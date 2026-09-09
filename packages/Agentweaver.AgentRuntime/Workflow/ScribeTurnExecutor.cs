@@ -181,6 +181,13 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                     _approvalStore,
                     _toolApprovalGate,
                     _loggerFactory.CreateLogger<CopilotAIAgent>());
+            if (agent is IProviderBoundWorkflowTurnAgent providerBoundAgent
+                && !string.IsNullOrWhiteSpace(input.ModelSource))
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
 
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,

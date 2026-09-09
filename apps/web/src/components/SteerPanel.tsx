@@ -14,6 +14,8 @@ import { Button,
   } from '@fluentui/react-components';
 import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular, WarningRegular } from '@fluentui/react-icons';
 import { SteeringLegend } from './SteeringLegend';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useState } from 'react';
 import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
 // ---------------------------------------------------------------------------
@@ -124,6 +126,7 @@ type SteerState = 'idle' | 'pending' | 'success' | 'error';
 
 export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = true, onSteered }: SteerPanelProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext('orchestration', undefined, runId, canSteer);
   const [instruction, setInstruction] = useState('');
   const [steerState, setSteerState] = useState<SteerState>('idle');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -140,15 +143,22 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
     const text = instruction.trim() || (kind === 'stop' ? '' : fallbackInstruction);
     // A child target only applies to a Redirect (force-complete that child to unblock it).
     const target = kind === 'redirect' ? targetChildRunId : undefined;
+    if (kind !== 'stop') providerContext.setPhase('active');
     try {
-      const res = await apiClient.steerCoordinator(runId, buildSteerPayload(kind, text, target));
+      const payload = buildSteerPayload(kind, text, target);
+      const res = kind === 'stop'
+        ? await apiClient.steerCoordinator(runId, payload)
+        : await apiClient.steerCoordinator(runId, payload, providerContext.providerKey);
+      if (kind !== 'stop') providerContext.setPhase('completed');
       setSteerState('success');
       setStatusMessage(successMessage(kind, res.status));
       setInstruction('');
       onSteered?.({ kind, status: res.status });
     } catch (err) {
       setErrorMessage(
-        err instanceof ApiError
+        kind !== 'stop' && providerContext.handleInvocationError(err)
+          ? 'The AI provider changed. Review the updated provider and send again.'
+          : err instanceof ApiError
           ? errorMessageFromApiError(err)
           : err instanceof Error
             ? err.message
@@ -203,33 +213,39 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
       <SteeringLegend />
 
       <div className={styles.actionRow}>
-        <Button
-          appearance="primary"
-          icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}
-          disabled={isPending}
-          onClick={() => void submit('send')}
-          data-testid="steer-panel-send"
-        >
-          Send
-        </Button>
-        <Button
-          appearance="outline"
-          icon={<ArrowRoutingRegular />}
-          disabled={isPending}
-          onClick={() => void submit('redirect')}
-          data-testid="steer-panel-redirect"
-        >
-          Redirect
-        </Button>
-        <Button
-          appearance="outline"
-          icon={<EditRegular />}
-          disabled={isPending}
-          onClick={() => void submit('amend')}
-          data-testid="steer-panel-amend"
-        >
-          Amend
-        </Button>
+        <AiExecutionProviderHint context={providerContext.context}>
+          <Button
+            appearance="primary"
+            icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}
+            disabled={isPending || providerContext.loading || !providerContext.available}
+            onClick={() => void submit('send')}
+            data-testid="steer-panel-send"
+          >
+            Send
+          </Button>
+        </AiExecutionProviderHint>
+        <AiExecutionProviderHint context={providerContext.context}>
+          <Button
+            appearance="outline"
+            icon={<ArrowRoutingRegular />}
+            disabled={isPending || providerContext.loading || !providerContext.available}
+            onClick={() => void submit('redirect')}
+            data-testid="steer-panel-redirect"
+          >
+            Redirect
+          </Button>
+        </AiExecutionProviderHint>
+        <AiExecutionProviderHint context={providerContext.context}>
+          <Button
+            appearance="outline"
+            icon={<EditRegular />}
+            disabled={isPending || providerContext.loading || !providerContext.available}
+            onClick={() => void submit('amend')}
+            data-testid="steer-panel-amend"
+          >
+            Amend
+          </Button>
+        </AiExecutionProviderHint>
         <Button
           appearance="subtle"
           icon={<StopRegular />}
@@ -241,6 +257,7 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
         </Button>
         {isPending && <Spinner size="extra-tiny" aria-label="Steering" />}
       </div>
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>
   );
 }

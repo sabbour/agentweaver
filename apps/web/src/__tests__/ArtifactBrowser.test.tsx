@@ -27,6 +27,7 @@ vi.mock('../api/apiClient', () => ({
     submitReview: vi.fn(),
     commitRun: vi.fn(),
     requestChanges: vi.fn(),
+    prepareAiExecutionContext: vi.fn(),
   },
 }));
 
@@ -69,6 +70,23 @@ const commitRunMock        = () => vi.mocked(apiClient.commitRun);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(apiClient.prepareAiExecutionContext).mockResolvedValue({
+    ai_required: true,
+    operation: 'agent_turn',
+    phase: 'prepared',
+    execution_key: 'signed-provider-key',
+    expires_at: '2099-01-01T00:00:00Z',
+    effective_model_provider: {
+      state: 'resolved',
+      provider_kind: 'project_github_copilot',
+      resolution_scope: 'project',
+      provider_scope: 'project',
+      provider_type: null,
+      model_id: 'gpt-5',
+      provider_key: 'provider-fingerprint',
+      unavailable_reason: null,
+    },
+  });
 });
 
 afterEach(() => {
@@ -511,7 +529,41 @@ describe('ArtifactBrowser', () => {
     await user.click(screen.getByLabelText('Send change request to agent'));
 
     await waitFor(() => {
-      expect(requestChangesMock()).toHaveBeenCalledWith('run-008', 'Please fix the formatting');
+      expect(requestChangesMock()).toHaveBeenCalledWith(
+        'run-008',
+        'Please fix the formatting',
+        'signed-provider-key',
+      );
+    });
+  });
+
+  it('shows Expected, Using, and Used provider states for request changes', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+    let completeRequest!: (value: { run_id: string; status: string }) => void;
+    requestChangesMock().mockImplementation(() => new Promise((resolve) => {
+      completeRequest = resolve;
+    }));
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-provider-phases" runStatus="awaiting_review" />
+      </Wrapper>,
+    );
+
+    await userEvent.click(screen.getByLabelText('Request change'));
+    await waitFor(() => {
+      expect(screen.getByText('Expected provider: GitHub Copilot. Model: gpt-5.')).toBeDefined();
+    });
+    await userEvent.type(screen.getByLabelText('Changes requested comment'), 'Add provider tests');
+    await userEvent.click(screen.getByLabelText('Send change request to agent'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Using GitHub Copilot. Model: gpt-5.')).toBeDefined();
+    });
+
+    completeRequest({ run_id: 'run-provider-phases', status: 'in_progress' });
+    await waitFor(() => {
+      expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeDefined();
     });
   });
 
@@ -543,7 +595,11 @@ describe('ArtifactBrowser', () => {
     await user.type(screen.getByLabelText('Changes requested comment'), 'Add more tests');
     await user.click(screen.getByLabelText('Send change request to agent'));
     await waitFor(() => {
-      expect(requestChangesMock()).toHaveBeenCalledWith('run-009', 'Add more tests');
+      expect(requestChangesMock()).toHaveBeenCalledWith(
+        'run-009',
+        'Add more tests',
+        'signed-provider-key',
+      );
     });
 
     // Step 3: server starts revision; runStatus transitions to in_progress.

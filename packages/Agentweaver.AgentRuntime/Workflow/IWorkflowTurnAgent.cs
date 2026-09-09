@@ -41,3 +41,10 @@ public interface IWorkflowTurnAgent : IAsyncDisposable
     /// </summary>
     Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct);
 }
+
+public interface IProviderBoundWorkflowTurnAgent
+{
+    void ConfigureProviderBoundary(
+        ModelSource modelSource,
+        string? byokProviderFingerprint);
+}

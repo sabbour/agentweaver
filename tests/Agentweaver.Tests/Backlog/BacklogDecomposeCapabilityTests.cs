@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
@@ -10,6 +11,7 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using GitHub.Copilot;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -84,6 +86,28 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
             "the explicit project capability must exist before any decomposition model turn is attempted");
     }
 
+    [Fact]
+    public async Task RunAfterValidationAsync_WhenAcceptedPlanGuardRejects_DoesNotCallModelRunner()
+    {
+        var guard = new RejectingAcceptedPlanGuard("backlog_decomposition");
+        var runnerCalled = false;
+
+        var act = () => BacklogDecomposeService.RunAfterValidationAsync(
+            guard,
+            () =>
+            {
+                runnerCalled = true;
+                return Task.FromResult<string?>("""{"items":[]}""");
+            },
+            CancellationToken.None);
+
+        var exception = (await act.Should().ThrowAsync<AiExecutionPlanException>()).Which;
+        exception.ErrorCode.Should().Be("model_provider_changed");
+        exception.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        guard.Invocations.Should().Be(1);
+        runnerCalled.Should().BeFalse("the accepted plan must be revalidated before the model runner starts");
+    }
+
     private WebApplicationFactory<Program> CreateApp(CapturingRunner runner) =>
         _factory.WithWebHostBuilder(builder =>
         {
@@ -152,7 +176,12 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
     {
         public int Invocations { get; private set; }
 
-        public Task<string?> RunAsync(CopilotClient client, string prompt, string? modelId, CancellationToken ct)
+        public Task<string?> RunAsync(
+            CopilotClient client,
+            string prompt,
+            string? modelId,
+            CancellationToken ct,
+            ByokProviderConfiguration? byokProviderConfiguration = null)
         {
             Invocations++;
             prompt.Should().Contain("<<<DOCUMENT>>>");
@@ -173,5 +202,24 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
 
         public Task TombstoneAndDeleteAsync(GitHubConnectionsCredentialLocator locator, CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RejectingAcceptedPlanGuard(string operation) : IModelInvocationGuard
+    {
+        public int Invocations { get; private set; }
+
+        public Task ValidateAsync(string runId, CancellationToken ct)
+        {
+            Invocations++;
+            throw new AiExecutionPlanException(
+                "model_provider_changed",
+                new AiExecutionContextResponse
+                {
+                    AiRequired = true,
+                    Operation = operation,
+                    Phase = "prepared",
+                },
+                "The accepted model provider changed.");
+        }
     }
 }

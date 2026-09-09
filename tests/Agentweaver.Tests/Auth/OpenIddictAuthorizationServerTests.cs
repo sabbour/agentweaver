@@ -255,6 +255,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     [InlineData("com.example.app://evil.example/callback")]
     [InlineData("com.app:/callback")]
     [InlineData("http://2130706433/callback")]
+    [InlineData("http://[::1]:49152/callback")]
     public async Task DynamicRegistration_RejectsUnsafeRedirects(string redirect)
     {
         using var response = await _client.PostAsJsonAsync("/oauth/register", new
@@ -373,9 +374,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
 
     [Theory]
     [InlineData("http://127.0.0.1:49168/callback", "'self' http://127.0.0.1:49168")]
-    [InlineData("http://[::1]:49168/callback", "'self'")]
-    [InlineData("com.github.copilot:/oauth/callback", "com.github.copilot:")]
-    public async Task Authorization_ConsentCspAllowsOnlyValidatedRegisteredCallback(
+    [InlineData("com.github.copilot:/oauth/callback", "'self' com.github.copilot:")]
+    public async Task Authorization_ConsentCspAllowsOnlyValidatedCallback(
         string redirectUri,
         string expectedFormAction)
     {
@@ -421,28 +421,21 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     [InlineData("https://client.example/callback\"")]
     [InlineData(" https://client.example/callback")]
     [InlineData("https://client.example/callback\r\nform-action *")]
-    public void ConsentFormAction_RejectsUnsafeRegisteredRedirectMetadata(string redirectUri)
+    public void ConsentPolicySerializer_RejectsUnsafeRedirectMetadata(string redirectUri)
     {
-        OAuthAuthorizationServerEndpoints.BuildConsentFormActionDirective(redirectUri, [redirectUri])
-            .Should().BeNull();
+        OAuthConsentContentSecurityPolicy.TrySerializeCallbackSource(
+            redirectUri, out var callbackSource).Should().BeFalse();
+        callbackSource.Should().BeEmpty();
     }
 
     [Fact]
-    public void ConsentFormAction_DropsValidPathPunctuationFromSerializedSource()
+    public void ConsentPolicySerializer_DropsValidPathPunctuationFromSerializedSource()
     {
         const string redirectUri = "http://127.0.0.1:49168/callback;'v=1";
 
-        OAuthAuthorizationServerEndpoints.BuildConsentFormActionDirective(redirectUri, [redirectUri])
-            .Should().Be("'self' http://127.0.0.1:49168");
-    }
-
-    [Fact]
-    public void ConsentFormAction_UsesSameOriginContinuationForHttpsIpv6Authority()
-    {
-        const string redirectUri = "https://[2001:db8::1]/oauth/callback";
-
-        OAuthAuthorizationServerEndpoints.BuildConsentFormActionDirective(redirectUri, [redirectUri])
-            .Should().Be("'self'");
+        OAuthConsentContentSecurityPolicy.TrySerializeCallbackSource(
+            redirectUri, out var callbackSource).Should().BeTrue();
+        callbackSource.Should().Be("http://127.0.0.1:49168");
     }
 
     [Theory]
@@ -513,9 +506,13 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         var interstitial = await response.Content.ReadAsStringAsync();
         var styleNonce = Regex.Match(interstitial, "<style nonce=\"([^\"]+)\">").Groups[1].Value;
         response.Headers.GetValues("Content-Security-Policy").Single().Should().Be(
-            $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'none'; " +
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action 'none'; " +
             "base-uri 'none'; frame-ancestors 'none'");
+        interstitial.Should().Contain("<title>Sign in again | Agentweaver</title>");
+        interstitial.Should().Contain(
+            "<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"Agentweaver logo\">");
         interstitial.Should().Contain("href=\"/auth/entra/authorize?oauth_return_handle=");
+        interstitial.Should().NotContain("<form");
         interstitial.Should().NotContain("login.microsoftonline.com");
         var returnHandle = Regex.Match(
             interstitial, "oauth_return_handle=([A-Za-z0-9_-]+)").Groups[1].Value;
@@ -531,18 +528,57 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     }
 
     [Theory]
+    [InlineData("approve", 49172, "code")]
+    [InlineData("deny", 49173, "error")]
+    public async Task Authorization_PortlessLoopbackRegistrationUsesValidatedFreshPort(
+        string decision,
+        int port,
+        string expectedParameter)
+    {
+        const string registeredRedirectUri = "http://127.0.0.1/callback";
+        var requestedRedirectUri = $"http://127.0.0.1:{port}/callback";
+        var clientId = await RegisterClientAsync(registeredRedirectUri);
+        var sessionId = await CreateBrowserSessionAsync();
+        var query = AuthorizationQuery(clientId, requestedRedirectUri);
+        using var consentRequest = new HttpRequestMessage(HttpMethod.Get, "/oauth/authorize" + query);
+        consentRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var consent = await _client.SendAsync(consentRequest);
+
+        consent.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await consent.Content.ReadAsStringAsync();
+        var styleNonce = Regex.Match(html, "<style nonce=\"([^\"]+)\">").Groups[1].Value;
+        consent.Headers.GetValues("Content-Security-Policy").Single().Should().Be(
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; " +
+            $"form-action 'self' http://127.0.0.1:{port}; base-uri 'none'; frame-ancestors 'none'");
+        var consentHandle = Regex.Match(
+            html, "name=\"consent_handle\" value=\"([^\"]+)\"").Groups[1].Value;
+
+        using var submission = new HttpRequestMessage(HttpMethod.Post, "/oauth/authorize")
+        {
+            Content = new FormUrlEncodedContent(AuthorizationForm(
+                clientId, requestedRedirectUri, consentHandle, decision)),
+        };
+        submission.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var response = await _client.SendAsync(submission);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.GetLeftPart(UriPartial.Path).Should().Be(requestedRedirectUri);
+        ParseQuery(response.Headers.Location.Query).Should().ContainKey(expectedParameter);
+    }
+
+    [Theory]
     [InlineData("approve")]
     [InlineData("deny")]
-    public async Task Authorization_Ipv6LoopbackUsesSingleUseSameOriginContinuation(string decision)
+    public async Task Authorization_PrivateUseCallbackRemainsExact(string decision)
     {
-        const string redirectUri = "http://[::1]:49171/callback";
+        const string redirectUri = "com.example.agentweaver:/oauth/callback";
         var (clientId, sessionId, query) = await PrepareConsentAsync(redirectUri);
         using var consentRequest = new HttpRequestMessage(HttpMethod.Get, "/oauth/authorize" + query);
         consentRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
         using var consent = await _client.SendAsync(consentRequest);
-        var consentHtml = await consent.Content.ReadAsStringAsync();
+        var html = await consent.Content.ReadAsStringAsync();
         var consentHandle = Regex.Match(
-            consentHtml, "name=\"consent_handle\" value=\"([^\"]+)\"").Groups[1].Value;
+            html, "name=\"consent_handle\" value=\"([^\"]+)\"").Groups[1].Value;
 
         using var submission = new HttpRequestMessage(HttpMethod.Post, "/oauth/authorize")
         {
@@ -550,45 +586,53 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
                 clientId, redirectUri, consentHandle, decision)),
         };
         submission.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-        using var submitted = await _client.SendAsync(submission);
+        using var response = await _client.SendAsync(submission);
 
-        submitted.StatusCode.Should().Be(HttpStatusCode.OK);
-        submitted.Headers.GetValues("Referrer-Policy").Single().Should().Be("no-referrer");
-        var interstitial = await submitted.Content.ReadAsStringAsync();
-        interstitial.Should().NotContain(redirectUri);
-        interstitial.Should().NotContain("consent-csp-state");
-        var continuePath = Regex.Match(
-            interstitial, "href=\"(/oauth/continue\\?handle=[^\"]+)\"").Groups[1].Value;
-        continuePath.Should().NotBeNullOrWhiteSpace();
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.GetLeftPart(UriPartial.Path).Should().Be(redirectUri);
+    }
 
-        using var continueRequest = new HttpRequestMessage(HttpMethod.Get, continuePath);
-        continueRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-        using var continuation = await _client.SendAsync(continueRequest);
-
-        continuation.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        if (decision == "approve")
+    [Fact]
+    public async Task Authorization_Ipv6CallbackFailsClosedBeforeConsent()
+    {
+        const string redirectUri = "https://[2001:db8::1]:8443/oauth/callback";
+        var clientId = $"stored-ipv6-client-{Guid.NewGuid():N}";
+        await using (var scope = _factory.Services.CreateAsyncScope())
         {
-            continuation.Headers.Location!.OriginalString.Should().StartWith("/oauth/authorize?");
-            using var finishRequest = new HttpRequestMessage(HttpMethod.Get, continuation.Headers.Location);
-            finishRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-            using var finished = await _client.SendAsync(finishRequest);
-            finished.StatusCode.Should().Be(HttpStatusCode.Redirect);
-            finished.Headers.Location!.GetLeftPart(UriPartial.Path).Should().Be(redirectUri);
-            ParseQuery(finished.Headers.Location.Query).Should().ContainKey("code");
-            ParseQuery(finished.Headers.Location.Query)["state"].Should().Be("consent-csp-state");
+            var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            await applications.CreateAsync(OAuthStaticClientReconciler.CreateDescriptor(
+                new OAuthStaticClient
+                {
+                    ClientId = clientId,
+                    DisplayName = "Stored IPv6 client",
+                    RedirectUris = [redirectUri],
+                },
+                "http://localhost:5000/mcp"));
         }
-        else
-        {
-            continuation.Headers.Location!.GetLeftPart(UriPartial.Path).Should().Be(redirectUri);
-            ParseQuery(continuation.Headers.Location.Query)["error"].Should().Be("access_denied");
-            ParseQuery(continuation.Headers.Location.Query)["state"].Should().Be("consent-csp-state");
-            ParseQuery(continuation.Headers.Location.Query)["iss"].Should().Be("http://localhost:5000/");
-        }
+        var sessionId = await CreateBrowserSessionAsync();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/oauth/authorize" + AuthorizationQuery(clientId, redirectUri));
+        request.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
 
-        using var replayRequest = new HttpRequestMessage(HttpMethod.Get, continuePath);
-        replayRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-        using var replay = await _client.SendAsync(replayRequest);
-        replay.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        using var response = await _client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Headers.Contains("Content-Security-Policy").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("http://[::1]:49177/callback")]
+    [InlineData("https://[2001:db8::1]:8443/callback")]
+    [InlineData("https://example.com/*")]
+    [InlineData("https://user@example.com/callback")]
+    [InlineData("https://example.com/callback#fragment")]
+    [InlineData("https://example.com/callback\r\nform-action https://evil.example")]
+    public void ConsentPolicySerializer_RejectsUnsafeRedirects(string redirectUri)
+    {
+        OAuthConsentContentSecurityPolicy.TrySerializeCallbackSource(
+            redirectUri, out var callbackSource).Should().BeFalse();
+        callbackSource.Should().BeEmpty();
     }
 
     [Fact]
@@ -1055,7 +1099,6 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["consent_handle"] = consentHandle,
             ["decision"] = decision,
         };
-
     private static QueryString ClaudeAuthorizationQuery(string redirectUri) =>
         QueryString.Create(new Dictionary<string, string?>
         {

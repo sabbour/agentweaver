@@ -54,6 +54,85 @@ public sealed class McpActionableErrorsTests
     }
 
     [Fact]
+    public async Task RunReview_DeterministicApproval_DoesNotPrepareProviderContext()
+    {
+        var calls = 0;
+        var tools = CreateRunTools((request, _) =>
+        {
+            calls++;
+            request.Method.Should().Be(HttpMethod.Post);
+            request.RequestUri!.AbsolutePath.Should().Be("/api/runs/run-123/review");
+            request.Headers.Contains("If-Model-Provider-Key").Should().BeFalse();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { status = "merged" }),
+            });
+        });
+
+        _ = await tools.RunReviewAsync("run-123", approved: true, CancellationToken.None);
+
+        calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RunReview_ApprovalThatResumesAi_PreparesAndRetriesWithProviderKey()
+    {
+        var calls = 0;
+        var tools = CreateRunTools((request, _) =>
+        {
+            calls++;
+            return Task.FromResult(calls switch
+            {
+                1 => Response(
+                    request,
+                    HttpMethod.Post,
+                    "/api/runs/run-123/review",
+                    HttpStatusCode.Conflict,
+                    new { error = "ai_execution_context_required" }),
+                2 => Response(
+                    request,
+                    HttpMethod.Get,
+                    "/api/runs/run-123",
+                    HttpStatusCode.OK,
+                    new
+                    {
+                        project_id = "project-123",
+                        parent_run_id = (string?)null,
+                        agent_name = "Coordinator",
+                    }),
+                3 => Response(
+                    request,
+                    HttpMethod.Post,
+                    "/api/ai/execution-context",
+                    HttpStatusCode.OK,
+                    new
+                    {
+                        ai_required = true,
+                        operation = "orchestration",
+                        phase = "prepared",
+                        execution_key = "opaque-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "project",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                        },
+                    }),
+                4 => ProviderAwareReviewResponse(request),
+                _ => throw new InvalidOperationException($"Unexpected request {calls}: {request.RequestUri}"),
+            });
+        });
+
+        _ = await tools.RunReviewAsync("run-123", approved: true, CancellationToken.None);
+
+        calls.Should().Be(4);
+    }
+
+    [Fact]
     public async Task GitHubCapabilityConnect_Unauthorized_ThrowsAgentweaverSignInHint()
     {
         var tools = CreateGitHubTools((_, _) =>
@@ -131,7 +210,35 @@ public sealed class McpActionableErrorsTests
         new(CreateApiClient(handler));
 
     private static TeamTools CreateTeamTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
-        new(CreateApiClient(handler));
+        new(CreateApiClient((request, ct) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri!.AbsolutePath == "/api/ai/execution-context")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "casting_generation",
+                        phase = "prepared",
+                        execution_key = "opaque-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "project",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                        },
+                    }),
+                });
+            }
+
+            return handler(request, ct);
+        }));
 
     private static RunTools CreateRunTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
         new(CreateApiClient(handler));
@@ -147,6 +254,29 @@ public sealed class McpActionableErrorsTests
         };
 
         return new AgentweaverApiClient(httpClient, new McpConfig("http://localhost", "test-api-key"));
+    }
+
+    private static HttpResponseMessage Response(
+        HttpRequestMessage request,
+        HttpMethod expectedMethod,
+        string expectedPath,
+        HttpStatusCode status,
+        object body)
+    {
+        request.Method.Should().Be(expectedMethod);
+        request.RequestUri!.AbsolutePath.Should().Be(expectedPath);
+        return new HttpResponseMessage(status) { Content = JsonContent.Create(body) };
+    }
+
+    private static HttpResponseMessage ProviderAwareReviewResponse(HttpRequestMessage request)
+    {
+        request.Method.Should().Be(HttpMethod.Post);
+        request.RequestUri!.AbsolutePath.Should().Be("/api/runs/run-123/review");
+        request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle("opaque-provider-key");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { status = "merged" }),
+        };
     }
 
     private sealed class DelegatingHandlerStub(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler

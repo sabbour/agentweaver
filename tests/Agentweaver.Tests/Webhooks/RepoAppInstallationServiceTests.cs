@@ -15,6 +15,33 @@ namespace Agentweaver.Tests.Webhooks;
 
 public sealed class RepoAppInstallationServiceTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateAppJwt_AcceptsProvisioningPemFormats(bool pkcs8)
+    {
+        using var rsa = RSA.Create(2048);
+        var pem = pkcs8 ? rsa.ExportPkcs8PrivateKeyPem() : rsa.ExportRSAPrivateKeyPem();
+
+        var token = RepoAppInstallationTokenService.CreateAppJwt(123, pem);
+        var jwt = new JsonWebTokenHandler().ReadJsonWebToken(token);
+
+        jwt.Issuer.Should().Be("123");
+        jwt.Alg.Should().Be(SecurityAlgorithms.RsaSha256);
+    }
+
+    [Fact]
+    public void CreateAppJwt_RejectsConcatenatedSupportedPrivateKeyBlocks()
+    {
+        using var first = RSA.Create(2048);
+        using var second = RSA.Create(2048);
+        var concatenated = first.ExportRSAPrivateKeyPem() + second.ExportPkcs8PrivateKeyPem();
+
+        var act = () => RepoAppInstallationTokenService.CreateAppJwt(123, concatenated);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
     [Fact]
     public async Task Mint_UsesKeyVaultPem_AndSingleRepositoryPermissionDownscope_WithoutPersistingCredentials()
     {

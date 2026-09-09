@@ -24,12 +24,13 @@ public sealed class McpApiException : McpException
 
     public int StatusCode { get; }
     public string Error { get; }
+    public string? ApiErrorCode { get; }
     public string Hint { get; }
     public string? RawMessage { get; }
     public string? Path { get; }
 
     public McpApiException(int statusCode, string message, string? path = null, string? errorCode = null, string? hint = null)
-        : this(BuildPayload(statusCode, message, path, errorCode, hint))
+        : this(BuildPayload(statusCode, message, path, errorCode, hint) with { ErrorCode = errorCode })
     {
     }
 
@@ -38,6 +39,7 @@ public sealed class McpApiException : McpException
     {
         StatusCode = payload.StatusCode;
         Error = payload.Error;
+        ApiErrorCode = payload.ErrorCode;
         Hint = payload.Hint;
         RawMessage = payload.RawMessage;
         Path = payload.Path;
@@ -283,7 +285,8 @@ public sealed class McpApiException : McpException
         string Error,
         string Hint,
         string? RawMessage,
-        string? Path);
+        string? Path,
+        string? ErrorCode = null);
 }
 
 /// <summary>Typed thin wrapper over the Agentweaver backend API.</summary>
@@ -352,6 +355,146 @@ public sealed class AgentweaverApiClient
         message.Headers.Authorization = GetAuthHeader();
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, path, ct);
+    }
+
+    public async Task<T> PostAiAsync<T>(
+        string path,
+        object? body,
+        string operation,
+        string? projectId = null,
+        string? runId = null,
+        CancellationToken ct = default)
+    {
+        var context = await PostAsync<JsonElement>(
+            "/api/ai/execution-context",
+            new { operation, project_id = projectId, run_id = runId },
+            ct).ConfigureAwait(false);
+        var provider = context.GetProperty("effective_model_provider");
+        if (!string.Equals(provider.GetProperty("state").GetString(), "resolved", StringComparison.Ordinal))
+        {
+            var reason = provider.TryGetProperty("unavailable_reason", out var reasonElement)
+                ? reasonElement.GetString()
+                : null;
+            var providerMessage = reason switch
+            {
+                "operation_requires_github_copilot" =>
+                    "This operation requires GitHub Copilot, but BYOK is the effective provider.",
+                "project_binding_requires_reauthorization" =>
+                    "The project's GitHub Copilot connection requires reauthorization.",
+                "user_binding_requires_reauthorization" =>
+                    "Your GitHub Copilot connection requires reauthorization.",
+                "user_provider_required" =>
+                    "Configure personal AI access before running this operation.",
+                _ => "The effective AI provider is unavailable.",
+            };
+            var hint = reason switch
+            {
+                "operation_requires_github_copilot" =>
+                    "Select or reconnect GitHub Copilot for this operation, then retry.",
+                "project_binding_requires_reauthorization" =>
+                    "Reconnect the project model provider, then retry.",
+                "user_binding_requires_reauthorization" =>
+                    "Reconnect personal GitHub Copilot access, then retry.",
+                "user_provider_required" =>
+                    "Configure personal AI access, then retry.",
+                _ => "Configure an available model provider, then retry.",
+            };
+            throw new McpApiException(409, providerMessage, path, reason, hint);
+        }
+        var providerKey = context.GetProperty("execution_key").GetString();
+        if (string.IsNullOrWhiteSpace(providerKey))
+            throw new McpApiException(
+                409,
+                "AI execution context did not return a provider key.",
+                path,
+                "ai_execution_context_required",
+                "Prepare the AI execution context again, then retry.");
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, path.TrimStart('/'))
+        {
+            Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
+        };
+        message.Headers.Authorization = GetAuthHeader();
+        message.Headers.Add("If-Model-Provider-Key", providerKey);
+        using var response = await _http.SendAsync(message, ct).ConfigureAwait(false);
+        return await ReadJsonAsync<T>(response, path, ct).ConfigureAwait(false);
+    }
+
+    public async Task<T> PostAiOnDemandAsync<T>(
+        string path,
+        object? body,
+        string operation,
+        string projectId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await PostAsync<T>(path, body, ct).ConfigureAwait(false);
+        }
+        catch (McpApiException ex) when (
+            ex.StatusCode == StatusCodes.Status409Conflict
+            && string.Equals(ex.ApiErrorCode, "ai_execution_context_required", StringComparison.Ordinal))
+        {
+            return await PostAiAsync<T>(
+                path,
+                body,
+                operation,
+                projectId,
+                ct: ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<T> PostAiForRunAsync<T>(
+        string path,
+        object? body,
+        string operation,
+        string runId,
+        CancellationToken ct = default)
+    {
+        var run = await GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(runId)}",
+            ct).ConfigureAwait(false);
+        var projectId = run.TryGetProperty("project_id", out var projectElement)
+            && projectElement.ValueKind == JsonValueKind.String
+            ? projectElement.GetString()
+            : null;
+        var isCoordinator = (!run.TryGetProperty("parent_run_id", out var parentElement)
+                || parentElement.ValueKind == JsonValueKind.Null)
+            && run.TryGetProperty("agent_name", out var agentNameElement)
+            && string.Equals(agentNameElement.GetString(), "Coordinator", StringComparison.Ordinal);
+        var resolvedOperation = operation == "retry"
+            ? isCoordinator ? "orchestration" : "agent_turn"
+            : operation;
+        return await PostAiAsync<T>(
+            path,
+            body,
+            resolvedOperation,
+            projectId,
+            runId,
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<T> PostAiForRunOnDemandAsync<T>(
+        string path,
+        object? body,
+        string runId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await PostAsync<T>(path, body, ct).ConfigureAwait(false);
+        }
+        catch (McpApiException ex) when (
+            ex.StatusCode == StatusCodes.Status409Conflict
+            && string.Equals(ex.ApiErrorCode, "ai_execution_context_required", StringComparison.Ordinal))
+        {
+            return await PostAiForRunAsync<T>(
+                path,
+                body,
+                "retry",
+                runId,
+                ct).ConfigureAwait(false);
+        }
     }
 
     public async Task PostAsync(string path, object? body, CancellationToken ct = default)

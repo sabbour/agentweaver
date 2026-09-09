@@ -401,6 +401,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.IsAutomationInvocationPending)
                 .HasColumnName("automation_invocation_pending")
                 .HasDefaultValue(false);
+            e.Property(t => t.AiExecutionProviderKey).HasColumnName("ai_execution_provider_key");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
                 .HasDatabaseName("IX_backlog_tasks_project_state_orderkey");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })

@@ -142,12 +142,15 @@ public interface IAssistantRunService
 /// per-user concurrency bound (derived from run status, so the API's replicas agree) and an idle
 /// sweep keep the number of live Copilot/MCP sessions and held AgentHost pods bounded.
 ///
-/// This is additive: it does not touch the existing <c>/api/console/turn</c> facade path.
+/// Production operator turns use the run-bound AgentHost path.
 /// </summary>
 public sealed class AssistantRunService : IAssistantRunService, IDisposable
 {
     /// <summary>Sentinel AgentName that marks a run as an operator chat (mirrors "Coordinator").</summary>
     public const string OperatorAgentName = "Operator";
+
+    internal const int PersonalSessionMarkerSequence = 1;
+    internal const string PersonalSessionMarkerKind = "operator";
 
     private const int MaxHistoryMessages = 24;
 
@@ -168,6 +171,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly AssistantRunOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOperatorAssistantBrokerTokenIssuer _brokerTokenIssuer;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly bool _agentHostEnabled;
     private readonly ILogger<AssistantRunService> _logger;
 
@@ -197,7 +201,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IServiceScopeFactory scopeFactory,
         IOperatorAssistantBrokerTokenIssuer brokerTokenIssuer,
         IConfiguration configuration,
-        ILogger<AssistantRunService> logger)
+        ILogger<AssistantRunService> logger,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _runStore = runStore;
         _eventStream = eventStream;
@@ -206,6 +211,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         _options = options.Value;
         _scopeFactory = scopeFactory;
         _brokerTokenIssuer = brokerTokenIssuer;
+        _executionPlanAccessor = executionPlanAccessor;
         _agentHostEnabled = string.Equals(
             configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
@@ -365,16 +371,19 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 SubtaskId = null,
             };
 
-            await PrepareAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
-            await AppendAsync(key, EventTypes.RunStarted, new
-            {
-                runId = key,
-                kind = "operator",
-                agentName = OperatorAgentName,
-                projectId,
-                contextRunId,
-                resumedFromRunId = resumeFromRunId,
-            }, ct).ConfigureAwait(false);
+            await PrepareAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+            _ = await _eventStream.AppendAsync(
+                key,
+                new RunEvent(PersonalSessionMarkerSequence, EventTypes.RunStarted, new
+                {
+                    runId = key,
+                    kind = PersonalSessionMarkerKind,
+                    agentName = OperatorAgentName,
+                    projectId,
+                    contextRunId,
+                    resumedFromRunId = resumeFromRunId,
+                }),
+                ct).ConfigureAwait(false);
             await AppendAsync(
                 key,
                 EventTypes.RunModelProviderResolved,
@@ -549,6 +558,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private async Task<EffectiveModelProviderResult> ResolveAssistantProviderAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
+        if (_executionPlanAccessor?.Current is { Operation: "assistant_turn" } accepted)
+        {
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+        }
         var modelProviderResolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
         return await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
     }
@@ -634,19 +648,20 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             return provider;
 
         _logger.LogInformation(
-            "Operator run {RunId}: effective model provider changed ({PreviousSource}/{PreviousIdentity} -> " +
-            "{CurrentSource}/{CurrentIdentity}) since the last turn; the new provider takes effect for this turn.",
+            "Operator run {RunId}: effective model provider changed ({PreviousSource}/{PreviousProviderKey} -> " +
+            "{CurrentSource}/{CurrentProviderKey}) since the last turn; the new provider takes effect for this turn.",
             runId,
             run.ModelSource.ToApiString(),
-            previousIdentity ?? "(none)",
+            previousIdentity is null ? "(none)" : ProviderIdentityDigest(previousIdentity),
             modelSource.ToApiString(),
-            provider.ProviderIdentity);
+            provider.ProviderKey());
 
-        if (modelSourceChanged)
+        if (modelSourceChanged || identityChanged)
         {
             var repointed = run with { ModelSource = modelSource };
-            await PrepareAgentHostCapabilityAsync(repointed, ct).ConfigureAwait(false);
-            await _runStore.UpdateModelSourceAsync(parsedRunId, modelSource, ct).ConfigureAwait(false);
+            await PrepareAgentHostCapabilityAsync(repointed, provider, ct).ConfigureAwait(false);
+            if (modelSourceChanged)
+                await _runStore.UpdateModelSourceAsync(parsedRunId, modelSource, ct).ConfigureAwait(false);
         }
 
         // Give the held, provider-bound pod back so this turn cold-starts one configured for the
@@ -658,7 +673,14 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         return provider;
     }
 
-    private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
+    private static string ProviderIdentityDigest(string identity) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+
+    private async Task PrepareAgentHostCapabilityAsync(
+        Run run,
+        EffectiveModelProviderResult effectiveProvider,
+        CancellationToken ct)
     {
         if (!_agentHostEnabled || run.ModelSource != ModelSource.GitHubCopilot)
             return;
@@ -673,7 +695,12 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // a failure always surfaces the platform-settings CTA, never a project-specific one. This is
         // the SAME scope ResolveAssistantModelSourceAsync selects the provider at, so selection and
         // validation cannot disagree.
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+                run,
+                ct,
+                platformScoped: true,
+                expectedCopilotBindingId: effectiveProvider.ProviderId(),
+                expectedCopilotCredentialVersion: effectiveProvider.CredentialVersion())
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();
     }

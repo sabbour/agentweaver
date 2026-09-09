@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Skills;
 using Agentweaver.Api.Workflows;
@@ -734,6 +735,10 @@ public sealed class BlueprintService
         catch (AgentProviderException ex)
         {
             return ProviderFailureResult(ex);
+        }
+        catch (AiExecutionPlanException)
+        {
+            throw;
         }
         catch (Exception ex) when (AgentProviderException.Classify(ModelSource.GitHubCopilot, ex) is not null)
         {

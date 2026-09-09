@@ -115,7 +115,6 @@ GET /auth/github/repo-app/installation/callback | ProtocolManaged
 GET /health | OperationalAnonymous
 GET /healthz/workspace | OperationalAnonymous
 GET /oauth/authorize | ProtocolManaged
-GET /oauth/continue | ProtocolManaged
 GET /oauth/resume | ProtocolManaged
 GET /openapi/{documentName}.json | OperationalAnonymous
 GET /openapi/{documentName}.yaml | OperationalAnonymous
@@ -133,7 +132,7 @@ POST /api/admin/byok-providers/deactivate | PlatformOrMcp
 POST /api/admin/byok-providers/{id}/activate | PlatformOrMcp
 POST /api/admin/platform-default-copilot/begin | PlatformOrMcp
 POST /api/admin/platform-default-copilot/disconnect | PlatformOrMcp
-POST /api/ai/execution-context | AuthenticatedPlatform
+POST /api/ai/execution-context | AuthenticatedSelfOrMcp
 POST /api/assistant/runs | AuthenticatedPlatform
 POST /api/assistant/runs/{id}/messages | AuthenticatedPlatform
 POST /api/auth/github/repo-app/authorization/refresh | PlatformOrMcp
@@ -203,6 +202,7 @@ POST /api/runs/{id}/auto-approve | PlatformOrMcp
 POST /api/runs/{id}/autopilot | PlatformOrMcp
 POST /api/runs/{id}/cancel | PlatformOrMcp
 POST /api/runs/{id}/commit | PlatformOrMcp
+POST /api/runs/{id}/model-provider/validate | RunCapability
 POST /api/runs/{id}/outcome-spec/confirm | PlatformOrMcp
 POST /api/runs/{id}/outcome-spec/revise | PlatformOrMcp
 POST /api/runs/{id}/questions/{requestId}/answer | PlatformOrMcp

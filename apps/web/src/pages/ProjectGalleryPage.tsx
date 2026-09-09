@@ -28,6 +28,7 @@ import { AddRegular, CheckmarkCircleRegular, DismissCircleRegular, SparkleRegula
 import { BlueprintPanel } from '../components/BlueprintPicker';
 import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker.helpers';
 import { GitHubIcon } from '../components/GitHubIcon';
+import { GitHubRepositoryAccessNotice } from '../components/GitHubRepositoryAccessNotice';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
@@ -37,6 +38,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   CreateProjectRequest,
+  GitHubRepositoryInstallation,
   PagedResult,
   Project,
 } from '../api/types';
@@ -445,6 +447,9 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       generationError={generation.error}
       generateDescription={goal}
       onGenerateDescriptionChange={setGoal}
+      executionContext={generation.providerContext.context}
+      providerLoading={generation.providerContext.loading || !generation.providerContext.available}
+      providerAnnouncement={generation.providerContext.announcement}
     />
   );
 
@@ -476,6 +481,7 @@ type RepoBrowserRepo = {
 
 function useGitHubData(open: boolean) {
   const [repos, setRepos] = useState<RepoBrowserRepo[]>([]);
+  const [installations, setInstallations] = useState<GitHubRepositoryInstallation[] | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposConnectionRequired, setReposConnectionRequired] = useState(false);
@@ -490,6 +496,7 @@ function useGitHubData(open: boolean) {
       setReposLoading(true);
       setReposError(null);
       setReposConnectionRequired(false);
+      setInstallations(null);
       try {
         const selections = await apiClient.listGitHubRepositorySelections();
         if (cancelled) return;
@@ -499,6 +506,7 @@ function useGitHubData(open: boolean) {
           defaultBranch: repository.default_branch,
           pushedAt: repository.pushed_at,
         })));
+        setInstallations(selections.installations ?? null);
       } catch (err: unknown) {
         if (cancelled) return;
         setReposConnectionRequired(isGitHubRepoAppConnectionRequired(err));
@@ -514,7 +522,7 @@ function useGitHubData(open: boolean) {
   const reloadRepos = useCallback(() => setReposKey((k) => k + 1), []);
 
   return {
-    repos, reposLoading, reposError, reposConnectionRequired, reloadRepos,
+    repos, installations, reposLoading, reposError, reposConnectionRequired, reloadRepos,
   };
 }
 
@@ -535,12 +543,14 @@ function CreateFromGitHubDialog({
   onCreated,
   dataDir,
   workspaceAutoAssigned,
+  repoAppInstallUrl,
   initiallyOpen = false,
   authorizationResult = null,
 }: {
   onCreated: (p: Project) => void;
   dataDir: string | null;
   workspaceAutoAssigned: boolean;
+  repoAppInstallUrl: string | null;
   initiallyOpen?: boolean;
   authorizationResult?: string | null;
 }) {
@@ -558,7 +568,14 @@ function CreateFromGitHubDialog({
     onCreated(project);
   }, initiallyOpen);
   const { open } = d;
-  const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(open);
+  const {
+    repos,
+    installations,
+    reposLoading,
+    reposError,
+    reposConnectionRequired,
+    reloadRepos,
+  } = useGitHubData(open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
   const [folderName, setFolderName] = useState('');
@@ -633,6 +650,13 @@ function CreateFromGitHubDialog({
         <Text weight="semibold">Repository *</Text>
         {!reposConnectionRequired && (
           <>
+            {!reposLoading && !reposError && (
+              <GitHubRepositoryAccessNotice
+                installations={installations}
+                repositoryCount={repos.length}
+                repoAppInstallUrl={repoAppInstallUrl}
+              />
+            )}
             <Combobox
               aria-label="Repository"
               freeform
@@ -728,6 +752,9 @@ function CreateFromGitHubDialog({
       generationError={generation.error}
       generateDescription={generateDescription}
       onGenerateDescriptionChange={setGenerateDescription}
+      executionContext={generation.providerContext.context}
+      providerLoading={generation.providerContext.loading || !generation.providerContext.available}
+      providerAnnouncement={generation.providerContext.announcement}
     />
   );
 
@@ -812,6 +839,7 @@ export function ProjectGalleryPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
+  const [repoAppInstallUrl, setRepoAppInstallUrl] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [repoAppAuthorizationResult] = useState(() => searchParams.get('repo_app_auth'));
   const toasterId = useId('project-gallery-toaster');
@@ -854,6 +882,7 @@ export function ProjectGalleryPage() {
         if (!cancelled) {
           setDataDir(info.data_directory);
           setWorkspaceAutoAssigned(info.workspace_auto_assigned ?? false);
+          setRepoAppInstallUrl(info.repo_app_install_url ?? null);
         }
       } catch {
         return undefined;
@@ -954,6 +983,7 @@ export function ProjectGalleryPage() {
               onCreated={handleCreated}
               dataDir={dataDir}
               workspaceAutoAssigned={workspaceAutoAssigned}
+              repoAppInstallUrl={repoAppInstallUrl}
               initiallyOpen={openCreateFromGitHub}
               authorizationResult={repoAppAuthorizationResult}
             />
@@ -1004,6 +1034,7 @@ export function ProjectGalleryPage() {
                 onCreated={handleCreated}
                 dataDir={dataDir}
                 workspaceAutoAssigned={workspaceAutoAssigned}
+                repoAppInstallUrl={repoAppInstallUrl}
                 initiallyOpen={openCreateFromGitHub}
                 authorizationResult={repoAppAuthorizationResult}
               />

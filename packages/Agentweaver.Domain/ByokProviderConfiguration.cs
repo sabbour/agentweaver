@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Agentweaver.Domain;
 
 /// <summary>
@@ -15,6 +18,31 @@ public sealed record ByokProviderConfiguration(
     string? WireApi = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     string? AzureApiVersion = null);
+
+public static class ByokProviderConfigurationExtensions
+{
+    public static string ExecutionFingerprint(this ByokProviderConfiguration configuration)
+    {
+        var headers = configuration.Headers is null
+            ? string.Empty
+            : string.Join(
+                "\n",
+                configuration.Headers
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => $"{pair.Key}={pair.Value}"));
+        var material = string.Join(
+            "\n",
+            configuration.Id,
+            configuration.Type,
+            configuration.BaseUrl,
+            configuration.Model,
+            configuration.ApiKey,
+            configuration.WireApi ?? string.Empty,
+            configuration.AzureApiVersion ?? string.Empty,
+            headers);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
+    }
+}
 
 public interface IByokProviderConfigurationProvider
 {

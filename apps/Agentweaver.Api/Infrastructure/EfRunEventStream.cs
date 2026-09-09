@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
@@ -82,6 +83,55 @@ public sealed class EfRunEventStream : IRunEventStream
         }
 
         return sequence;
+    }
+
+    public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
+    {
+        var terminalStatuses = Endpoints.EndpointHelpers.TerminalRunStatuses
+            .Append(RunStatus.AssembleReady).Select(s => s.ToApiString()).ToArray();
+        for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
+        {
+            await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+            await using var tx = await db.Database.BeginTransactionAsync(
+                System.Data.IsolationLevel.ReadCommitted, ct).ConfigureAwait(false);
+            try
+            {
+                await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+                // A conditional no-op UPDATE takes the same row lock as every status UPDATE/DELETE.
+                // PostgreSQL re-evaluates this predicate after waiting for a concurrent writer.
+                // Keep that lock and both ready events in ONE transaction until commit.
+                var active = await db.Runs
+                    .Where(r => r.RunId == runId && !terminalStatuses.Contains(r.Status))
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, r => r.Status), ct)
+                    .ConfigureAwait(false);
+                if (active == 0)
+                    return [];
+
+                var sequence = (await db.RunEvents.Where(e => e.RunId == runId)
+                    .Select(e => (int?)e.Sequence).MaxAsync(ct).ConfigureAwait(false)) ?? 0;
+                var recorded = events.Select(e => e with { Sequence = ++sequence }).ToArray();
+                foreach (var evt in recorded)
+                    db.RunEvents.Add(new RunEventRecord
+                    {
+                        RunId = runId,
+                        Sequence = evt.Sequence,
+                        EventType = evt.Type,
+                        PayloadJson = JsonSerializer.Serialize(evt.Payload),
+                        CreatedAt = evt.TimestampUtc.UtcDateTime,
+                    });
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                return recorded;
+            }
+            catch (Exception ex) when (ShouldRetryWrite(ex, attempt, out _))
+            {
+                await tx.RollbackAsync(ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelay(attempt), ct).ConfigureAwait(false);
+            }
+        }
+        throw new InvalidOperationException("Failed to append the conditional run event batch.");
     }
 
     /// <inheritdoc />

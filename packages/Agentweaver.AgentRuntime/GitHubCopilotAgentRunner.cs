@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using GitHub.Copilot;
@@ -111,10 +112,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? systemPromptContext = null,
         string? userId = null,
         string? projectId = null,
-        CopilotOperationCapability? copilotCapability = null)
+        CopilotOperationCapability? copilotCapability = null,
+        ByokProviderConfiguration? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
-        var byokProvider = _byokProviderConfiguration is not null
-            ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
+        var byokProvider = modelSource == ModelSource.Byok
+            ? byokProviderConfiguration ?? (_byokProviderConfiguration is not null
+                ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
+                : null)
             : null;
 
         if (modelSource == ModelSource.Byok && byokProvider is null)
@@ -154,16 +159,16 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 copilotCapability.Purpose,
                 modelId,
                 ct).ConfigureAwait(false)
-            : byokProvider is null
-                ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
-                : _factory.CreateByokClient();
+            : modelSource == ModelSource.Byok
+                ? _factory.CreateByokClient()
+                : await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId);
+            var providerFailure = AgentProviderException.Classify(modelSource, ex, runId);
             if (providerFailure is not null)
             {
                 _logger.LogWarning(
@@ -441,7 +446,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
         try
         {
-            await foreach (var chunk in agent.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+            await foreach (var chunk in RunAfterValidationAsync(
+                modelInvocationGuard,
+                runId,
+                () => agent.RunStreamingAsync(task, session, options: null, ct),
+                ct))
             {
                 if (chunk is null) continue;
 
@@ -538,6 +547,19 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             if (agent is IAsyncDisposable disposableAgent)
                 await disposableAgent.DisposeAsync();
         }
+    }
+
+    internal static async IAsyncEnumerable<T> RunAfterValidationAsync<T>(
+        IModelInvocationGuard? modelInvocationGuard,
+        string runId,
+        Func<IAsyncEnumerable<T>> streamFactory,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (modelInvocationGuard is not null)
+            await modelInvocationGuard.ValidateAsync(runId, ct).ConfigureAwait(false);
+
+        await foreach (var item in streamFactory().WithCancellation(ct).ConfigureAwait(false))
+            yield return item;
     }
 
     /// <summary>

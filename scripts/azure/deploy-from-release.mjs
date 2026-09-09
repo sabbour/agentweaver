@@ -30,6 +30,7 @@ import {
   assertVersionMirrors,
   extractChangelogSection,
 } from "../changesets/shared.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 
 export class PublishedReleaseError extends Error {}
 
@@ -88,6 +89,7 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
 
 Requires an existing annotated git tag and matching GitHub Release. The
 working tree must be clean and HEAD must equal the tag commit. By default
@@ -99,6 +101,8 @@ needed for private-package auth. Pass --image-source acr-build to build
 vX.Y.Z images from source into ACR instead. Either way, this deploys them,
 verifies live provenance against the tag, waits for the AgentHost warm pool,
 and runs health verification.
+Soft-deleted canonical Repo App credentials remain inactive unless the explicit
+recovery operator flag is present.
 `;
 
 export async function previousReleaseTag(tag, { cwd, capture }) {
@@ -190,6 +194,7 @@ export async function run(opts = {}) {
     readFile = fs.readFileSync,
     validatedRelease,
     env: baseEnv = process.env,
+    recoverRepoAppPrivateKey = false,
   } = opts;
   const parsed = parseArgs(argv);
   const dryRun = parsed.dryRun || baseEnv.DRY_RUN === "true";
@@ -199,6 +204,7 @@ export async function run(opts = {}) {
     return { ok: true, help: true };
   }
 
+  const stagedRepoAppKey = stageRepoAppPrivateKeyFile(baseEnv.REPO_APP_PRIVATE_KEY_FILE);
   if (dryRun) {
     exec.setDryRun(true);
   }
@@ -217,6 +223,7 @@ export async function run(opts = {}) {
     });
     const releaseEnv = {
       ...baseEnv,
+      REPO_APP_PRIVATE_KEY_FILE: "",
       IMAGE_TAG: tag,
       AGENTHOST_IMAGE_TAG: tag,
       TARGET_GIT_REF: release.commit ?? tag,
@@ -241,6 +248,8 @@ export async function run(opts = {}) {
       TARGET_GIT_REF: release.commit ?? tag,
       PREVIOUS_IMAGE_TAG: previous || undefined,
       IMAGE_SOURCE: parsed.imageSource,
+      REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+      RECOVER_REPO_APP_PRIVATE_KEY: recoverRepoAppPrivateKey,
       ...(parsed.imageSource === "ghcr"
         ? {
             GHCR_REF: tag,
@@ -303,6 +312,7 @@ export async function run(opts = {}) {
       dryRun,
     };
   } finally {
+    stagedRepoAppKey?.cleanup();
     if (dryRun) {
       exec.setDryRun(false);
     }

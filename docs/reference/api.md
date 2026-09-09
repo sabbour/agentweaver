@@ -129,11 +129,25 @@ authenticated **human Entra subject** and use only that caller's current Repo Ap
       "default_branch": "main",
       "pushed_at": "2026-08-28T00:00:00+00:00"
     }
+  ],
+  "installations": [
+    {
+      "account_login": "octo",
+      "account_type": "user",
+      "repository_selection": "selected",
+      "management_url": "https://github.com/settings/installations/123"
+    }
   ]
 }
 ```
 
-The list intentionally has no repository permission map, clone URL, installation ID,
+Repository enumeration uses the caller's Repo App user access token against the user-installation
+repository endpoint. The visible list is therefore limited to repositories available to both the
+caller and the App installation. `installations` contains GitHub-provided navigation metadata for
+personal and organization installations, including whether each installation grants `all` or
+`selected` repositories. `management_url` is validated against the configured GitHub web origin.
+
+The response intentionally has no repository permission map, clone URL, raw installation ID,
 credential data, provider error, or assertion that public metadata proves operational access.
 `POST` accepts `{ "full_name": "octo/example" }` only as a user selection instruction. The server
 rechecks that name against the caller's bounded Repo App browse result, then returns:
@@ -571,8 +585,8 @@ Response `204 No Content`.
 
 Authorization:
 
-- Platform administrators may delete any run, including one whose persisted project no longer exists.
-- The submitting user may delete their own personal session created by the Assistant endpoints even if its incidental project no longer exists or the user's project role was revoked. Sessions are recognized by their server-authored durable `run.started` event.
+- Human platform administrators may delete any run, including one whose persisted project no longer exists. Dedicated internal-service credentials cannot delete runs.
+- The submitting user may delete their own personal session created by the Assistant endpoints even if its incidental project no longer exists or the user's project role was revoked. Sessions are recognized only when the first durable event is the server-authored sequence-1 `run.started` marker with the run's matching `runId`, `agentName: "Operator"`, and `kind: "operator"` values.
 - Other project-owned runs require current project Contributor access.
 
 Errors: `400` invalid run id; `404` run not found; `403` caller lacks deletion authority; `500` fetch or delete failed.

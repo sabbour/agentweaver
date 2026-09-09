@@ -90,6 +90,13 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                     : _agentNodeCharter + "\n\n---\n\n" + systemPromptContext;
             }
 
+            if (_agent is IProviderBoundWorkflowTurnAgent providerBoundAgent)
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
+
             await _agent.SetupAsync(
                 input.WorktreePath,
                 input.RepositoryPath,
@@ -147,7 +154,10 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 Iteration: input.Iteration,
                 SubmittingUser: input.SubmittingUser,
                 ProjectId: input.ProjectId,
-                AgentName: input.AgentName);
+                AgentName: input.AgentName,
+                ModelSource: input.ModelSource,
+                ModelId: input.ModelId,
+                ByokProviderFingerprint: input.ByokProviderFingerprint);
         }
 
         // POST-TURN BOOKKEEPING. The agent turn itself has already completed here (agent.turn.end
@@ -239,7 +249,10 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                     TerminalFailureReason: failureReason,
                     TerminalFailureEvidence: evidence,
                     TerminalFailureMessage: ex.Message,
-                    TerminalFailureRetryable: false);
+                    TerminalFailureRetryable: false,
+                    ModelSource: input.ModelSource,
+                    ModelId: input.ModelId,
+                    ByokProviderFingerprint: input.ByokProviderFingerprint);
             }
 
             // Compatibility fallback for callers that explicitly disable graph-native failures.
@@ -268,7 +281,10 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             Iteration: input.Iteration,
             SubmittingUser: input.SubmittingUser,
             ProjectId: input.ProjectId,
-            AgentName: input.AgentName);
+            AgentName: input.AgentName,
+            ModelSource: input.ModelSource,
+            ModelId: input.ModelId,
+            ByokProviderFingerprint: input.ByokProviderFingerprint);
     }
 
     private static bool TryGetKnownTerminalFailure(

@@ -9,6 +9,7 @@ import type {
   ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
+  AiExecutionContext,
   AuthConfigResponse,
   AuthSessionResponse,
   AssemblyReviewDecision,
@@ -102,6 +103,10 @@ import type {
   UnattendedReadiness,
   AutomationActivationStatus,
 } from './types';
+
+const providerHeaders = (providerKey?: string): Record<string, string> | undefined =>
+  providerKey ? { 'If-Model-Provider-Key': providerKey } : undefined;
+
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
   file: File;
@@ -294,8 +299,14 @@ export class AgentweaverApiClient {
     return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
-  retryRun(runId: string): Promise<RetryRunResponse> {
-    return this.request<RetryRunResponse>('POST', `/runs/${encodeURIComponent(runId)}/retry`, {});
+  retryRun(runId: string, providerKey?: string): Promise<RetryRunResponse> {
+    return this.request<RetryRunResponse>(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/retry`,
+      {},
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // Persisted run events (FR-022). Seeds the execution timeline for terminal/parked
@@ -366,8 +377,14 @@ export class AgentweaverApiClient {
     return this.request<CommitResponse>('POST', `/runs/${encodeURIComponent(runId)}/commit`, {});
   }
 
-  requestChanges(runId: string, comment: string): Promise<RequestChangesResponse> {
-    return this.request<RequestChangesResponse>('POST', `/runs/${encodeURIComponent(runId)}/request-changes`, { comment });
+  requestChanges(runId: string, comment: string, providerKey?: string): Promise<RequestChangesResponse> {
+    return this.request<RequestChangesResponse>(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/request-changes`,
+      { comment },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   updateSandboxPolicy(policy: SandboxPolicy): Promise<SandboxPolicy> {
@@ -404,11 +421,11 @@ export class AgentweaverApiClient {
       .then(normalizeBlueprintList);
   }
 
-  generateBlueprint(description: string, targetRepository?: string | null): Promise<GenerateBlueprintResponse> {
+  generateBlueprint(description: string, targetRepository?: string | null, providerKey?: string): Promise<GenerateBlueprintResponse> {
     return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', {
       description,
       target_repository: targetRepository || undefined,
-    });
+    }, undefined, providerHeaders(providerKey));
   }
 
   suggestBlueprint(repository: string): Promise<SuggestBlueprintResponse> {
@@ -559,6 +576,18 @@ export class AgentweaverApiClient {
     return this.request<AuthSessionResponse>('GET', '/auth/session');
   }
 
+  prepareAiExecutionContext(
+    operation: string,
+    projectId?: string,
+    runId?: string,
+  ): Promise<AiExecutionContext> {
+    return this.request<AiExecutionContext>('POST', '/ai/execution-context', {
+      operation,
+      project_id: projectId,
+      run_id: runId,
+    });
+  }
+
   getAuthConfig(): Promise<AuthConfigResponse> {
     return this.request<AuthConfigResponse>('GET', '/auth/config');
   }
@@ -683,8 +712,14 @@ export class AgentweaverApiClient {
     return this.request<{ universes: string[] }>('GET', `/projects/${encodeURIComponent(projectId)}/casting/universes`);
   }
 
-  createProposal(projectId: string, req: CreateProposalRequest): Promise<CastProposalDto> {
-    return this.request<CastProposalDto>('POST', `/projects/${encodeURIComponent(projectId)}/casting/proposals`, req);
+  createProposal(projectId: string, req: CreateProposalRequest, providerKey?: string): Promise<CastProposalDto> {
+    return this.request<CastProposalDto>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/casting/proposals`,
+      req,
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   getProposal(projectId: string, proposalId: string): Promise<CastProposalDto> {
@@ -825,8 +860,14 @@ export class AgentweaverApiClient {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills`, body);
   }
 
-  generateSkill(projectId: string, description: string): Promise<import('./types').GeneratedSkillDraft> {
-    return this.request<import('./types').GeneratedSkillDraft>('POST', `/projects/${encodeURIComponent(projectId)}/skills/generate`, { description });
+  generateSkill(projectId: string, description: string, providerKey?: string): Promise<import('./types').GeneratedSkillDraft> {
+    return this.request<import('./types').GeneratedSkillDraft>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skills/generate`,
+      { description },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   syncSkills(projectId: string): Promise<import('./types').SkillAcquisitionResponse> {
@@ -854,8 +895,14 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources/${encodeURIComponent(name)}`);
   }
 
-  browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number): Promise<import('./types').SkillMarketplaceBrowseResponse> {
-    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query, page, pageSize });
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number, providerKey?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`,
+      { query, page, pageSize },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {
@@ -944,11 +991,18 @@ export class AgentweaverApiClient {
     goal: string,
     workflowOverrideId?: string | null,
     startMode?: StartOrchestrationMode,
+    providerKey?: string,
   ): Promise<StartOrchestrationResponse> {
     const body: Record<string, unknown> = { goal };
     if (workflowOverrideId) body.workflow_override_id = workflowOverrideId;
     if (startMode && startMode !== 'define_outcome') body.start_mode = startMode;
-    return this.request<StartOrchestrationResponse>('POST', `/projects/${encodeURIComponent(projectId)}/orchestrations`, body);
+    return this.request<StartOrchestrationResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/orchestrations`,
+      body,
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // Project Workspace browsing (read-only). The backend exposes the project repo
@@ -972,18 +1026,36 @@ export class AgentweaverApiClient {
     return this.request<OutcomeSpec>('GET', `/runs/${encodeURIComponent(runId)}/outcome-spec`);
   }
 
-  confirmOutcomeSpec(runId: string, allowTaskPromotion = false): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, { allowTaskPromotion });
+  confirmOutcomeSpec(runId: string, allowTaskPromotion = false, providerKey?: string): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`,
+      { allowTaskPromotion },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
-  reviseOutcomeSpec(runId: string, feedback: string): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/revise`, { feedback });
+  reviseOutcomeSpec(runId: string, feedback: string, providerKey?: string): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/outcome-spec/revise`,
+      { feedback },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // Coordinator steering (Feature 008 Phase 2). The /steer endpoint is added by the
   // backend team in parallel; this codes against the agreed contract.
-  steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest): Promise<SteerCoordinatorResponse> {
-    return this.request<SteerCoordinatorResponse>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/steer`, req);
+  steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest, providerKey?: string): Promise<SteerCoordinatorResponse> {
+    return this.request<SteerCoordinatorResponse>(
+      'POST',
+      `/runs/${encodeURIComponent(coordinatorRunId)}/steer`,
+      req,
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // ─── Assistant (operator) run (#346) ──────────────────────────────────────
@@ -1009,16 +1081,28 @@ export class AgentweaverApiClient {
   //   sealed with a genuinely terminal run.completed event (a real end-of-conversation, not
   //   mere inactivity) — the server refuses to revive a sealed run instead of silently
   //   flipping it back to in-progress.
-  createAssistantRun(req: CreateAssistantRunRequest): Promise<CreateAssistantRunResponse> {
-    return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
+  createAssistantRun(req: CreateAssistantRunRequest, providerKey?: string): Promise<CreateAssistantRunResponse> {
+    return this.request<CreateAssistantRunResponse>(
+      'POST',
+      '/assistant/runs',
+      req,
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   sendAssistantMessage(
     assistantRunId: string,
     req: SendAssistantMessageRequest,
+    providerKey?: string,
   ): Promise<SendAssistantMessageResponse> {
     return this.request<SendAssistantMessageResponse>(
-      'POST', `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`, req);
+      'POST',
+      `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`,
+      req,
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // GET /api/assistant/runs?limit=50 — the caller's own assistant conversations,
@@ -1043,13 +1127,19 @@ export class AgentweaverApiClient {
   // Posts the backend AssemblyReviewRequest shape ({ approved, request_changes, feedback }) derived
   // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
   // decline -> assembly_declined.
-  reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string): Promise<void> {
+  reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string, providerKey?: string): Promise<void> {
     const body: AssemblyReviewRequest = {
       approved: decision === 'approve',
       request_changes: decision === 'request_changes',
       feedback: comment,
     };
-    return this.request<AssemblyReviewResponse>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body)
+    return this.request<AssemblyReviewResponse>(
+      'POST',
+      `/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`,
+      body,
+      undefined,
+      providerHeaders(providerKey),
+    )
       .then(() => undefined);
   }
 
@@ -1171,11 +1261,12 @@ export class AgentweaverApiClient {
     return this.request<BacklogSettingsDto>('PUT', `/projects/${encodeURIComponent(projectId)}/backlog/settings`, settings);
   }
 
-  async submitReview(runId: string, approved: boolean): Promise<ReviewResponse> {
+  async submitReview(runId: string, approved: boolean, providerKey?: string): Promise<ReviewResponse> {
     const body: ReviewRequest = { approved };
     const headers: Record<string, string> = {
       ...this.authHeaders(),
       'Content-Type': 'application/json',
+      ...providerHeaders(providerKey),
     };
     const response = await fetch(
       `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
@@ -1300,22 +1391,26 @@ export class AgentweaverApiClient {
     );
   }
 
-  runWorkflowNow(projectId: string, workflowId: string): Promise<{ task_id: string }> {
+  runWorkflowNow(projectId: string, workflowId: string, providerKey?: string): Promise<{ task_id: string }> {
     return this.request<{ task_id: string }>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/run`,
       {},
+      undefined,
+      providerHeaders(providerKey),
     );
   }
 
   // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
   // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
   // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
-  generateWorkflow(projectId: string, description: string): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean }> {
-    return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean }>(
+  generateWorkflow(projectId: string, description: string, providerKey?: string): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
+    return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
       { description },
+      undefined,
+      providerHeaders(providerKey),
     );
   }
 
@@ -1383,8 +1478,14 @@ export class AgentweaverApiClient {
   // Decompose a spec file into proposed backlog items (Feature 014, FR-003/004).
   // filePath=null uses the project's confirmed outcome spec stored on the server (requires runId).
   // confirm=false → dry-run preview; confirm=true → create the tasks.
-  decomposeSpec(projectId: string, filePath: string | null, confirm: boolean, runId?: string | null, ref?: string): Promise<DecomposeResponse> {
-    return this.request<DecomposeResponse>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/decompose`, { file_path: filePath, run_id: runId ?? null, confirm, ...(ref ? { ref } : {}) });
+  decomposeSpec(projectId: string, filePath: string | null, confirm: boolean, runId?: string | null, ref?: string, providerKey?: string): Promise<DecomposeResponse> {
+    return this.request<DecomposeResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/backlog/decompose`,
+      { file_path: filePath, run_id: runId ?? null, confirm, ...(ref ? { ref } : {}) },
+      undefined,
+      providerHeaders(providerKey),
+    );
   }
 
   // Sandbox port-forward (017-preview): tunnel a sandbox pod port to the API server.
@@ -1413,9 +1514,16 @@ export class AgentweaverApiClient {
     return this.request<RuntimeInfo>('GET', '/system/runtime');
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
     const headers: Record<string, string> = {
       ...this.authHeaders(),
+      ...extraHeaders,
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 

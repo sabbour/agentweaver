@@ -237,6 +237,7 @@ export async function resolveVariables(options = {}) {
     env.OAUTH_SIGNING_CERTIFICATE_NAME || DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME;
   const OAUTH_ENCRYPTION_CERTIFICATE_NAME =
     env.OAUTH_ENCRYPTION_CERTIFICATE_NAME || DEFAULTS.OAUTH_ENCRYPTION_CERTIFICATE_NAME;
+  const REPO_APP_PRIVATE_KEY_FILE = env.REPO_APP_PRIVATE_KEY_FILE || "";
   // These are deliberately opt-in: a local Azure CLI timeout does not prove
   // whether a remote ACR build/import completed, so callers must reconcile
   // the target tag/digest before deciding whether a retry is safe.
@@ -308,6 +309,7 @@ export async function resolveVariables(options = {}) {
     ENTRA_ENTERPRISE_APP_OBJECT_ID,
     OAUTH_SIGNING_CERTIFICATE_NAME,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME,
+    REPO_APP_PRIVATE_KEY_FILE,
     ACR_BUILD_TIMEOUT_MS,
     ACR_IMPORT_TIMEOUT_MS,
     TENANT_ID,

@@ -143,6 +143,8 @@ builder.Services.AddSingleton<WorkflowRestartService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
+builder.Services.AddSingleton<Agentweaver.Api.Auth.IRunModelProviderBoundaryResolver>(
+    sp => sp.GetRequiredService<RunOrchestrator>());
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IChildRevisionHandoff,
     Agentweaver.Api.Coordinator.RunOrchestratorChildRevisionHandoff>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorAssemblyStore>();
@@ -298,6 +300,9 @@ if (!isWorker)
             EndpointAuthorizationPolicies.AuthenticatedSelf,
             Authenticated().RequireAuthenticatedUser().Build());
         options.AddPolicy(
+            EndpointAuthorizationPolicies.AuthenticatedSelfOrMcp,
+            Authenticated().RequireAuthenticatedUser().Build());
+        options.AddPolicy(
             EndpointAuthorizationPolicies.AuthenticatedPlatform,
             Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformRoleRequirement()).Build());
         options.AddPolicy(
@@ -341,6 +346,12 @@ builder.Services.AddScoped<CopilotCredentialRefreshService>(sp => new(
 builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<EffectiveModelProviderResolver>();
+builder.Services.AddScoped<AiExecutionPlanService>();
+builder.Services.AddSingleton<AiExecutionPlanAccessor>();
+builder.Services.AddSingleton<RunModelInvocationGuard>();
+builder.Services.AddSingleton<Agentweaver.Domain.IModelInvocationGuard>(
+    sp => sp.GetRequiredService<RunModelInvocationGuard>());
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.EffectiveRunModelTurnExecutor>();
 builder.Services.AddScoped<UserModelProviderSettingsService>();
 builder.Services.AddScoped<Agentweaver.Api.Auth.GenerationModelProviderExecutor>();
 builder.Services.AddScoped<BrowserEntraSessionService>();
@@ -814,6 +825,7 @@ builder.Services.AddSingleton<PortForwardService>();
             sp.GetRequiredService<Agentweaver.Api.Sandbox.Preview.PreviewCommandResolver>(),
             sp.GetRequiredService<Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry>(),
             sp.GetRequiredService<Agentweaver.Api.Infrastructure.RunStreamStore>(),
+            sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SandboxRuntimeOptions>>().Value,
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<Agentweaver.Api.Coordinator.Preview.PreviewStep>(),
             sp.GetService<Agentweaver.Api.Auth.ISecretStore>(),
@@ -902,6 +914,13 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
             .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<MemoryDbContext>())
             .AddServer(options =>
             {
+                options.RemoveEventHandler(
+                    OpenIddict.Server.OpenIddictServerHandlers.Authentication
+                        .ValidateClientRedirectUri.Descriptor);
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthAuthorizationRedirectUriValidationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication
+                            .ValidateClientRedirectUri.Descriptor.Order));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
                     handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication.ValidateAuthentication.Descriptor.Order - 500));

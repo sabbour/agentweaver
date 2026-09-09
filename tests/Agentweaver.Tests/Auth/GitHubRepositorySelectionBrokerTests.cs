@@ -132,7 +132,8 @@ public sealed class GitHubRepositorySelectionBrokerTests
             .ListAsync("entra-one", CancellationToken.None);
         listed.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
         listed.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
-            42, "octo/secure-repo", "octo", true, "main", "https://github.com/octo/secure-repo.git", null));
+            42, "octo/secure-repo", "octo", true, "main",
+            "https://github.com/octo/secure-repo", "https://github.com/octo/secure-repo.git", null));
     }
 
     [Fact]
@@ -182,11 +183,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
             token => new GitHubRepositorySelectionClient(
                     new StubHttpClientFactory(RepositoriesAndInstallations(42)),
-                    new RepoAppInstallationTokenService(
-                        Config(),
-                        new MemoryDbContext(options),
-                        secrets,
-                        new StubHttpClientFactory(RepositoriesAndInstallations(42))))
+                    Config())
                 .ListOwnersAsync(token, CancellationToken.None),
             CancellationToken.None);
 
@@ -221,11 +218,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
             token => new GitHubRepositorySelectionClient(
                     new StubHttpClientFactory(new ThrowingHttpHandler()),
-                    new RepoAppInstallationTokenService(
-                        Config(),
-                        new MemoryDbContext(options),
-                        secrets,
-                        new StubHttpClientFactory(new ThrowingHttpHandler())))
+                    Config())
                 .ListOwnersAsync(token, CancellationToken.None),
             CancellationToken.None);
 
@@ -241,11 +234,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new GitHubConnectionsCredentialVault(secrets),
             new GitHubRepositorySelectionClient(
                 new StubHttpClientFactory(handler),
-                new RepoAppInstallationTokenService(
-                    Config(),
-                    new MemoryDbContext(options),
-                    secrets,
-                    new StubHttpClientFactory(handler))));
+                Config()));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -284,9 +273,8 @@ public sealed class GitHubRepositorySelectionBrokerTests
     private static HttpMessageHandler RepositoriesAndInstallations(long id) => new RouteHttpHandler(request =>
         request.RequestUri!.AbsolutePath switch
         {
-            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
-            "/app/installations/72/access_tokens" => """{"token":"ghs_installation_token","expires_at":"2030-01-01T00:00:00Z"}""",
-            "/installation/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
+            "/user/installations/72/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
             _ => "{}",
         });
 

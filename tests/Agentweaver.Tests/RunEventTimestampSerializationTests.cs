@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -55,5 +56,25 @@ public sealed class RunEventTimestampSerializationTests
         var parsed = DateTimeOffset.Parse(node["timestamp_utc"]!.GetValue<string>());
         parsed.Should().BeOnOrAfter(before);
         parsed.Should().BeOnOrBefore(after);
+    }
+
+    [Fact]
+    public void StampTimestamp_RedactsLegacyProviderIdentityFields()
+    {
+        var evt = new RunEvent(1, EventTypes.RunModelProviderResolved, new
+        {
+            providerKind = EffectiveModelProviderProvenance.KindPlatformGitHubCopilot,
+            providerId = "binding-secret-id",
+            githubLogin = "private-login",
+            modelSource = "github-copilot",
+            resolutionScope = EffectiveModelProviderProvenance.ScopePlatform,
+        });
+
+        var node = EndpointHelpers.StampTimestamp(evt);
+
+        node.ContainsKey("providerId").Should().BeFalse();
+        node.ContainsKey("githubLogin").Should().BeFalse();
+        node["providerIdentityVersion"]!.GetValue<int>().Should().Be(2);
+        node["providerKey"]!.GetValue<string>().Should().NotBeNullOrWhiteSpace();
     }
 }

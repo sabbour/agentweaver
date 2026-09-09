@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox;
@@ -34,6 +35,18 @@ namespace Agentweaver.Tests.Assistant;
 /// </summary>
 public sealed class AssistantRunEndpointsTests
 {
+    [Theory]
+    [InlineData("model_provider_changed", 409)]
+    [InlineData("provider_configuration_invalid", 503)]
+    public void Provider_change_is_a_conflict_not_an_outage(string errorCode, int expectedStatus)
+    {
+        var error = new Agentweaver.AgentRuntime.Providers.AgentProviderException(
+            ModelSource.Byok,
+            Agentweaver.AgentRuntime.Providers.AgentProviderFailureKind.Configuration,
+            errorCode, "Provider configuration changed.", isRetryable: true);
+        Agentweaver.Api.Endpoints.AssistantEndpoints.ProviderFailureStatus(error).Should().Be(expectedStatus);
+    }
+
     [Fact]
     public async Task StartRun_PersistsOperatorRun()
     {
@@ -61,6 +74,12 @@ public sealed class AssistantRunEndpointsTests
         run.Status.Should().Be(RunStatus.InProgress);
 
         var events = await GetEventsAsync(client, runId!);
+        var marker = events[0];
+        marker.Sequence.Should().Be(AssistantRunService.PersonalSessionMarkerSequence);
+        marker.Type.Should().Be(EventTypes.RunStarted);
+        marker.Payload.GetProperty("runId").GetString().Should().Be(runId);
+        marker.Payload.GetProperty("agentName").GetString().Should().Be(AssistantRunService.OperatorAgentName);
+        marker.Payload.GetProperty("kind").GetString().Should().Be(AssistantRunService.PersonalSessionMarkerKind);
         events.Should().Contain(e => e.Type == EventTypes.RunModelProviderResolved,
             "Assistant creation must publish the provider context before any optional opening turn");
 
@@ -130,10 +149,13 @@ public sealed class AssistantRunEndpointsTests
             });
 
             response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-            var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
-            requirement.Should().BeEquivalentTo(ModelProviderConnectionRequirement.ForPlatformDefault(),
-                "an Operator/Assistant run's incidental project_id must never route the caller to a " +
-                "project-specific Connect-GitHub prompt");
+            var requirement = await response.Content.ReadFromJsonAsync<JsonElement>();
+            requirement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+            var context = requirement.GetProperty("context");
+            context.GetProperty("operation").GetString().Should().Be("assistant_turn");
+            context.GetProperty("effective_model_provider").GetProperty("resolution_scope").GetString()
+                .Should().Be("platform",
+                    "an Operator/Assistant run's incidental project_id must never route the caller to project scope");
             factory.Agent.Requests.Should().BeEmpty(
                 "the AgentHost path must stop before any assistant/pod work can use an ambient credential");
         }
@@ -168,7 +190,7 @@ public sealed class AssistantRunEndpointsTests
                 .GetProperty("project_id").GetString()!;
             await SeedProjectCopilotBindingAsync(factory, projectId);
 
-            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
             {
                 project_id = projectId,
                 message = "Start an AgentHost assistant session with an incidental project",
@@ -206,7 +228,7 @@ public sealed class AssistantRunEndpointsTests
         await SeedPlatformDefaultCopilotBindingAsync(factory);
         var client = AuthedClient(factory);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
         {
             message = "Start a platform-wide AgentHost assistant session",
         });
@@ -230,7 +252,7 @@ public sealed class AssistantRunEndpointsTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
         {
             message = "Start a platform-wide AgentHost assistant session in BYOK mode",
         });
@@ -275,7 +297,7 @@ public sealed class AssistantRunEndpointsTests
             await SeedProjectCopilotBindingAsync(factory, projectId);
             await SeedByokProviderConfigurationAsync(factory);
 
-            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
             {
                 project_id = projectId,
                 message = "Start a BYOK session from inside a project with its own Copilot binding",
@@ -310,11 +332,12 @@ public sealed class AssistantRunEndpointsTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn" });
+        var start = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new { message = "opening turn" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var runStore = factory.Services.GetRequiredService<IRunStore>();
@@ -334,7 +357,8 @@ public sealed class AssistantRunEndpointsTests
         await SeedPlatformDefaultCopilotBindingAsync(factory);
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on Copilot" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "opening turn on Copilot" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
@@ -344,7 +368,8 @@ public sealed class AssistantRunEndpointsTests
 
         await SeedByokProviderConfigurationAsync(factory);
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
@@ -362,7 +387,8 @@ public sealed class AssistantRunEndpointsTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on BYOK" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "opening turn on BYOK" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
@@ -373,7 +399,8 @@ public sealed class AssistantRunEndpointsTests
             await byok.SetActiveAsync(null, CancellationToken.None);
         }
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var runStore = factory.Services.GetRequiredService<IRunStore>();
@@ -402,12 +429,13 @@ public sealed class AssistantRunEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
-        requirement.Should().NotBeNull();
-        requirement!.Message.Should().Be(ModelProviderConnectionRequirement.PlatformDefaultRequirementMessage);
-        requirement.Action.Type.Should().Be(ModelProviderConnectionAction.ConfigurePlatformModelProvider,
-            "a platform-scoped requirement must carry a distinct action type so the client routes to Platform Settings, not Account Settings");
-        requirement.Action.ProjectId.Should().BeEmpty();
+        var requirement = await response.Content.ReadFromJsonAsync<JsonElement>();
+        requirement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+        var context = requirement.GetProperty("context");
+        context.GetProperty("operation").GetString().Should().Be("assistant_turn");
+        context.GetProperty("effective_model_provider").GetProperty("resolution_scope").GetString()
+            .Should().Be("platform",
+                "the provider requirement must route to Platform Settings, not project or account settings");
         factory.Agent.Requests.Should().BeEmpty(
             "the AgentHost path must stop before any assistant work can run without a redeemable platform-default Copilot binding");
     }
@@ -426,7 +454,8 @@ public sealed class AssistantRunEndpointsTests
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "list my projects" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "list my projects" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
         var turnBody = await turn.Content.ReadFromJsonAsync<JsonElement>();
         turnBody.GetProperty("message").GetString().Should().Be("Here are your projects.");
@@ -465,13 +494,19 @@ public sealed class AssistantRunEndpointsTests
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
         var refreshedClient = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
-        var firstTurn = await refreshedClient.PostAsJsonAsync(
-            $"/api/assistant/runs/{runId}/messages", new { message = "first refreshed turn" });
+        var firstTurn = await PostAssistantAiAsync(
+            factory,
+            refreshedClient,
+            $"/api/assistant/runs/{runId}/messages",
+            new { message = "first refreshed turn" });
         firstTurn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var newestClient = AuthedClient(factory, AssistantWebApplicationFactory.NewestTestToken);
-        var secondTurn = await newestClient.PostAsJsonAsync(
-            $"/api/assistant/runs/{runId}/messages", new { message = "second refreshed turn" });
+        var secondTurn = await PostAssistantAiAsync(
+            factory,
+            newestClient,
+            $"/api/assistant/runs/{runId}/messages",
+            new { message = "second refreshed turn" });
         secondTurn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var brokerTokens = factory.Agent.Requests.Select(request => request.McpBrokerToken).ToList();
@@ -496,7 +531,7 @@ public sealed class AssistantRunEndpointsTests
         var client = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
         var projectId = await SeedProjectAsync(factory);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
         {
             project_id = projectId,
             message = "verify broker identity",
@@ -533,7 +568,7 @@ public sealed class AssistantRunEndpointsTests
         var client = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
         var projectId = await SeedProjectAsync(factory);
 
-        using var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        using var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs", new
         {
             project_id = projectId,
             message = "exercise deterministic renewal",
@@ -572,7 +607,9 @@ public sealed class AssistantRunEndpointsTests
         (await assignments.DeleteAsync(ProjectId.Parse(projectId), AssistantWebApplicationFactory.TestUser))
             .Should().BeTrue();
 
-        var response = await client.PostAsJsonAsync(
+        var response = await PostAssistantAiAsync(
+            factory,
+            client,
             $"/api/assistant/runs/{runId}/messages",
             new { message = "must not mint a token" });
 
@@ -585,7 +622,9 @@ public sealed class AssistantRunEndpointsTests
     {
         await using var factory = new AssistantWebApplicationFactory();
         var platformClient = AuthedClient(factory);
-        var start = await platformClient.PostAsJsonAsync(
+        var start = await PostAssistantAiAsync(
+            factory,
+            platformClient,
             "/api/assistant/runs",
             new { message = "mint one bounded token" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -614,7 +653,8 @@ public sealed class AssistantRunEndpointsTests
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "burst tool callbacks" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "burst tool callbacks" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var events = await GetEventsAsync(client, runId);
@@ -649,7 +689,9 @@ public sealed class AssistantRunEndpointsTests
         // The turn blocks inside the gate until the operator approves, so post the message without
         // awaiting it, resolve the approval on the SAME generic endpoint the coordinator uses, then
         // await the turn.
-        var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "start coordinator" });
+        await PrepareAssistantExecutionAsync(factory, client);
+        var turnTask = client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "start coordinator" });
 
         var requestId = await WaitForApprovalRequestIdAsync(factory.Agent);
         requestId.Should().NotBeNullOrWhiteSpace("the gated tool must raise a tool.approval_required event");
@@ -686,7 +728,9 @@ public sealed class AssistantRunEndpointsTests
         var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
-        var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "submit a run" });
+        await PrepareAssistantExecutionAsync(factory, client);
+        var turnTask = client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "submit a run" });
 
         var requestId = await WaitForApprovalRequestIdAsync(factory.Agent);
         requestId.Should().NotBeNullOrWhiteSpace();
@@ -718,10 +762,12 @@ public sealed class AssistantRunEndpointsTests
         await using var factory = new AssistantWebApplicationFactory();
         var client = AuthedClient(factory);
 
-        var first = (await (await client.PostAsJsonAsync("/api/assistant/runs", new { message = "first convo" }))
+        var first = (await (await PostAssistantAiAsync(
+                factory, client, "/api/assistant/runs", new { message = "first convo" }))
             .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
         await Task.Delay(10);
-        var second = (await (await client.PostAsJsonAsync("/api/assistant/runs", new { message = "second convo" }))
+        var second = (await (await PostAssistantAiAsync(
+                factory, client, "/api/assistant/runs", new { message = "second convo" }))
             .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
         // Seed an operator run owned by a DIFFERENT user directly in the store — it must never leak.
@@ -791,7 +837,8 @@ public sealed class AssistantRunEndpointsTests
             AgentName = AssistantRunService.OperatorAgentName,
         }, CancellationToken.None);
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "are you still here?" });
+        var turn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "are you still here?" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK, "an unsealed InProgress run must rehydrate on a cache-miss");
         (await turn.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString().Should().Be("Resumed.");
     }
@@ -811,7 +858,8 @@ public sealed class AssistantRunEndpointsTests
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
-        var firstTurn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "remember the number 42" });
+        var firstTurn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "remember the number 42" });
         firstTurn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // Force the 30-minute idle sweep. The run must be PARKED dormant, NOT sealed: status Idle,
@@ -831,7 +879,8 @@ public sealed class AssistantRunEndpointsTests
 
         // The next message transparently WAKES the dormant run and continues the SAME conversation.
         factory.Agent.ReplyText = "You said 42.";
-        var secondTurn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "what number did I say?" });
+        var secondTurn = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "what number did I say?" });
         secondTurn.StatusCode.Should().Be(HttpStatusCode.OK,
             "a dormant conversation must wake and continue with zero error surfaced");
         (await secondTurn.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString().Should().Be("You said 42.");
@@ -887,7 +936,8 @@ public sealed class AssistantRunEndpointsTests
             new RunEvent(0, EventTypes.RunCompleted, new { runId = runId.ToString(), reason = "completed" }), CancellationToken.None);
         await eventStream.CompleteAsync(runId.ToString());
 
-        var resume = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "you there?" });
+        var resume = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{runId}/messages", new { message = "you there?" });
         resume.StatusCode.Should().Be(HttpStatusCode.Conflict, "a genuinely-sealed conversation must not rehydrate");
         (await resume.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString().Should().Be("operator_run_closed");
 
@@ -907,7 +957,8 @@ public sealed class AssistantRunEndpointsTests
         var client = AuthedClient(factory);
 
         // Replica A = the DI-hosted service. Start a run + opening turn so it is resident in A.
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "hello" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "hello" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
@@ -963,7 +1014,8 @@ public sealed class AssistantRunEndpointsTests
         factory.Agent.ReplyText = "hi";
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "hello" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "hello" });
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
         // Park the run dormant via the idle sweep.
@@ -994,7 +1046,8 @@ public sealed class AssistantRunEndpointsTests
         factory.Agent.ReplyText = "hi";
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "start something" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "start something" });
         start.StatusCode.Should().Be(HttpStatusCode.Created);
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
@@ -1039,7 +1092,8 @@ public sealed class AssistantRunEndpointsTests
         factory.Agent.ReplyText = "hi";
         var client = AuthedClient(factory);
 
-        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "start something" });
+        var start = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "start something" });
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
         var runService = (AssistantRunService)factory.Services.GetRequiredService<IAssistantRunService>();
@@ -1080,8 +1134,8 @@ public sealed class AssistantRunEndpointsTests
             AgentName = AssistantRunService.OperatorAgentName,
         }, CancellationToken.None);
 
-        var response = await client.PostAsJsonAsync(
-            $"/api/assistant/runs/{otherUsersRunId}/messages", new { message = "hi" });
+        var response = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{otherUsersRunId}/messages", new { message = "hi" });
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
             "rehydration must never let a caller resume a run they don't own");
@@ -1093,8 +1147,8 @@ public sealed class AssistantRunEndpointsTests
         await using var factory = new AssistantWebApplicationFactory();
         var client = AuthedClient(factory);
 
-        var response = await client.PostAsJsonAsync(
-            $"/api/assistant/runs/{RunId.New()}/messages", new { message = "hi" });
+        var response = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{RunId.New()}/messages", new { message = "hi" });
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound,
             "a genuinely nonexistent run must still 404, not attempt rehydration");
@@ -1141,11 +1195,12 @@ public sealed class AssistantRunEndpointsTests
 
         // A follow-up on the SEALED run A must 409, confirming it really is sealed (guard untouched)
         // before we exercise the resume path against it.
-        var reviveAttempt = await client.PostAsJsonAsync($"/api/assistant/runs/{keyA}/messages", new { message = "still there?" });
+        var reviveAttempt = await PostAssistantAiAsync(
+            factory, client, $"/api/assistant/runs/{keyA}/messages", new { message = "still there?" });
         reviveAttempt.StatusCode.Should().Be(HttpStatusCode.Conflict);
 
         factory.Agent.ReplyText = "Continuing our chat.";
-        var startB = await client.PostAsJsonAsync("/api/assistant/runs",
+        var startB = await PostAssistantAiAsync(factory, client, "/api/assistant/runs",
             new { message = "are you still there?", resume_from_run_id = keyA });
         startB.StatusCode.Should().Be(HttpStatusCode.Created);
         var bodyB = await startB.Content.ReadFromJsonAsync<JsonElement>();
@@ -1181,7 +1236,8 @@ public sealed class AssistantRunEndpointsTests
         factory.Agent.ReplyText = "ok";
         var client = AuthedClient(factory);
 
-        var startA = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "keep this in mind: 42" });
+        var startA = await PostAssistantAiAsync(
+            factory, client, "/api/assistant/runs", new { message = "keep this in mind: 42" });
         startA.StatusCode.Should().Be(HttpStatusCode.Created);
         var runIdA = (await startA.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
 
@@ -1189,7 +1245,7 @@ public sealed class AssistantRunEndpointsTests
         (await runStore.GetAsync(RunId.Parse(runIdA), CancellationToken.None))!.Status.Should().Be(RunStatus.InProgress);
 
         factory.Agent.ReplyText = "sure";
-        var startB = await client.PostAsJsonAsync("/api/assistant/runs",
+        var startB = await PostAssistantAiAsync(factory, client, "/api/assistant/runs",
             new { message = "hi again", resume_from_run_id = runIdA });
 
         startB.StatusCode.Should().Be(HttpStatusCode.Created,
@@ -1221,7 +1277,7 @@ public sealed class AssistantRunEndpointsTests
         var before = await runStore.GetRunsBySubmittingUserAsync(
             AssistantWebApplicationFactory.TestUser, AssistantRunService.OperatorAgentName, 200, CancellationToken.None);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs",
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs",
             new { message = "hi", resume_from_run_id = otherUsersRunId.ToString() });
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
@@ -1244,7 +1300,7 @@ public sealed class AssistantRunEndpointsTests
         var before = await runStore.GetRunsBySubmittingUserAsync(
             AssistantWebApplicationFactory.TestUser, AssistantRunService.OperatorAgentName, 200, CancellationToken.None);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs",
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs",
             new { message = "hi", resume_from_run_id = RunId.New().ToString() });
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -1262,7 +1318,7 @@ public sealed class AssistantRunEndpointsTests
         await using var factory = new AssistantWebApplicationFactory();
         var client = AuthedClient(factory);
 
-        var response = await client.PostAsJsonAsync("/api/assistant/runs",
+        var response = await PostAssistantAiAsync(factory, client, "/api/assistant/runs",
             new { message = "hi", resume_from_run_id = "not-a-real-run-id" });
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -1316,6 +1372,23 @@ public sealed class AssistantRunEndpointsTests
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
         return client;
+    }
+
+    private static async Task<HttpResponseMessage> PostAssistantAiAsync<T>(
+        AssistantWebApplicationFactory factory,
+        HttpClient client,
+        string requestUri,
+        T body)
+    {
+        await PrepareAssistantExecutionAsync(factory, client);
+        return await client.PostAsJsonAsync(requestUri, body);
+    }
+
+    private static async Task PrepareAssistantExecutionAsync(
+        AssistantWebApplicationFactory factory,
+        HttpClient client)
+    {
+        await factory.PrepareAiExecutionAsync(client);
     }
 
     private static async Task<List<EventRow>> GetEventsAsync(HttpClient client, string runId)
@@ -1476,6 +1549,44 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
     private readonly string _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-cp-{Guid.NewGuid():N}");
     private readonly string _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-ccp-{Guid.NewGuid():N}");
+
+    public async Task PrepareAiExecutionAsync(HttpClient client)
+    {
+        var response = await client.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation = "assistant_turn" });
+        response.EnsureSuccessStatusCode();
+        var context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>()
+            ?? throw new InvalidOperationException("AI execution context response was empty.");
+        if (context.ExecutionKey is null)
+        {
+            await using var scope = Services.CreateAsyncScope();
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var provider = await settings.GetAsync(CancellationToken.None)
+                ?? await settings.AddAsync(
+                    new ByokProviderConfiguration(
+                        string.Empty,
+                        "Assistant test provider",
+                        "openai",
+                        "https://api.example.test/v1",
+                        "gpt-5",
+                        "test-key"),
+                    CancellationToken.None);
+            await settings.SetActiveAsync(provider.Id, CancellationToken.None);
+
+            response = await client.PostAsJsonAsync(
+                "/api/ai/execution-context",
+                new { operation = "assistant_turn" });
+            response.EnsureSuccessStatusCode();
+            context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>()
+                ?? throw new InvalidOperationException("AI execution context response was empty.");
+        }
+
+        var providerKey = context.ExecutionKey
+            ?? throw new InvalidOperationException("AI execution context did not return a provider key.");
+        client.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+        client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

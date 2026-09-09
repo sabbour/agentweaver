@@ -568,7 +568,11 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         ]);
 
         var child = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
-        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+        (await lifecycle.PrepareForLaunchAsync(
+            child,
+            CancellationToken.None,
+            expectedCopilotBindingId: "binding",
+            expectedCopilotCredentialVersion: "version")).Should().BeTrue();
         var childSnapshots = await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString());
         childSnapshots.Should().HaveCount(rootSnapshots.Count);
         foreach (var rootSnapshot in rootSnapshots)
@@ -580,7 +584,11 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         }
 
         var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
-        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
+        (await lifecycle.PrepareForLaunchAsync(
+            retry,
+            CancellationToken.None,
+            expectedCopilotBindingId: "binding",
+            expectedCopilotCredentialVersion: "version")).Should().BeTrue();
         var retrySnapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
         retrySnapshots.Should().HaveCount(rootSnapshots.Count);
         foreach (var rootSnapshot in rootSnapshots)
@@ -589,6 +597,13 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             retrySnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
             retrySnapshot.GrantDigest.Should().Be(rootSnapshot.GrantDigest);
         }
+
+        var drifted = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(
+            drifted,
+            CancellationToken.None,
+            expectedCopilotBindingId: "binding",
+            expectedCopilotCredentialVersion: "replacement-version")).Should().BeFalse();
 
         // Recovery (resume) revisits the SAME run: already-captured snapshots are re-fenced, not
         // recaptured or duplicated.
@@ -638,6 +653,57 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         // Recovery/resume of the same blank-origin root re-attempts root construction and still
         // legitimately succeeds with zero snapshots.
         (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_ByokRetryInheritsRepositoryWithoutStaleCopilotBinding()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+
+        await db.ProjectCopilotBindings.ExecuteUpdateAsync(update => update
+            .SetProperty(binding => binding.Status, GitHubBindingStatus.Revoked)
+            .SetProperty(binding => binding.DeactivatedAt, DateTimeOffset.UtcNow));
+        var retry = RunForSnapshotLifecycle(projectId) with
+        {
+            RetriedFrom = root.Id.ToString(), ModelSource = ModelSource.Byok,
+        };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository);
+        snapshots.Should().NotContain(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_CopilotRetryUsesAcceptedCredentialVersion()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        await db.ProjectCopilotBindings.ExecuteUpdateAsync(update => update
+            .SetProperty(binding => binding.CredentialVersion, "replacement-version"));
+        var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(
+            retry, CancellationToken.None, "binding", "replacement-version")).Should().BeTrue();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot
+            && snapshot.CredentialVersion == "replacement-version");
     }
 
     [Fact]
@@ -1423,6 +1489,36 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             projectId.ToString(), "entra", now, now.AddMinutes(2))).Should().BeNull(
             "an inactive or revoked connection cannot issue a marketplace capability");
         classifier.Redemptions.Should().Be(1, "reused and expired capabilities must not dispatch another model turn");
+    }
+
+    [Fact]
+    public async Task ProjectCapabilityIssuanceRejectsAReauthorizedBindingVersion()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var binding = MarketplaceBinding("binding-1");
+        db.ProjectCopilotBindings.Add(binding);
+        await db.SaveChangesAsync();
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var now = DateTimeOffset.UtcNow;
+
+        (await persistence.TryIssueProjectCopilotCapabilityAsync(
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
+            "project",
+            "entra",
+            now,
+            now.AddMinutes(2),
+            expectedBindingId: binding.Id,
+            expectedCredentialVersion: "superseded-version")).Should().BeNull();
+
+        (await persistence.TryIssueProjectCopilotCapabilityAsync(
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
+            "project",
+            "entra",
+            now,
+            now.AddMinutes(2),
+            expectedBindingId: binding.Id,
+            expectedCredentialVersion: binding.CredentialVersion)).Should().NotBeNull();
     }
 
     [Fact]

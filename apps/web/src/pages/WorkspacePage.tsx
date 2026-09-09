@@ -17,6 +17,8 @@ import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
 import { FileViewer } from '../components/FileViewer';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState } from '../components/ui';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../components/AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
@@ -178,6 +180,7 @@ function runStatusColor(status: string | undefined): 'success' | 'danger' | 'war
 export function WorkspacePage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const providerContext = useAiExecutionContext('backlog_decomposition', projectId);
   const [searchParams] = useSearchParams();
   const requestedRef = searchParams.get('ref') ?? undefined;
   const requestedRun = searchParams.get('run') ?? undefined;
@@ -208,12 +211,22 @@ export function WorkspacePage() {
     setDecomposeItems([]);
     setDecomposePreviewOpen(true);
     try {
-      const result = await apiClient.decomposeSpec(projectId, selectedPath, false, null, selectedRef);
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        selectedPath,
+        false,
+        null,
+        selectedRef,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
     } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and preview again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -224,13 +237,23 @@ export function WorkspacePage() {
     setDecomposeLoading(true);
     setDecomposeError(null);
     try {
-      const result = await apiClient.decomposeSpec(projectId, selectedPath, true, null, selectedRef);
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        selectedPath,
+        true,
+        null,
+        selectedRef,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
       setDecomposePreviewOpen(false);
     } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and create tasks again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -416,14 +439,17 @@ export function WorkspacePage() {
             <div className={styles.fileViewerWrapper}>
               {selectedPath.endsWith('.md') && (
                 <div className={styles.fileViewerToolbar}>
-                  <Button
-                    appearance="primary"
-                    size="small"
-                    icon={<TasksAppRegular />}
-                    onClick={() => void handleImport()}
-                  >
-                    Import to backlog
-                  </Button>
+                  <AiExecutionProviderHint context={providerContext.context}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<TasksAppRegular />}
+                      disabled={providerContext.loading || !providerContext.available}
+                      onClick={() => void handleImport()}
+                    >
+                      Import to backlog
+                    </Button>
+                  </AiExecutionProviderHint>
                 </div>
               )}
               <FileViewer
@@ -453,7 +479,10 @@ export function WorkspacePage() {
         totalFound={decomposeTotal}
         isLoading={decomposeLoading}
         error={decomposeError}
+        executionContext={providerContext.context}
+        providerLoading={providerContext.loading || !providerContext.available}
       />
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>
   );
 }

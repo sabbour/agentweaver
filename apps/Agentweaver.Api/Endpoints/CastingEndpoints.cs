@@ -255,6 +255,8 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
         IProjectStore projectStore,
         IConfiguration configuration,
         CastingService castingService,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -266,6 +268,24 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
         if (mode is not ("scenario" or "free_text" or "analysis" or "manual"))
             return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
 
+        EndpointHelpers.AiExecutionLease? execution = null;
+        if (mode is "free_text" or "analysis")
+        {
+            execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "casting_generation",
+                ProjectId.Parse(id),
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+            {
+                execution.Dispose();
+                return execution.Error;
+            }
+        }
+        using (execution)
         try
         {
             switch (mode)
@@ -283,13 +303,19 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
                 {
                     var (proposal, _) = await castingService.ProposeFreetextCastAsync(
                         id, request.Goal ?? "", request.Universe, request.ModelId, ct, request.TeamSize);
-                    return Results.Ok(CastingMappings.ToDto(proposal));
+                    return Results.Ok(CastingMappings.ToDto(proposal) with
+                    {
+                        AiExecutionContext = executionPlans.ToResponse(execution!.Plan!, "completed"),
+                    });
                 }
                 case "analysis":
                 {
                     var (proposal, _) = await castingService.ProposeAnalysisCastAsync(
                         id, request.Universe, request.ModelId, ct, request.TeamSize);
-                    return Results.Ok(CastingMappings.ToDto(proposal));
+                    return Results.Ok(CastingMappings.ToDto(proposal) with
+                    {
+                        AiExecutionContext = executionPlans.ToResponse(execution!.Plan!, "completed"),
+                    });
                 }
                 case "manual":
                 {
@@ -319,6 +345,10 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
         catch (ModelRunFailedException ex)
         {
             return Results.Conflict(new { error = ex.Message, code = "model_run_failed" });
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
         }
         catch (ArgumentException ex)
         {

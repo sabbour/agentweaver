@@ -38,8 +38,8 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await using var factory = new AssistantWebApplicationFactory { MaxConcurrentRunsPerUser = 2 };
         var client = AuthedClient(factory);
 
-        var first = await StartRunAsync(client);
-        var second = await StartRunAsync(client);
+        var first = await StartRunAsync(factory, client);
+        var second = await StartRunAsync(factory, client);
 
         var blocked = await client.PostAsJsonAsync("/api/assistant/runs", new { });
         blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests,
@@ -76,15 +76,16 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         var client1 = AuthedClient(replica1);
         var client2 = AuthedClient(replica2);
 
-        var conversationA = await StartRunAsync(client1);
+        var conversationA = await StartRunAsync(replica1, client1);
 
         // Replying on the other replica rehydrates the SAME conversation there, so it is now resident
         // in both processes' caches. It must still count exactly once.
+        await replica2.PrepareAiExecutionAsync(client2);
         var reply = await client2.PostAsJsonAsync(
             $"/api/assistant/runs/{conversationA}/messages", new { message = "hello from the other replica" });
         reply.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var conversationB = await StartRunAsync(client1);
+        var conversationB = await StartRunAsync(replica1, client1);
 
         var blocked = await client2.PostAsJsonAsync("/api/assistant/runs", new { });
         blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests,
@@ -116,8 +117,10 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "first turn");
-        var second = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
+        var runId = await StartRunAsync(factory, client, message: "first turn");
+        await factory.PrepareAiExecutionAsync(client);
+        var second = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
         second.StatusCode.Should().Be(HttpStatusCode.OK);
 
         lifecycle.Releases.Should().BeEmpty(
@@ -156,7 +159,7 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "only turn");
+        var runId = await StartRunAsync(factory, client, message: "only turn");
         var service = (AssistantRunService)factory.Services.GetRequiredService<IAssistantRunService>();
 
         // Past the 30-minute conversation idle timeout: the run is parked dormant AND its pod given
@@ -187,7 +190,7 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "opening turn on BYOK");
+        var runId = await StartRunAsync(factory, client, message: "opening turn on BYOK");
         lifecycle.Releases.Should().BeEmpty("the opening turn has nothing to invalidate");
 
         await SeedPlatformDefaultCopilotBindingAsync(factory);
@@ -197,7 +200,9 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
             await byok.SetActiveAsync(null, CancellationToken.None);
         }
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        await factory.PrepareAiExecutionAsync(client);
+        var turn = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         lifecycle.Releases.Should().Contain(runId,
@@ -225,12 +230,14 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory, name: "Provider A");
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "opening turn on provider A");
+        var runId = await StartRunAsync(factory, client, message: "opening turn on provider A");
         lifecycle.Releases.Should().BeEmpty();
 
         await SeedByokProviderConfigurationAsync(factory, name: "Provider B");
 
-        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        await factory.PrepareAiExecutionAsync(client);
+        var turn = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
         turn.StatusCode.Should().Be(HttpStatusCode.OK);
 
         lifecycle.Releases.Should().Contain(runId,
@@ -256,9 +263,10 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "first turn");
+        var runId = await StartRunAsync(factory, client, message: "first turn");
         for (var i = 0; i < 3; i++)
         {
+            await factory.PrepareAiExecutionAsync(client);
             var turn = await client.PostAsJsonAsync(
                 $"/api/assistant/runs/{runId}/messages", new { message = $"turn {i}" });
             turn.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -281,7 +289,8 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         var client1 = AuthedClient(replica1);
         var client2 = AuthedClient(replica2);
 
-        var runId = await StartRunAsync(client1, message: "first turn");
+        var runId = await StartRunAsync(replica1, client1, message: "first turn");
+        await replica1.PrepareAiExecutionAsync(client1);
         (await client1.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -291,6 +300,7 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         tokensOnReplica1.Distinct().Should().ContainSingle(
             "the same owner holds the pod for the whole conversation on this replica");
 
+        await replica2.PrepareAiExecutionAsync(client2);
         (await client2.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "third turn, elsewhere" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -316,11 +326,12 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         await SeedByokProviderConfigurationAsync(factory);
         var client = AuthedClient(factory);
 
-        var runId = await StartRunAsync(client, message: "first turn");
+        var runId = await StartRunAsync(factory, client, message: "first turn");
 
         factory.Agent.ThrowOnNextTurn = new OperationCanceledException();
         try
         {
+            await factory.PrepareAiExecutionAsync(client);
             await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "cancelled turn" });
         }
         catch (Exception)
@@ -370,7 +381,7 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         var otherClient = AuthedClient(otherReplica);
         var outageClient = AuthedClient(afterLongOutage);
 
-        var strandedRunId = await StartRunAsync(ownerClient, message: "stranded by a restart");
+        var strandedRunId = await StartRunAsync(owner, ownerClient, message: "stranded by a restart");
 
         var blocked = await otherClient.PostAsJsonAsync("/api/assistant/runs", new { });
         blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests,
@@ -390,7 +401,13 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
                 "being re-derived on every start");
     }
 
-    private static async Task<string> StartRunAsync(HttpClient client, string? message = null)    {
+    private static async Task<string> StartRunAsync(
+        AssistantWebApplicationFactory factory,
+        HttpClient client,
+        string? message = null)
+    {
+        if (message is not null)
+            await factory.PrepareAiExecutionAsync(client);
         var response = message is null
             ? await client.PostAsJsonAsync("/api/assistant/runs", new { })
             : await client.PostAsJsonAsync("/api/assistant/runs", new { message });

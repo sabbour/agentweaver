@@ -11,6 +11,7 @@ const originalConsoleWarn = console.warn;
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getServerInfo: vi.fn(),
     listProjectRepositoryOwners: vi.fn(),
     listGitHubRepositorySelections: vi.fn(),
     issueGitHubRepositorySelection: vi.fn(),
@@ -27,6 +28,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+    data_directory: '/data',
+    repo_app_install_url: 'https://github.com/apps/agentweaver/installations/new',
+  } as never);
   vi.mocked(apiClient.listProjectRepositoryOwners).mockResolvedValue([
     { login: 'octo', type: 'user' },
   ] as never);
@@ -35,6 +40,12 @@ beforeEach(() => {
       { full_name: 'octo/existing-repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null },
       { full_name: 'octo/other-repo', owner_login: 'octo', private: false, default_branch: 'develop', pushed_at: null },
     ],
+    installations: [{
+      account_login: 'octo',
+      account_type: 'user',
+      repository_selection: 'selected',
+      management_url: 'https://github.com/settings/installations/123',
+    }],
   } as never);
   vi.spyOn(console, 'error').mockImplementation((...args) => {
     if (typeof args[0] === 'string' && args[0].includes('Keyborg instance')) return;
@@ -97,6 +108,38 @@ describe('ConnectGitHubRepositoryDialog', () => {
     expect(screen.queryByRole('button', { name: 'Authorize repository access' })).toBeNull();
   });
 
+  it('offers GitHub App installation from the default create tab when no installations exist', async () => {
+    vi.mocked(apiClient.listProjectRepositoryOwners).mockResolvedValue([]);
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [],
+      installations: [],
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={() => {}}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(
+      'The Agentweaver GitHub App is not installed for an account you can access.',
+    )).toBeDefined();
+    const installLinks = screen.getAllByRole('link', { name: 'Install Agentweaver GitHub App' });
+    expect(installLinks).toHaveLength(1);
+    expect(installLinks[0].getAttribute('href')).toBe('https://github.com/apps/agentweaver/installations/new');
+    expect(installLinks[0].getAttribute('target')).toBe('_blank');
+    expect(installLinks[0].getAttribute('rel')).toBe('noopener noreferrer');
+    expect(screen.getByRole('button', { name: 'Create repository' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('connects an existing repository from the new tab', async () => {
     vi.mocked(apiClient.issueGitHubRepositorySelection).mockResolvedValue({
       selection_code: 'opaque-selection-code',
@@ -123,6 +166,11 @@ describe('ConnectGitHubRepositoryDialog', () => {
     );
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Connect existing repository' }));
+    expect(screen.getByText('Agentweaver has access only to selected repositories for octo.')).toBeDefined();
+    const managementLink = screen.getByRole('link', { name: 'Open GitHub installation settings for octo' });
+    expect(managementLink.getAttribute('href')).toBe('https://github.com/settings/installations/123');
+    expect(managementLink.getAttribute('target')).toBe('_blank');
+    expect(managementLink.getAttribute('rel')).toBe('noopener noreferrer');
     fireEvent.change(await screen.findByRole('textbox', { name: 'Find repository' }), { target: { value: 'other' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octo/other-repo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Connect repository' }));

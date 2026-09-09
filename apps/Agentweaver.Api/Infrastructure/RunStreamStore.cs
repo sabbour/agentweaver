@@ -28,6 +28,7 @@ public sealed class RunStreamEntry
     private bool _isCompleted;
     private bool _isAwaitingReview;
     private readonly Lock _lock = new();
+    private CancellationTokenSource _completionCancellation = new();
     private volatile TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -41,6 +42,11 @@ public sealed class RunStreamEntry
     public bool IsCompleted
     {
         get { lock (_lock) return _isCompleted; }
+    }
+
+    internal CancellationToken CompletionToken
+    {
+        get { lock (_lock) return _completionCancellation.Token; }
     }
 
     /// <summary>
@@ -84,10 +90,12 @@ public sealed class RunStreamEntry
     {
         lock (_lock)
         {
+            if (_isCompleted)
+                _completionCancellation = new CancellationTokenSource();
             _isCompleted = false;
             _isAwaitingReview = false;
+            Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
-        Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
 
     /// <summary>
@@ -110,6 +118,60 @@ public sealed class RunStreamEntry
     public int RecordNext(string type, object payload)
     {
         return RecordNext(type, _ => payload);
+    }
+
+    internal async Task<bool> TryRecordPreviewReadyAsync(object payload, IRunStore runStore, CancellationToken ct)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, CompletionToken);
+        ct = lifetime.Token;
+        var events = CreatePreviewReadyEvents(payload);
+        TaskCompletionSource? previous = null;
+        if (HasDurableSequenceAuthority)
+        {
+            var recorded = await _eventStream!.AppendWhileRunActiveAsync(_runId, events, runStore, ct)
+                .ConfigureAwait(false);
+            if (recorded.Count == 0)
+                return false;
+            lock (_lock)
+            {
+                foreach (var evt in recorded)
+                    TryInsertOrValidateLocked(evt);
+                previous = Interlocked.Exchange(ref _eventSignal,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
+        }
+        else
+        {
+            if (runStore is not RunActiveClaimGuardedRunStore guarded)
+                throw new InvalidOperationException("In-memory conditional events require the guarded run store.");
+            if (!await guarded.TryWhileRunActiveAsync(RunId.Parse(_runId), () =>
+            {
+                lock (_lock)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (_isCompleted)
+                        throw new OperationCanceledException(ct);
+                    foreach (var evt in events)
+                        TryInsertOrValidateLocked(evt with { Sequence = NextInMemorySequenceLocked() });
+                    previous = Interlocked.Exchange(ref _eventSignal,
+                        new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                }
+                return Task.CompletedTask;
+            }, ct).ConfigureAwait(false))
+                return false;
+        }
+        previous!.TrySetResult();
+        return true;
+    }
+
+    internal static RunEvent[] CreatePreviewReadyEvents(object payload)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return
+        [
+            new(0, EventTypes.SandboxPreviewReady, payload, now),
+            new(0, EventTypes.CoordinatorPreviewReady, payload, now),
+        ];
     }
 
     /// <summary>
@@ -247,8 +309,16 @@ public sealed class RunStreamEntry
 
     public void MarkCompleted()
     {
-        lock (_lock) _isCompleted = true;
-        _completionSignal.TrySetResult();
+        CancellationTokenSource cancellation;
+        TaskCompletionSource signal;
+        lock (_lock)
+        {
+            _isCompleted = true;
+            cancellation = _completionCancellation;
+            signal = _completionSignal;
+        }
+        signal.TrySetResult();
+        cancellation.Cancel();
     }
 
     /// <summary>
@@ -360,6 +430,22 @@ public sealed class RunStreamStore
 
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
+
+    internal async Task<bool> TryRecordPreviewReadyAsync(
+        string runId, object payload, IRunStore runStore, CancellationToken ct)
+    {
+        var entry = Get(runId);
+        if (entry is not null)
+            return await entry.TryRecordPreviewReadyAsync(payload, runStore, ct).ConfigureAwait(false);
+        if (_eventStream is null)
+            return false;
+
+        // Another replica may own the live entry. Persist without creating a partial local history;
+        // durable subscribers replay the committed batch through the existing event stream.
+        var recorded = await _eventStream.AppendWhileRunActiveAsync(
+            runId, RunStreamEntry.CreatePreviewReadyEvents(payload), runStore, ct).ConfigureAwait(false);
+        return recorded.Count > 0;
+    }
 
     /// <summary>
     /// Reopens an existing (typically completed) run's stream entry in place, preserving its

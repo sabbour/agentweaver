@@ -25,6 +25,11 @@ import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { parseNoTeamStartError } from '../api/errors';
 import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
+import {
+  AiExecutionProviderHint,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
 const useStyles = makeStyles({
   stack: {
@@ -50,6 +55,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
+  const providerContext = useAiExecutionContext('orchestration', projectId);
   const saving = savingMode !== null;
 
   useEffect(() => {
@@ -79,12 +85,26 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     setNoTeamError(null);
     try {
       const result = mode === 'direct'
-        ? await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null, 'direct')
-        : await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null);
+        ? await apiClient.startOrchestration(
+            projectId,
+            goal.trim(),
+            workflowOverride || null,
+            'direct',
+            providerContext.providerKey)
+        : await apiClient.startOrchestration(
+            projectId,
+            goal.trim(),
+            workflowOverride || null,
+            undefined,
+            providerContext.providerKey);
       setOpen(false);
       reset();
       onStarted(result.runId);
     } catch (err) {
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and start again.');
+        return;
+      }
       const noTeam = parseNoTeamStartError(err);
       if (noTeam) {
         setNoTeamError(noTeam.message);
@@ -167,21 +187,26 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary" disabled={saving}>Cancel</Button>
             </DialogTrigger>
-            <Button
-              appearance="secondary"
-              disabled={!goal.trim() || saving}
-              onClick={() => void handleSubmit('define_outcome')}
-            >
-              {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
-            </Button>
-            <Button
-              appearance="primary"
-              disabled={!goal.trim() || saving}
-              onClick={() => void handleSubmit('direct')}
-            >
-              {savingMode === 'direct' ? 'Starting' : 'Direct'}
-            </Button>
+            <AiExecutionProviderHint context={providerContext.context}>
+              <Button
+                appearance="secondary"
+                disabled={!goal.trim() || saving || providerContext.loading || !providerContext.available}
+                onClick={() => void handleSubmit('define_outcome')}
+              >
+                {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
+              </Button>
+            </AiExecutionProviderHint>
+            <AiExecutionProviderHint context={providerContext.context}>
+              <Button
+                appearance="primary"
+                disabled={!goal.trim() || saving || providerContext.loading || !providerContext.available}
+                onClick={() => void handleSubmit('direct')}
+              >
+                {savingMode === 'direct' ? 'Starting' : 'Direct'}
+              </Button>
+            </AiExecutionProviderHint>
             {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            <AiProviderChangeAnnouncement message={providerContext.announcement} />
           </DialogActions>
         </DialogBody>
       </DialogSurface>

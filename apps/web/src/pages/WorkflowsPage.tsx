@@ -47,6 +47,8 @@ import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { ScheduleTriggerDialog } from '../components/ScheduleTriggerDialog';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../components/AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import {
   getEventTrigger,
   setEventTrigger,
@@ -283,6 +285,8 @@ function triggerBadgeCopy(trigger: WorkflowTriggerDto): string {
 export function WorkflowsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const generationContext = useAiExecutionContext('workflow_generation', projectId);
+  const runContext = useAiExecutionContext('orchestration', projectId);
 
   const [data, setData] = useState<WorkflowListResponse | null>(null);
   const [project, setProject] = useState<Project | null>(null);
@@ -417,14 +421,16 @@ export function WorkflowsPage() {
     setRunningWorkflowId(wf.id);
     setError(null);
     try {
-      await apiClient.runWorkflowNow(projectId, wf.id);
+      await apiClient.runWorkflowNow(projectId, wf.id, runContext.providerKey);
       setSyncMessage(`Queued a run for "${wf.name ?? wf.id}".`);
     } catch (err) {
-      setError(formatError(err));
+      setError(runContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and run again.'
+        : formatError(err));
     } finally {
       setRunningWorkflowId(null);
     }
-  }, [projectId]);
+  }, [projectId, runContext]);
 
   const handleOpenSchedule = useCallback((wf: WorkflowSummaryDto) => {
     setScheduleWorkflow(wf);
@@ -563,7 +569,12 @@ export function WorkflowsPage() {
     setGenerating(true);
     setGenerateError(null);
     try {
-      const result = await apiClient.generateWorkflow(projectId, generateDescription.trim());
+      const result = await apiClient.generateWorkflow(
+        projectId,
+        generateDescription.trim(),
+        generationContext.providerKey,
+      );
+      generationContext.applyCompletedContext(result.ai_execution_context);
       setGenerateOpen(false);
       setEditorState({ workflowId: result.workflowId, initialYaml: result.yaml });
       setSyncMessage(
@@ -572,11 +583,17 @@ export function WorkflowsPage() {
           : 'Workflow generated. Review and save the draft.',
       );
     } catch (err) {
-      setGenerateError(formatError(err));
+      setGenerateError(generationContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and generate again.'
+        : formatError(err));
     } finally {
       setGenerating(false);
     }
-  }, [projectId, generateDescription]);
+  }, [
+    generateDescription,
+    generationContext,
+    projectId,
+  ]);
 
   const handleEditorSave = useCallback((saved: WorkflowDetailDto) => {
     // Refresh the workflow list so the saved workflow is visible.
@@ -758,15 +775,17 @@ export function WorkflowsPage() {
                 </Button>
               )}
               {wf.id && wf.valid && (
-                <Button
-                  appearance="secondary"
-                  size="small"
-                  icon={runningWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <PlayRegular />}
-                  disabled={runningWorkflowId !== null}
-                  onClick={() => { void handleRunNow(wf); }}
-                >
-                  Run now
-                </Button>
+                <AiExecutionProviderHint context={runContext.context}>
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={runningWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <PlayRegular />}
+                    disabled={runningWorkflowId !== null || runContext.loading || !runContext.available}
+                    onClick={() => { void handleRunNow(wf); }}
+                  >
+                    Run now
+                  </Button>
+                </AiExecutionProviderHint>
               )}
               {wf.id && wf.is_built_in && (
                 <Button
@@ -962,14 +981,17 @@ export function WorkflowsPage() {
             <Button appearance="subtle" disabled={generating} onClick={() => setGenerateOpen(false)}>
               Cancel
             </Button>
-            <Button
-              appearance="primary"
-              disabled={generating || !generateDescription.trim()}
-              icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <SparkleRegular />}
-              onClick={() => { void handleGenerate(); }}
-            >
-              {generating ? 'Generating…' : 'Generate'}
-            </Button>
+            <AiExecutionProviderHint context={generationContext.context}>
+              <Button
+                appearance="primary"
+                disabled={generating || !generateDescription.trim() || generationContext.loading || !generationContext.available}
+                icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <SparkleRegular />}
+                onClick={() => { void handleGenerate(); }}
+              >
+                {generating ? 'Generating…' : 'Generate'}
+              </Button>
+            </AiExecutionProviderHint>
+            <AiProviderChangeAnnouncement message={generationContext.announcement || runContext.announcement} />
           </DialogActions>
         </DialogBody>
       </DialogSurface>

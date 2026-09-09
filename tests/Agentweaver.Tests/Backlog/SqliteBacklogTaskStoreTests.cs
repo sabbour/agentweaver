@@ -74,7 +74,12 @@ public sealed class SqliteBacklogTaskStoreTests
                 "SELECT COUNT(*) FROM pragma_table_info('backlog_tasks') WHERE name = 'automation_invocation_pending';";
             Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1,
                 "upgraded SQLite databases must retain the durable provisional-invocation marker");
+            verify.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('backlog_tasks') WHERE name = 'ai_execution_provider_key';";
+            Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1,
+                "queued AI work must retain its accepted execution plan across pickup");
         }
+
         finally
         {
             SqliteConnection.ClearAllPools();
@@ -84,6 +89,22 @@ public sealed class SqliteBacklogTaskStoreTests
                 catch { }
             }
         }
+    }
+
+    [Fact]
+    public async Task InsertAndRead_RoundTripsAcceptedAiExecutionProviderKey()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var task = MakeReadyTask(project.Id, "m") with
+        {
+            AiExecutionProviderKey = "signed.execution-plan",
+        };
+
+        await store.InsertAsync(task);
+        var stored = await store.GetAsync(project.Id, task.Id);
+
+        stored!.AiExecutionProviderKey.Should().Be("signed.execution-plan");
     }
 
     // =========================================================================

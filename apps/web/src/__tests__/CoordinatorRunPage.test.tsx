@@ -72,6 +72,38 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: {
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: 'signed-provider-key',
+      expires_at: '2099-01-01T00:00:00Z',
+      effective_model_provider: {
+        state: 'resolved',
+        provider_kind: 'platform_github_copilot',
+        resolution_scope: 'project',
+        provider_scope: 'platform',
+        provider_type: null,
+        model_id: 'gpt-5',
+        provider_key: 'provider-fingerprint',
+        unavailable_reason: null,
+      },
+    },
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+  }),
+}));
+
 vi.mock('../api/sse', () => ({
   useRunStream: () => mockRunStreamState.current,
 }));
@@ -446,6 +478,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const approvalGate = await screen.findByLabelText('Approvals and gates', undefined, { timeout: 4000 });
     expect(approvalGate.textContent).toContain('Approve & merge');
     expect(approvalGate.textContent).toContain('Change');
+    expect(screen.getAllByText('Expected provider: GitHub Copilot. Model: gpt-5.').length)
+      .toBeGreaterThan(0);
+    expect(screen.queryAllByRole('note')).toHaveLength(0);
     expect(approvalGate.textContent).not.toContain('You can request changes from the Artifacts tab.');
     expect(within(approvalGate).queryByRole('button', { name: /open outcome plan/i })).toBeNull();
     expect(within(approvalGate).queryByRole('button', { name: /open assembly artifacts/i })).toBeNull();
@@ -476,6 +511,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
         'coord-run-1',
         'request_changes',
         'Please tighten the error messaging.',
+        'signed-provider-key',
       );
     });
   });
@@ -1132,6 +1168,23 @@ describe('CoordinatorRunPage — graph during outcome-plan drafting', () => {
     expect(statusChip.textContent).toContain('Drafting outcome plan');
     expect(await screen.findByLabelText('Select Outcome plan: Drafting outcome plan', undefined, { timeout: 4000 })).toBeDefined();
     expect(screen.queryByLabelText('Select Outcome plan: Pending')).toBeNull();
+  });
+
+  it('uses the durable run start while drafting so elapsed time does not remain at zero', async () => {
+    vi.setSystemTime(new Date('2026-07-07T00:02:05.000Z'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      coordinator_status: 'drafting',
+      started_at: '2026-07-07T00:01:00.000Z',
+      ended_at: null,
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const progress = await screen.findByTestId('run-progress-chips', undefined, { timeout: 4000 });
+    expect(progress.textContent).toContain('1m 5s elapsed');
   });
 
   it('hides the assembly pipeline stages and shows a caption while drafting the spec', async () => {

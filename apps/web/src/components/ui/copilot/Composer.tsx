@@ -63,6 +63,7 @@ export interface ComposerProps {
   contentBefore?: React.ReactNode;
   /** slot: actions — right of editor, before send button */
   actions?: React.ReactNode;
+  sendTooltip?: string;
   /** slot: contentBelow — below the input shell (suggestions, etc.) */
   contentBelow?: React.ReactNode;
   /**
@@ -85,12 +86,14 @@ function SendButton({
   onSend,
   onStop,
   hidden,
+  tooltip,
 }: {
   isSending: boolean;
   canSend: boolean;
   onSend: (ev: React.MouseEvent<HTMLButtonElement>) => void;
   onStop: (ev: React.MouseEvent<HTMLButtonElement>) => void;
   hidden: boolean;
+  tooltip?: string;
 }) {
   const styles = useSendButtonStyles();
 
@@ -115,7 +118,7 @@ function SendButton({
   }
 
   return (
-    <Tooltip content="Send" relationship="label" withArrow>
+    <Tooltip content={tooltip ?? 'Send'} relationship={tooltip ? 'description' : 'label'} withArrow>
       <button
         type="button"
         className={mergeClasses(
@@ -152,6 +155,7 @@ export function Composer({
   attachments = [],
   contentBefore,
   actions,
+  sendTooltip,
   contentBelow,
   readOnly = false,
   readOnlyNote = "Viewing this agent — steer via the Coordinator",
@@ -285,6 +289,7 @@ export function Composer({
           onSend={handleSend}
           onStop={handleStop}
           hidden={hideSend}
+          tooltip={sendTooltip}
         />
       </div>
 

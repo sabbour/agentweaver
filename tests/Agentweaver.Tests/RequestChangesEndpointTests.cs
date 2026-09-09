@@ -4,13 +4,18 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using LibGit2Sharp;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 
 namespace Agentweaver.Tests.Api;
 
@@ -131,12 +136,13 @@ public sealed class RequestChangesEndpointTests
 
         var (run, _) = await SetupRunAwaitingReviewAsync();
 
-        var response = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{run.Id}/request-changes",
-            new { comment = "Please add error handling to the new method." });
+        var response = await PostRequestChangesAsync(
+            run,
+            "Please add error handling to the new method.");
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted,
-            "a valid request-changes on an awaiting_review run must return 202");
+            "a valid request-changes on an awaiting_review run must return 202; body: {0}",
+            await response.Content.ReadAsStringAsync());
 
         var body = await response.Content.ReadFromJsonAsync<RequestChangesResponse>();
         body.Should().NotBeNull();
@@ -229,6 +235,152 @@ public sealed class RequestChangesEndpointTests
             "the 409 response must explain the soft cap was reached");
     }
 
+    [Fact]
+    public async Task ProviderDrift_Returns409_BeforeMutatingReviewState()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+        var providerKey = await PrepareAgentTurnAsync(run);
+        var settings = _factory.Services.GetRequiredService<ByokProviderConfigurationService>();
+        var byok = await settings.AddAsync(new ByokProviderConfiguration(
+            Id: string.Empty,
+            Name: "Replacement provider",
+            Type: "openai",
+            BaseUrl: "https://replacement.example.test",
+            Model: "replacement-model",
+            ApiKey: "replacement-key"), CancellationToken.None);
+
+        try
+        {
+            await settings.SetActiveAsync(byok.Id, CancellationToken.None);
+
+            var response = await PostRequestChangesAsync(
+                run,
+                "Please revise this.",
+                providerKey);
+
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            body.RootElement.GetProperty("error").GetString().Should().Be("model_provider_changed");
+
+            var unchanged = await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id);
+            unchanged!.Status.Should().Be(RunStatus.AwaitingReview);
+            (await _factory.Services.GetRequiredService<SqliteRunRevisionStore>()
+                    .GetMaxRevisionNumberAsync(run.Id))
+                .Should().Be(0);
+        }
+        finally
+        {
+            await settings.SetActiveAsync(null, CancellationToken.None);
+            await settings.RemoveAsync(byok.Id, CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task MissingProviderKey_Returns409_BeforeMutatingReviewState()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/request-changes",
+            new { comment = "Please revise this." });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+
+        var unchanged = await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id);
+        unchanged!.Status.Should().Be(RunStatus.AwaitingReview);
+        (await _factory.Services.GetRequiredService<SqliteRunRevisionStore>()
+                .GetMaxRevisionNumberAsync(run.Id))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MalformedChildProvenance_DoesNotFallBackToParentProvenance()
+    {
+        var parentRunId = RunId.New().ToString();
+        var (run, _) = await SetupRunAwaitingReviewAsync(parentRunId);
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var provider = await scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>()
+            .ResolveAsync(run.ProjectId, CancellationToken.None);
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        streamStore.Create(parentRunId, RequestChangesWebApplicationFactory.OwnerUser)
+            .RecordNext(
+                EventTypes.RunModelProviderResolved,
+                provider.ToProvenancePayload(
+                    parentRunId,
+                    run.ModelId,
+                    EffectiveModelProviderProvenance.ScopeProject));
+        streamStore.Get(run.Id.ToString())!.RecordNext(
+            EventTypes.RunModelProviderResolved,
+            new
+            {
+                providerIdentityVersion = 2,
+                providerKind = EffectiveModelProviderProvenance.KindByok,
+                providerType = "openai",
+                modelSource = "byok",
+            });
+
+        var response = await PostRequestChangesAsync(run, "Please revise this.");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("error").GetString().Should().Be("model_provider_changed");
+
+        var unchanged = await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id);
+        unchanged!.Status.Should().Be(RunStatus.AwaitingReview);
+        (await _factory.Services.GetRequiredService<SqliteRunRevisionStore>()
+                .GetMaxRevisionNumberAsync(run.Id))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReviewRequestChanges_MissingProviderKey_Returns409_BeforeMutatingReviewState()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review",
+            new { approved = false, request_changes = true, feedback = "Please revise this." });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+
+        var unchanged = await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id);
+        unchanged!.Status.Should().Be(RunStatus.AwaitingReview);
+    }
+
+    [Fact]
+    public async Task ReviewApproval_WithPendingWorkflow_MissingProviderKey_Returns409_BeforeMutatingReviewState()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        await pendingStore.SetAsync(
+            run.Id.ToString(),
+            new ExternalRequest(
+                new RequestPortInfo(
+                    new TypeId("Agentweaver.Tests", "ReviewRequest"),
+                    new TypeId("Agentweaver.Tests", "ReviewResponse"),
+                    "review"),
+                "review-request",
+                new PortableValue("review-request")),
+            RequestChangesWebApplicationFactory.OwnerUser);
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review",
+            new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+
+        var unchanged = await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id);
+        unchanged!.Status.Should().Be(RunStatus.AwaitingReview);
+        (await pendingStore.GetAsync(run.Id.ToString()))
+            .Should().NotBeNull("provider validation must happen before the pending review is consumed");
+    }
+
     // =========================================================================
     // Test 7 — Sanitization: control characters are stripped from the comment,
     // and the structured task wraps the sanitized feedback in <reviewer_feedback>.
@@ -244,9 +396,7 @@ public sealed class RequestChangesEndpointTests
         const string controlChars = "\x00\x01\x85";
         var rawComment = $"Fix the bug{controlChars} please add tests.";
 
-        var response = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{run.Id}/request-changes",
-            new { comment = rawComment });
+        var response = await PostRequestChangesAsync(run, rawComment);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted,
             "control chars in the comment must be stripped, not rejected");
@@ -291,12 +441,38 @@ public sealed class RequestChangesEndpointTests
     // Helpers
     // =========================================================================
 
+    private async Task<string> PrepareAgentTurnAsync(Run run)
+    {
+        var response = await _ownerClient.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation = "agent_turn", project_id = run.ProjectId?.ToString(), run_id = run.Id.ToString() });
+        response.EnsureSuccessStatusCode();
+        var context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>();
+        return context!.ExecutionKey!;
+    }
+
+    private async Task<HttpResponseMessage> PostRequestChangesAsync(
+        Run run,
+        string comment,
+        string? providerKey = null)
+    {
+        providerKey ??= await PrepareAgentTurnAsync(run);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/runs/{run.Id}/request-changes")
+        {
+            Content = JsonContent.Create(new { comment }),
+        };
+        request.Headers.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
+        return await _ownerClient.SendAsync(request);
+    }
+
     /// <summary>
     /// Creates a real git repository, adds a worktree for a new run, commits a
     /// file into the worktree, and inserts a run record at AwaitingReview status.
     /// Mirrors SetupRunAwaitingReviewAsync in ReviewEndpointTests.
     /// </summary>
-    private async Task<(Run Run, string RepoPath)> SetupRunAwaitingReviewAsync()
+    private async Task<(Run Run, string RepoPath)> SetupRunAwaitingReviewAsync(string? parentRunId = null)
     {
         var repoPath = CreateTempGitRepo();
         var runId    = RunId.New();
@@ -317,10 +493,11 @@ public sealed class RequestChangesEndpointTests
             Id                = runId,
             RepositoryPath    = repoPath,
             OriginatingBranch = "main",
-            ModelSource       = ModelSource.GitHubCopilot,
+            ModelSource       = ModelSource.Byok,
             Task              = "original task description",
             SubmittingUser    = RequestChangesWebApplicationFactory.OwnerUser,
             ProjectId         = projectId,
+            ParentRunId       = parentRunId,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
             WorktreePath      = worktreeInfo.WorktreePath,

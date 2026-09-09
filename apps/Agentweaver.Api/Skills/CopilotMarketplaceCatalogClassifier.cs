@@ -7,7 +7,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -92,17 +94,23 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly ILogger<CopilotMarketplaceCatalogClassifier> _logger;
     private readonly string? _modelId;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
 
     public CopilotMarketplaceCatalogClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotMarketplaceCatalogClassifier> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        IServiceScopeFactory? scopeFactory = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
+        _scopeFactory = scopeFactory;
+        _executionPlanAccessor = executionPlanAccessor;
     }
 
     public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
@@ -152,14 +160,37 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
     {
         if (treePaths.Count == 0)
             return null;
+        if (_scopeFactory is null
+            || _executionPlanAccessor?.Current is not { Operation: "marketplace_catalog_classification" } accepted)
+            throw new GitHubCopilotUnauthorizedException(
+                "Marketplace classification requires an accepted AI execution plan.");
+
+        GenerationExecutionPlan executionPlan;
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            executionPlan = await executor.PrepareAsync(
+                accepted.ProjectId,
+                accepted.Subject,
+                ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
+                ct).ConfigureAwait(false);
+        }
+        if (executionPlan.ModelSource != ModelSource.Byok
+            || executionPlan.ByokProviderConfiguration is null)
+            throw new GitHubCopilotUnauthorizedException(
+                "Marketplace classification did not resolve a BYOK execution plan.");
 
         return await RunClassificationAsync(
             owner, repo, branch, treePaths,
-            runTurnAsync: turnCt => RunByokModelTurnAsync(BuildPrompt(owner, repo, branch, treePaths), turnCt),
+            runTurnAsync: turnCt => RunByokModelTurnAsync(
+                BuildPrompt(owner, repo, branch, treePaths),
+                executionPlan.ByokProviderConfiguration,
+                executionPlan.ModelInvocationGuard,
+                turnCt),
             ct).ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyList<MarketplaceCatalogEntry>?> RunClassificationAsync(
+    internal async Task<IReadOnlyList<MarketplaceCatalogEntry>?> RunClassificationAsync(
         string owner,
         string repo,
         string branch,
@@ -192,6 +223,10 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
         {
             throw;
         }
+        catch (AiExecutionPlanException)
+        {
+            throw;
+        }
         catch (GitHubCopilotUnauthorizedException)
         {
             // The caller must convert an unavailable explicit capability into its user-facing
@@ -207,7 +242,11 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
         }
     }
 
-    protected virtual async Task<string?> RunByokModelTurnAsync(string prompt, CancellationToken ct)
+    protected virtual async Task<string?> RunByokModelTurnAsync(
+        string prompt,
+        ByokProviderConfiguration configuration,
+        IModelInvocationGuard? modelInvocationGuard,
+        CancellationToken ct)
     {
         CopilotClient? client = null;
         AIAgent? agent = null;
@@ -224,7 +263,16 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
                     Content = ClassifierCharter,
                 },
                 Tools = [],
-                Model = _modelId,
+                Model = configuration.Model,
+                Provider = new ProviderConfig
+                {
+                    Type = configuration.Type,
+                    BaseUrl = configuration.BaseUrl,
+                    ApiKey = configuration.ApiKey,
+                    WireApi = configuration.WireApi ?? "responses",
+                    Headers = ByokProviderConfigMapper.ToHeaderDictionary(configuration.Headers),
+                    Azure = ByokProviderConfigMapper.ToAzureOptions(configuration),
+                },
                 EnableConfigDiscovery = false,
                 Streaming = true,
                 EnableSessionStore = false,
@@ -233,8 +281,11 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
 
             agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
-                agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
+            return await RunAfterValidationAsync(
+                modelInvocationGuard,
+                () => CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
+                    agent.RunStreamingAsync(prompt, session, options: null, ct), ct),
+                ct).ConfigureAwait(false);
         }
         finally
         {
@@ -243,6 +294,18 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
             if (client is IAsyncDisposable disposableClient)
                 await disposableClient.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    internal static async Task<T> RunAfterValidationAsync<T>(
+        IModelInvocationGuard? modelInvocationGuard,
+        Func<Task<T>> runAsync,
+        CancellationToken ct)
+    {
+        if (modelInvocationGuard is not null)
+            await modelInvocationGuard.ValidateAsync(
+                "marketplace_catalog_classification",
+                ct).ConfigureAwait(false);
+        return await runAsync().ConfigureAwait(false);
     }
 
     protected virtual async Task<string?> RunModelTurnAsync(string capabilityRunId, string prompt, CancellationToken ct)

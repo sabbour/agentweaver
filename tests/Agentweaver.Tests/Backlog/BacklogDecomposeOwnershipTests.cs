@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
@@ -35,6 +36,7 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
         var projectId = await CreateProjectAsync(owner);
         var sourceRunId = await InsertConfirmedOutcomeSpecAsync(
             app.Services, projectId, CoordinatorWebApplicationFactory.OwnerUser);
+        await PrepareAiExecutionAsync(app, owner, "backlog_decomposition", projectId);
 
         var decompose = await owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/backlog/decompose",
@@ -149,13 +151,13 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
             $"/api/projects/{projectId}/backlog/decompose",
             new { run_id = sourceRunId, confirm = true });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
-        requirement.Should().NotBeNull();
-        requirement!.Code.Should().Be(ModelProviderConnectionRequirement.RequirementCode);
-        requirement.Message.Should().Be(ModelProviderConnectionRequirement.RequirementMessage);
-        requirement.Action.Type.Should().Be(ModelProviderConnectionAction.ConfigureProjectModelProvider);
-        requirement.Action.ProjectId.Should().Be(projectId);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var requirement = await response.Content.ReadFromJsonAsync<JsonElement>();
+        requirement.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+        var context = requirement.GetProperty("context");
+        context.GetProperty("operation").GetString().Should().Be("backlog_decomposition");
+        context.GetProperty("effective_model_provider").GetProperty("resolution_scope").GetString()
+            .Should().Be("project");
 
         var tasks = await app.Services.GetRequiredService<IBacklogTaskStore>()
             .ListByProjectAsync(ProjectId.Parse(projectId));
@@ -180,6 +182,40 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
         var client = app.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return client;
+    }
+
+    private static async Task PrepareAiExecutionAsync(
+        WebApplicationFactory<Program> app,
+        HttpClient client,
+        string operation,
+        string projectId)
+    {
+        await using (var scope = app.Services.CreateAsyncScope())
+        {
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var provider = await settings.GetAsync(CancellationToken.None)
+                ?? await settings.AddAsync(
+                    new ByokProviderConfiguration(
+                        string.Empty,
+                        "Backlog test provider",
+                        "openai",
+                        "https://api.example.test/v1",
+                        "gpt-5",
+                        "test-key"),
+                    CancellationToken.None);
+            await settings.SetActiveAsync(provider.Id, CancellationToken.None);
+        }
+
+        var response = await client.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation, project_id = projectId });
+        response.EnsureSuccessStatusCode();
+        var context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>()
+            ?? throw new InvalidOperationException("AI execution context response was empty.");
+        var providerKey = context.ExecutionKey
+            ?? throw new InvalidOperationException("AI execution context did not return a provider key.");
+        client.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+        client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
     }
 
     private async Task<string> CreateProjectAsync(HttpClient client)

@@ -74,6 +74,38 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: {
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: 'signed-provider-key',
+      expires_at: '2099-01-01T00:00:00Z',
+      effective_model_provider: {
+        state: 'resolved',
+        provider_kind: 'platform_github_copilot',
+        resolution_scope: 'project',
+        provider_scope: 'platform',
+        provider_type: null,
+        model_id: 'gpt-5',
+        provider_key: 'provider-fingerprint',
+        unavailable_reason: null,
+      },
+    },
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+  }),
+}));
+
 vi.mock('../api/sse', () => ({
   useRunStream: () => ({ events: currentEvents, droppedEventCount: 0, status: 'done', error: null, reconnect: vi.fn() }),
 }));
@@ -160,7 +192,10 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(retryButton);
 
-    await waitFor(() => expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('coord-run-1'));
+    await waitFor(() => expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith(
+      'coord-run-1',
+      'signed-provider-key',
+    ));
     expect((await screen.findByTestId('coordinator-retry-status')).textContent).toContain(
       'Retry resumed from the last failure point. Coordinator progress is reconnecting.',
     );
@@ -1176,7 +1211,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', {
       kind: 'send',
       instruction: 'Clarify the outcome plan: support a dry run.',
-    }));
+    }, 'signed-provider-key'));
     expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
   });

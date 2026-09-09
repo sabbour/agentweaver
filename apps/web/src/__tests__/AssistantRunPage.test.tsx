@@ -43,6 +43,21 @@ vi.mock('../api/sse', () => ({
   useRunStream: () => mockRunStreamState.current,
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+  }),
+}));
+
 function Wrapper({ children }: { children: ReactNode }) {
   return (
     <AzureFluentProvider density="compact">
@@ -76,6 +91,13 @@ function NewSessionRouteHarness() {
         data-testid="new-session-nav"
       >
         New session
+      </button>
+      <button
+        type="button"
+        onClick={() => navigate('/assistant?project=proj-7&runId=assistant-run-2')}
+        data-testid="established-run-nav"
+      >
+        Open another run
       </button>
       <AssistantRoute />
       <LocationProbe />
@@ -137,6 +159,25 @@ describe('AssistantRunPage', () => {
     expect(screen.getByPlaceholderText('Message the assistant...')).toBeTruthy();
   });
 
+  it('shows a completed assistant provider as Used when no turn is active', () => {
+    mockRunStreamState.current.events = [{
+      sequence: 1,
+      type: 'run.model_provider_resolved',
+      payload: {
+        providerKind: 'platform_github_copilot',
+        resolutionScope: 'project',
+        providerScope: 'platform',
+        modelId: 'gpt-5',
+        providerKey: 'provider-fingerprint',
+      },
+    }];
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('provider-fingerprint');
+  });
+
   it('shows suggested prompt buttons on the empty state and hides them once a run exists', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     const suggestions = screen.getAllByTestId('assistant-suggested-prompt');
@@ -194,6 +235,69 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('does not remount an explicit new session when the first send adds runId', async () => {
+    const openingTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(openingTurn.promise);
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      status: 'connecting',
+    };
+
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?project=proj-7&runId=assistant-run-old']}>
+          <Routes>
+            <Route path="/assistant" element={<NewSessionRouteHarness />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId('new-session-nav'));
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+    });
+
+    typeAndSend('keep the explicit session mounted');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).toBe(
+        '/assistant?project=proj-7&runId=assistant-run-1',
+      );
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'keep the explicit session mounted',
+      );
+    });
+
+    openingTurn.resolve(REAL_MESSAGE_RESPONSE);
+  });
+
+  it('remounts and resets local state when navigating between established run IDs', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?project=proj-7&runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<NewSessionRouteHarness />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'draft for the first run' } });
+    expect(textarea.value).toBe('draft for the first run');
+
+    fireEvent.click(screen.getByTestId('established-run-nav'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).toBe(
+        '/assistant?project=proj-7&runId=assistant-run-2',
+      );
+      expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+      expect(apiClient.getRunEvents).toHaveBeenCalledWith('assistant-run-2');
+    });
+  });
+
   it('starts a platform-wide run when /assistant has no explicit project query', async () => {
     localStorage.setItem('agentweaver:last-active-project-id', 'proj-remembered');
 
@@ -211,6 +315,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'what projects exist?' },
+        'signed-provider-key',
       );
     });
   });
@@ -237,11 +342,13 @@ describe('AssistantRunPage', () => {
         defer_first_turn: true,
         project_id: 'proj-7',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'project-scoped request' },
+        'signed-provider-key',
       );
     });
   });
@@ -262,6 +369,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'what projects exist?' },
+        'signed-provider-key',
       );
     });
     // Once the run exists the empty state is replaced by the transcript.
@@ -285,6 +393,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'stream the first reply' },
+        'signed-provider-key',
       );
       expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
       expect(screen.getByText(/Connected to operator run assistant-run-1/)).toBeTruthy();
@@ -463,6 +572,214 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('does not reconcile repeated text against replayed history after initial hydration fails', async () => {
+    const oldUserEvent = {
+      sequence: 1,
+      type: 'agent.message',
+      payload: { messageId: 'user-1', role: 'user', content: 'repeat after failure' },
+    };
+    vi.mocked(apiClient.getRunEvents)
+      .mockRejectedValueOnce(new Error('history unavailable'))
+      .mockResolvedValueOnce([oldUserEvent] as never);
+
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await screen.findByRole('button', { name: 'Retry sync' });
+    typeAndSend('repeat after failure');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sync' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'repeat after failure',
+      );
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(1);
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        oldUserEvent,
+        {
+          sequence: 2,
+          type: 'agent.message',
+          payload: { messageId: 'user-2', role: 'user', content: 'repeat after failure' },
+        },
+      ],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+    });
+  });
+
+  it('reconciles a repeated optimistic message when the first post-send baseline already contains it', async () => {
+    const retryHydration = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    const repeatedTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    const oldUserEvent = {
+      sequence: 1,
+      type: 'agent.message',
+      payload: { messageId: 'user-1', role: 'user', content: 'persist before response' },
+    };
+    const persistedUserEvent = {
+      sequence: 2,
+      type: 'agent.message',
+      payload: { messageId: 'user-2', role: 'user', content: 'persist before response' },
+    };
+    vi.mocked(apiClient.getRunEvents)
+      .mockRejectedValueOnce(new Error('history unavailable'))
+      .mockReturnValueOnce(retryHydration.promise as never);
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(repeatedTurn.promise);
+
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await screen.findByRole('button', { name: 'Retry sync' });
+    typeAndSend('persist before response');
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('assistant-pending-message')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sync' }));
+    await waitFor(() => expect(apiClient.getRunEvents).toHaveBeenCalledTimes(2));
+    retryHydration.resolve([oldUserEvent, persistedUserEvent]);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(2);
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [persistedUserEvent],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+    expect(screen.getAllByTestId('timeline-message').filter(
+      (message) => message.getAttribute('data-role') === 'user',
+    )).toHaveLength(2);
+    repeatedTurn.resolve(REAL_MESSAGE_RESPONSE);
+  });
+
+  it('keeps a retry-established baseline when the original hydration resolves later', async () => {
+    const originalHydration = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    const retryHydration = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    const oldUserEvent = {
+      sequence: 1,
+      type: 'agent.message',
+      payload: { messageId: 'user-1', role: 'user', content: 'overlapping repeat' },
+    };
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      status: 'error',
+      error: 'connection lost',
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRunEvents)
+      .mockReturnValueOnce(originalHydration.promise as never)
+      .mockReturnValueOnce(retryHydration.promise as never);
+
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => expect(apiClient.getRunEvents).toHaveBeenCalledTimes(1));
+    typeAndSend('overlapping repeat');
+    await waitFor(() => expect(apiClient.getRunEvents).toHaveBeenCalledTimes(2));
+
+    retryHydration.resolve([oldUserEvent]);
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'overlapping repeat',
+      );
+    });
+
+    originalHydration.resolve([]);
+    await act(async () => {
+      await originalHydration.promise;
+    });
+    expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+      'overlapping repeat',
+    );
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [{
+        sequence: 2,
+        type: 'agent.message',
+        payload: { messageId: 'user-2', role: 'user', content: 'overlapping repeat' },
+      }],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+    });
+  });
+
   it('clears the textarea before the first-run create request settles', async () => {
     const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
     vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
@@ -476,6 +793,7 @@ describe('AssistantRunPage', () => {
           message: 'what projects exist?',
           defer_first_turn: true,
         }),
+        'signed-provider-key',
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
@@ -521,6 +839,7 @@ describe('AssistantRunPage', () => {
     expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
       'assistant-run-1',
       expect.objectContaining({ message: 'second message' }),
+      'signed-provider-key',
     );
     // The create call is not made again for follow-ups.
     expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
@@ -539,6 +858,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         expect.objectContaining({ message: 'second message' }),
+        'signed-provider-key',
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
@@ -761,12 +1081,66 @@ describe('AssistantRunPage', () => {
       expect.objectContaining({
         resume_from_run_id: 'assistant-run-1',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
         'assistant-run-1',
         { message: 'continuing message' },
+        'signed-provider-key',
       );
+    });
+  });
+
+  it('keeps the resumed optimistic message mounted when a replacement runId is assigned', async () => {
+    const gone = new ApiError(404, JSON.stringify({
+      error: 'run_not_found',
+      message: 'Run not found.',
+    }));
+    const resumedTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    vi.mocked(apiClient.sendAssistantMessage)
+      .mockRejectedValueOnce(gone)
+      .mockReturnValueOnce(resumedTurn.promise);
+    vi.mocked(apiClient.createAssistantRun).mockResolvedValueOnce({
+      ...REAL_CREATE_RESPONSE,
+      run_id: 'assistant-run-2',
+    });
+
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    typeAndSend('message on the missing run');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+    });
+
+    typeAndSend('continue in the replacement run');
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
+        expect.objectContaining({ resume_from_run_id: 'assistant-run-1' }),
+        'signed-provider-key',
+      );
+      expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
+        'assistant-run-2',
+        { message: 'continue in the replacement run' },
+        'signed-provider-key',
+      );
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'continue in the replacement run',
+      );
+    });
+
+    resumedTurn.resolve({
+      ...REAL_MESSAGE_RESPONSE,
+      run_id: 'assistant-run-2',
     });
   });
 
@@ -798,6 +1172,7 @@ describe('AssistantRunPage', () => {
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
     expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
       expect.objectContaining({ resume_from_run_id: undefined }),
+      'signed-provider-key',
     );
   });
 
@@ -890,11 +1265,13 @@ describe('AssistantRunPage', () => {
       expect.objectContaining({
         resume_from_run_id: 'assistant-run-1',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
         'assistant-run-1',
         { message: 'continuing message' },
+        'signed-provider-key',
       );
     });
   });

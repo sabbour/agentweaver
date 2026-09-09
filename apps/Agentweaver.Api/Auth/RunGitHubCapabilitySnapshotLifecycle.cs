@@ -21,7 +21,11 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
     GitHubCapabilityBroker broker)
 {
-    internal async Task<bool> PrepareForLaunchAsync(Run run, CancellationToken ct)
+    internal async Task<bool> PrepareForLaunchAsync(
+        Run run,
+        CancellationToken ct,
+        string? expectedCopilotBindingId = null,
+        string? expectedCopilotCredentialVersion = null)
 
     {
 
@@ -39,8 +43,19 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
         {
 
-            if (!await persistence.TryInheritCapabilitySnapshotsAsync(sourceRunId, runId, projectId, ct).ConfigureAwait(false))
+            var repositoryOnly = run.ModelSource == ModelSource.Byok
+                || (!string.IsNullOrWhiteSpace(run.RetriedFrom) && expectedCopilotBindingId is not null);
+            var inherited = repositoryOnly
+                ? await persistence.TryInheritRepositoryCapabilitySnapshotAsync(sourceRunId, runId, projectId, ct).ConfigureAwait(false)
+                : await persistence.TryInheritCapabilitySnapshotsAsync(sourceRunId, runId, projectId, ct).ConfigureAwait(false);
+            if (!inherited)
 
+                return false;
+
+            if (repositoryOnly && run.ModelSource == ModelSource.GitHubCopilot
+                && expectedCopilotBindingId is not null
+                && !await persistence.CaptureAcceptedCopilotSnapshotAsync(
+                    runId, projectId, expectedCopilotBindingId, expectedCopilotCredentialVersion, ct).ConfigureAwait(false))
                 return false;
 
         }
@@ -55,7 +70,8 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
             // one-time migration input only and is never consulted on this new-run capture path.
 
-            var capture = await persistence.CaptureRootCapabilitySnapshotsAsync(runId, projectId, ct)
+            var capture = await persistence.CaptureRootCapabilitySnapshotsAsync(
+                runId, projectId, ct, includeCopilot: run.ModelSource == ModelSource.GitHubCopilot)
 
                 .ConfigureAwait(false);
 
@@ -67,9 +83,25 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
 
 
-        foreach (var snapshot in await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false))
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false);
+        if ((!string.IsNullOrWhiteSpace(expectedCopilotBindingId)
+                || !string.IsNullOrWhiteSpace(expectedCopilotCredentialVersion))
+            && !snapshots.Any(snapshot =>
+                snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.CopilotBinding
+                && MatchesExpectedCopilot(
+                    snapshot,
+                    expectedCopilotBindingId,
+                    expectedCopilotCredentialVersion)))
+        {
+            return false;
+        }
+
+        foreach (var snapshot in snapshots)
 
         {
+            if (run.ModelSource == ModelSource.Byok
+                && snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot)
+                continue;
 
             if (await broker.TryFenceAsync(
 
@@ -109,12 +141,18 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
         Run run,
         CancellationToken ct,
         bool platformScoped = false,
-        string? userScopedEntraObjectId = null)
+        string? userScopedEntraObjectId = null,
+        string? expectedCopilotBindingId = null,
+        string? expectedCopilotCredentialVersion = null)
     {
         RunGitHubCapabilitySnapshotRecord? copilotSnapshot;
         if (run.ProjectId is { } && !platformScoped)
         {
-            if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+            if (!await PrepareForLaunchAsync(
+                    run,
+                    ct,
+                    expectedCopilotBindingId,
+                    expectedCopilotCredentialVersion).ConfigureAwait(false))
                 return false;
 
             copilotSnapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
@@ -128,16 +166,38 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
                     run.Id.ToString(), userScopedEntraObjectId, ct).ConfigureAwait(false)
                 : await persistence.RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(
                     run.Id.ToString(), ct).ConfigureAwait(false);
-            if (copilotSnapshot is null)
-                return false;
         }
 
-        return copilotSnapshot is not null &&
-            await broker.TryUseCopilotCredentialAsync(
+        if ((!string.IsNullOrWhiteSpace(expectedCopilotBindingId)
+                || !string.IsNullOrWhiteSpace(expectedCopilotCredentialVersion))
+            && !MatchesExpectedCopilot(
+                copilotSnapshot,
+                expectedCopilotBindingId,
+                expectedCopilotCredentialVersion))
+        {
+            return false;
+        }
+        if (copilotSnapshot is null)
+            return false;
+
+        return await broker.TryUseCopilotCredentialAsync(
                 new SnapshotRef(copilotSnapshot.SnapshotRef),
                 DateTimeOffset.UtcNow,
                 static (_, _) => Task.CompletedTask,
                 ct).ConfigureAwait(false) == GitHubCapabilityBrokerOutcome.Issued;
     }
+
+    private static bool MatchesExpectedCopilot(
+        RunGitHubCapabilitySnapshotRecord? snapshot,
+        string? expectedBindingId,
+        string? expectedCredentialVersion) =>
+        snapshot is not null
+        && (string.IsNullOrWhiteSpace(expectedBindingId)
+            || string.Equals(snapshot.SourceBindingId, expectedBindingId, StringComparison.Ordinal))
+        && (string.IsNullOrWhiteSpace(expectedCredentialVersion)
+            || string.Equals(
+                snapshot.CredentialVersion,
+                expectedCredentialVersion,
+                StringComparison.Ordinal));
 
 }

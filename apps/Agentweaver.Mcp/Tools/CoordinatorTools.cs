@@ -19,7 +19,12 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { goal, modelId = model_id };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations", body, ct);
+            var result = await api.PostAiAsync<JsonElement>(
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations",
+                body,
+                "orchestration",
+                project_id,
+                ct: ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -47,7 +52,12 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/confirm", null, ct);
+            var result = await api.PostAiForRunAsync<JsonElement>(
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/confirm",
+                null,
+                "orchestration",
+                run_id,
+                ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -63,7 +73,12 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { feedback };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/revise", body, ct);
+            var result = await api.PostAiForRunAsync<JsonElement>(
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/outcome-spec/revise",
+                body,
+                "orchestration",
+                run_id,
+                ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -109,7 +124,15 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         try
         {
             var body = new { kind, targetChildRunId = target_child_run_id, instruction };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/steer", body, ct);
+            var path = $"/api/runs/{Uri.EscapeDataString(run_id)}/steer";
+            var result = string.Equals(kind, "stop", StringComparison.OrdinalIgnoreCase)
+                ? await api.PostAsync<JsonElement>(path, body, ct)
+                : await api.PostAiForRunAsync<JsonElement>(
+                    path,
+                    body,
+                    "orchestration",
+                    run_id,
+                    ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

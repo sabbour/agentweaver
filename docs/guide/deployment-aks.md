@@ -46,9 +46,9 @@ npm run azure:provision-infra
 
 With no arguments (and a TTY), this launches an interactive installer that
 prompts for the Azure subscription, resource group (existing or new),
-location, cluster/ACR/Key Vault names, and Entra application/tenant IDs, then
-provisions the cluster, identity, monitoring, durable OAuth signing and encryption
-certificates,
+location, cluster/ACR/Key Vault names, Entra application/tenant IDs, and the
+optional GitHub Repo App private-key PEM file, then provisions the cluster,
+identity, monitoring, durable OAuth signing and encryption certificates,
 PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
 
@@ -70,11 +70,41 @@ npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name 
 Config precedence: flags > env > params file > detected defaults > prompt.
 Optional flags include `--skip-postgres`, `--image-tag <tag>`,
 `--node-vm-size <sku>`, `--oauth-signing-certificate-name <name>`, and
-`--oauth-encryption-certificate-name <name>`. The runtime loads the newest two usable
+`--oauth-encryption-certificate-name <name>`. Use
+`--repo-app-private-key-file <path>` or `REPO_APP_PRIVATE_KEY_FILE` to import
+the GitHub Repo App PEM without placing its contents in a command argument or
+params-file value. The file must contain exactly one unencrypted PKCS#1
+`RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY` PEM block, the two formats accepted
+by the API's .NET `RSA.ImportFromPem` consumer. Provisioning validates the
+file immediately after argument and params parsing, before variable discovery
+or Azure work. It rejects symlink, junction, and reparse-path ambiguity, copies
+the validated bytes to an exclusively created access-restricted temporary
+file, gives only that file to Azure, and always removes it. Treat
+`REPO_APP_PRIVATE_KEY_FILE` as a one-shot input: after the canonical import
+succeeds, unset it in the environment. Remove it from every params file used
+for the import. Then delete the PEM. Otherwise a future deploy reloads the
+stale path before checking the valid canonical secret. The
+runtime loads the newest two usable
 versions under each certificate name; create a new version under the same name for
 rotation overlap.
 
 `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for new clusters. The default is `Standard_D4s_v6`; existing clusters are unaffected because the installer only uses the value when it needs to run `az aks create` or `az aks nodepool add`.
+
+The API receives logical secret name `repo-app-private-key`; its production
+secret store maps that name to physical Key Vault secret
+`ghtok-repo-app-private-key`. Deployment never writes the readable legacy physical
+`repo-app-private-key` automatically because Key Vault secret set cannot protect a
+create-only write across deployment runners. If only the legacy secret exists,
+deployment stops with an explicit download-and-file-import command. The file import
+intentionally replaces the canonical value and must run from one serialized operator
+or CI step. Any environment or params-file `REPO_APP_PRIVATE_KEY_FILE` setting must be
+removed after that import succeeds. Remove the setting before you delete the PEM. See
+[Configuration](./configuration#repo-app-installation-and-webhook) for the migration
+commands. Deployment also stops before applying manifests when neither secret exists or
+Key Vault access cannot be verified. A soft-deleted canonical secret is never
+recovered by a normal provision or deploy. Recovery requires the explicit
+`--recover-repo-app-private-key` operator flag after workload access is suspended
+or the old GitHub App credential is revoked.
 
 ### Image-build progress and optional Azure CLI limits
 
@@ -154,7 +184,7 @@ npm run azure:verify
 
 The verifier checks cluster resources, routes, health, the canonical OAuth public
 origin and `/mcp` resource, runtime certificate-family configuration, Key Vault
-certificate versions, and JWKS.
+certificate versions, the canonical Repo App private-key secret, and JWKS.
 
 Useful follow-up commands:
 
@@ -180,6 +210,6 @@ described above.
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
-| API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, and both configured Key Vault certificate families/versions |
+| API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, both configured Key Vault certificate families/versions, and readable `ghtok-repo-app-private-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

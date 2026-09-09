@@ -9,7 +9,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage, parseApiBody } from '../api/errors';
@@ -19,6 +19,15 @@ import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import { RunTimeline } from '../components/RunTimeline';
 import { Composer } from '../components/ui/copilot';
 import { ApprovalGate } from '../components/ui/agentic';
+import {
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from '../components/AiExecutionProviderHint';
+import {
+  aiExecutionContextFromEvents,
+  aiExecutionProviderLabel,
+} from '../components/aiExecutionContext';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
 const useStyles = makeStyles({
   page: {
@@ -147,6 +156,7 @@ interface OptimisticUserMessage {
   text: string;
   normalizedText: string;
   expectedServerOccurrence: number | null;
+  snapshotRequestGenerationAtSend: number;
   status: 'sending' | 'syncing';
 }
 
@@ -297,13 +307,15 @@ export interface AssistantRunPageProps {
 export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
+  const location = useLocation();
   const effectiveProjectId = projectId ?? params.projectId;
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
+  const providerContext = useAiExecutionContext('assistant_turn');
 
-  // The URL is the conversation source of truth. AssistantRoute does not key this page by
-  // runId, so assigning the first run id connects the stream without remounting this
-  // component and discarding its optimistic message.
+  // The URL is the conversation source of truth. AssistantRoute preserves this page while
+  // assigning a newly-created session's first run id, then resets it when navigation moves
+  // between two already-established run ids.
   const runId = routeRunId;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -348,6 +360,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     events,
     baselineEvents,
     baselineReady,
+    snapshotRequestGeneration,
+    baselineRequestGeneration,
     status: streamStatus,
     error: streamError,
     seedError,
@@ -394,10 +408,40 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const optimisticExpectedOccurrences = useMemo(() => {
     const nextExpectedOccurrence = new Map(baselineUserMessageCounts);
     const expectedByMessageId = new Map<string, number>();
+    const postSendPendingByText = new Map<string, OptimisticUserMessage[]>();
+    if (baselineReady && baselineRequestGeneration !== null) {
+      for (const message of optimisticMessages) {
+        if (
+          message.runId !== runId
+          || message.expectedServerOccurrence !== null
+          || baselineRequestGeneration <= message.snapshotRequestGenerationAtSend
+        ) {
+          continue;
+        }
+        const messages = postSendPendingByText.get(message.normalizedText) ?? [];
+        messages.push(message);
+        postSendPendingByText.set(message.normalizedText, messages);
+      }
+    }
+    const baselineIncludedOccurrences = new Map<string, number>();
+    for (const [normalizedText, messages] of postSendPendingByText) {
+      const baselineCount = baselineUserMessageCounts.get(normalizedText) ?? 0;
+      // A later snapshot can claim only its trailing repeated occurrences. If it contains
+      // no older occurrence beyond the pending group, keep waiting rather than treating
+      // an unknown pre-send message as confirmation.
+      if (baselineCount <= messages.length) continue;
+      messages.forEach((message, index) => {
+        baselineIncludedOccurrences.set(
+          message.id,
+          baselineCount - messages.length + index + 1,
+        );
+      });
+    }
     for (const message of optimisticMessages) {
       if (message.runId !== runId) continue;
       const currentMaximum = nextExpectedOccurrence.get(message.normalizedText) ?? 0;
       const expectedServerOccurrence = message.expectedServerOccurrence
+        ?? baselineIncludedOccurrences.get(message.id)
         ?? (baselineReady ? currentMaximum + 1 : null);
       if (expectedServerOccurrence === null) continue;
       nextExpectedOccurrence.set(
@@ -407,7 +451,13 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       expectedByMessageId.set(message.id, expectedServerOccurrence);
     }
     return expectedByMessageId;
-  }, [baselineReady, baselineUserMessageCounts, optimisticMessages, runId]);
+  }, [
+    baselineReady,
+    baselineRequestGeneration,
+    baselineUserMessageCounts,
+    optimisticMessages,
+    runId,
+  ]);
   const visibleOptimisticMessages = useMemo(
     () => optimisticMessages.filter((message) => {
       if (message.runId !== runId) return false;
@@ -421,6 +471,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
+  );
+  const activeProviderContext = useMemo(
+    () => aiExecutionContextFromEvents(
+      events,
+      'assistant_turn',
+      busy ? 'active' : 'completed',
+    ) ?? providerContext.context,
+    [busy, events, providerContext.context],
   );
 
   const reconcileDurableHistory = useCallback(async () => {
@@ -537,6 +595,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       text: message,
       normalizedText,
       expectedServerOccurrence,
+      snapshotRequestGenerationAtSend: snapshotRequestGeneration,
       status: 'sending',
     };
     setOptimisticMessages((current) => [...current, optimisticMessage]);
@@ -547,7 +606,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           defer_first_turn: true,
           project_id: effectiveProjectId,
           resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
-        });
+        }, providerContext.providerKey);
+        providerContext.applyProvider(created.effective_model_provider, 'active');
         // Consumed (or not needed) — clear so it never leaks into a later, unrelated new
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
@@ -558,13 +618,23 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         )));
         const next = new URLSearchParams(searchParams);
         next.set('runId', created.run_id);
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         // Create the conversation first so React can bind its SSE stream while this request is
         // still running. Supplying the opening message to createAssistantRun would keep the run id
         // hidden until the entire model turn completed, making the first reply impossible to stream.
-        await apiClient.sendAssistantMessage(created.run_id, { message });
+        const response = await apiClient.sendAssistantMessage(
+          created.run_id,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       } else {
-        await apiClient.sendAssistantMessage(runId, { message });
+        const response = await apiClient.sendAssistantMessage(
+          runId,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       }
       setOptimisticMessages((current) => current.map((candidate) => (
         candidate.id === optimisticMessage.id
@@ -575,7 +645,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       setOptimisticMessages((current) => current.filter(
         (candidate) => candidate.id !== optimisticMessage.id,
       ));
-      if (
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and send again.');
+      } else if (
         isNewRun &&
         err instanceof ApiError &&
         err.status === 429 &&
@@ -599,7 +671,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         pendingResumeFromRunIdRef.current = runId;
         const next = new URLSearchParams(searchParams);
         next.delete('runId');
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation could not be found, so it can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else if (
         !isNewRun &&
@@ -614,7 +686,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         pendingResumeFromRunIdRef.current = runId;
         const next = new URLSearchParams(searchParams);
         next.delete('runId');
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation has ended and can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else {
         setError(formatApiErrorMessage(err));
@@ -627,11 +699,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     busy,
     effectiveProjectId,
     input,
+    location.state,
     optimisticMessages,
+    providerContext,
     baselineReady,
     runId,
     searchParams,
     serverUserMessageCounts,
+    snapshotRequestGeneration,
     setSearchParams,
   ]);
 
@@ -748,13 +823,17 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           // itself is gated via disableSend, so the user can keep typing (and even queue
           // up their next message) while the previous one is still in flight; handleSubmit
           // already guards against a duplicate dispatch via `busy`/`sendingRef`.
-          disableSend={busy || !input.trim()}
+          disableSend={busy || providerContext.loading || !providerContext.available || !input.trim()}
+          sendTooltip={aiExecutionProviderLabel(providerContext.context)}
         />
-        <Text className={styles.composerStatus} aria-live="polite">
-          {runId
-            ? `Connected to operator run ${runId} · stream ${streamStatus}`
-            : 'Your first message creates an operator run.'}
-        </Text>
+        <AiExecutionProviderStatus context={activeProviderContext}>
+          <Text className={styles.composerStatus}>
+            {runId
+              ? `Connected to operator run ${runId} · stream ${streamStatus}`
+              : 'Your first message creates an operator run.'}
+          </Text>
+        </AiExecutionProviderStatus>
+        <AiProviderChangeAnnouncement message={providerContext.announcement} />
       </div>
     </div>
   );

@@ -55,9 +55,8 @@ public sealed record EffectiveModelProviderDto
     [JsonPropertyName("resolution_scope")] public required string ResolutionScope { get; init; }
     [JsonPropertyName("provider_scope")] public required string ProviderScope { get; init; }
     [JsonPropertyName("provider_type")] public string? ProviderType { get; init; }
-    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
-    /// <summary>Opaque fingerprint used to detect provider changes. Never display this value.</summary>
+    /// <summary>Opaque provider-identity fingerprint used for comparison. Never display this value.</summary>
     [JsonPropertyName("provider_key")] public string? ProviderKey { get; init; }
     [JsonPropertyName("unavailable_reason")] public string? UnavailableReason { get; init; }
 }
@@ -67,6 +66,7 @@ public sealed record AiExecutionContextRequest
 {
     [JsonPropertyName("operation")] public string? Operation { get; init; }
     [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
 }
 
 /// <summary>
@@ -78,6 +78,9 @@ public sealed record AiExecutionContextResponse
     [JsonPropertyName("ai_required")] public required bool AiRequired { get; init; }
     [JsonPropertyName("operation")] public required string Operation { get; init; }
     [JsonPropertyName("phase")] public required string Phase { get; init; }
+    /// <summary>Short-lived bearer token accepted by <c>If-Model-Provider-Key</c>.</summary>
+    [JsonPropertyName("execution_key")] public string? ExecutionKey { get; init; }
+    [JsonPropertyName("expires_at")] public DateTimeOffset? ExpiresAt { get; init; }
     [JsonPropertyName("effective_model_provider")]
     public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
 }
@@ -87,6 +90,9 @@ public sealed record RunResponse
 {
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
+
+    [JsonPropertyName("project_id")]
+    public string? ProjectId { get; init; }
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
@@ -652,10 +658,20 @@ public sealed record GitHubRepositorySelectionCandidateDto
     [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
 }
 
+/// <summary>Safe display and navigation metadata for one Repo App installation.</summary>
+public sealed record GitHubRepositoryInstallationDto
+{
+    [JsonPropertyName("account_login")] public required string AccountLogin { get; init; }
+    [JsonPropertyName("account_type")] public required string AccountType { get; init; }
+    [JsonPropertyName("repository_selection")] public required string RepositorySelection { get; init; }
+    [JsonPropertyName("management_url")] public required string ManagementUrl { get; init; }
+}
+
 /// <summary>Response for GET /api/github/repository-selections.</summary>
 public sealed record GitHubRepositorySelectionListResponse
 {
     [JsonPropertyName("repositories")] public required IReadOnlyList<GitHubRepositorySelectionCandidateDto> Repositories { get; init; }
+    [JsonPropertyName("installations")] public required IReadOnlyList<GitHubRepositoryInstallationDto> Installations { get; init; }
 }
 
 /// <summary>
@@ -838,6 +854,8 @@ public sealed record CastProposalDto
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<string> Warnings { get; init; }
     [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+    [JsonPropertyName("ai_execution_context")]
+    public AiExecutionContextResponse? AiExecutionContext { get; init; }
 }
 
 public sealed record TeamMemberDto
@@ -1079,6 +1097,8 @@ public sealed record AssistantMessageResponse
     [JsonPropertyName("message")] public required string Message { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("tools_invoked")] public IReadOnlyList<string>? ToolsInvoked { get; init; }
+    [JsonPropertyName("effective_model_provider")]
+    public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
 }
 
 /// <summary>A single operator conversation in the GET /api/assistant/runs list.</summary>

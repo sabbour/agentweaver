@@ -12,13 +12,21 @@ namespace Agentweaver.Api.Auth;
 /// </summary>
 internal sealed class GitHubRepositorySelectionClient(
     IHttpClientFactory httpClientFactory,
-    Webhooks.RepoAppInstallationTokenService repoAppInstallationTokenService)
+    IConfiguration configuration)
 {
     private const int PageSize = 100;
     private const int MaximumPages = 2;
+    private const int MaximumRepositories = PageSize * MaximumPages;
     private const long MaximumResponseBytes = 512 * 1024;
+    private readonly string _apiUrl = (configuration["Auth:RepoApp:ApiUrl"] ?? "https://api.github.com").TrimEnd('/');
+    private readonly string _baseUrl = (configuration["Auth:RepoApp:BaseUrl"] ?? "https://github.com").TrimEnd('/');
 
     internal async Task<IReadOnlyList<GitHubRepositorySelectionCandidate>?> ListAsync(
+        string accessToken,
+        CancellationToken ct) =>
+        (await BrowseAsync(accessToken, ct).ConfigureAwait(false))?.Repositories;
+
+    internal async Task<GitHubRepositoryBrowseResult?> BrowseAsync(
         string accessToken,
         CancellationToken ct)
     {
@@ -26,21 +34,26 @@ internal sealed class GitHubRepositorySelectionClient(
         if (installations is null)
             return null;
 
+        var repositoriesByInstallation = installations
+            .Select(_ => new List<GitHubRepositorySelectionCandidate>())
+            .ToList();
+        var installationHasMorePages = Enumerable.Repeat(true, installations.Count).ToArray();
+        var nextCandidateIndexes = new int[installations.Count];
         var candidates = new Dictionary<long, GitHubRepositorySelectionCandidate>();
-        foreach (var installation in installations)
-        {
-            var installationToken = await repoAppInstallationTokenService
-                .MintMetadataInstallationTokenAsync(installation.Id, ct).ConfigureAwait(false);
-            if (installationToken is null)
-                return null;
 
-            var repositoriesUrl = GetInstallationRepositoriesUrl(installation);
-            for (var page = 1; page <= MaximumPages; page++)
+        for (var page = 1; page <= MaximumPages && candidates.Count < MaximumRepositories; page++)
+        {
+            for (var installationIndex = 0; installationIndex < installations.Count; installationIndex++)
             {
+                if (!installationHasMorePages[installationIndex])
+                    continue;
+
+                var installation = installations[installationIndex];
+                var repositoriesUrl = $"{_apiUrl}/user/installations/{installation.Id}/repositories";
                 using var request = CreateRequest(
                     HttpMethod.Get,
                     AppendPagination(repositoriesUrl, page),
-                    installationToken.Value);
+                    accessToken);
                 using var response = await httpClientFactory.CreateClient("github")
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumResponseBytes)
@@ -55,24 +68,56 @@ internal sealed class GitHubRepositorySelectionClient(
 
                 foreach (var repository in batch.Where(IsSafe))
                 {
-                    candidates[repository.Id!.Value] = new GitHubRepositorySelectionCandidate(
-                        repository.Id.Value,
+                    repositoriesByInstallation[installationIndex].Add(new GitHubRepositorySelectionCandidate(
+                        repository.Id!.Value,
                         repository.FullName!,
                         repository.Owner!.Login!,
                         repository.Private,
                         repository.DefaultBranch ?? "main",
+                        $"{_baseUrl}/{repository.FullName}",
                         repository.CloneUrl!,
-                        repository.PushedAt);
+                        repository.PushedAt));
                 }
 
-                if (batch.Count < PageSize)
+                installationHasMorePages[installationIndex] = batch.Count >= PageSize;
+            }
+
+            while (candidates.Count < MaximumRepositories)
+            {
+                var candidatesRemain = false;
+                for (var installationIndex = 0;
+                     installationIndex < repositoriesByInstallation.Count
+                        && candidates.Count < MaximumRepositories;
+                     installationIndex++)
+                {
+                    var installationCandidates = repositoriesByInstallation[installationIndex];
+                    while (nextCandidateIndexes[installationIndex] < installationCandidates.Count)
+                    {
+                        candidatesRemain = true;
+                        var candidate = installationCandidates[nextCandidateIndexes[installationIndex]++];
+                        if (candidates.TryAdd(candidate.RepositoryId, candidate))
+                            break;
+                    }
+                }
+
+                if (!candidatesRemain)
                     break;
             }
         }
 
-        return candidates.Values
-            .OrderByDescending(candidate => candidate.PushedAt ?? DateTimeOffset.MinValue)
-            .ToList();
+        return new GitHubRepositoryBrowseResult(
+            candidates.Values
+                .OrderByDescending(candidate => candidate.PushedAt ?? DateTimeOffset.MinValue)
+                .ToList(),
+            installations
+                .OrderByDescending(installation => installation.AccountType == "user")
+                .ThenBy(installation => installation.AccountLogin, StringComparer.OrdinalIgnoreCase)
+                .Select(installation => new GitHubRepositoryInstallationMetadata(
+                    installation.AccountLogin,
+                    installation.AccountType,
+                    installation.RepositorySelection,
+                    installation.ManagementUrl))
+                .ToList());
     }
 
     internal async Task<IReadOnlyList<GitHubRepositoryOwner>?> ListOwnersAsync(string accessToken, CancellationToken ct)
@@ -110,17 +155,19 @@ internal sealed class GitHubRepositorySelectionClient(
             return null;
 
         var endpoint = string.Equals(installation.TargetType, "Organization", StringComparison.OrdinalIgnoreCase)
-            ? $"https://api.github.com/orgs/{Uri.EscapeDataString(owner)}/repos"
-            : "https://api.github.com/user/repos";
+            ? $"{_apiUrl}/orgs/{Uri.EscapeDataString(owner)}/repos"
+            : $"{_apiUrl}/user/repos";
         using var request = CreateRequest(HttpMethod.Post, endpoint, accessToken);
         request.Content = JsonContent.Create(new { name, @private = isPrivate });
         using var response = await httpClientFactory.CreateClient("github").SendAsync(request, ct).ConfigureAwait(false);
         if (response.StatusCode != System.Net.HttpStatusCode.Created)
             return null;
         var repository = await response.Content.ReadFromJsonAsync<GitHubCreatedRepositoryResponse>(ct).ConfigureAwait(false);
-        return string.IsNullOrWhiteSpace(repository?.FullName) || string.IsNullOrWhiteSpace(repository.CloneUrl)
+        return string.IsNullOrWhiteSpace(repository?.FullName)
+            || !TryValidateProviderUrl(repository.CloneUrl, out var cloneUrl)
+            || !TryValidateProviderUrl(repository.HtmlUrl, out var htmlUrl)
             ? null
-            : new GitHubCreatedRepository(repository.FullName, repository.CloneUrl);
+            : new GitHubCreatedRepository(repository.FullName, cloneUrl, htmlUrl);
     }
 
     private async Task<IReadOnlyList<GitHubAccessibleInstallation>?> ListAccessibleInstallationsAsync(
@@ -132,7 +179,7 @@ internal sealed class GitHubRepositorySelectionClient(
         {
             using var request = CreateRequest(
                 HttpMethod.Get,
-                $"https://api.github.com/user/installations?per_page={PageSize}&page={page}",
+                $"{_apiUrl}/user/installations?per_page={PageSize}&page={page}",
                 accessToken);
             using var response = await httpClientFactory.CreateClient("github")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
@@ -146,14 +193,11 @@ internal sealed class GitHubRepositorySelectionClient(
             if (batch is null)
                 return null;
 
-            foreach (var installation in batch.Where(IsSafe))
+            foreach (var installation in batch)
             {
-                installations[installation.Id!.Value] = new GitHubAccessibleInstallation(
-                    installation.Id.Value,
-                    installation.Account!.Login!,
-                    installation.TargetType!,
-                    installation.RepositoriesUrl!,
-                    installation.Permissions ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                if (!TryCreateInstallation(installation, out var mapped))
+                    return null;
+                installations[mapped.Id] = mapped;
             }
 
             if (batch.Count < PageSize)
@@ -197,17 +241,57 @@ internal sealed class GitHubRepositorySelectionClient(
         return payload.Deserialize<List<T>>();
     }
 
-    private static bool IsSafe(GitHubRepositoryResponse repository) =>
+    private bool IsSafe(GitHubRepositoryResponse repository) =>
         repository.Id is > 0 &&
         !string.IsNullOrWhiteSpace(repository.FullName) &&
         !string.IsNullOrWhiteSpace(repository.Owner?.Login) &&
-        !string.IsNullOrWhiteSpace(repository.CloneUrl);
+        TryValidateProviderUrl(repository.CloneUrl, out _);
 
-    private static bool IsSafe(GitHubInstallationResponse installation) =>
-        installation.Id is > 0 &&
-        !string.IsNullOrWhiteSpace(installation.Account?.Login) &&
-        !string.IsNullOrWhiteSpace(installation.TargetType) &&
-        !string.IsNullOrWhiteSpace(installation.RepositoriesUrl);
+    private bool TryCreateInstallation(
+        GitHubInstallationResponse installation,
+        out GitHubAccessibleInstallation mapped)
+    {
+        mapped = default!;
+        var accountType = installation.TargetType switch
+        {
+            "User" => "user",
+            "Organization" => "organization",
+            _ => null,
+        };
+        if (installation.Id is not > 0
+            || string.IsNullOrWhiteSpace(installation.Account?.Login)
+            || accountType is null
+            || installation.RepositorySelection is not ("all" or "selected")
+            || !TryValidateProviderUrl(installation.HtmlUrl, out var managementUrl))
+            return false;
+
+        mapped = new GitHubAccessibleInstallation(
+            installation.Id.Value,
+            installation.Account.Login,
+            installation.TargetType!,
+            accountType,
+            installation.RepositorySelection,
+            managementUrl,
+            installation.Permissions ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+        return true;
+    }
+
+    private bool TryValidateProviderUrl(string? value, out string validatedUrl)
+    {
+        validatedUrl = "";
+        if (!Uri.TryCreate(_baseUrl, UriKind.Absolute, out var configuredOrigin)
+            || configuredOrigin.Scheme != Uri.UriSchemeHttps
+            || !Uri.TryCreate(value, UriKind.Absolute, out var candidate)
+            || candidate.Scheme != Uri.UriSchemeHttps
+            || !string.IsNullOrEmpty(candidate.UserInfo)
+            || !string.IsNullOrEmpty(candidate.Fragment)
+            || !string.Equals(candidate.IdnHost, configuredOrigin.IdnHost, StringComparison.OrdinalIgnoreCase)
+            || candidate.Port != configuredOrigin.Port)
+            return false;
+
+        validatedUrl = candidate.AbsoluteUri;
+        return true;
+    }
 
     private static bool CanCreateRepositories(GitHubAccessibleInstallation installation) =>
         installation.Permissions.TryGetValue("administration", out var administration) &&
@@ -219,31 +303,13 @@ internal sealed class GitHubRepositorySelectionClient(
         return $"{repositoriesUrl}{separator}per_page={PageSize}&page={page}";
     }
 
-    private static string GetInstallationRepositoriesUrl(GitHubAccessibleInstallation installation)
-    {
-        if (!Uri.TryCreate(installation.RepositoriesUrl, UriKind.Absolute, out var uri))
-            return installation.RepositoriesUrl;
-
-        var normalizedPath = uri.AbsolutePath.TrimEnd('/');
-        var userInstallationSuffix = $"/user/installations/{installation.Id}/repositories";
-        if (!normalizedPath.EndsWith(userInstallationSuffix, StringComparison.OrdinalIgnoreCase))
-            return installation.RepositoriesUrl;
-
-        var pathPrefix = normalizedPath[..^userInstallationSuffix.Length];
-        var builder = new UriBuilder(uri)
-        {
-            Path = $"{pathPrefix}/installation/repositories",
-            Query = string.Empty,
-            Fragment = string.Empty,
-        };
-        return builder.Uri.AbsoluteUri.TrimEnd('/');
-    }
-
     private sealed record GitHubAccessibleInstallation(
         long Id,
         string AccountLogin,
         string TargetType,
-        string RepositoriesUrl,
+        string AccountType,
+        string RepositorySelection,
+        string ManagementUrl,
         IReadOnlyDictionary<string, string> Permissions);
 
     private sealed class GitHubRepositoryResponse
@@ -262,7 +328,8 @@ internal sealed class GitHubRepositorySelectionClient(
         [JsonPropertyName("id")] public long? Id { get; init; }
         [JsonPropertyName("account")] public GitHubRepositoryOwnerResponse? Account { get; init; }
         [JsonPropertyName("target_type")] public string? TargetType { get; init; }
-        [JsonPropertyName("repositories_url")] public string? RepositoriesUrl { get; init; }
+        [JsonPropertyName("repository_selection")] public string? RepositorySelection { get; init; }
+        [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
         [JsonPropertyName("permissions")] public Dictionary<string, string>? Permissions { get; init; }
     }
 
@@ -275,8 +342,17 @@ internal sealed class GitHubRepositorySelectionClient(
     {
         [JsonPropertyName("full_name")] public string? FullName { get; init; }
         [JsonPropertyName("clone_url")] public string? CloneUrl { get; init; }
+        [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
     }
 }
 
 internal sealed record GitHubRepositoryOwner(string Login, bool IsUser);
-internal sealed record GitHubCreatedRepository(string FullName, string CloneUrl);
+internal sealed record GitHubCreatedRepository(string FullName, string CloneUrl, string HtmlUrl);
+internal sealed record GitHubRepositoryInstallationMetadata(
+    string AccountLogin,
+    string AccountType,
+    string RepositorySelection,
+    string ManagementUrl);
+internal sealed record GitHubRepositoryBrowseResult(
+    IReadOnlyList<GitHubRepositorySelectionCandidate> Repositories,
+    IReadOnlyList<GitHubRepositoryInstallationMetadata> Installations);

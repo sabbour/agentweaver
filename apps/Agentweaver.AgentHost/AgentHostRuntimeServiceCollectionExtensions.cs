@@ -10,6 +10,7 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
     {
         services.AddHttpClient("agentweaver-api");
         services.AddSingleton<AgentHostRuntimeState>();
+        services.AddSingleton<IModelInvocationGuard, AgentHostModelInvocationGuard>();
         services.AddSingleton<IByokProviderConfigurationProvider, AgentHostByokProviderConfigurationProvider>();
         services.AddSingleton<IToolApprovalOwnerResolver, AgentHostToolApprovalOwnerResolver>();
         services.AddAgentRuntime();

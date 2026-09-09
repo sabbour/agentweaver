@@ -48,6 +48,22 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+  }),
+}));
+
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
@@ -821,7 +837,7 @@ describe('SkillsPage — blueprint defaults', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
       expect(document.activeElement).toBe(trigger);
-    }, { timeout: 4000 });
+    });
   });
 
   it('cancels an in-flight preview when the dialog closes', async () => {
@@ -921,7 +937,7 @@ describe('SkillsPage — curated marketplaces', () => {
     expect(await screen.findByText('skill-a')).toBeTruthy();
     expect(screen.getByText('Showing 1 of 2')).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }, { timeout: 4000 }));
 
     // Page 2 candidates are appended (page 1 remains visible), and the Load more control is gone.
     expect(await screen.findByText('skill-b')).toBeTruthy();
@@ -1050,7 +1066,11 @@ describe('SkillsPage — add/remove a marketplace source by URL', () => {
     // Built-in config sources have no remove affordance.
     expect(screen.queryByRole('button', { name: 'Remove GitHub Awesome Copilot' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove my-org/my-skills' }));
+    fireEvent.click(await screen.findByRole(
+      'button',
+      { name: 'Remove my-org/my-skills' },
+      { timeout: 4000 },
+    ));
 
     await waitFor(() => expect(apiClient.removeSkillMarketplaceSource).toHaveBeenCalledWith(expect.any(String), 'my-org/my-skills'));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'my-org/my-skills' })).toBeNull());
