@@ -28,6 +28,7 @@ public sealed class RunStreamEntry
     private bool _isCompleted;
     private bool _isAwaitingReview;
     private readonly Lock _lock = new();
+    private CancellationTokenSource _completionCancellation = new();
     private volatile TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -41,6 +42,11 @@ public sealed class RunStreamEntry
     public bool IsCompleted
     {
         get { lock (_lock) return _isCompleted; }
+    }
+
+    internal CancellationToken CompletionToken
+    {
+        get { lock (_lock) return _completionCancellation.Token; }
     }
 
     /// <summary>
@@ -84,10 +90,12 @@ public sealed class RunStreamEntry
     {
         lock (_lock)
         {
+            if (_isCompleted)
+                _completionCancellation = new CancellationTokenSource();
             _isCompleted = false;
             _isAwaitingReview = false;
+            Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
-        Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
 
     /// <summary>
@@ -247,8 +255,16 @@ public sealed class RunStreamEntry
 
     public void MarkCompleted()
     {
-        lock (_lock) _isCompleted = true;
-        _completionSignal.TrySetResult();
+        CancellationTokenSource cancellation;
+        TaskCompletionSource signal;
+        lock (_lock)
+        {
+            _isCompleted = true;
+            cancellation = _completionCancellation;
+            signal = _completionSignal;
+        }
+        signal.TrySetResult();
+        cancellation.Cancel();
     }
 
     /// <summary>

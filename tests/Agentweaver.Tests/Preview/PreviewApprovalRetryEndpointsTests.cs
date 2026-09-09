@@ -4,6 +4,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -11,6 +12,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using k8s;
 
 namespace Agentweaver.Tests.Preview;
 
@@ -200,6 +202,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             .Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed).ToList();
         outcomes.Should().HaveCount(2);
         runner.HealthCalls.Should().Be(1);
+        runner.HealthCancellationToken.CanBeCanceled.Should().BeTrue();
         runner.LastSessionId.Should().Be("retained-process");
         runner.LastPort.Should().Be(5173);
         runner.LastBearer.Should().Be("retained-test-credential", "retry uses the retained per-run credential, not operator auth");
@@ -220,12 +223,108 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetryPublication_RunEndsDuringHttpsWait_LateSuccessCannotPublish(bool completeLocalStream)
+    {
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var publication = new HttpClient(new PreviewPublicationHandler(async (_, ct) =>
+        {
+            entered.SetResult(ct);
+            // Deliberately return 200 even after cancellation, reproducing a late external response.
+            await resume.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        var kube = new FakeKubeHandler();
+        const string routes = "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes";
+        kube.OnGet(routes, """{"kind":"HTTPRouteList","items":[]}""");
+        using var kubernetes = new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, kube);
+        var preview = new SandboxPreviewService(kubernetes, new SandboxPreviewOptions
+        {
+            Enabled = true,
+            ZoneSuffix = "preview.example.test",
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var secrets = new InMemorySecretStore();
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+            services.AddSingleton<ISecretStore>(secrets);
+            services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, requestId) = await CreateRetryableRunAsync(
+            services: factory.Services, previewRunnerSessionId: "retained-process");
+        await secrets.SetSecretAsync(PreviewRunnerCredential.SecretKey(runId), "retained-test-credential");
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var claim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        kube.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claim}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"preview-pod"}}}""");
+
+        using var requestLifetime = new CancellationTokenSource();
+        var response = await client.PostAsync(
+            $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null, requestLifetime.Token);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var retryId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("request_id").GetString()!;
+        requestLifetime.Cancel();
+        (await factory.Services.GetRequiredService<IToolApprovalGate>()
+            .GrantAsync(runId, retryId, ApprovalScope.Once)).Should().BeTrue();
+        var publicationCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var route = kube.Requests.Single(r => r.Method == "POST" && r.Path == routes);
+        using var routeDocument = JsonDocument.Parse(route.Body!);
+        var routeName = routeDocument.RootElement.GetProperty("metadata").GetProperty("name").GetString();
+        kube.OnGet($"{routes}/{routeName}", route.Body!);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.TrySetTerminalStatusAsync(
+            RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (completeLocalStream)
+            streams.Complete(runId);
+        var publicationCancelled = publicationCt.IsCancellationRequested;
+        resume.SetResult();
+
+        for (var i = 0; i < 500; i++)
+        {
+            if (streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e =>
+                e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed) == 2)
+                break;
+            await Task.Delay(10);
+        }
+
+        var events = streams.Get(runId)!.GetSnapshotSince(0).Events;
+        events.Should().NotContain(e =>
+            e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
+        events.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(2);
+        publicationCancelled.Should().Be(completeLocalStream);
+        runner.HealthCancellationToken.Should().Be(streams.Get(runId)!.CompletionToken);
+        runner.LastBearer.Should().Be("retained-test-credential");
+        await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        runner.HealthCalls.Should().Be(1);
+        runner.StopCalls.Should().Be(1);
+        var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
+        deleted.Should().HaveCount(2);
+        deleted[0].Path.Should().Be($"{routes}/{routeName}");
+        deleted[1].Path.Should().Be($"/api/v1/namespaces/agentweaver/services/{routeName}");
+        kube.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith("/pods/preview-pod")
+            && r.Body!.Contains("safe-to-evict") && r.Body.Contains("true"));
+    }
+
     private async Task<(string RunId, string RequestId)> CreateRetryableRunAsync(
         string owner = ProjectsWebApplicationFactory.TestUser,
-        RunStatus status = RunStatus.InProgress)
+        RunStatus status = RunStatus.InProgress,
+        IServiceProvider? services = null,
+        string? previewRunnerSessionId = null)
     {
-        var (runId, requestId) = await CreateRunAsync(status, owner);
-        var gate = _factory.Services.GetRequiredService<IToolApprovalGate>();
+        services ??= _factory.Services;
+        var (runId, requestId) = await CreateRunAsync(status, owner, services);
+        var gate = services.GetRequiredService<IToolApprovalGate>();
         await gate.WaitForApprovalAsync(
             runId,
             requestId,
@@ -234,7 +333,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             TimeSpan.FromMilliseconds(1),
             CancellationToken.None);
         gate.GetRequestState(runId, requestId).Should().Be(ToolApprovalRequestState.Expired);
-        EmitRetryableFailure(runId, requestId);
+        EmitRetryableFailure(runId, requestId, services, previewRunnerSessionId);
         return (runId, requestId);
     }
 
@@ -262,8 +361,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         return (id, Guid.NewGuid().ToString("n"));
     }
 
-    private void EmitRetryableFailure(string runId, string requestId) =>
-        _factory.Services.GetRequiredService<RunStreamStore>().Get(runId)!.RecordNext(
+    private void EmitRetryableFailure(
+        string runId, string requestId, IServiceProvider? services = null, string? previewRunnerSessionId = null) =>
+        (services ?? _factory.Services).GetRequiredService<RunStreamStore>().Get(runId)!.RecordNext(
             EventTypes.SandboxPreviewFailed,
             new
             {
@@ -272,6 +372,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
                 reason = "approval_timed_out",
                 approval_request_id = requestId,
                 retry_available = true,
+                preview_runner_session_id = previewRunnerSessionId,
             });
 
     private static string ReadString(object payload, string property) =>
@@ -291,6 +392,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public string? LastSessionId;
         public string? LastBearer;
         public int LastPort;
+        public CancellationToken HealthCancellationToken;
+        public TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<PreviewRunnerHealthResult> HealthCheckAsync(
             string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct)
@@ -299,6 +402,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             LastSessionId = sessionId;
             LastBearer = bearer;
             LastPort = port;
+            HealthCancellationToken = ct;
             if (unreachable) throw new PreviewRunnerHttpException("agenthost_unreachable", "unreachable");
             return Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, healthy, healthy ? 200 : 503));
         }
@@ -307,6 +411,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         {
             StopCalls++;
             sessionId.Should().Be("retained-process");
+            Stopped.TrySetResult();
             return Task.CompletedTask;
         }
 

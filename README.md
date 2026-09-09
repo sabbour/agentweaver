@@ -110,6 +110,8 @@ Publication retries DNS and HTTP failures for up to 90 seconds (`Sandbox:Preview
 An expired window triggers publication cleanup and a failure event.
 
 Approval retries retain the process-session ID and check process health again before publication.
+An accepted retry continues after its HTTP request ends, but stops when the run ends.
+If the run ends before publication completes, the API removes the new preview resources and does not report ready.
 Keepalive success does not establish preview health.
 
 ## Quick start

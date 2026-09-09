@@ -185,6 +185,8 @@ public static class SandboxEndpoints
 
             RetryablePreviewContext retry;
             PreviewApprovalAttempt attempt;
+            // Workflow registry entries can end while the run remains active.
+            var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
             try
             {
                 var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
@@ -206,7 +208,7 @@ public static class SandboxEndpoints
                 attempt = await previewGate.BeginApprovalAsync(
                     runId,
                     retry.TargetPort,
-                    CancellationToken.None,
+                    runCt,
                     retry.WorkPlanId,
                     retry.TreeHash,
                     retryOfRequestId: requestId).ConfigureAwait(false);
@@ -229,7 +231,8 @@ public static class SandboxEndpoints
                 turnTokens,
                 secretStore,
                 runStore,
-                logger);
+                logger,
+                runCt);
 
             return Results.Accepted(
                 $"/api/runs/{runId}/events",
@@ -386,7 +389,8 @@ public static class SandboxEndpoints
         RunStreamStore streamStore,
         ILogger logger,
         CancellationToken ct,
-        string? previewRunnerSessionId = null)
+        string? previewRunnerSessionId = null,
+        IRunStore? runStore = null)
     {
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
@@ -414,6 +418,31 @@ public static class SandboxEndpoints
                     started_at = preview.StartedAt,
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 };
+
+                var canPublish = false;
+                try
+                {
+                    // Publication can outlive the run, including when another replica terminalizes it.
+                    if (runStore is not null)
+                    {
+                        var currentRun = await runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+                        if (currentRun is null || EndpointHelpers.IsTerminal(currentRun.Status))
+                        {
+                            const string message = "The run became terminal before preview publication completed.";
+                            EmitPreviewFailure(
+                                streamStore, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
+                            return Results.Conflict(new { error = message });
+                        }
+                    }
+                    ct.ThrowIfCancellationRequested();
+                    canPublish = true;
+                }
+                finally
+                {
+                    if (!canPublish)
+                        await previewService.StopPreviewAsync(preview.Token, CancellationToken.None).ConfigureAwait(false);
+                }
+
                 streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewReady, readyPayload);
                 streamStore.Get(runId)?.RecordNext(EventTypes.CoordinatorPreviewReady, readyPayload);
                 EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.");
@@ -602,12 +631,13 @@ public static class SandboxEndpoints
         Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
         Agentweaver.Api.Auth.ISecretStore secretStore,
         IRunStore runStore,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken ct)
     {
         try
         {
             var result = await attempt.Completion.ConfigureAwait(false);
-            var currentRun = await runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+            var currentRun = await runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
             if (currentRun is null || EndpointHelpers.IsTerminal(currentRun.Status))
             {
                 await TryStopRetainedProcessAsync(
@@ -635,7 +665,7 @@ public static class SandboxEndpoints
                         runId, turnTokens, secretStore).ConfigureAwait(false);
                     if (!await IsPreviewProcessHealthyAsync(
                         runId, bearer, retry.PreviewRunnerSessionId, retry.TargetPort,
-                        previewRunnerClient, CancellationToken.None).ConfigureAwait(false))
+                        previewRunnerClient, ct).ConfigureAwait(false))
                     {
                         await TryStopRetainedProcessAsync(
                             runId, retry.PreviewRunnerSessionId, "preview_session_exited",
@@ -656,8 +686,9 @@ public static class SandboxEndpoints
                     portForwardService,
                     streamStore,
                     logger,
-                    CancellationToken.None,
-                    retry.PreviewRunnerSessionId).ConfigureAwait(false);
+                    ct,
+                    retry.PreviewRunnerSessionId,
+                    runStore).ConfigureAwait(false);
                 if (registrationResult is not Microsoft.AspNetCore.Http.IStatusCodeHttpResult
                     { StatusCode: StatusCodes.Status200OK })
                 {
@@ -698,6 +729,15 @@ public static class SandboxEndpoints
                 result.RequestId,
                 retryAvailable: timedOut,
                 expiredAt: result.ExpiresAt);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await TryStopRetainedProcessAsync(
+                runId, retry.PreviewRunnerSessionId, "run_terminal",
+                previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+            EmitPreviewFailure(
+                streamStore, runId, retry.TargetPort, "registration_failed",
+                "The run ended before preview publication completed.", retry.PreviewRunnerSessionId);
         }
         catch (Exception ex)
         {

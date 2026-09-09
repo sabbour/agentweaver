@@ -13,6 +13,30 @@ namespace Agentweaver.Tests.Runtime;
 public sealed class RunStreamStoreTests
 {
     [Fact]
+    public void CompletionToken_CancelsOnlyForItsRunLifetime()
+    {
+        var store = new RunStreamStore();
+        var entry = store.Create("run", "owner");
+        var other = store.Create("other", "owner");
+        var initial = entry.CompletionToken;
+
+        store.Reopen("run");
+        entry.CompletionToken.Should().Be(initial, "reopening a live stream must not detach accepted retries");
+        store.Complete("run");
+        initial.IsCancellationRequested.Should().BeTrue();
+        other.CompletionToken.IsCancellationRequested.Should().BeFalse();
+
+        store.Reopen("run");
+        var reopened = entry.CompletionToken;
+        reopened.CanBeCanceled.Should().BeTrue();
+        reopened.IsCancellationRequested.Should().BeFalse();
+        initial.IsCancellationRequested.Should().BeTrue();
+        store.Complete("run");
+        store.Complete("run");
+        reopened.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
     public void CompletedRun_RetainsDeltaSequence_ForReplay()
     {
         var store = new RunStreamStore();
