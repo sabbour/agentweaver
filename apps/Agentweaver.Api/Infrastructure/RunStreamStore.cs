@@ -124,12 +124,7 @@ public sealed class RunStreamEntry
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, CompletionToken);
         ct = lifetime.Token;
-        var now = DateTimeOffset.UtcNow;
-        RunEvent[] events =
-        [
-            new(0, EventTypes.SandboxPreviewReady, payload, now),
-            new(0, EventTypes.CoordinatorPreviewReady, payload, now),
-        ];
+        var events = CreatePreviewReadyEvents(payload);
         TaskCompletionSource? previous = null;
         if (HasDurableSequenceAuthority)
         {
@@ -167,6 +162,16 @@ public sealed class RunStreamEntry
         }
         previous!.TrySetResult();
         return true;
+    }
+
+    internal static RunEvent[] CreatePreviewReadyEvents(object payload)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return
+        [
+            new(0, EventTypes.SandboxPreviewReady, payload, now),
+            new(0, EventTypes.CoordinatorPreviewReady, payload, now),
+        ];
     }
 
     /// <summary>
@@ -425,6 +430,22 @@ public sealed class RunStreamStore
 
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
+
+    internal async Task<bool> TryRecordPreviewReadyAsync(
+        string runId, object payload, IRunStore runStore, CancellationToken ct)
+    {
+        var entry = Get(runId);
+        if (entry is not null)
+            return await entry.TryRecordPreviewReadyAsync(payload, runStore, ct).ConfigureAwait(false);
+        if (_eventStream is null)
+            return false;
+
+        // Another replica may own the live entry. Persist without creating a partial local history;
+        // durable subscribers replay the committed batch through the existing event stream.
+        var recorded = await _eventStream.AppendWhileRunActiveAsync(
+            runId, RunStreamEntry.CreatePreviewReadyEvents(payload), runStore, ct).ConfigureAwait(false);
+        return recorded.Count > 0;
+    }
 
     /// <summary>
     /// Reopens an existing (typically completed) run's stream entry in place, preserving its
