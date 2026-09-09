@@ -1,11 +1,16 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Preview;
 
@@ -127,6 +132,94 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             .Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task AgentTimeout_RetryRetainsSessionAndRechecksHealthAfterApproval(bool healthy, bool unreachable)
+    {
+        var runner = new RetainedRunnerClient(healthy, unreachable);
+        var preview = new RetainedPreviewService(runner);
+        var secrets = new InMemorySecretStore();
+        var approvalTimeout = TimeSpan.FromMilliseconds(25);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+            services.AddSingleton<ISecretStore>(secrets);
+            services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+            services.AddTransient(sp => new AgentPreviewGate(
+                sp.GetRequiredService<IToolApprovalGate>(),
+                sp.GetRequiredService<IRunOptionsStore>(),
+                sp.GetRequiredService<RunStreamStore>(),
+                autoApproveConfigured: false,
+                NullLogger<AgentPreviewGate>.Instance,
+                approvalTimeout));
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        await secrets.SetSecretAsync(PreviewRunnerCredential.SecretKey(runId), "retained-test-credential");
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var gate = factory.Services.GetRequiredService<IToolApprovalGate>();
+
+        var timeoutResponse = await client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+        {
+            target_port = 5173,
+            preview_runner_session_id = "retained-process",
+        });
+
+        timeoutResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var expired = streams.Get(runId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.SandboxPreviewFailed);
+        ReadString(expired.Payload, "preview_runner_session_id").Should().Be("retained-process");
+        ReadString(expired.Payload, "reason").Should().Be("approval_timed_out");
+        runner.HealthCalls.Should().Be(0);
+        runner.StopCalls.Should().Be(0);
+        preview.StartCalls.Should().Be(0);
+
+        approvalTimeout = TimeSpan.FromSeconds(10);
+        var requestId = ReadString(expired.Payload, "approval_request_id");
+        var retryResponse = await client.PostAsync(
+            $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", content: null);
+        retryResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var retryId = (await retryResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("request_id").GetString()!;
+        runner.HealthCalls.Should().Be(0, "health must be fresh after the delayed approval, not before it");
+        (await gate.GrantAsync(runId, retryId, ApprovalScope.Once)).Should().BeTrue();
+
+        for (var i = 0; i < 500; i++)
+        {
+            if (streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e =>
+                e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed) == 2)
+                break;
+            await Task.Delay(10);
+        }
+
+        var outcomes = streams.Get(runId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed).ToList();
+        outcomes.Should().HaveCount(2);
+        runner.HealthCalls.Should().Be(1);
+        runner.LastSessionId.Should().Be("retained-process");
+        runner.LastPort.Should().Be(5173);
+        runner.LastBearer.Should().Be("retained-test-credential", "retry uses the retained per-run credential, not operator auth");
+        ReadString(outcomes[1].Payload, "preview_runner_session_id").Should().Be("retained-process");
+        if (healthy)
+        {
+            outcomes[1].Type.Should().Be(EventTypes.SandboxPreviewReady);
+            preview.StartCalls.Should().Be(1);
+            preview.SessionId.Should().Be("retained-process");
+            runner.StopCalls.Should().Be(0);
+        }
+        else
+        {
+            outcomes[1].Type.Should().Be(EventTypes.SandboxPreviewFailed);
+            ReadString(outcomes[1].Payload, "reason").Should().Be("preview_session_exited");
+            preview.StartCalls.Should().Be(0);
+            runner.StopCalls.Should().Be(1);
+        }
+    }
+
     private async Task<(string RunId, string RequestId)> CreateRetryableRunAsync(
         string owner = ProjectsWebApplicationFactory.TestUser,
         RunStatus status = RunStatus.InProgress)
@@ -147,10 +240,12 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
 
     private async Task<(string RunId, string RequestId)> CreateRunAsync(
         RunStatus status,
-        string owner = ProjectsWebApplicationFactory.TestUser)
+        string owner = ProjectsWebApplicationFactory.TestUser,
+        IServiceProvider? services = null)
     {
+        services ??= _factory.Services;
         var runId = RunId.New();
-        await _factory.Services.GetRequiredService<SqliteRunStore>().InsertAsync(new Run
+        await services.GetRequiredService<SqliteRunStore>().InsertAsync(new Run
         {
             Id = runId,
             RepositoryPath = _factory.NewWorkingDirectory(),
@@ -163,7 +258,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         });
 
         var id = runId.ToString();
-        _factory.Services.GetRequiredService<RunStreamStore>().Create(id, owner);
+        services.GetRequiredService<RunStreamStore>().Create(id, owner);
         return (id, Guid.NewGuid().ToString("n"));
     }
 
@@ -181,4 +276,80 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
 
     private static string ReadString(object payload, string property) =>
         payload.GetType().GetProperty(property)!.GetValue(payload)!.ToString()!;
+
+    private sealed class EmptyTurnTokens : IAgentHostTurnTokenRegistry
+    {
+        public void RegisterTurnToken(string runId, string token) { }
+        public string? TryGetTurnToken(string runId) => null;
+        public void UnregisterTurnToken(string runId) { }
+    }
+
+    private sealed class RetainedRunnerClient(bool healthy, bool unreachable) : IPreviewRunnerHttpClient
+    {
+        public int HealthCalls;
+        public int StopCalls;
+        public string? LastSessionId;
+        public string? LastBearer;
+        public int LastPort;
+
+        public Task<PreviewRunnerHealthResult> HealthCheckAsync(
+            string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct)
+        {
+            HealthCalls++;
+            LastSessionId = sessionId;
+            LastBearer = bearer;
+            LastPort = port;
+            if (unreachable) throw new PreviewRunnerHttpException("agenthost_unreachable", "unreachable");
+            return Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, healthy, healthy ? 200 : 503));
+        }
+
+        public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
+        {
+            StopCalls++;
+            sessionId.Should().Be("retained-process");
+            return Task.CompletedTask;
+        }
+
+        public Task<PreviewRunnerStartResult> StartProcessAsync(
+            string runId, string? bearer, string command, string cwd, int? workPlanId, string? treeHash, CancellationToken ct) =>
+            throw new InvalidOperationException("Retry must not start another process.");
+
+        public Task<PreviewRunnerPortResult> ObserveBoundPortAsync(
+            string runId, string? bearer, string sessionId, int timeoutSeconds, string healthPath, CancellationToken ct) =>
+            throw new InvalidOperationException("Retry must reuse the retained session and port.");
+
+        public Task<PreviewRunnerHealthResult> HealthCheckByOriginAsync(
+            string origin, string? bearer, string sessionId, int port, string path, CancellationToken ct) =>
+            throw new InvalidOperationException("Registration must check health by run identity, not keepalive.");
+    }
+
+    private sealed class RetainedPreviewService(RetainedRunnerClient runner) : ISandboxPreviewService
+    {
+        public int StartCalls;
+        public string? SessionId;
+        public bool Enabled => true;
+        public int AllowedPortMin => 3000;
+        public int AllowedPortMax => 9000;
+
+        public Task<PreviewSession> StartPreviewAsync(
+            string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+            string? previewRunnerSessionId = null)
+        {
+            runner.HealthCalls.Should().Be(1, "fresh process health must precede registration");
+            StartCalls++;
+            SessionId = previewRunnerSessionId;
+            return Task.FromResult(new PreviewSession(
+                "gateway-token", runId, "pod", targetPort, "https://preview.example.test", DateTimeOffset.UtcNow));
+        }
+
+        public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+        public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(PreviewLifecycleState.Previewable);
+        public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
+            Task.FromResult(false);
+        public Task StopPreviewAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<int> ReapAsync(CancellationToken ct = default) => Task.FromResult(0);
+    }
 }

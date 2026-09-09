@@ -105,6 +105,13 @@ Add a new feature: <describe what you want>
 - **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
 - **MCP server** — expose Agentweaver runs and outcomes through OAuth to Claude Desktop, VS Code, GitHub Copilot CLI, and GitHub Copilot desktop
 
+**Preview readiness.** Gateway previews report ready only after the generated HTTPS URL responds successfully, with normal TLS validation and no API credentials.
+Publication retries DNS and HTTP failures for up to 90 seconds (`Sandbox:Preview:PublicationTimeoutSeconds`).
+An expired window triggers publication cleanup and a failure event.
+
+Approval retries retain the process-session ID and check process health again before publication.
+Keepalive success does not establish preview health.
+
 ## Quick start
 
 📖 New to Agentweaver? See [Prerequisites](#prerequisites) above if you don't
