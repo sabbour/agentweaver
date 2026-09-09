@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.8
+
+### Patch Changes
+
+- 7893713: Allow eligible BYOK providers to draft coordinator outcomes and run Preview analysis without GitHub Copilot credentials.
+- c757db2: Improve GHCR release deployment reliability by pinning AgentHost to the final promoted ACR digest and update the README with a clearer product overview and architecture diagram.
+
 ## 0.28.7
 
 ### Patch Changes
