@@ -35,7 +35,7 @@ public static class AiOperationCatalog
     private static readonly IReadOnlyDictionary<string, AiOperationDefinition> Operations =
         new Dictionary<string, AiOperationDefinition>(StringComparer.Ordinal)
         {
-            ["orchestration"] = Project("orchestration", ProjectRole.Contributor, supportsByok: false),
+            ["orchestration"] = Project("orchestration", ProjectRole.Contributor, supportsByok: true),
             ["blueprint_generation"] = new(
                 "blueprint_generation",
                 AiResolutionMode.OptionalProject,
@@ -69,12 +69,12 @@ public static class AiOperationCatalog
                 ProjectRole.Viewer,
                 supportsByok: true,
                 ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification),
-            ["outcome_spec_generation"] = Project("outcome_spec_generation", ProjectRole.Contributor, supportsByok: false),
+            ["outcome_spec_generation"] = Project("outcome_spec_generation", ProjectRole.Contributor, supportsByok: true),
             ["workflow_selection"] = Project("workflow_selection", ProjectRole.Contributor, supportsByok: false),
             ["story_independence_classification"] = Project("story_independence_classification", ProjectRole.Contributor, supportsByok: false),
             ["assembly_gate_classification"] = Project("assembly_gate_classification", ProjectRole.Contributor, supportsByok: false),
-            ["preview_classification"] = Project("preview_classification", ProjectRole.Contributor, supportsByok: false),
-            ["preview_command_generation"] = Project("preview_command_generation", ProjectRole.Contributor, supportsByok: false),
+            ["preview_classification"] = Project("preview_classification", ProjectRole.Contributor, supportsByok: true),
+            ["preview_command_generation"] = Project("preview_command_generation", ProjectRole.Contributor, supportsByok: true),
             ["agent_turn"] = Project("agent_turn", ProjectRole.Contributor, supportsByok: true),
             ["rai"] = Project("rai", ProjectRole.Contributor, supportsByok: false),
             ["rubberduck"] = Project("rubberduck", ProjectRole.Contributor, supportsByok: false),

@@ -398,17 +398,7 @@ public sealed class CoordinatorRunService
             var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
             return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
         }
-        var resolved = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
-        if (resolved is EffectiveModelProviderResult.Byok)
-        {
-            throw new AgentProviderException(
-                ModelSource.Byok,
-                AgentProviderFailureKind.Configuration,
-                "operation_requires_github_copilot",
-                "Coordinator orchestration currently requires GitHub Copilot because its outcome and classification stages are not BYOK-capable.",
-                isRetryable: false);
-        }
-        return resolved;
+        return await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
     }
 
     /// <summary>

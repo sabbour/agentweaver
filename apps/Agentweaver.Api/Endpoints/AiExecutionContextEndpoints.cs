@@ -16,10 +16,41 @@ public static class AiExecutionContextEndpoints
         app.MapPost("/api/ai/execution-context", ResolveAsync)
             .WithName("ResolveAiExecutionContext")
             .WithTags("AI execution")
+            .Accepts<AiExecutionContextRequest>("application/json")
+            .Produces<AiExecutionContextResponse>(StatusCodes.Status200OK)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description =
+                    "Prepares a short-lived, caller- and provider-bound AI execution context. " +
+                    "Send the returned execution_key as the If-Model-Provider-Key header on the " +
+                    "corresponding guarded operation. A valid BYOK provider is returned as a " +
+                    "resolved effective_model_provider where that operation supports BYOK. " +
+                    "A 409 provider/context error includes replacement context when the provider changed.";
+                return Task.CompletedTask;
+            })
             .AuthenticatedSelfOrMcp();
         app.MapPost("/api/runs/{id}/model-provider/validate", ValidateRunProviderAsync)
             .WithName("ValidateRunModelProvider")
             .WithTags("AI execution")
+            .Accepts<ValidateRunProviderRequest>("application/json")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description =
+                    "Validates the provider fingerprint held by a run-capability caller before " +
+                    "a guarded model invocation. A model_provider_changed response means the " +
+                    "caller must stop and prepare fresh execution context.";
+                return Task.CompletedTask;
+            })
             .RunCapability();
     }
 

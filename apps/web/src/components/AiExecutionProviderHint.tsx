@@ -1,7 +1,7 @@
-import { Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, MessageBar, MessageBarBody, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { cloneElement, useId } from 'react';
 import type { ReactElement, ReactNode } from 'react';
-import { aiExecutionProviderLabel } from './aiExecutionContext';
+import { aiExecutionProviderLabel, aiExecutionProviderScope } from './aiExecutionContext';
 import type { AiExecutionContext } from '../api/types';
 
 const useStyles = makeStyles({
@@ -27,6 +27,7 @@ export function AiExecutionProviderHint({
 }) {
   const styles = useStyles();
   const label = aiExecutionProviderLabel(context);
+  const scope = aiExecutionProviderScope(context);
   const descriptionId = useId();
   const describedBy = [children.props['aria-describedby'], descriptionId]
     .filter(Boolean)
@@ -38,6 +39,7 @@ export function AiExecutionProviderHint({
         title: children.props.title ?? label,
       })}
       <Text id={descriptionId} className={styles.label}>{label}</Text>
+      {scope && <Text className={styles.label}>Scope: {scope}.</Text>}
     </span>
   );
 }
@@ -51,11 +53,88 @@ export function AiExecutionProviderStatus({
 }) {
   const styles = useStyles();
   const label = aiExecutionProviderLabel(context);
+  const scope = aiExecutionProviderScope(context);
   return (
     <span className={styles.root} title={label}>
       {children}
       <Text className={styles.label}>{label}</Text>
+      {scope && <Text className={styles.label}>Scope: {scope}.</Text>}
     </span>
+  );
+}
+
+function remediation(
+  context: AiExecutionContext | null,
+  projectId?: string,
+): { message: string; href?: string; action?: string } {
+  const reason = context?.effective_model_provider?.unavailable_reason;
+  switch (reason) {
+    case 'no_provider':
+      return {
+        message: 'A Platform Administrator must configure a model provider before you can continue.',
+        href: '/platform-settings',
+        action: 'Open Platform settings',
+      };
+    case 'project_binding_requires_reauthorization':
+      return {
+        message: 'The project GitHub Copilot connection needs authorization again.',
+        href: projectId ? `/projects/${encodeURIComponent(projectId)}/settings` : undefined,
+        action: 'Open Project settings',
+      };
+    case 'user_provider_required':
+      return {
+        message: 'Configure personal AI access before you continue.',
+        href: '/settings',
+        action: 'Open AI Access settings',
+      };
+    case 'user_binding_requires_reauthorization':
+      return {
+        message: 'Your GitHub Copilot connection needs authorization again.',
+        href: '/settings',
+        action: 'Open AI Access settings',
+      };
+    case 'operation_requires_github_copilot':
+      return {
+        message: 'This operation requires GitHub Copilot and cannot use the current BYOK provider.',
+        href: projectId ? `/projects/${encodeURIComponent(projectId)}/settings` : undefined,
+        action: 'Open Project settings',
+      };
+    default:
+      return { message: 'The AI provider is unavailable. Review the provider and try again.' };
+  }
+}
+
+export function AiExecutionProviderReadiness({
+  context,
+  error,
+  projectId,
+  onRefresh,
+}: {
+  context: AiExecutionContext | null;
+  error?: string | null;
+  projectId?: string;
+  onRefresh: () => void;
+}) {
+  const unavailable = context?.effective_model_provider?.state === 'unavailable';
+  if (!unavailable && !error) return null;
+
+  const nextStep = remediation(context, projectId);
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        {unavailable ? nextStep.message : error}
+        {' '}
+        {context && <span>{aiExecutionProviderLabel(context)} </span>}
+        {nextStep.href && nextStep.action && (
+          <Button appearance="secondary" size="small" as="a" href={nextStep.href}>
+            {nextStep.action}
+          </Button>
+        )}
+        <Button appearance="secondary" size="small" onClick={onRefresh}>
+          Refresh provider
+        </Button>
+      </MessageBarBody>
+    </MessageBar>
   );
 }
 

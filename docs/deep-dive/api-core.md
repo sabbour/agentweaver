@@ -37,8 +37,9 @@ The admission contract covers these boundaries:
 | Path | Boundary |
 | --- | --- |
 | Generation, casting, backlog decomposition | Opaque admission, configuration fence, accepted configuration, pre-call provenance |
-| Coordinator selection, classifiers, preview command proposal | Copilot-only run fence and pre-call provenance |
-| Coordinator spec drafting and autopilot | Explicit Copilot selection and runtime invocation guard |
+| Coordinator spec drafting | Effective-provider boundary, accepted BYOK configuration, and runtime invocation guard |
+| Preview classifiers and preview command proposal | Effective-provider run fence, accepted BYOK configuration, and pre-call provenance |
+| Other coordinator selection/classifier actions | Copilot-only run fence and pre-call provenance |
 | Worker and reviewer turns, including AgentHost | Accepted provider context and guard before application-issued calls, re-asks, and SDK retries |
 | Assistant and RemoteOperator dispatch | Opaque admission, platform scope, launch fence, pre-dispatch revalidation |
 | Retry, revision, restart, queued pickup | Current resolver comparison against accepted fingerprints |

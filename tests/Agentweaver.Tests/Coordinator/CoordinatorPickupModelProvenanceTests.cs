@@ -15,8 +15,7 @@ namespace Agentweaver.Tests.Coordinator;
 /// Regression for the hardcoded <c>Run.ModelSource = ModelSource.GitHubCopilot</c> at every
 /// coordinator run insert site: the row (and therefore the UI) always claimed "GitHub Copilot" even
 /// when <see cref="EffectiveModelProviderResolver"/> had resolved a deployment-wide BYOK provider.
-/// The reserved-pickup path must persist the resolver's actual source while failing a Copilot-only
-/// orchestration truthfully before it can emit "used" provider provenance.
+/// The reserved-pickup path must persist the resolver's actual source before outcome drafting begins.
 /// </summary>
 [Collection("CoordinatorOutcomeSpec")]
 public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
@@ -37,17 +36,17 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
     }
 
     [Fact]
-    public async Task Pickup_run_with_byok_fails_truthfully_without_emitting_used_provenance()
+    public async Task Define_outcome_with_azure_byok_without_copilot_binding_passes_durable_byok_boundary_to_background_drafting()
     {
         var projectId = await CreateProjectAsync();
-        var pid = ProjectId.Parse(projectId);
+        ByokProviderConfiguration provider;
 
         // Activate a deployment-wide BYOK provider — the resolver's platform-scope winner when a
         // project has no Copilot binding of its own.
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
             var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
-            var provider = await byok.AddAsync(
+            provider = await byok.AddAsync(
                 new ByokProviderConfiguration(
                     Id: "unused",
                     Name: "Test Azure provider",
@@ -59,47 +58,40 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             await byok.SetActiveAsync(provider.Id, CancellationToken.None);
         }
 
-        var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
-        var task = new BacklogTask
-        {
-            Id = BacklogTaskId.New(),
-            ProjectId = pid,
-            Title = "Pickup must record the provider that actually ran",
-            Description = "deterministic pickup",
-            State = BacklogTaskState.Ready,
-            OrderKey = "n",
-            CapturedBy = "owner-github-login",
-            CapturedByUserId = CoordinatorWebApplicationFactory.OwnerUser,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CommittedAt = DateTimeOffset.UtcNow,
-        };
-        await backlogStore.InsertAsync(task);
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId, ensureProvider: false);
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations",
+            new { goal = "Define Outcome must keep its accepted Azure BYOK provider after the request ends." });
+        response.EnsureSuccessStatusCode();
+        var runId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
 
-        var projectStore = _factory.Services.GetRequiredService<IProjectStore>();
-        var project = await projectStore.GetAsync(pid);
-        project.Should().NotBeNull();
-
-        await _factory.Services.GetRequiredService<CoordinatorPickupService>()
-            .TryPickupAsync(project!, task, CancellationToken.None);
-
-        var claimed = await backlogStore.GetAsync(pid, task.Id);
-        claimed!.RunId.Should().NotBeNull();
-
-        var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed.RunId!.Value);
+        var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId));
         run.Should().NotBeNull();
         run!.ModelSource.Should().Be(ModelSource.Byok,
             "the persisted source must be the resolver's actual result, never a hardcoded Copilot literal");
-        run.Status.Should().Be(RunStatus.Failed);
-        run.Result.Should().Be("operation_requires_github_copilot");
 
-        var eventsResponse = await _owner.GetAsync($"/api/runs/{claimed.RunId.Value}/events");
-        eventsResponse.EnsureSuccessStatusCode();
-        var events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement>();
-        var provenance = EnumerateEvents(events).FirstOrDefault(e =>
-            e.TryGetProperty("type", out var type)
-            && type.GetString() == EventTypes.RunModelProviderResolved);
-        provenance.ValueKind.Should().Be(JsonValueKind.Undefined,
-            "a Copilot-only operation blocked before model invocation must not claim that BYOK was used");
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (drafter.LastInput is null && DateTime.UtcNow < deadline)
+            await Task.Delay(50);
+
+        drafter.LastInput.Should().NotBeNull(
+            "the background Define Outcome workflow must invoke its drafter");
+        drafter.LastInput!.ModelSource.Should().Be(ModelSource.Byok.ToApiString(),
+            "background drafting must select the persisted accepted BYOK source, not a disposed request-local plan");
+        drafter.LastInput.ByokProviderFingerprint.Should().Be(provider.ExecutionFingerprint(),
+            "the drafting client must validate the durable accepted Azure provider identity before invocation");
+
+        var entry = _factory.Services.GetRequiredService<RunStreamStore>().Get(runId);
+        entry.Should().NotBeNull();
+        var provenance = entry!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunModelProviderResolved);
+        JsonSerializer.SerializeToElement(provenance.Payload)
+            .GetProperty("modelSource").GetString()
+            .Should().Be(ModelSource.Byok.ToApiString());
     }
 
     [Fact]
@@ -133,40 +125,6 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
 
         run!.ModelSource.Should().Be(ModelSource.GitHubCopilot);
     }
-
-    /// <summary>
-    /// Reads the run's event stream (the durable provenance channel) until the
-    /// <c>run.model_provider_resolved</c> event appears, or the poll deadline expires.
-    /// </summary>
-    private async Task<JsonElement?> PollForProvenanceAsync(string runId)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            var response = await _owner.GetAsync($"/api/runs/{runId}/events");
-            if (response.IsSuccessStatusCode)
-            {
-                var events = await response.Content.ReadFromJsonAsync<JsonElement>();
-                var match = EnumerateEvents(events).FirstOrDefault(e =>
-                    e.TryGetProperty("type", out var type)
-                    && type.GetString() == EventTypes.RunModelProviderResolved);
-                if (match.ValueKind != JsonValueKind.Undefined)
-                    return match.GetProperty("payload");
-            }
-
-            await Task.Delay(50);
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<JsonElement> EnumerateEvents(JsonElement body) => body.ValueKind switch
-    {
-        JsonValueKind.Array => body.EnumerateArray(),
-        JsonValueKind.Object when body.TryGetProperty("events", out var events)
-            && events.ValueKind == JsonValueKind.Array => events.EnumerateArray(),
-        _ => [],
-    };
 
     private async Task<string> CreateProjectAsync()
     {

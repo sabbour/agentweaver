@@ -29,8 +29,9 @@ The API binds an execution key to the caller, operation, project, and provider c
 The key expires after five minutes.
 Missing or expired keys require new context.
 
-Coordinator orchestration and its classifier actions currently require GitHub Copilot.
-A configured BYOK provider does not imply support for these operations.
+Coordinator outcome drafting and Preview analysis use the effective model provider, including
+a configured BYOK provider. Other coordinator classifier actions can still require GitHub
+Copilot when their execution path is Copilot-specific.
 Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
 
 Custom API clients prepare context through `POST /api/ai/execution-context`.
@@ -41,6 +42,9 @@ The provider object contains redacted kind, scope, type, model, availability, an
 Send `execution_key` in `If-Model-Provider-Key` for the corresponding action.
 Do not display or send the public `provider_key` as authority.
 It is an opaque comparison fingerprint, not an execution key.
+If preparation or a guarded invocation returns `409 model_provider_changed`, stop the operation,
+use the replacement context, and prepare a new key. If the provider is unavailable, configure an
+eligible BYOK provider or the operation's required GitHub Copilot capability, then retry.
 
 ### Coordinator orchestration
 

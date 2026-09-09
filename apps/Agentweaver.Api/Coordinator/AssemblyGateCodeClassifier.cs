@@ -91,6 +91,7 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
                                 _modelId,
                                 ClassifierCharter,
                                 BuildPrompt(context),
+                                supportsByok: false,
                                 token),
                         ClassificationTimeout,
                         ct,
