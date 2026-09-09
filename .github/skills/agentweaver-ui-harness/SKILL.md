@@ -25,14 +25,14 @@ That contract now includes `list-scenarios` for the reviewed built-in UI catalog
 the separate `harness-scenarios` skill for cross-surface cataloging and persona
 generation.
 
-The auth pattern requires the managed **Edge Default profile** to satisfy Conditional
-Access (plain Chromium is blocked by Entra policy). Close all Edge windows first, then:
+The auth pattern requires the managed **Chrome Default profile** to satisfy Conditional
+Access (plain Chromium is blocked by Entra policy). Close all Chrome windows first, then:
 
 ```powershell
-node scripts/ui-harness/login-edge-default.mjs --base-url <staging-url>
+node scripts/ui-harness/login-chrome-default.mjs --base-url <staging-url>
 ```
 
-If Edge is already running with `--remote-debugging-port=9222`, append `--cdp`. The
+If Chrome is already running with `--remote-debugging-port=9222`, append `--cdp`. The
 script writes git-ignored state to `scripts/ui-harness/.auth/` and a
 `session-token.txt` for the API harness — never print or commit these.
 
