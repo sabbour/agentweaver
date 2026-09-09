@@ -973,3 +973,36 @@ run_status can remain top-level in_progress while coordinator_status is assembly
 - status: open
 
 On staging revision e12ff596, a blank-origin software-development project reached assembly_blocked because its only subtask failed github_copilot_auth_required: GitHub Copilot requires a live run-bound capability snapshot. OAuth/MCP protocol and Copilot CLI connectivity can pass independently; they do not prove that an owned blank project has the project/platform Copilot capability (or configured BYOK provider) needed for agent execution.
+
+---
+
+## Chrome Default profile copy satisfies Entra Conditional Access for OAuth automation
+
+- date: 2026-09-09
+- category: environment-fact
+- surface: all
+- status: fixed
+
+Browser automation for Entra-protected sign-in (staging UI and MCP OAuth PKCE) requires a real installed browser's own user-data profile (WAM/device-trust signal), not just injected cookies/storageState. The working pattern: copy the real Default profile's user-data directory to a disposable location, then launchPersistentContext from that disposable copy (never the live directory directly, which trips a separate CDP restriction: 'DevTools remote debugging requires a non-default data directory'). This was previously implemented only for Microsoft Edge (channel msedge) on the assumption that Conditional Access requires Edge specifically. Empirically verified: the same disposable-real-profile-copy technique works identically with Google Chrome (channel chrome, %LOCALAPPDATA%\Google\Chrome\User Data\Default) -- full Entra SSO + app consent + OAuth callback succeeded. Plain/ephemeral Chromium or Chrome without a real profile copy still does NOT work (confirmed separately) -- the requirement is the real profile copy, not the specific browser vendor. scripts/demo-recording/lib/recording-session.mjs, scripts/ui-harness/login-*-default.mjs, and related SKILL.md/README.md docs were migrated from Edge to Chrome as the standard method.
+
+---
+
+## MCP OAuth token exchange requires the resource parameter, not just the authorize request
+
+- date: 2026-09-09
+- category: bug
+- surface: mcp
+- status: fixed
+
+Agentweaver's OAuth 2.1 authorization server (OpenIddict-based, PKCE S256, dynamic client registration) requires the 'resource' parameter (RFC 8707) on BOTH the /oauth/authorize request AND the /oauth/token exchange request, targeting the exact MCP resource URL (e.g. https://<host>/mcp). Omitting resource on the token exchange (even though it was present on the authorize request) fails with {error: invalid_target, error_description: 'The request must target exactly the configured MCP resource.'}. A working PKCE client must include resource on both calls to obtain a valid mcp:invoke-scoped access token.
+
+---
+
+## PersonaActor cannot consume verified recorder-session auth
+
+- date: 2026-09-09
+- category: environment-fact
+- surface: api
+- status: open
+
+On 2026-09-09 post-AgentHost generation-65 baseline, npm run demo:record -- status reported an open, verified recorder session, but AGENTWEAVER_TOKEN was absent in the Harness/PersonaActor environment. A fresh PersonaActor could only obtain 401 Bearer challenges from GET /api/projects and GET /api/account/ai-access, so dynamic authorized Preview validation and provider/model enumeration could not proceed without violating the no-read/export-token boundary.
