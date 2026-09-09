@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
@@ -224,6 +225,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     public async Task Steer_Stop_NoInstruction_Returns201_WithDirectiveView()
     {
         var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer", new { kind = "stop" });
 
@@ -236,6 +238,30 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         directive.Status.Should().Be("applied", "stop collapses to applied immediately");
         directive.CreatedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser,
             "createdBy must be the authenticated caller");
+    }
+
+    [Theory]
+    [InlineData("send")]
+    [InlineData("redirect")]
+    [InlineData("amend")]
+    public async Task Steer_AiContinuationWithoutProviderKey_Returns409_WithoutPersistingDirective(string kind)
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/steer",
+            new { kind, instruction = "Do not persist this without provider consent." });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+        body.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.SteeringDirectives.CountAsync(d => d.CoordinatorRunId == runId))
+            .Should().Be(0, "provider rejection must happen before a steering directive is persisted");
     }
 
     [Fact]
@@ -503,6 +529,41 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.AssemblyReviews.CountAsync(r => r.CoordinatorRunId == runId))
             .Should().Be(0, "stale assembly review submissions must not persist decisions");
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task AssemblyReview_AiContinuationWithoutProviderKey_Returns409_WithoutPersistingDecision(
+        bool approved,
+        bool requestChanges)
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            runId,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            $"agentweaver/integration/{runId}",
+            "tree-hash",
+            CancellationToken.None);
+        _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/assembly/review",
+            new { approved, request_changes = requestChanges, feedback = "keep the gate pending" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var review = await db.AssemblyReviews.AsNoTracking()
+            .SingleAsync(record => record.CoordinatorRunId == runId);
+        review.DecisionJson.Should().BeNull(
+            "provider rejection must happen before the assembly-review decision is persisted");
+        review.DecisionSubmittedAt.Should().BeNull();
     }
 
     [Fact]
@@ -925,6 +986,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
     private async Task<string> StartOrchestrationAsync(string projectId, string goal)
     {
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId);
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", new { goal });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
@@ -988,6 +1051,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         string ownerUser,
         RunStatus status = RunStatus.InProgress)
     {
+        var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
         var run = new Run
@@ -1001,10 +1065,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
+            ProjectId = ProjectId.Parse(projectId),
             ParentRunId = null,
             SubtaskId = null,
         };
         await runStore.InsertAsync(run, CancellationToken.None);
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId, runId.ToString());
         return runId.ToString();
     }
 

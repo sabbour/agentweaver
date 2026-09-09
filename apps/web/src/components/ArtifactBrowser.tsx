@@ -12,6 +12,7 @@ import {
   Textarea,
   tokens,
   } from '@fluentui/react-components';
+import { AiExecutionProviderHint, AiExecutionProviderStatus } from './AiExecutionProviderHint';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
 import { isMarkdownFile } from '../utils/fileKind';
@@ -820,6 +821,10 @@ export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChanges
     requestChanges,
     approveLabel,
     approveAriaLabel,
+    approvalUsesAi,
+    aiExecutionContext,
+    aiExecutionLoading,
+    aiExecutionAvailable,
   } = state;
 
   const fileClickHandler = (path: string, isChanged = true) => {
@@ -872,20 +877,43 @@ export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChanges
             </div>
           )}
           {(commitPending || reviewPending || requestChangesPending) ? (
-            <Spinner size="tiny" aria-label="Processing" />
+            requestChangesPending || (commitPending && approvalUsesAi) ? (
+              <AiExecutionProviderStatus context={aiExecutionContext}>
+                <Spinner size="tiny" aria-label="Processing" />
+              </AiExecutionProviderStatus>
+            ) : (
+              <Spinner size="tiny" aria-label="Processing" />
+            )
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-              <Button
-                appearance="primary"
-                size="small"
-                icon={<CheckmarkRegular />}
-                aria-label={approveAriaLabel}
-                style={{ width: '100%', whiteSpace: 'nowrap' }}
-                disabled={commitPending || reviewPending || requestChangesPending}
-                onClick={() => void commitRun()}
-              >
-                {approveLabel}
-              </Button>
+              {approvalUsesAi ? (
+                <AiExecutionProviderHint context={aiExecutionContext}>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<CheckmarkRegular />}
+                    aria-label={approveAriaLabel}
+                    style={{ width: '100%', whiteSpace: 'nowrap' }}
+                    disabled={commitPending || reviewPending || requestChangesPending
+                      || aiExecutionLoading || !aiExecutionAvailable}
+                    onClick={() => void commitRun()}
+                  >
+                    {approveLabel}
+                  </Button>
+                </AiExecutionProviderHint>
+              ) : (
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={<CheckmarkRegular />}
+                  aria-label={approveAriaLabel}
+                  style={{ width: '100%', whiteSpace: 'nowrap' }}
+                  disabled={commitPending || reviewPending || requestChangesPending}
+                  onClick={() => void commitRun()}
+                >
+                  {approveLabel}
+                </Button>
+              )}
               <div className={styles.reviewBarSplitActions}>
                 <Button
                   appearance="secondary"
@@ -933,20 +961,23 @@ export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChanges
                 <Text className={styles.requestChangesError}>{requestChangesError}</Text>
               )}
               <div className={styles.requestChangesActions}>
-                <Button
-                  appearance="primary"
-                  size="small"
-                  disabled={requestChangesComment.trim().length === 0}
-                  aria-label="Send change request to agent"
-                  onClick={() => {
-                    void requestChanges(requestChangesComment.trim()).then(() => {
-                      setRequestChangesOpen(false);
-                      setRequestChangesComment('');
-                    });
-                  }}
-                >
-                  Send
-                </Button>
+                <AiExecutionProviderHint context={aiExecutionContext}>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    disabled={requestChangesComment.trim().length === 0
+                      || aiExecutionLoading || !aiExecutionAvailable}
+                    aria-label="Send change request to agent"
+                    onClick={() => {
+                      void requestChanges(requestChangesComment.trim()).then(() => {
+                        setRequestChangesOpen(false);
+                        setRequestChangesComment('');
+                      });
+                    }}
+                  >
+                    Send
+                  </Button>
+                </AiExecutionProviderHint>
                 <Button
                   appearance="secondary"
                   size="small"
@@ -965,12 +996,20 @@ export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChanges
       )}
       {commitResult !== null && (
         <div className={styles.reviewResultBar}>
-          <Badge color={reviewResultBadgeColor(commitResult.status)}>{formatReviewResultStatus(commitResult.status)}</Badge>
+          {approvalUsesAi ? (
+            <AiExecutionProviderStatus context={aiExecutionContext}>
+              <Badge color={reviewResultBadgeColor(commitResult.status)}>{formatReviewResultStatus(commitResult.status)}</Badge>
+            </AiExecutionProviderStatus>
+          ) : (
+            <Badge color={reviewResultBadgeColor(commitResult.status)}>{formatReviewResultStatus(commitResult.status)}</Badge>
+          )}
         </div>
       )}
       {requestChangesResult !== null && (
         <div className={styles.reviewResultBar}>
-          <Badge color="subtle">{formatReviewResultStatus(requestChangesResult.status)}</Badge>
+          <AiExecutionProviderStatus context={aiExecutionContext}>
+            <Badge color="subtle">{formatReviewResultStatus(requestChangesResult.status)}</Badge>
+          </AiExecutionProviderStatus>
         </div>
       )}
       {reviewResult !== null && (

@@ -24,7 +24,9 @@ public sealed record CoordinatorDraftInput(
     string? ReviseFeedback = null,
     string? OutcomeSpecGenerationModel = null,
     OutcomeSpecDraft? PriorDraft = null,
-    string? SubmittingUserDisplayName = null);
+    string? SubmittingUserDisplayName = null,
+    string ModelSource = "github-copilot",
+    string? ByokProviderFingerprint = null);
 
 /// <summary>
 /// Data surfaced to the external caller (the confirm/revise endpoints) through the

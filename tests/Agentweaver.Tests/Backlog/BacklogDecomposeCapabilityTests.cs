@@ -152,7 +152,12 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
     {
         public int Invocations { get; private set; }
 
-        public Task<string?> RunAsync(CopilotClient client, string prompt, string? modelId, CancellationToken ct)
+        public Task<string?> RunAsync(
+            CopilotClient client,
+            string prompt,
+            string? modelId,
+            CancellationToken ct,
+            ByokProviderConfiguration? byokProviderConfiguration = null)
         {
             Invocations++;
             prompt.Should().Contain("<<<DOCUMENT>>>");

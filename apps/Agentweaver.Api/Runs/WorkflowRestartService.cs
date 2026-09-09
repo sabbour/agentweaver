@@ -125,9 +125,35 @@ public sealed class WorkflowRestartService
             var runIdStr = run.Id.ToString();
 
             await using var snapshotScope = _scopeFactory.CreateAsyncScope();
+            var providerBoundary = snapshotScope.ServiceProvider.GetService<IRunModelProviderBoundaryResolver>();
+            ResolvedRunModelProviderBoundary? acceptedBoundary = null;
+            if (providerBoundary is not null)
+            {
+                try
+                {
+                    acceptedBoundary = await providerBoundary.ResolveDurableProviderBoundaryAsync(run, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Model provider changed for recovered run {RunId}", run.Id);
+                    await FailRecoveredRunAsync(
+                        run, "model_provider_changed", entry: null, cleanupWorktree: false, ct: ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+            }
             var snapshotLifecycle = snapshotScope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
             if (snapshotLifecycle is not null &&
-                !await snapshotLifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+                !await snapshotLifecycle.PrepareForLaunchAsync(
+                    run, ct,
+                    expectedCopilotBindingId: run.ModelSource == ModelSource.GitHubCopilot
+                        ? acceptedBoundary?.Provider.ProviderId() : null,
+                    expectedCopilotCredentialVersion: acceptedBoundary?.Provider.CredentialVersion()).ConfigureAwait(false))
             {
                 _logger.LogError(
                     "Immutable GitHub capability snapshot is unavailable for recovered run {RunId}; failing run",

@@ -72,4 +72,11 @@ public sealed record BacklogTask
     /// contributor backlog operations.
     /// </summary>
     public bool IsAutomationInvocationPending { get; init; }
+
+    /// <summary>
+    /// Signed execution plan accepted when a user explicitly queues an AI-backed workflow run.
+    /// Background pickup restores and revalidates this immutable plan before model execution.
+    /// Null for ordinary backlog and automation-trigger tasks that resolve at pickup time.
+    /// </summary>
+    public string? AiExecutionProviderKey { get; init; }
 }

@@ -366,7 +366,8 @@ public sealed class CopilotBlueprintGeneratorTests
             string? systemPromptContext = null,
             string? userId = null,
             string? projectId = null,
-            CopilotOperationCapability? copilotCapability = null)
+            CopilotOperationCapability? copilotCapability = null,
+            ByokProviderConfiguration? byokProviderConfiguration = null)
         {
             LastCapability = copilotCapability;
             return ExecuteAsync(

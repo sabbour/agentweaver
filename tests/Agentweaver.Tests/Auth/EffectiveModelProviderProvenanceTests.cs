@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -39,7 +40,7 @@ public sealed class EffectiveModelProviderProvenanceTests
     }
 
     [Fact]
-    public void Byok_provenance_payload_carries_provider_identity_and_model()
+    public void Byok_provenance_payload_carries_public_provider_metadata_without_raw_identity()
     {
         EffectiveModelProviderResult result = new EffectiveModelProviderResult.Byok("provider-1", "anthropic");
 
@@ -52,9 +53,9 @@ public sealed class EffectiveModelProviderProvenanceTests
         fields["runId"].Should().Be("run-1");
         fields["state"].Should().Be(EffectiveModelProviderProvenance.StateResolved);
         fields["providerKind"].Should().Be(EffectiveModelProviderProvenance.KindByok);
-        fields["providerId"].Should().Be("provider-1");
+        fields.Should().NotContainKey("providerId");
         fields["providerType"].Should().Be("anthropic");
-        fields["githubLogin"].Should().BeNull();
+        fields.Should().NotContainKey("githubLogin");
         fields["modelSource"].Should().Be("byok");
         fields["modelId"].Should().Be("claude-opus-4.8");
         fields["resolutionScope"].Should().Be(EffectiveModelProviderProvenance.ScopeProject);
@@ -100,12 +101,78 @@ public sealed class EffectiveModelProviderProvenanceTests
         context.ProviderScope.Should().Be("platform");
         context.ResolutionScope.Should().Be("unknown",
             "legacy events did not record whether a platform provider was resolved for project or platform execution");
-        context.GitHubLogin.Should().Be("platform-bot");
         context.ProviderKey.Should().HaveLength(64);
     }
 
     [Fact]
-    public void Project_copilot_provenance_payload_carries_the_binding_and_account_login()
+    public void Legacy_provenance_payload_is_redacted_before_public_serialization()
+    {
+        var payload = new
+        {
+            providerKind = "platform_github_copilot",
+            providerId = "binding-1",
+            githubLogin = "platform-bot",
+            modelSource = "github-copilot",
+            modelId = "gpt-5",
+        };
+
+        var publicPayload = EffectiveModelProviderProvenance.RedactPublicPayload(payload);
+
+        publicPayload.ContainsKey("providerId").Should().BeFalse();
+        publicPayload.ContainsKey("githubLogin").Should().BeFalse();
+        publicPayload["providerIdentityVersion"]!.GetValue<int>().Should().Be(2);
+        publicPayload["providerKey"]!.GetValue<string>().Should().HaveLength(64);
+        publicPayload.ToJsonString().Should().NotContain("binding-1");
+        publicPayload.ToJsonString().Should().NotContain("platform-bot");
+    }
+
+    [Fact]
+    public void Legacy_byok_provenance_fails_closed_without_a_configuration_fingerprint()
+    {
+        var payload = new
+        {
+            providerKind = "byok",
+            providerId = "provider-1",
+            providerType = "azure",
+            modelId = "gpt-5",
+        };
+        var current = new EffectiveModelProviderResult.Byok(
+            "provider-1",
+            "azure",
+            "new-configuration-fingerprint");
+
+        EffectiveModelProviderProvenance.MatchesDurableProvider(
+            payload,
+            current,
+            EffectiveModelProviderProvenance.ScopeProject,
+            "gpt-5").Should().BeFalse();
+        EffectiveModelProviderProvenance.MatchesDurableProvider(
+            payload,
+            current with { ProviderId = "provider-2" },
+            EffectiveModelProviderProvenance.ScopeProject,
+            "gpt-5").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Version_two_provenance_without_a_provider_fingerprint_fails_closed()
+    {
+        var payload = new
+        {
+            providerIdentityVersion = 2,
+            providerKind = "byok",
+            providerType = "azure",
+            modelSource = "byok",
+        };
+
+        EffectiveModelProviderProvenance.MatchesDurableProvider(
+            payload,
+            new EffectiveModelProviderResult.Byok("provider-1", "azure", "configuration-fingerprint"),
+            EffectiveModelProviderProvenance.ScopeProject,
+            "gpt-5").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Project_copilot_provenance_payload_omits_binding_and_account_metadata()
     {
         EffectiveModelProviderResult result =
             new EffectiveModelProviderResult.ProjectGitHubCopilot("binding-1", "octocat");
@@ -113,14 +180,41 @@ public sealed class EffectiveModelProviderProvenanceTests
         var fields = Fields(result.ToProvenancePayload("run-2", "gpt-5"));
 
         fields["providerKind"].Should().Be(EffectiveModelProviderProvenance.KindProjectGitHubCopilot);
-        fields["providerId"].Should().Be("binding-1");
-        fields["githubLogin"].Should().Be("octocat");
+        fields.Should().NotContainKey("providerId");
+        fields.Should().NotContainKey("githubLogin");
         fields["modelSource"].Should().Be("github-copilot");
         fields["modelId"].Should().Be("gpt-5");
     }
 
     [Fact]
-    public void Platform_copilot_provenance_payload_carries_the_platform_binding_and_account_login()
+    public void Public_provider_contract_never_serializes_the_github_login()
+    {
+        EffectiveModelProviderResult result =
+            new EffectiveModelProviderResult.ProjectGitHubCopilot("binding-1", "octocat");
+
+        var contract = JsonSerializer.SerializeToElement(
+            result.ToContract(EffectiveModelProviderProvenance.ScopeProject, "gpt-5"));
+
+        contract.TryGetProperty("github_login", out _).Should().BeFalse();
+        contract.ToString().Should().NotContain("octocat");
+    }
+
+    [Fact]
+    public void Copilot_provider_fingerprint_uses_credential_version_not_github_login()
+    {
+        var original = new EffectiveModelProviderResult.PlatformGitHubCopilot(
+            "platform-default", "octocat", "credential-version-1");
+        var renamed = original with { GitHubLogin = "different-login" };
+        var rebound = original with { CredentialVersion = "credential-version-2" };
+
+        renamed.ProviderKey().Should().Be(original.ProviderKey(),
+            "public fingerprints must not encode or change with the GitHub login");
+        rebound.ProviderKey().Should().NotBe(original.ProviderKey(),
+            "a replaced credential must invalidate accepted provider identity");
+    }
+
+    [Fact]
+    public void Platform_copilot_provenance_payload_omits_binding_and_account_metadata()
     {
         EffectiveModelProviderResult result =
             new EffectiveModelProviderResult.PlatformGitHubCopilot("binding-2", "platform-bot");
@@ -128,8 +222,8 @@ public sealed class EffectiveModelProviderProvenanceTests
         var fields = Fields(result.ToProvenancePayload("run-3", null));
 
         fields["providerKind"].Should().Be(EffectiveModelProviderProvenance.KindPlatformGitHubCopilot);
-        fields["providerId"].Should().Be("binding-2");
-        fields["githubLogin"].Should().Be("platform-bot");
+        fields.Should().NotContainKey("providerId");
+        fields.Should().NotContainKey("githubLogin");
     }
 
     [Fact]
@@ -192,7 +286,7 @@ public sealed class EffectiveModelProviderProvenanceTests
     }
 
     [Fact]
-    public void Unavailable_event_preserves_legacy_enum_name_while_contract_uses_snake_case()
+    public void Unavailable_event_and_contract_use_the_same_actionable_reason_code()
     {
         EffectiveModelProviderResult result = new EffectiveModelProviderResult.Unavailable(
             EffectiveModelProviderUnavailableReason.NoProvider,
@@ -204,7 +298,7 @@ public sealed class EffectiveModelProviderProvenanceTests
             EffectiveModelProviderProvenance.ScopePlatform));
         var contract = result.ToContract(EffectiveModelProviderProvenance.ScopePlatform);
 
-        eventFields["unavailableReason"].Should().Be("NoProvider");
+        eventFields["unavailableReason"].Should().Be("no_provider");
         contract.UnavailableReason.Should().Be("no_provider");
     }
 

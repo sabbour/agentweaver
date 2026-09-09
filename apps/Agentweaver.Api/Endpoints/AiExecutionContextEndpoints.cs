@@ -1,71 +1,31 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
-using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Endpoints;
 
-/// <summary>
-/// Pre-invocation provider resolution for every first-party generative AI action. This endpoint
-/// never accepts prompt/content and never starts execution; it gives the UI an authoritative,
-/// redacted provider context to display before the user commits the action.
-/// </summary>
 public static class AiExecutionContextEndpoints
 {
-    private enum ResolutionMode
-    {
-        RequiredProject,
-        OptionalProject,
-        Platform,
-        User,
-    }
-
-    private static readonly IReadOnlyDictionary<string, ResolutionMode> Operations =
-        new Dictionary<string, ResolutionMode>(StringComparer.Ordinal)
-        {
-            ["orchestration"] = ResolutionMode.RequiredProject,
-            ["blueprint_generation"] = ResolutionMode.OptionalProject,
-            ["workflow_generation"] = ResolutionMode.RequiredProject,
-            ["skill_generation"] = ResolutionMode.RequiredProject,
-            ["agent_generation"] = ResolutionMode.RequiredProject,
-            ["team_generation"] = ResolutionMode.RequiredProject,
-            ["casting_generation"] = ResolutionMode.RequiredProject,
-            ["backlog_decomposition"] = ResolutionMode.RequiredProject,
-            ["marketplace_catalog_classification"] = ResolutionMode.RequiredProject,
-            ["outcome_spec_generation"] = ResolutionMode.RequiredProject,
-            ["workflow_selection"] = ResolutionMode.RequiredProject,
-            ["story_independence_classification"] = ResolutionMode.RequiredProject,
-            ["assembly_gate_classification"] = ResolutionMode.RequiredProject,
-            ["preview_classification"] = ResolutionMode.RequiredProject,
-            ["preview_command_generation"] = ResolutionMode.RequiredProject,
-            ["agent_turn"] = ResolutionMode.RequiredProject,
-            ["rai"] = ResolutionMode.RequiredProject,
-            ["rubberduck"] = ResolutionMode.RequiredProject,
-            ["build_test"] = ResolutionMode.RequiredProject,
-            ["scribe"] = ResolutionMode.RequiredProject,
-            ["assistant_turn"] = ResolutionMode.Platform,
-            ["user_session"] = ResolutionMode.User,
-        };
-
     public static void MapAiExecutionContextEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/ai/execution-context", ResolveAsync)
             .WithName("ResolveAiExecutionContext")
             .WithTags("AI execution")
-            .AuthenticatedPlatform();
+            .AuthenticatedSelfOrMcp();
     }
 
     private static async Task<IResult> ResolveAsync(
         HttpContext httpContext,
         AiExecutionContextRequest request,
-        EffectiveModelProviderResolver resolver,
+        AiExecutionPlanService plans,
         IProjectStore projectStore,
+        IRunStore runStore,
         IConfiguration configuration,
         CancellationToken ct)
     {
-        var operation = request.Operation?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(operation) || !Operations.TryGetValue(operation, out var mode))
+        if (!AiOperationCatalog.TryGet(request.Operation, out var operation))
         {
             return Results.BadRequest(new
             {
@@ -74,7 +34,9 @@ public static class AiExecutionContextEndpoints
             });
         }
 
+        var caller = httpContext.GetCaller();
         ProjectId? projectId = null;
+        Run? run = null;
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
         {
             if (!ProjectId.TryParse(request.ProjectId, out var parsedProjectId))
@@ -83,8 +45,9 @@ public static class AiExecutionContextEndpoints
             var project = await projectStore.GetAsync(parsedProjectId, ct).ConfigureAwait(false);
             if (project is null)
                 return Results.NotFound();
+            var minimumRole = operation.MinimumProjectRole ?? ProjectRole.Viewer;
             if (await ProjectAuthorization
-                .RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct)
+                .RequireAccessAsync(httpContext, project, configuration, minimumRole, ct)
                 .ConfigureAwait(false) is { } denied)
             {
                 return denied;
@@ -92,50 +55,82 @@ public static class AiExecutionContextEndpoints
             projectId = parsedProjectId;
         }
 
-        if (mode == ResolutionMode.RequiredProject && projectId is null)
+        if (!string.IsNullOrWhiteSpace(request.RunId))
+        {
+            if (!RunId.TryParse(request.RunId, out var parsedRunId))
+                return Results.BadRequest(new { error = "invalid_run_id", message = "run_id is invalid." });
+            run = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is null)
+                return Results.NotFound();
+            if (projectId is not null && run.ProjectId != projectId)
+                return Results.NotFound();
+            if (projectId is null && run.ProjectId is { } runProjectId)
+            {
+                var project = await projectStore.GetAsync(runProjectId, ct).ConfigureAwait(false);
+                if (project is null)
+                    return Results.NotFound();
+                var minimumRole = operation.MinimumProjectRole ?? ProjectRole.Viewer;
+                if (await ProjectAuthorization
+                    .RequireAccessAsync(httpContext, project, configuration, minimumRole, ct)
+                    .ConfigureAwait(false) is { } denied)
+                {
+                    return denied;
+                }
+                projectId = runProjectId;
+            }
+        }
+
+        if (run is not null)
+        {
+            if (await EndpointHelpers.RequireRunAccessAsync(
+                    httpContext,
+                    run,
+                    operation.MinimumProjectRole ?? ProjectRole.Viewer,
+                    ct).ConfigureAwait(false) is { } runDenied)
+            {
+                return runDenied;
+            }
+        }
+        var permitsOwnedNonProjectRun = run is { ProjectId: null }
+            && string.Equals(operation.Name, "agent_turn", StringComparison.Ordinal);
+        if (operation.ResolutionMode == AiResolutionMode.RequiredProject
+            && projectId is null
+            && !permitsOwnedNonProjectRun)
         {
             return Results.BadRequest(new
             {
                 error = "project_id_required",
-                message = $"project_id is required for {operation}.",
+                message = $"project_id is required for {operation.Name}.",
             });
         }
-        if (mode is ResolutionMode.Platform or ResolutionMode.User && projectId is not null)
+        if (operation.ResolutionMode is AiResolutionMode.Platform or AiResolutionMode.User
+            && projectId is not null)
         {
             return Results.BadRequest(new
             {
                 error = "project_id_not_supported",
-                message = $"project_id is not used for {operation}.",
+                message = $"project_id is not used for {operation.Name}.",
             });
         }
+        if (operation.RequiresPlatformRole
+            && (operation.ResolutionMode != AiResolutionMode.OptionalProject || projectId is null)
+            && !(operation.AllowsBroker
+                && string.Equals(
+                    caller.AuthenticationScheme,
+                    AgentweaverAuthenticationSchemes.BrokerBearer,
+                    StringComparison.Ordinal))
+            && caller.PlatformRoles.Count == 0)
+            return Results.Forbid();
+        if (!HasRequiredCallerIdentity(operation, caller))
+            return Results.Forbid();
 
-        var caller = httpContext.GetCaller();
-        EffectiveModelProviderResult effective;
-        string resolutionScope;
-        if (mode == ResolutionMode.User)
-        {
-            if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
-                return Results.Forbid();
-            effective = await resolver.ResolveForSessionAsync(caller.EntraObjectId, ct).ConfigureAwait(false);
-            resolutionScope = EffectiveModelProviderProvenance.ScopeUser;
-        }
-        else
-        {
-            var resolutionProjectId = mode is ResolutionMode.RequiredProject or ResolutionMode.OptionalProject
-                ? projectId
-                : null;
-            effective = await resolver.ResolveAsync(resolutionProjectId, ct).ConfigureAwait(false);
-            resolutionScope = resolutionProjectId is null
-                ? EffectiveModelProviderProvenance.ScopePlatform
-                : EffectiveModelProviderProvenance.ScopeProject;
-        }
-
-        return Results.Ok(new AiExecutionContextResponse
-        {
-            AiRequired = true,
-            Operation = operation,
-            Phase = "prepared",
-            EffectiveModelProvider = effective.ToContract(resolutionScope),
-        });
+        var plan = await plans.PrepareAsync(operation, projectId, caller, ct).ConfigureAwait(false);
+        return Results.Ok(plans.ToResponse(plan, "prepared"));
     }
+
+    internal static bool HasRequiredCallerIdentity(
+        AiOperationDefinition operation,
+        CallerContext caller) =>
+        operation.ResolutionMode != AiResolutionMode.User
+        || !string.IsNullOrWhiteSpace(caller.EntraObjectId);
 }

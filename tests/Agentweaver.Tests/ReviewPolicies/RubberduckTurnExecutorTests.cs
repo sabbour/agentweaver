@@ -19,6 +19,7 @@ public sealed class RubberduckTurnExecutorTests
         var copilotFactory = new GitHubCopilotClientFactory(
             config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var runner = new TestFileEditAgentRunner();
+        var agentFactory = new FakeWorkflowAgentFactory(runner);
 
         var executor = new RubberduckTurnExecutor(
             copilotFactory,
@@ -27,7 +28,7 @@ public sealed class RubberduckTurnExecutorTests
             new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(),
             NullLoggerFactory.Instance,
-            agentFactory: new FakeWorkflowAgentFactory(runner));
+            agentFactory: agentFactory);
 
         var input = new AgentTurnOutput(
             RunId: "rubberduck-test-run",
@@ -38,11 +39,52 @@ public sealed class RubberduckTurnExecutorTests
             WorktreeBranch: "agent/run",
             RepositoryPath: AppContext.BaseDirectory,
             OriginatingBranch: "main",
-            ContentSafetyFlagged: false);
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ModelId: "byok-model",
+            ByokProviderFingerprint: "byok-fingerprint");
 
         var decision = await executor.HandleAsync(input, context: null!, CancellationToken.None);
 
         decision.Approved.Should().BeTrue();
         decision.RequestChanges.Should().BeFalse();
+        agentFactory.LastRubberduckAgent!.ProviderModelSource.Should().Be(ModelSource.Byok);
+        agentFactory.LastRubberduckAgent.ByokProviderFingerprint.Should().Be("byok-fingerprint");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ProviderFailure_IsNotConvertedToPass()
+    {
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner())
+        {
+            ProviderFailureRole = FakeAgentRole.Rubberduck,
+        };
+        var executor = new RubberduckTurnExecutor(
+            new GitHubCopilotClientFactory(
+                new ConfigurationBuilder().Build(),
+                new FixedGitHubCopilotCapabilityCredentialProvider()),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            agentFactory: agentFactory);
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rubberduck-provider-failure",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ByokProviderFingerprint: "byok-fingerprint"),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        await act.Should().ThrowAsync<AgentProviderException>();
     }
 }

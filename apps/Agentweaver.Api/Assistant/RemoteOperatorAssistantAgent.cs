@@ -165,6 +165,7 @@ public sealed class RemoteOperatorAssistantAgent(
             string text;
             try
             {
+                await EnsureAgentHostCapabilityAsync(runId, scopeFactory, turnCts.Token).ConfigureAwait(false);
                 var turnTask = proxy.RunTurnAsync(taskJson, isRevision: false, turnCts.Token);
                 var completed = await Task.WhenAny(turnTask, drainTask).ConfigureAwait(false);
                 if (completed == drainTask)
@@ -239,7 +240,9 @@ public sealed class RemoteOperatorAssistantAgent(
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
         var run = await runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Operator run '{runId}' was not found.");
-        if (run.ModelSource != ModelSource.GitHubCopilot)
+        var boundary = await scope.ServiceProvider.GetRequiredService<RunModelInvocationGuard>()
+            .PrepareAsync(runId, ct).ConfigureAwait(false);
+        if (boundary.Provider is EffectiveModelProviderResult.Byok)
             return;
 
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
@@ -252,7 +255,10 @@ public sealed class RemoteOperatorAssistantAgent(
         // ResolveAssistantModelSourceAsync resolves at platform scope too, and re-resolves each
         // turn), so selection and validation cannot disagree — and because run.ModelSource is read
         // fresh from the store above, a mid-conversation provider switch is honoured here too.
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+                run, ct, platformScoped: true,
+                expectedCopilotBindingId: boundary.Provider.ProviderId(),
+                expectedCopilotCredentialVersion: boundary.Provider.CredentialVersion())
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();
     }
@@ -346,7 +352,7 @@ public sealed class RemoteOperatorAssistantAgent(
     }
 
     internal static Exception ClassifyOrWrap(Exception ex, string runId, string fallbackMessage) =>
-        ClassifyProxyFailure(ex, runId)
+        ex is AiExecutionPlanException or AgentProviderException ? ex : ClassifyProxyFailure(ex, runId)
         ?? AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId)
         ?? new AgentProviderException(
             ModelSource.GitHubCopilot,

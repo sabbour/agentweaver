@@ -79,7 +79,9 @@ public sealed record CollectiveRaiRequest(
     string RepositoryPath,
     string AggregateDiff,
     string SubmittingUser,
-    string WorktreePath = "");
+    string WorktreePath = "",
+    string? ModelSource = null,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Outcome of the collective RAI review.</summary>
 public sealed record CollectiveRaiResult(
@@ -98,7 +100,9 @@ public sealed record CollectiveRubberduckRequest(
     string SubmittingUser,
     string? GateNodeId = null,
     string? DisplayLabel = null,
-    string WorktreePath = "");
+    string WorktreePath = "",
+    string? ModelSource = null,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Inputs to the collective Build & Test gate.</summary>
 public sealed record CollectiveBuildTestRequest(
@@ -111,7 +115,9 @@ public sealed record CollectiveBuildTestRequest(
     string SubmittingUser,
     string? GateNodeId = null,
     string? DisplayLabel = null,
-    string? AgentId = null);
+    string? AgentId = null,
+    string? ModelSource = null,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 /// <param name="TargetFiles">
@@ -180,4 +186,5 @@ public sealed record CollectiveScribeRequest(
     string? ModelId,
     DateTimeOffset RunStartedAt,
     string? TerminalStatus = null,
-    string? MergeResult = null);
+    string? MergeResult = null,
+    string? ByokProviderFingerprint = null);

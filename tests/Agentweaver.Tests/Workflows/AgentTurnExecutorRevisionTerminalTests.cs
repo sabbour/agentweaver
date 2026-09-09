@@ -82,6 +82,29 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
     }
 
     [Fact]
+    public async Task SuccessfulTurn_CarriesAcceptedProviderBoundaryToDownstreamPasses()
+    {
+        var worktree = new StubWorktreeOperations
+        {
+            CommittedTreeHash = "provider-bound-tree",
+            DiffText = "diff --git a/file.txt b/file.txt",
+        };
+        var executor = NewExecutor(worktree);
+        var input = RevisionInput() with
+        {
+            ModelSource = ModelSource.Byok.ToApiString(),
+            ModelId = "byok-model",
+            ByokProviderFingerprint = "byok-fingerprint",
+        };
+
+        var result = await executor.HandleAsync(input, context: null!, CancellationToken.None);
+
+        result.ModelSource.Should().Be(ModelSource.Byok.ToApiString());
+        result.ModelId.Should().Be("byok-model");
+        result.ByokProviderFingerprint.Should().Be("byok-fingerprint");
+    }
+
+    [Fact]
     public async Task PersistentCommitFailure_WhenTerminalOutputDisabled_Rethrows_NeverFakeSuccess()
     {
         // Compatibility mode (emitTerminalFailureOutput=false): every attempt throws

@@ -57,6 +57,7 @@ public sealed class CoordinatorRunService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunOptionsStore _runOptions;
     private readonly IBacklogTaskStore _backlogStore;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
@@ -86,7 +87,8 @@ public sealed class CoordinatorRunService
         IConfiguration configuration,
         ILogger<CoordinatorRunService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -100,6 +102,7 @@ public sealed class CoordinatorRunService
         _scopeFactory = scopeFactory;
         _runOptions = runOptions;
         _backlogStore = backlogStore;
+        _executionPlanAccessor = executionPlanAccessor;
         _logger = logger;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
@@ -140,7 +143,7 @@ public sealed class CoordinatorRunService
 
         // The resolver — not a hardcoded literal — decides the run's durable ModelSource, so a BYOK
         // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
 
         var run = new Run
         {
@@ -202,7 +205,9 @@ public sealed class CoordinatorRunService
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
-        var effectiveProvider = await ResolveEffectiveProviderAsync(source.ProjectId, ct).ConfigureAwait(false);
+        if (source.ProjectId is not { } projectId)
+            throw new InvalidOperationException("A coordinator retry requires a project-scoped run.");
+        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
 
         var run = new Run
         {
@@ -251,9 +256,17 @@ public sealed class CoordinatorRunService
     /// accountable human), because Autopilot does not bypass the confirmation gate.
     /// </summary>
     public async Task StartReservedCoordinatorRunAsync(
-        Run reservedRun, bool autoApproveTools, bool autopilot, string confirmedBy, CancellationToken ct)
+        Run reservedRun,
+        bool autoApproveTools,
+        bool autopilot,
+        string confirmedBy,
+        CancellationToken ct,
+        EffectiveModelProviderResult? effectiveProvider = null)
     {
-        await ActivateAsync(reservedRun, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+        await ActivateAsync(
+                reservedRun,
+                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                effectiveProvider: effectiveProvider)
             .ConfigureAwait(false);
 
         // Fire-and-forget bounded loop: confirm the spec once it arms — but ONLY when Autopilot is
@@ -277,7 +290,13 @@ public sealed class CoordinatorRunService
         string? submittingUserDisplayName = null,
         EffectiveModelProviderResult? effectiveProvider = null)
     {
-        await PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            _appStopping,
+            effectiveProvider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? effectiveProvider
+                : null).ConfigureAwait(false);
 
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
@@ -309,7 +328,10 @@ public sealed class CoordinatorRunService
             run.ModelId,
             WorkflowOverrideId: workflowOverrideId,
             OutcomeSpecGenerationModel: outcomeSpecGenerationModel,
-            SubmittingUserDisplayName: submittingUserDisplayName);
+            SubmittingUserDisplayName: submittingUserDisplayName,
+            ModelSource: resolvedProvider.ToModelSource().ToApiString(),
+            ByokProviderFingerprint: (resolvedProvider as EffectiveModelProviderResult.Byok)
+                ?.ConfigurationFingerprint);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;
@@ -333,14 +355,21 @@ public sealed class CoordinatorRunService
         }
     }
 
-    private async Task PrepareGitHubCapabilitySnapshotsAsync(Run run, CancellationToken ct)
+    private async Task PrepareGitHubCapabilitySnapshotsAsync(
+        Run run,
+        CancellationToken ct,
+        EffectiveModelProviderResult? expectedCopilotProvider = null)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
         if (lifecycle is null)
             return;
 
-        if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForLaunchAsync(
+                run,
+                ct,
+                expectedCopilotProvider?.ProviderId(),
+                expectedCopilotProvider?.CredentialVersion()).ConfigureAwait(false))
             throw new InvalidOperationException(
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
     }
@@ -357,6 +386,29 @@ public sealed class CoordinatorRunService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
         return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderForInvocationAsync(
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        if (_executionPlanAccessor?.Current is { Operation: "orchestration" } accepted)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+        }
+        var resolved = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        if (resolved is EffectiveModelProviderResult.Byok)
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "operation_requires_github_copilot",
+                "Coordinator orchestration currently requires GitHub Copilot because its outcome and classification stages are not BYOK-capable.",
+                isRetryable: false);
+        }
+        return resolved;
     }
 
     /// <summary>
@@ -492,6 +544,18 @@ public sealed class CoordinatorRunService
     private async Task<CoordinatorGateOutcome> SubmitDecisionAsync(
         string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
     {
+        if (RunId.TryParse(runId, out var parsedRunId))
+        {
+            var persistedRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (persistedRun is not null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null)
+                    await orchestrator.ValidateDurableProviderBoundaryAsync(persistedRun, ct).ConfigureAwait(false);
+            }
+        }
+
         var streamingRun = _registry.Get(runId);
         if (streamingRun is null)
         {

@@ -1,4 +1,5 @@
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,7 +10,10 @@ namespace Agentweaver.Api.Skills;
 /// Acquires a broker-only capability for one marketplace classification request. It never returns
 /// a GitHub credential, synthesizes a run ID, or accepts a project/caller binding from the client.
 /// </summary>
-public sealed class MarketplaceCopilotCapabilityIssuer(IServiceScopeFactory scopeFactory)
+public sealed class MarketplaceCopilotCapabilityIssuer(
+    IServiceScopeFactory scopeFactory,
+    AiExecutionPlanAccessor executionPlanAccessor,
+    IRunEventStream eventStream)
 {
     internal static readonly TimeSpan CapabilityLifetime = TimeSpan.FromMinutes(2);
 
@@ -50,12 +54,30 @@ public sealed class MarketplaceCopilotCapabilityIssuer(IServiceScopeFactory scop
         using var scope = scopeFactory.CreateScope();
         var now = DateTimeOffset.UtcNow;
         var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
-        var capability = await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+        var accepted = executionPlanAccessor.Current;
+        if (accepted is not { Operation: "marketplace_catalog_classification" })
+            return null;
+        var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+        accepted = await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false);
+        var capability = await persistence.TryIssueProjectCopilotCapabilityAsync(
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             projectId.ToString(),
             caller.EntraObjectId,
             now,
             now.Add(CapabilityLifetime),
-            ct).ConfigureAwait(false);
+            ct,
+            expectedBindingId: accepted.Provider.ProviderId(),
+            expectedCredentialVersion: accepted.Provider.CredentialVersion()).ConfigureAwait(false);
+        if (capability is not null)
+        {
+            await GenerationModelProviderExecutor.RecordProviderProvenanceAsync(
+                eventStream,
+                accepted.Provider,
+                accepted.ResolutionScope,
+                projectId,
+                ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
+                ct).ConfigureAwait(false);
+        }
         return capability?.Value;
     }
 }

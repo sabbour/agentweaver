@@ -2,6 +2,11 @@ using System.Threading.Channels;
 
 namespace Agentweaver.Domain;
 
+public interface IModelInvocationGuard
+{
+    Task ValidateAsync(string runId, CancellationToken ct);
+}
+
 /// <summary>
 /// A pre-issued, purpose-bound, non-run GitHub Copilot capability for exactly one
 /// <see cref="IAgentRunner"/> call. Non-run AI generation features (blueprint/workflow/skill/casting
@@ -43,7 +48,8 @@ public interface IAgentRunner
         string? systemPromptContext = null,
         string? userId = null,
         string? projectId = null,
-        CopilotOperationCapability? copilotCapability = null) =>
+        CopilotOperationCapability? copilotCapability = null,
+        ByokProviderConfiguration? byokProviderConfiguration = null) =>
         ExecuteAsync(
             task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
             systemPromptContext, userId);

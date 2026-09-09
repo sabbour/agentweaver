@@ -31,6 +31,11 @@ import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
 import type { ReactElement } from 'react';
 import { useBlueprintGeneration } from './BlueprintPicker.helpers';
 import type { BlueprintPanelTab, BlueprintSelection } from './BlueprintPicker.helpers';
+import {
+  AiExecutionProviderHint,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
+import type { AiExecutionContext } from '../api/types';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
@@ -418,12 +423,18 @@ export function GenerateBlueprintBox({
   onGenerate,
   generating,
   error,
+  executionContext,
+  providerLoading,
+  providerAnnouncement,
 }: {
   description: string;
   onDescriptionChange: (value: string) => void;
   onGenerate: () => void;
   generating: boolean;
   error: string | null;
+  executionContext: AiExecutionContext | null;
+  providerLoading: boolean;
+  providerAnnouncement: string;
 }) {
   const styles = useStyles();
   return (
@@ -438,9 +449,12 @@ export function GenerateBlueprintBox({
         />
       </Field>
       <div className={styles.generateBar}>
-        <Button appearance="primary" icon={<span className={generating ? styles.buttonSparkle : undefined}><SparkleRegular /></span>} aria-label="Generate blueprint" disabled={!description.trim() || generating} onClick={onGenerate}>
-          {generating ? 'Generating' : 'Generate Blueprint'}
-        </Button>
+        <AiExecutionProviderHint context={executionContext}>
+          <Button appearance="primary" icon={<span className={generating ? styles.buttonSparkle : undefined}><SparkleRegular /></span>} aria-label="Generate blueprint" disabled={!description.trim() || generating || providerLoading} onClick={onGenerate}>
+            {generating ? 'Generating' : 'Generate Blueprint'}
+          </Button>
+        </AiExecutionProviderHint>
+        <AiProviderChangeAnnouncement message={providerAnnouncement} />
       </div>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
     </div>
@@ -619,6 +633,9 @@ export function BlueprintPanel({
   generationError,
   generateDescription,
   onGenerateDescriptionChange,
+  executionContext,
+  providerLoading,
+  providerAnnouncement,
 }: {
   active: boolean;
   tabs: BlueprintPanelTab[];
@@ -631,6 +648,9 @@ export function BlueprintPanel({
   generationError: string | null;
   generateDescription: string;
   onGenerateDescriptionChange: (value: string) => void;
+  executionContext: AiExecutionContext | null;
+  providerLoading: boolean;
+  providerAnnouncement: string;
 }) {
   const styles = useStyles();
   const catalog = useBlueprintCatalog(active);
@@ -674,6 +694,9 @@ export function BlueprintPanel({
               onGenerate={onGenerate}
               generating={generating}
               error={generationError}
+              executionContext={executionContext}
+              providerLoading={providerLoading}
+              providerAnnouncement={providerAnnouncement}
             />
             <GeneratedBlueprintPane generated={generated} generating={generating} />
           </>
@@ -705,6 +728,9 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
       generationError={generation.error}
       generateDescription={description}
       onGenerateDescriptionChange={setDescription}
+      executionContext={generation.providerContext.context}
+      providerLoading={generation.providerContext.loading || !generation.providerContext.available}
+      providerAnnouncement={generation.providerContext.announcement}
     />
   );
 }

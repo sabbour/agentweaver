@@ -21,4 +21,5 @@ public sealed class BacklogTaskRecord
     public string? PromotionKey { get; set; }
     public string? PromotionReason { get; set; }
     public bool IsAutomationInvocationPending { get; set; }
+    public string? AiExecutionProviderKey { get; set; }
 }

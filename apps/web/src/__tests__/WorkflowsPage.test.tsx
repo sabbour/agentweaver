@@ -25,6 +25,21 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+  }),
+}));
+
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
@@ -362,7 +377,11 @@ trigger:
     renderPage('proj-1');
 
     fireEvent.click((await screen.findAllByRole('button', { name: /run now/i }))[1]);
-    await waitFor(() => expect(apiClient.runWorkflowNow).toHaveBeenCalledWith('proj-1', 'nightly'));
+    await waitFor(() => expect(apiClient.runWorkflowNow).toHaveBeenCalledWith(
+      'proj-1',
+      'nightly',
+      'signed-provider-key',
+    ));
     expect(await screen.findByText(/Queued a run for "Nightly Sweep"/)).toBeDefined();
   });
 

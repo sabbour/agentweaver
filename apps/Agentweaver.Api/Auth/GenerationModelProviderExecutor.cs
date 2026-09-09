@@ -1,6 +1,9 @@
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Agentweaver.Api.Auth;
 
@@ -17,7 +20,11 @@ namespace Agentweaver.Api.Auth;
 /// </summary>
 public sealed class GenerationModelProviderExecutor(
     EffectiveModelProviderResolver resolver,
-    GitHubConnectionsPersistenceStore persistence)
+    GitHubConnectionsPersistenceStore persistence,
+    ByokProviderConfigurationService? byokSettings = null,
+    AiExecutionPlanAccessor? executionPlanAccessor = null,
+    AiExecutionPlanService? executionPlans = null,
+    IRunEventStream? eventStream = null)
 {
     private static readonly TimeSpan CapabilityLifetime = TimeSpan.FromMinutes(10);
 
@@ -42,9 +49,42 @@ public sealed class GenerationModelProviderExecutor(
         ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct)
     {
-        var effective = await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+        var acceptedPlan = executionPlanAccessor?.Current;
+        if (acceptedPlan is not null && executionPlans is not null)
+            acceptedPlan = await executionPlans.RevalidateAcceptedAsync(acceptedPlan, ct).ConfigureAwait(false);
+        var effective = acceptedPlan?.Provider
+            ?? await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
         if (effective is EffectiveModelProviderResult.Byok)
-            return new GenerationExecutionPlan(ModelSource.Byok, Capability: null);
+        {
+            var expectedByok = (EffectiveModelProviderResult.Byok)effective;
+            var configuration = executionPlanAccessor?.FrozenByokConfiguration
+                ?? (byokSettings is null
+                ? null
+                : await byokSettings.GetAsync(ct).ConfigureAwait(false));
+            if (configuration is null || !Matches(configuration, expectedByok))
+            {
+                if (acceptedPlan is not null)
+                    throw await executionPlans!.ChangedAsync(acceptedPlan, ct).ConfigureAwait(false);
+                throw new GitHubCopilotUnauthorizedException(
+                    "The effective BYOK provider changed before model invocation.");
+            }
+            if (acceptedPlan is not null && executionPlanAccessor?.FrozenByokConfiguration is null)
+                executionPlanAccessor?.FreezeByokConfiguration(configuration);
+            await RecordProviderProvenanceAsync(
+                eventStream,
+                effective,
+                acceptedPlan?.ResolutionScope
+                    ?? (projectId is null
+                        ? EffectiveModelProviderProvenance.ScopePlatform
+                        : EffectiveModelProviderProvenance.ScopeProject),
+                projectId,
+                purpose,
+                ct).ConfigureAwait(false);
+            return new GenerationExecutionPlan(
+                ModelSource.Byok,
+                Capability: null,
+                ByokProviderConfiguration: configuration);
+        }
 
         if (effective is not (EffectiveModelProviderResult.ProjectGitHubCopilot or EffectiveModelProviderResult.PlatformGitHubCopilot))
             throw new GitHubCopilotUnauthorizedException(
@@ -57,19 +97,79 @@ public sealed class GenerationModelProviderExecutor(
         var scopeProjectId = projectId?.ToString();
         var now = DateTimeOffset.UtcNow;
         var capability = await persistence.TryIssueProjectCopilotCapabilityAsync(
-            purpose, scopeProjectId, entraObjectId, now, now.Add(CapabilityLifetime), ct).ConfigureAwait(false);
+            purpose,
+            scopeProjectId,
+            entraObjectId,
+            now,
+            now.Add(CapabilityLifetime),
+            ct,
+            expectedBindingId: effective.ProviderId(),
+            expectedCredentialVersion: effective.CredentialVersion()).ConfigureAwait(false);
         if (capability is null)
+        {
+            if (acceptedPlan is not null)
+                throw await executionPlans!.ChangedAsync(acceptedPlan, ct).ConfigureAwait(false);
             throw new GitHubCopilotUnauthorizedException(
                 "GitHub Copilot requires a live project-scoped or platform-default capability.");
+        }
 
+        await RecordProviderProvenanceAsync(
+            eventStream,
+            effective,
+            acceptedPlan?.ResolutionScope
+                ?? (projectId is null
+                    ? EffectiveModelProviderProvenance.ScopePlatform
+                    : EffectiveModelProviderProvenance.ScopeProject),
+            projectId,
+            purpose,
+            ct).ConfigureAwait(false);
         return new GenerationExecutionPlan(
             ModelSource.GitHubCopilot,
-            new CopilotOperationCapability(capability.Value, scopeProjectId, entraObjectId, purpose));
+            new CopilotOperationCapability(capability.Value, scopeProjectId, entraObjectId, purpose),
+            ByokProviderConfiguration: null);
     }
+
+    internal static async Task RecordProviderProvenanceAsync(
+        IRunEventStream? eventStream,
+        EffectiveModelProviderResult provider,
+        string resolutionScope,
+        ProjectId? projectId,
+        ProjectModelProviderCapabilityPurpose purpose,
+        CancellationToken ct)
+    {
+        if (eventStream is null)
+            return;
+
+        var executionId = $"ai-operation-{Guid.NewGuid():N}";
+        var payload = JsonSerializer.SerializeToNode(
+            provider.ToProvenancePayload(executionId, modelId: null, resolutionScope))!.AsObject();
+        payload["operation"] = purpose.ToString();
+        payload["projectId"] = projectId?.ToString();
+        await eventStream.AppendAsync(
+            executionId,
+            new RunEvent(
+                0,
+                EventTypes.RunModelProviderResolved,
+                payload,
+                DateTimeOffset.UtcNow),
+            ct).ConfigureAwait(false);
+    }
+
+    internal static bool Matches(
+        ByokProviderConfiguration configuration,
+        EffectiveModelProviderResult.Byok expected) =>
+        string.Equals(configuration.Id, expected.ProviderId, StringComparison.Ordinal)
+        && string.Equals(
+            configuration.ExecutionFingerprint(),
+            expected.ConfigurationFingerprint,
+            StringComparison.Ordinal);
 }
 
 /// <summary>
 /// The execution plan for one non-run generation call: which model source to use, and — only when
 /// GitHub Copilot is in effect — the pre-issued capability to redeem instead of a run snapshot.
 /// </summary>
-public sealed record GenerationExecutionPlan(ModelSource ModelSource, CopilotOperationCapability? Capability);
+public sealed record GenerationExecutionPlan(
+    ModelSource ModelSource,
+    CopilotOperationCapability? Capability,
+    ByokProviderConfiguration? ByokProviderConfiguration);

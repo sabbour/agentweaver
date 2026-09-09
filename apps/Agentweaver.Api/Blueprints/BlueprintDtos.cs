@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Squad.Model;
 
 namespace Agentweaver.Api.Blueprints;
@@ -143,6 +144,8 @@ public sealed record GenerateBlueprintResponse
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
     /// <summary>Non-fatal generation warnings the caller may want to inspect before applying the result.</summary>
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
+    [JsonPropertyName("ai_execution_context")]
+    public AiExecutionContextResponse? AiExecutionContext { get; init; }
 }
 
 /// <summary>Request body for validating a blueprint payload offline.</summary>

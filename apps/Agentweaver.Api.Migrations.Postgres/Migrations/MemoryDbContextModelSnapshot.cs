@@ -611,6 +611,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("task_id");
 
+                    b.Property<string>("AiExecutionProviderKey")
+                        .HasColumnType("text")
+                        .HasColumnName("ai_execution_provider_key");
+
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("archived_at");

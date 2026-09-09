@@ -39,6 +39,23 @@ vi.mock('../api/apiClient', () => ({
     confirmOutcomeSpec: vi.fn(),
     reviseOutcomeSpec: vi.fn(),
     decomposeSpec: vi.fn(),
+    prepareAiExecutionContext: vi.fn().mockResolvedValue({
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: 'signed-provider-key',
+      expires_at: '2099-01-01T00:00:00Z',
+      effective_model_provider: {
+        state: 'resolved',
+        provider_kind: 'platform_github_copilot',
+        resolution_scope: 'project',
+        provider_scope: 'platform',
+        provider_type: null,
+        model_id: 'gpt-5',
+        provider_key: 'provider-fingerprint',
+        unavailable_reason: null,
+      },
+    }),
     steerCoordinator: vi.fn().mockResolvedValue({ status: 'applied' }),
     approveTool: vi.fn().mockResolvedValue(undefined),
     denyTool: vi.fn().mockResolvedValue(undefined),
@@ -1498,6 +1515,7 @@ describe('AgentSessionPanel', () => {
         kind: 'send',
         instruction: 'Check the compact view',
       }),
+      'signed-provider-key',
     ));
     expect(await screen.findByText('Message sent to coordinator.')).toBeDefined();
 

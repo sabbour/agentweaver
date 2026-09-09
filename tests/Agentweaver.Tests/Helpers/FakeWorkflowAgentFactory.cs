@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
@@ -18,15 +19,30 @@ public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
 
     public FakeWorkflowAgentFactory(TestFileEditAgentRunner runner) => _runner = runner;
 
-    public IWorkflowTurnAgent CreateWorkerAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Worker, _runner);
+    internal FakeWorkflowTurnAgent? LastWorkerAgent { get; private set; }
+    internal FakeWorkflowTurnAgent? LastRaiAgent { get; private set; }
+    internal FakeWorkflowTurnAgent? LastRubberduckAgent { get; private set; }
+    internal FakeWorkflowTurnAgent? LastBuildTestAgent { get; private set; }
+    internal FakeWorkflowTurnAgent? LastScribeAgent { get; private set; }
+    internal FakeAgentRole? ProviderFailureRole { get; set; }
 
-    public IWorkflowTurnAgent CreateRaiAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Rai, _runner);
+    public IWorkflowTurnAgent CreateWorkerAgent() =>
+        LastWorkerAgent = Create(FakeAgentRole.Worker);
 
-    public IWorkflowTurnAgent CreateRubberduckAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Rubberduck, _runner);
+    public IWorkflowTurnAgent CreateRaiAgent() =>
+        LastRaiAgent = Create(FakeAgentRole.Rai);
 
-    public IWorkflowTurnAgent CreateBuildTestAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.BuildTest, _runner);
+    public IWorkflowTurnAgent CreateRubberduckAgent() =>
+        LastRubberduckAgent = Create(FakeAgentRole.Rubberduck);
 
-    public IWorkflowTurnAgent CreateScribeAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Scribe, _runner);
+    public IWorkflowTurnAgent CreateBuildTestAgent() =>
+        LastBuildTestAgent = Create(FakeAgentRole.BuildTest);
+
+    public IWorkflowTurnAgent CreateScribeAgent() =>
+        LastScribeAgent = Create(FakeAgentRole.Scribe);
+
+    private FakeWorkflowTurnAgent Create(FakeAgentRole role) =>
+        new(role, _runner, ProviderFailureRole == role);
 }
 
 internal enum FakeAgentRole
@@ -43,7 +59,7 @@ internal enum FakeAgentRole
 /// delegates to <see cref="TestFileEditAgentRunner"/> (real file/git operations in the worktree);
 /// Rai returns GREEN, Rubberduck/BuildTest return PASS, and Scribe returns an empty result.
 /// </summary>
-internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
+internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent, IProviderBoundWorkflowTurnAgent
 {
     private readonly FakeAgentRole _role;
     private readonly TestFileEditAgentRunner _runner;
@@ -54,11 +70,19 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
     private string? _modelId;
     private string? _systemPromptContext;
     private ChannelWriter<RunEvent>? _stream;
+    private readonly bool _throwProviderFailure;
 
-    public FakeWorkflowTurnAgent(FakeAgentRole role, TestFileEditAgentRunner runner)
+    internal ModelSource? ProviderModelSource { get; private set; }
+    internal string? ByokProviderFingerprint { get; private set; }
+
+    public FakeWorkflowTurnAgent(
+        FakeAgentRole role,
+        TestFileEditAgentRunner runner,
+        bool throwProviderFailure = false)
     {
         _role = role;
         _runner = runner;
+        _throwProviderFailure = throwProviderFailure;
     }
 
     public Task SetupAsync(
@@ -84,8 +108,20 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
         return Task.CompletedTask;
     }
 
-    public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) => _role switch
+    public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct)
     {
+        if (_throwProviderFailure)
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "byok_provider_configuration_mismatch",
+                "The accepted BYOK provider configuration changed.",
+                isRetryable: false);
+        }
+
+        return _role switch
+        {
         // Worker funnels into the shared TestFileEditAgentRunner so Mode/InvocationCount/LastTask
         // behave exactly as before the AIAgent migration. A ContentSafety mode throws here, which
         // AgentTurnExecutor catches via IsContentSafetyViolation.
@@ -104,8 +140,15 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
         FakeAgentRole.BuildTest => Task.FromResult("APPROVED — build and test gate passed."),
 
         // Scribe is a silent no-op in tests.
-        _ => Task.FromResult(string.Empty),
-    };
+            _ => Task.FromResult(string.Empty),
+        };
+    }
+
+    public void ConfigureProviderBoundary(ModelSource modelSource, string? byokProviderFingerprint)
+    {
+        ProviderModelSource = modelSource;
+        ByokProviderFingerprint = byokProviderFingerprint;
+    }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

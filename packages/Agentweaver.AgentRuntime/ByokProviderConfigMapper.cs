@@ -8,7 +8,7 @@ namespace Agentweaver.AgentRuntime;
 /// run against a BYOK provider (assistant, workflow agents, operator assistant) so they all
 /// forward wire API / custom headers / Azure API version consistently.
 /// </summary>
-internal static class ByokProviderConfigMapper
+public static class ByokProviderConfigMapper
 {
     /// <summary>Converts the optional custom-headers map to the dictionary shape the SDK expects,
     /// or <see langword="null"/> when there are none.</summary>

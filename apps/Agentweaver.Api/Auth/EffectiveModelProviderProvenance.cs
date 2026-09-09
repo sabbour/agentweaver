@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Domain;
 
@@ -92,6 +93,14 @@ public static class EffectiveModelProviderProvenance
         _ => null,
     };
 
+    public static string? CredentialVersion(this EffectiveModelProviderResult result) => result switch
+    {
+        EffectiveModelProviderResult.ProjectGitHubCopilot project => project.CredentialVersion,
+        EffectiveModelProviderResult.PlatformGitHubCopilot platform => platform.CredentialVersion,
+        EffectiveModelProviderResult.UserGitHubCopilot user => user.CredentialVersion,
+        _ => null,
+    };
+
     /// <summary>The scope where the selected provider itself is configured.</summary>
     public static string ProviderScope(this EffectiveModelProviderResult result) => result switch
     {
@@ -126,7 +135,6 @@ public static class EffectiveModelProviderProvenance
             ResolutionScope = resolutionScope,
             ProviderScope = result.ProviderScope(),
             ProviderType = result.ProviderType(),
-            GitHubLogin = result.GitHubLogin(),
             ModelId = modelId,
             ProviderKey = result.ProviderKey(),
             UnavailableReason = result is EffectiveModelProviderResult.Unavailable unavailable
@@ -136,9 +144,8 @@ public static class EffectiveModelProviderProvenance
 
     /// <summary>
     /// Builds the <see cref="EventTypes.RunModelProviderResolved"/> payload. Carries the provider
-    /// kind, the provider/binding id, the GitHub login (Copilot bindings only), the durable model
-    /// source, and the model id actually in effect, so a completed run's provenance can be
-    /// reconstructed from its event stream alone.
+    /// kind, opaque identity fingerprint, scopes, durable model source, and model id actually in
+    /// effect. Raw provider/binding identifiers and GitHub account metadata are intentionally omitted.
     /// </summary>
     public static object ToProvenancePayload(
         this EffectiveModelProviderResult result,
@@ -148,21 +155,44 @@ public static class EffectiveModelProviderProvenance
         new
         {
             runId,
+            providerIdentityVersion = 2,
             state = result is EffectiveModelProviderResult.Unavailable ? StateUnavailable : StateResolved,
             providerKind = result.ProviderKind(),
-            providerId = result.ProviderId(),
             providerType = result.ProviderType(),
-            githubLogin = result.GitHubLogin(),
             modelSource = result.ToModelSource().ToApiString(),
             modelId,
             providerKey = result.ProviderKey(),
             resolutionScope,
             providerScope = result.ProviderScope(),
             unavailableReason = result is EffectiveModelProviderResult.Unavailable unavailable
-                ? unavailable.UnavailableReason.ToString()
+                ? ToUnavailableReason(unavailable.UnavailableReason)
                 : null,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         };
+
+    public static bool MatchesDurableProvider(
+        object? payload,
+        EffectiveModelProviderResult current,
+        string resolutionScope,
+        string? modelId)
+    {
+        var expected = TryReadContract(payload);
+        if (expected?.ProviderKey is null)
+            return false;
+
+        var element = payload is JsonElement json
+            ? json
+            : JsonSerializer.SerializeToElement(payload);
+        var identityVersion = element.TryGetProperty("providerIdentityVersion", out var version)
+            && version.TryGetInt32(out var parsedVersion)
+                ? parsedVersion
+                : 1;
+        if (identityVersion < 2)
+            return false;
+
+        var actual = current.ToContract(resolutionScope, modelId);
+        return string.Equals(expected.ProviderKey, actual.ProviderKey, StringComparison.Ordinal);
+    }
 
     public static EffectiveModelProviderDto? TryReadContract(object? payload)
     {
@@ -200,8 +230,7 @@ public static class EffectiveModelProviderProvenance
                 var identity = LegacyProviderIdentity(
                     providerKind,
                     providerId,
-                    ReadString(element, "providerType", "provider_type"),
-                    ReadString(element, "githubLogin", "github_login"));
+                    ReadString(element, "providerType", "provider_type"));
                 if (identity is not null)
                 {
                     providerKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
@@ -218,12 +247,30 @@ public static class EffectiveModelProviderProvenance
             ResolutionScope = ReadString(element, "resolutionScope", "resolution_scope") ?? ScopeUnknown,
             ProviderScope = providerScope,
             ProviderType = ReadString(element, "providerType", "provider_type"),
-            GitHubLogin = ReadString(element, "githubLogin", "github_login"),
             ModelId = ReadString(element, "modelId", "model_id"),
             ProviderKey = providerKey,
             UnavailableReason = NormalizeUnavailableReason(
                 ReadString(element, "unavailableReason", "unavailable_reason")),
         };
+    }
+
+    public static JsonObject RedactPublicPayload(object? payload)
+    {
+        var node = JsonSerializer.SerializeToNode(payload) as JsonObject ?? new JsonObject();
+        var contract = TryReadContract(payload);
+
+        node.Remove("providerId");
+        node.Remove("provider_id");
+        node.Remove("githubLogin");
+        node.Remove("github_login");
+
+        if (contract is not null)
+        {
+            node["providerIdentityVersion"] = 2;
+            node["providerKey"] = contract.ProviderKey;
+        }
+
+        return node;
     }
 
     private static string ProviderScopeFromKind(string providerKind) => providerKind switch
@@ -237,12 +284,11 @@ public static class EffectiveModelProviderProvenance
     private static string? LegacyProviderIdentity(
         string providerKind,
         string providerId,
-        string? providerType,
-        string? githubLogin) => providerKind switch
+        string? providerType) => providerKind switch
     {
         KindByok => $"byok:{providerType}:{providerId}",
-        KindProjectGitHubCopilot => $"copilot-project:{providerId}:{githubLogin}",
-        KindPlatformGitHubCopilot => $"copilot-platform:{providerId}:{githubLogin}",
+        KindProjectGitHubCopilot => $"copilot-project:{providerId}",
+        KindPlatformGitHubCopilot => $"copilot-platform:{providerId}",
         // Legacy user-scoped events did not carry the user id required by the canonical identity.
         KindUserByok or KindUserGitHubCopilot => null,
         _ => null,
@@ -270,6 +316,8 @@ public static class EffectiveModelProviderProvenance
         EffectiveModelProviderUnavailableReason.UserProviderRequired => "user_provider_required",
         EffectiveModelProviderUnavailableReason.UserBindingRequiresReauthorization =>
             "user_binding_requires_reauthorization",
+        EffectiveModelProviderUnavailableReason.OperationRequiresGitHubCopilot =>
+            "operation_requires_github_copilot",
         _ => "unknown",
     };
 
@@ -281,6 +329,8 @@ public static class EffectiveModelProviderProvenance
         nameof(EffectiveModelProviderUnavailableReason.UserProviderRequired) => "user_provider_required",
         nameof(EffectiveModelProviderUnavailableReason.UserBindingRequiresReauthorization) =>
             "user_binding_requires_reauthorization",
+        nameof(EffectiveModelProviderUnavailableReason.OperationRequiresGitHubCopilot) =>
+            "operation_requires_github_copilot",
         _ => reason,
     };
 

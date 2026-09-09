@@ -2,6 +2,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
 using Agentweaver.Squad.Catalog;
@@ -390,6 +391,8 @@ public static class WorkflowDefinitionEndpoints
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             WorkflowRegistry registry,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -403,16 +406,29 @@ public static class WorkflowDefinitionEndpoints
                 return Results.BadRequest(new { error = "workflow_not_bindable", validation_errors = bindErrors });
 
             var caller = httpContext.GetCaller();
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "orchestration",
+                project!.Id,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
+
             var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
                 backlogStore,
-                project!,
+                project,
                 definition,
                 title: $"Manual run: {definition.Name}",
                 description: $"Manually triggered from the workflow library for '{definition.Id}'.",
                 capturedBy: caller.User,
                 idempotencyKey: $"workflow-manual-trigger:{definition.Id}:{Guid.NewGuid():N}",
                 now: DateTimeOffset.UtcNow,
-                ct: ct);
+                ct: ct,
+                capturedByUserId: caller.EntraObjectId ?? caller.User,
+                aiExecutionProviderKey: executionPlans.CreateQueuedProviderKey(execution.Plan!));
 
             return Results.Created(
                 $"/api/projects/{projectId}/backlog/tasks/{task.Id}",
@@ -582,6 +598,8 @@ public static class WorkflowDefinitionEndpoints
             WorkflowRegistry registry,
             IWorkflowGenerator generator,
             IOptions<GenerationModelOptions> generationOptions,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -594,6 +612,16 @@ public static class WorkflowDefinitionEndpoints
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
             var teamRoles = TryReadTeamRoles(project!);
             var caller = httpContext.GetCaller();
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "workflow_generation",
+                project!.Id,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
             var baseWorkflowId = Normalize(request.BaseWorkflowId);
             var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
             var baseWorkflowIsBuiltIn = false;
@@ -658,6 +686,7 @@ public static class WorkflowDefinitionEndpoints
                     Mode = baseYaml is null ? "create" : "edit",
                     BaseWorkflowId = baseWorkflowId,
                     BaseWorkflowIsBuiltIn = baseWorkflowIsBuiltIn,
+                    AiExecutionContext = executionPlans.ToResponse(execution.Plan!, "completed"),
                 });
             }
             catch (WorkflowGenerationException ex)
@@ -676,6 +705,10 @@ public static class WorkflowDefinitionEndpoints
                         ? new[] { "retry" }
                         : new[] { "check_provider_auth", "check_provider_config", "retry" },
                 }, statusCode: ProviderFailureStatus(ex.FailureKind));
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
             }
         });
     }

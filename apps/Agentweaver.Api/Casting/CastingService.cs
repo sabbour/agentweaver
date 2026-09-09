@@ -28,6 +28,8 @@ public sealed class CastingService
     private readonly ILogger<CastingService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunStore _runStore;
+    private readonly IRunEventStream? _runEventStream;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
 
     public CastingService(
         IProjectStore projectStore,
@@ -37,7 +39,9 @@ public sealed class CastingService
         ProjectSignalScanner signalScanner,
         ILogger<CastingService> logger,
         IServiceScopeFactory scopeFactory,
-        IRunStore runStore)
+        IRunStore runStore,
+        IRunEventStream? runEventStream = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _projectStore = projectStore;
         _catalog = catalog;
@@ -47,6 +51,8 @@ public sealed class CastingService
         _logger = logger;
         _scopeFactory = scopeFactory;
         _runStore = runStore;
+        _runEventStream = runEventStream;
+        _executionPlanAccessor = executionPlanAccessor;
     }
 
     // -----------------------------------------------------------------------
@@ -396,7 +402,7 @@ public sealed class CastingService
 
     /// <summary>
     /// Model-assisted free-text casting. Runs in the read-only proposal-generation run mode.
-    /// Provider is always GitHub Copilot (fixed); model_id overrides the role/agent default.
+    /// Uses the accepted effective provider plan; model_id overrides the role/agent default.
     /// Returns the proposal held in memory — no .squad/ files are written until confirm.
     /// </summary>
     public Task<(CastProposal Proposal, string ProjectOwner)> ProposeFreetextCastAsync(
@@ -427,7 +433,7 @@ public sealed class CastingService
 
     /// <summary>
     /// Model-assisted analysis-based casting. Scans the project for signals, then runs in the
-    /// read-only proposal-generation run mode. Provider is always GitHub Copilot (fixed);
+    /// read-only proposal-generation run mode. Uses the accepted effective provider plan;
     /// model_id overrides the role/agent default. No .squad/ files are written until confirm.
     /// </summary>
     public Task<(CastProposal Proposal, string ProjectOwner)> ProposeAnalysisCastAsync(
@@ -532,13 +538,22 @@ public sealed class CastingService
             prompt = buildPrompt!(availableRoles);
         }
 
+        GenerationExecutionPlan executionPlan;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            executionPlan = await executor.PrepareAsync(
+                project.Id, owner, ProjectModelProviderCapabilityPurpose.CastingGeneration, ct).ConfigureAwait(false);
+        }
+
         var castRunId = RunId.New();
+        var runId = castRunId.ToString();
         var runRecord = new Run
         {
             Id = castRunId,
             RepositoryPath = project.WorkingDirectory,
             OriginatingBranch = "casting",
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = executionPlan.ModelSource,
             Task = $"casting: {mode} proposal for project {projectId}",
             SubmittingUser = owner,
             Status = RunStatus.InProgress,
@@ -548,36 +563,42 @@ public sealed class CastingService
             WorkflowRunId = castRunId.ToString(),
             Origin = RunOrigin.Interactive,
         };
-        try
+        await _runStore.InsertAsync(runRecord, ct).ConfigureAwait(false);
+        EffectiveModelProviderResult acceptedProvider;
+        if (_executionPlanAccessor?.Current?.Provider is { } provider)
         {
-            await _runStore.InsertAsync(runRecord, ct).ConfigureAwait(false);
+            acceptedProvider = provider;
         }
-        catch (Exception ex)
+        else
         {
-            _logger.LogWarning(ex, "Failed to create casting run record {RunId} — proceeding without DB record", castRunId);
+            using var providerScope = _scopeFactory.CreateScope();
+            acceptedProvider = await providerScope.ServiceProvider
+                .GetRequiredService<EffectiveModelProviderResolver>()
+                .ResolveAsync(project.Id, ct).ConfigureAwait(false);
         }
-
-        var runId = castRunId.ToString();
-
-        // Resolve the caller's EFFECTIVE model provider (project override, else platform default —
-        // see EffectiveModelProviderResolver) instead of hardcoding GitHub Copilot: casting has no
-        // run-bound capability snapshot (the Run row above is created for bookkeeping only and never
-        // reaches the snapshot-capture path used by real Coordinator-launched runs), so a
-        // Copilot-sourced result must redeem a pre-issued, purpose-bound capability instead.
-        ModelSource modelSource;
-        CopilotOperationCapability? copilotCapability;
-        using (var scope = _scopeFactory.CreateScope())
-        {
-            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
-            var plan = await executor.PrepareAsync(
-                project.Id, owner, ProjectModelProviderCapabilityPurpose.CastingGeneration, ct).ConfigureAwait(false);
-            modelSource = plan.ModelSource;
-            copilotCapability = plan.Capability;
-        }
+        using var eventScope = _runEventStream is null ? _scopeFactory.CreateScope() : null;
+        var runEventStream = _runEventStream
+            ?? eventScope!.ServiceProvider.GetRequiredService<IRunEventStream>();
+        await runEventStream.AppendAsync(
+            runId,
+            new RunEvent(
+                0,
+                EventTypes.RunModelProviderResolved,
+                acceptedProvider.ToProvenancePayload(
+                    runId,
+                    modelId,
+                    EffectiveModelProviderProvenance.ScopeProject)),
+            ct).ConfigureAwait(false);
 
         string result;
         await using var runtime = new AgentweaverAgentRuntime(
-            _agentRunner, project.WorkingDirectory, modelId, project.Id.ToString(), modelSource, copilotCapability);
+            _agentRunner,
+            project.WorkingDirectory,
+            modelId,
+            project.Id.ToString(),
+            executionPlan.ModelSource,
+            executionPlan.Capability,
+            executionPlan.ByokProviderConfiguration);
         try
         {
             result = await runtime.RunAsync(prompt, ct, userId: owner).ConfigureAwait(false);

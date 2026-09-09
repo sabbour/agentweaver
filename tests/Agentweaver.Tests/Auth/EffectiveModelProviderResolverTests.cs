@@ -24,7 +24,8 @@ public sealed class EffectiveModelProviderResolverTests
 
         result.Should().Be(new EffectiveModelProviderResult.ProjectGitHubCopilot(
             ProjectBindingId,
-            "project-user"));
+            "project-user",
+            "version"));
         secrets.ReadCount(ProjectCredentialReference).Should().Be(1);
     }
 
@@ -119,7 +120,7 @@ public sealed class EffectiveModelProviderResolverTests
         var result = await resolver.ResolveAsync(projectId, CancellationToken.None);
 
         result.Should().Be(new EffectiveModelProviderResult.ProjectGitHubCopilot(
-            ProjectBindingId, "project-user"));
+            ProjectBindingId, "project-user", "version"));
     }
 
     [Fact]
@@ -150,7 +151,10 @@ public sealed class EffectiveModelProviderResolverTests
 
         var result = await resolver.ResolveAsync(projectId, CancellationToken.None);
 
-        result.Should().Be(new EffectiveModelProviderResult.Byok(provider.Id, provider.Type));
+        var resolved = result.Should().BeOfType<EffectiveModelProviderResult.Byok>().Subject;
+        resolved.ProviderId.Should().Be(provider.Id);
+        resolved.ProviderType.Should().Be(provider.Type);
+        resolved.ConfigurationFingerprint.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -171,7 +175,8 @@ public sealed class EffectiveModelProviderResolverTests
 
         result.Should().Be(new EffectiveModelProviderResult.PlatformGitHubCopilot(
             PlatformDefaultCopilotBindingRecord.SingletonId,
-            "platform-user"));
+            "platform-user",
+            "version"));
     }
 
     [Fact]
@@ -195,8 +200,10 @@ public sealed class EffectiveModelProviderResolverTests
 
         var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
 
-        result.Should().Be(new EffectiveModelProviderResult.Byok(
-            platformProvider.Id, platformProvider.Type));
+        var resolved = result.Should().BeOfType<EffectiveModelProviderResult.Byok>().Subject;
+        resolved.ProviderId.Should().Be(platformProvider.Id);
+        resolved.ProviderType.Should().Be(platformProvider.Type);
+        resolved.ConfigurationFingerprint.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -218,8 +225,11 @@ public sealed class EffectiveModelProviderResolverTests
 
         var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
 
-        result.Should().Be(new EffectiveModelProviderResult.UserByok(
-            provider.Id, provider.Type, "user"));
+        var resolved = result.Should().BeOfType<EffectiveModelProviderResult.UserByok>().Subject;
+        resolved.ProviderId.Should().Be(provider.Id);
+        resolved.ProviderType.Should().Be(provider.Type);
+        resolved.UserId.Should().Be("user");
+        resolved.ConfigurationFingerprint.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -272,7 +282,7 @@ public sealed class EffectiveModelProviderResolverTests
         var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
 
         result.Should().Be(new EffectiveModelProviderResult.UserGitHubCopilot(
-            "user-binding", "personal-user", "user"));
+            "user-binding", "personal-user", "user", "version"));
         (await resolver.ResolveForSessionAsync("other-user", CancellationToken.None))
             .Should().BeOfType<EffectiveModelProviderResult.Unavailable>();
     }

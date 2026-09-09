@@ -129,9 +129,12 @@ public sealed class SkillTools(AgentweaverApiClient api)
     {
         return await ExecuteJsonAsync(
             "skill_generate",
-            token => api.PostAsync<object>(
+            token => api.PostAiAsync<object>(
                 $"api/projects/{Uri.EscapeDataString(project_id)}/skills/generate",
-                new { description }, token),
+                new { description },
+                "skill_generation",
+                project_id,
+                ct: token),
             ct);
     }
 
@@ -193,8 +196,31 @@ public sealed class SkillTools(AgentweaverApiClient api)
         [Description("1-based page number (default 1)")] int? page = null,
         [Description("Candidates per page (default 25, max 50)")] int? page_size = null,
         CancellationToken ct = default) =>
-        await ExecuteJsonAsync("skill_marketplace_browse", token => api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query, page, pageSize = page_size }, token), ct);
+        await ExecuteJsonAsync("skill_marketplace_browse", async token =>
+        {
+            var sources = await api.GetAsync<JsonElement>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces",
+                token);
+            var source = sources.EnumerateArray().FirstOrDefault(item =>
+                string.Equals(
+                    item.GetProperty("name").GetString(),
+                    marketplace,
+                    StringComparison.Ordinal));
+            var autoDetect = source.ValueKind == JsonValueKind.Object
+                && source.TryGetProperty("auto_detect", out var autoElement)
+                && autoElement.ValueKind == JsonValueKind.True;
+            var path =
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse";
+            var body = new { query, page, pageSize = page_size };
+            return autoDetect
+                ? await api.PostAiOnDemandAsync<object>(
+                    path,
+                    body,
+                    "marketplace_catalog_classification",
+                    project_id,
+                    token)
+                : await api.PostAsync<object>(path, body, token);
+        }, ct);
 
     [McpServerTool(Name = "skill_marketplace_import"), Description("Import selected candidates from a curated marketplace through the normal repository-import pipeline.")]
     public async Task<string> SkillMarketplaceImportAsync(
