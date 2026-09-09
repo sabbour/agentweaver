@@ -20,12 +20,12 @@ export const DEFAULT_RECORDING_SESSION = 'agentweaver-demo';
 export const UNAUTHENTICATED_RECORDING_SESSION = 'agentweaver-demo-unauthenticated';
 export const DEFAULT_RECORDING_BASE_URL = 'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io';
 export const DEFAULT_RECORDING_AUTH_ROOT = 'scripts/demo-recording/.auth';
-export const EDGE_DEFAULT_PROFILE_DIRECTORY = 'Default';
+export const CHROME_DEFAULT_PROFILE_DIRECTORY = 'Default';
 
 const COMMAND_OPTIONS = {
-  signin: new Set(['session', 'base-url', 'auth-root', 'wait-for-edge-ms']),
+  signin: new Set(['session', 'base-url', 'auth-root', 'wait-for-chrome-ms']),
   open: new Set(['session', 'base-url', 'auth-root']),
-  start: new Set(['session', 'base-url', 'auth-root', 'wait-for-edge-ms', 'plan', 'beat-plan', 'out-dir', 'beat']),
+  start: new Set(['session', 'base-url', 'auth-root', 'wait-for-chrome-ms', 'plan', 'beat-plan', 'out-dir', 'beat']),
   prepare: new Set(['auth-root', 'plan', 'beat-plan', 'out-dir', 'beat']),
   capture: new Set(['session', 'base-url', 'auth-root', 'plan', 'beat-plan', 'out-dir', 'beat', 'all', 'unauthenticated']),
   status: new Set(['session', 'base-url', 'auth-root']),
@@ -64,7 +64,7 @@ export function parseRecordingCommandOptions(command, argv) {
     session: DEFAULT_RECORDING_SESSION,
     baseUrl: DEFAULT_RECORDING_BASE_URL,
     authRoot: DEFAULT_RECORDING_AUTH_ROOT,
-    waitForEdgeMs: 300_000,
+    waitForChromeMs: 300_000,
   };
   let explicitSession = false;
 
@@ -90,9 +90,9 @@ export function parseRecordingCommandOptions(command, argv) {
   if (!URL.canParse(options.baseUrl)) throw new Error('--base-url must be an absolute URL.');
   if (new URL(options.baseUrl).protocol !== 'https:') throw new Error('--base-url must use HTTPS.');
 
-  options.waitForEdgeMs = Number(options.waitForEdgeMs);
-  if (!Number.isInteger(options.waitForEdgeMs) || options.waitForEdgeMs < 0) {
-    throw new Error('--wait-for-edge-ms must be a non-negative integer.');
+  options.waitForChromeMs = Number(options.waitForChromeMs);
+  if (!Number.isInteger(options.waitForChromeMs) || options.waitForChromeMs < 0) {
+    throw new Error('--wait-for-chrome-ms must be a non-negative integer.');
   }
   if (command === 'prepare' || command === 'capture') {
     if (!options.plan) throw new Error(`${command} requires --plan.`);
@@ -117,66 +117,66 @@ export function recordingAuthPaths(authRoot = DEFAULT_RECORDING_AUTH_ROOT) {
     root,
     storageStatePath,
     sessionStoragePath: `${storageStatePath}.sessionStorage.json`,
-    automationUserDataDir: path.join(root, 'edge-default-automation'),
+    automationUserDataDir: path.join(root, 'chrome-default-automation'),
     generatedScriptsRoot: path.join(root, 'generated'),
   };
 }
 
-export function resolveLiteralEdgeDefaultProfile(localAppData = process.env.LOCALAPPDATA) {
-  if (!localAppData) throw new Error('LOCALAPPDATA is not set. Microsoft Edge Default profile cannot be located.');
-  const userDataDir = path.resolve(localAppData, 'Microsoft', 'Edge', 'User Data');
+export function resolveLiteralChromeDefaultProfile(localAppData = process.env.LOCALAPPDATA) {
+  if (!localAppData) throw new Error('LOCALAPPDATA is not set. Google Chrome Default profile cannot be located.');
+  const userDataDir = path.resolve(localAppData, 'Google', 'Chrome', 'User Data');
   return {
     userDataDir,
-    profileDirectory: EDGE_DEFAULT_PROFILE_DIRECTORY,
-    profilePath: path.join(userDataDir, EDGE_DEFAULT_PROFILE_DIRECTORY),
+    profileDirectory: CHROME_DEFAULT_PROFILE_DIRECTORY,
+    profilePath: path.join(userDataDir, CHROME_DEFAULT_PROFILE_DIRECTORY),
     localStatePath: path.join(userDataDir, 'Local State'),
   };
 }
 
-export async function validateLiteralEdgeDefaultProfile(
-  edgeProfile,
+export async function validateLiteralChromeDefaultProfile(
+  chromeProfile,
   {
     localAppData = process.env.LOCALAPPDATA,
     access = fs.access,
     readFile = fs.readFile,
   } = {},
 ) {
-  const expected = resolveLiteralEdgeDefaultProfile(localAppData);
+  const expected = resolveLiteralChromeDefaultProfile(localAppData);
   if (
-    edgeProfile.profileDirectory !== EDGE_DEFAULT_PROFILE_DIRECTORY
-    || path.resolve(edgeProfile.userDataDir) !== expected.userDataDir
-    || path.resolve(edgeProfile.profilePath) !== expected.profilePath
-    || path.resolve(edgeProfile.localStatePath) !== expected.localStatePath
+    chromeProfile.profileDirectory !== CHROME_DEFAULT_PROFILE_DIRECTORY
+    || path.resolve(chromeProfile.userDataDir) !== expected.userDataDir
+    || path.resolve(chromeProfile.profilePath) !== expected.profilePath
+    || path.resolve(chromeProfile.localStatePath) !== expected.localStatePath
   ) {
-    throw new Error('Refusing to use any Microsoft Edge profile except the literal Default profile.');
+    throw new Error('Refusing to use any Google Chrome profile except the literal Default profile.');
   }
 
   try {
     await access(expected.profilePath);
     await access(expected.localStatePath);
   } catch {
-    throw new Error('The literal Microsoft Edge Default work profile is unavailable. Close Edge and restore the Default profile before running signin.');
+    throw new Error('The literal Google Chrome Default work profile is unavailable. Close Chrome and restore the Default profile before running signin.');
   }
 
   let localState;
   try {
     localState = JSON.parse(await readFile(expected.localStatePath, 'utf8'));
   } catch {
-    throw new Error('The Microsoft Edge Default profile identity could not be validated from Local State. Run signin only after Edge has fully closed.');
+    throw new Error('The Google Chrome Default profile identity could not be validated from Local State. Run signin only after Chrome has fully closed.');
   }
-  if (!localState?.profile?.info_cache?.[EDGE_DEFAULT_PROFILE_DIRECTORY]) {
-    throw new Error('The Microsoft Edge Local State file does not identify a Default profile. Refusing to use another Edge profile or a stale automation copy.');
+  if (!localState?.profile?.info_cache?.[CHROME_DEFAULT_PROFILE_DIRECTORY]) {
+    throw new Error('The Google Chrome Local State file does not identify a Default profile. Refusing to use another Chrome profile or a stale automation copy.');
   }
   return expected;
 }
 
-export function buildEdgeLaunchOptions(userDataDir) {
+export function buildChromeLaunchOptions(userDataDir) {
   return {
-    channel: 'msedge',
+    channel: 'chrome',
     headless: false,
     viewport: null,
     args: [
-      `--profile-directory=${EDGE_DEFAULT_PROFILE_DIRECTORY}`,
+      `--profile-directory=${CHROME_DEFAULT_PROFILE_DIRECTORY}`,
       '--no-first-run',
       '--no-default-browser-check',
     ],
@@ -184,7 +184,7 @@ export function buildEdgeLaunchOptions(userDataDir) {
   };
 }
 
-export function shouldCopyEdgeProfileEntry(sourcePath, profileRoot) {
+export function shouldCopyChromeProfileEntry(sourcePath, profileRoot) {
   const relative = path.relative(profileRoot, sourcePath);
   if (!relative || relative.startsWith('..')) return true;
   const segments = relative.split(path.sep);
@@ -414,12 +414,12 @@ async function writeProtectedJson(filePath, value, authRoot, repositoryRoot) {
   await fs.chmod(filePath, 0o600).catch(() => {});
 }
 
-async function listEdgeProcessIds() {
+async function listChromeProcessIds() {
   if (process.platform !== 'win32') {
-    throw new Error('The Microsoft Edge Default work-profile sign-in flow is supported only on Windows.');
+    throw new Error('The Google Chrome Default work profile sign-in flow is supported only on Windows.');
   }
   const command = [
-    "$p = Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" -ErrorAction SilentlyContinue",
+    "$p = Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" -ErrorAction SilentlyContinue",
     "if ($p) { $p.ProcessId -join ',' }",
   ].join('; ');
   const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
@@ -429,21 +429,21 @@ async function listEdgeProcessIds() {
   return String(output).trim().split(',').filter(Boolean);
 }
 
-export async function waitForEdgeToClose({
+export async function waitForChromeToClose({
   timeoutMs = 300_000,
   pollMs = 1_000,
-  getProcessIds = listEdgeProcessIds,
+  getProcessIds = listChromeProcessIds,
   write = (message) => process.stdout.write(message),
 } = {}) {
   const startedAt = Date.now();
   let announced = false;
   while ((await getProcessIds()).length > 0) {
     if (!announced) {
-      write('Close all Microsoft Edge windows. The sign-in tool is waiting for the Default profile to be released.\n');
+      write('Close all Google Chrome windows. The sign-in tool is waiting for the Default profile to be released.\n');
       announced = true;
     }
     if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error('Microsoft Edge is still running. Close Edge, including background windows, then run signin again.');
+      throw new Error('Google Chrome is still running. Close Chrome, including background windows, then run signin again.');
     }
     await delay(pollMs);
   }
@@ -501,7 +501,7 @@ export async function waitForInteractiveSignInCompletion(page, {
       if (currentOrigin !== expectedOrigin) {
         if (!reachedIdentityProvider) {
           reachedIdentityProvider = true;
-          write('Microsoft Entra sign-in is now a human-only step. Complete it privately in the displayed Edge window.\n');
+          write('Microsoft Entra sign-in is now a human-only step. Complete it privately in the displayed Chrome window.\n');
         }
         await delayFn(pollMs);
         continue;
@@ -533,10 +533,10 @@ export async function pruneOrphanedAutomationProfileCopies(paths) {
     .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => {})));
 }
 
-export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositoryRoot) {
+export async function refreshDisposableChromeProfile(paths, chromeProfile, repositoryRoot) {
   await pruneOrphanedAutomationProfileCopies(paths);
   const refreshRoot = `${paths.automationUserDataDir}.refresh-${process.pid}-${Date.now()}`;
-  const refreshDefault = path.join(refreshRoot, EDGE_DEFAULT_PROFILE_DIRECTORY);
+  const refreshDefault = path.join(refreshRoot, CHROME_DEFAULT_PROFILE_DIRECTORY);
   try {
     await assertProtectedAuthDestination(refreshRoot, paths.root, repositoryRoot);
     await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
@@ -544,12 +544,12 @@ export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositor
     await assertProtectedAuthDestination(paths.automationUserDataDir, paths.root, repositoryRoot);
     await fs.mkdir(refreshDefault, { recursive: true, mode: 0o700 });
     await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
-    await fs.copyFile(edgeProfile.localStatePath, path.join(refreshRoot, 'Local State'));
-    await fs.cp(edgeProfile.profilePath, refreshDefault, {
+    await fs.copyFile(chromeProfile.localStatePath, path.join(refreshRoot, 'Local State'));
+    await fs.cp(chromeProfile.profilePath, refreshDefault, {
       recursive: true,
       force: true,
       filter: (sourcePath) => {
-        if (!shouldCopyEdgeProfileEntry(sourcePath, edgeProfile.profilePath)) return false;
+        if (!shouldCopyChromeProfileEntry(sourcePath, chromeProfile.profilePath)) return false;
         // Skip files locked by other processes (e.g. WebView2) — they aren't needed for SSO replay
         try {
           if (!fsStatSync(sourcePath).isDirectory()) {
@@ -566,24 +566,24 @@ export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositor
     await fs.rename(refreshRoot, paths.automationUserDataDir);
   } catch (error) {
     await fs.rm(refreshRoot, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`Could not refresh the disposable Microsoft Edge Default profile from the exact Default source. Close Edge and run signin again. (${error.code ?? 'copy failed'})`);
+    throw new Error(`Could not refresh the disposable Google Chrome Default profile from the exact Default source. Close Chrome and run signin again. (${error.code ?? 'copy failed'})`);
   }
 }
 
 export async function signInRecordingSession(options) {
   const paths = recordingAuthPaths(options.authRoot);
-  const edgeProfile = resolveLiteralEdgeDefaultProfile();
+  const chromeProfile = resolveLiteralChromeDefaultProfile();
   const repositoryRoot = await assertProtectedAuthRoot(paths.root);
   await fs.mkdir(paths.root, { recursive: true, mode: 0o700 });
   await assertProtectedAuthRoot(paths.root);
-  await waitForEdgeToClose({ timeoutMs: options.waitForEdgeMs });
-  await validateLiteralEdgeDefaultProfile(edgeProfile);
-  await refreshDisposableEdgeProfile(paths, edgeProfile, repositoryRoot);
+  await waitForChromeToClose({ timeoutMs: options.waitForChromeMs });
+  await validateLiteralChromeDefaultProfile(chromeProfile);
+  await refreshDisposableChromeProfile(paths, chromeProfile, repositoryRoot);
 
   let context;
   try {
     const { chromium } = await import('playwright');
-    const launch = buildEdgeLaunchOptions(paths.automationUserDataDir);
+    const launch = buildChromeLaunchOptions(paths.automationUserDataDir);
     const { userDataDir, ...launchOptions } = launch;
     context = await chromium.launchPersistentContext(userDataDir, launchOptions);
     const page = context.pages()[0] ?? await context.newPage();
@@ -594,7 +594,7 @@ export async function signInRecordingSession(options) {
     if (!hasSession) {
       await presentInteractiveSignInShell(page);
       process.stdout.write(
-        'Agentweaver sign-in is ready in Microsoft Edge. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
+        'Agentweaver sign-in is ready in Google Chrome. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
       );
       await waitForInteractiveSignInCompletion(page, { baseUrl: options.baseUrl });
       hasSession = true;
@@ -663,7 +663,7 @@ export async function restoreRecordingAuthentication(options, {
   if (listSessions().get(options.session)?.status === 'open') {
     closeSession(options.session);
   }
-  runPlaywrightCli(sessionArgs(options.session, 'open', '--persistent', '--browser=msedge'));
+  runPlaywrightCli(sessionArgs(options.session, 'open', '--persistent', '--browser=chrome'));
 
   const seedScriptPath = path.join(paths.root, `.seed-${options.session}.cjs`);
   try {
@@ -717,7 +717,7 @@ export async function openRecordingSession(options, {
     'Protected recording authentication is unavailable or expired. Starting the safe interactive sign-in path; Microsoft Entra interaction, if shown, requires a human.\n',
   );
   await refreshAuthentication(options);
-  if (!await hasAuthentication(paths.root)) throw new Error('The refreshed Microsoft Edge Default sign-in could not be verified.');
+  if (!await hasAuthentication(paths.root)) throw new Error('The refreshed Google Chrome Default sign-in could not be verified.');
   await restoreAuthentication(options);
 }
 
@@ -752,7 +752,7 @@ export function openUnauthenticatedRecordingSession(options) {
   // This session intentionally has no persistent context or loaded storage state. It is
   // closed after the one safe handoff beat so no browser data is retained for later runs.
   closeRecordingSession(options.session);
-  runPlaywrightCli(sessionArgs(options.session, 'open', '--browser=msedge'));
+  runPlaywrightCli(sessionArgs(options.session, 'open', '--browser=chrome'));
   process.stdout.write(`Unauthenticated recording session "${options.session}" is ready without restored storage.\n`);
 }
 
@@ -889,15 +889,15 @@ export async function captureRecordingPlan(options, {
 
 export async function recordingStatus(options) {
   const paths = recordingAuthPaths(options.authRoot);
-  const edgeProfile = resolveLiteralEdgeDefaultProfile();
+  const chromeProfile = resolveLiteralChromeDefaultProfile();
   const status = {
-    edgeDefaultProfile: false,
+    chromeDefaultProfile: false,
     authIgnored: false,
     authReady: false,
     sessionOpen: false,
     sessionAuthenticated: false,
   };
-  status.edgeDefaultProfile = await validateLiteralEdgeDefaultProfile(edgeProfile)
+  status.chromeDefaultProfile = await validateLiteralChromeDefaultProfile(chromeProfile)
     .then(() => true, () => false);
   status.authIgnored = await assertProtectedAuthRoot(paths.root).then(() => true, () => false);
   status.authReady = status.authIgnored && await hasRecordingAuth(paths.root);
@@ -925,7 +925,7 @@ export function closeRecordingSession(session) {
 // playwright-cli manages its own persistent browser profile per session under
 // `.auth/sessions/<session>` (relative to this package's cwd) and never cleans it up itself.
 // Once the browser has released the profile (after the `close` command above returns), it is
-// safe to prune the same known-safe cache directories we already exclude when copying Edge
+// safe to prune the same known-safe cache directories we already exclude when copying Chrome
 // profiles elsewhere in this file (see PROFILE_COPY_EXCLUDED_DIRECTORIES). This keeps the
 // persistent profile working (auth/cookies are preserved) while discarding regenerable cache
 // data that otherwise accumulates unbounded (tens of MB per session).

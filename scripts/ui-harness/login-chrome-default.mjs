@@ -1,43 +1,43 @@
 /**
- * login-edge-default.mjs
+ * login-chrome-default.mjs
  *
- * Capture a staging Entra/GitHub login session using the managed Edge Default
+ * Capture a staging Entra/GitHub login session using the managed Chrome Default
  * profile, which satisfies Conditional Access policies that block plain Chromium
  * (device-code flow) and unenrolled browsers.
  *
  * Usage:
- *   node scripts/ui-harness/login-edge-default.mjs [--base-url <url>] [--cdp]
+ *   node scripts/ui-harness/login-chrome-default.mjs [--base-url <url>] [--cdp]
  *
  * Options:
  *   --base-url <url>   Staging app URL (default: AGENTWEAVER_STAGING_URL env var)
- *   --cdp              Connect to an already-running Edge with --remote-debugging-port=9222
- *                      instead of launching a new persistent Edge context.
+ *   --cdp              Connect to an already-running Chrome with --remote-debugging-port=9222
+ *                      instead of launching a new persistent Chrome context.
  *
  * Two modes (auto-selected):
  *
  * Mode A — launchPersistentContext (default, preferred):
- *   Launches a new managed Edge window using the real Windows Default profile at
- *   %LOCALAPPDATA%\Microsoft\Edge\User Data. This works when Edge is not already
- *   running (or all existing Edge windows can be closed first).
+ *   Launches a new managed Chrome window using the real Windows Default profile at
+ *   %LOCALAPPDATA%\Google\Chrome\User Data. This works when Chrome is not already
+ *   running (or all existing Chrome windows can be closed first).
  *
- *   ⚠ On Windows, launching a second Edge process with the same User Data directory
- *   while another Edge instance already owns the lock will fail or open a new
- *   incognito-like session instead of the Default profile. If Edge is currently open,
+ *   ⚠ On Windows, launching a second Chrome process with the same User Data directory
+ *   while another Chrome instance already owns the lock will fail or open a new
+ *   incognito-like session instead of the Default profile. If Chrome is currently open,
  *   either:
- *     (a) Close all Edge windows first (save any open work), then run this script, OR
- *     (b) Enable remote debugging on the existing Edge instance:
- *         Go to edge://inspect/#devices → tick "Discover network targets" and open
- *         port 9222 (or restart Edge with --remote-debugging-port=9222), then use
+ *     (a) Close all Chrome windows first (save any open work), then run this script, OR
+ *     (b) Enable remote debugging on the existing Chrome instance:
+ *         Go to chrome://inspect/#devices → tick "Discover network targets" and open
+ *         port 9222 (or restart Chrome with --remote-debugging-port=9222), then use
  *         --cdp mode below.
  *
  * Mode B — connectOverCDP (--cdp flag):
- *   Attaches to an already-running Edge that was launched with:
- *     msedge.exe --remote-debugging-port=9222 \
- *       --user-data-dir="%LOCALAPPDATA%\Microsoft\Edge\User Data" \
+ *   Attaches to an already-running Chrome that was launched with:
+ *     chrome.exe --remote-debugging-port=9222 \
+ *       --user-data-dir="%LOCALAPPDATA%\Google\Chrome\User Data" \
  *       --profile-directory=Default --no-first-run <staging-url>
  *   Or you re-launched it via tools/playwright-cli:
  *     playwright-cli -s=api-auth attach --cdp=http://127.0.0.1:9222
- *   In CDP mode this script does NOT close Edge when it finishes — it only
+ *   In CDP mode this script does NOT close Chrome when it finishes — it only
  *   reads the session state from the already-open page.
  *
  * Output (all written to scripts/ui-harness/.auth/ — git-ignored):
@@ -107,15 +107,15 @@ async function captureState(page, context) {
 }
 
 // ---------------------------------------------------------------------------
-// Mode A: launchPersistentContext with Edge Default profile
+// Mode A: launchPersistentContext with Chrome Default profile
 // ---------------------------------------------------------------------------
 async function runWithPersistentContext() {
-  const userDataDir = path.join(os.homedir(), 'AppData', 'Local', 'Microsoft', 'Edge', 'User Data');
-  console.log(`Launching Edge Default profile from: ${userDataDir}`);
-  console.log('⚠ Close all Edge windows before running, or use --cdp if Edge is already open.\n');
+  const userDataDir = path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+  console.log(`Launching Chrome Default profile from: ${userDataDir}`);
+  console.log('⚠ Close all Chrome windows before running, or use --cdp if Chrome is already open.\n');
 
   const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: 'msedge',
+    channel: 'chrome',
     headless: false,
     args: ['--profile-directory=Default', '--no-first-run'],
     timeout: 30000,
@@ -127,7 +127,7 @@ async function runWithPersistentContext() {
 
   console.log(`Navigating to ${BASE_URL}`);
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  console.log('If Entra sign-in appears, complete it in the Edge window.');
+  console.log('If Entra sign-in appears, complete it in the Chrome window.');
   console.log('SSO often completes automatically with the Default profile.');
   console.log('When the authenticated app shell is visible, press Resume in the Playwright Inspector.');
   await page.pause();
@@ -137,12 +137,12 @@ async function runWithPersistentContext() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode B: connectOverCDP to existing Edge with --remote-debugging-port=9222
+// Mode B: connectOverCDP to existing Chrome with --remote-debugging-port=9222
 // ---------------------------------------------------------------------------
 async function runWithCDP() {
-  console.log(`Connecting to Edge via CDP at ${CDP_URL}`);
-  console.log('Make sure Edge was launched with:');
-  console.log(`  msedge.exe --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\\Microsoft\\Edge\\User Data" --profile-directory=Default --no-first-run ${BASE_URL}\n`);
+  console.log(`Connecting to Chrome via CDP at ${CDP_URL}`);
+  console.log('Make sure Chrome was launched with:');
+  console.log(`  chrome.exe --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\\Google\\Chrome\\User Data" --profile-directory=Default --no-first-run ${BASE_URL}\n`);
 
   const browser = await chromium.connectOverCDP(CDP_URL);
   const contexts = browser.contexts();
@@ -164,9 +164,9 @@ async function runWithCDP() {
   await page.pause();
 
   await captureState(page, context);
-  // Do NOT close browser in CDP mode — the user's Edge session stays open.
-  console.log('Done. Edge session left open (CDP mode).');
-  await browser.close(); // disconnects Playwright, does not close Edge
+  // Do NOT close browser in CDP mode — the user's Chrome session stays open.
+  console.log('Done. Chrome session left open (CDP mode).');
+  await browser.close(); // disconnects Playwright, does not close Chrome
 }
 
 // ---------------------------------------------------------------------------

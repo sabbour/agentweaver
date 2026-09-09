@@ -23,9 +23,9 @@ browser profiles, or account data. If cached SSO does not complete authenticatio
 and have a human complete sign-in privately and off camera. Agents must not run `signin`
 or inspect authentication artifacts to work around this boundary.
 
-The command uses **only** the literal Microsoft Edge `Default` work profile at
-`%LOCALAPPDATA%\Microsoft\Edge\User Data\Default`. Chrome and every other Edge
-profile are refused. Close all Edge windows when prompted. The command then:
+The command uses **only** the literal Google Chrome `Default` work profile at
+`%LOCALAPPDATA%\Google\Chrome\User Data\Default`. Edge and every other Chrome
+profile are refused. Close all Chrome windows when prompted. The command then:
 
 1. Validates that `Local State` identifies that exact `Default` profile, then copies
    it into a freshly created disposable, Git-ignored directory.
@@ -36,7 +36,7 @@ profile are refused. Close all Edge windows when prompted. The command then:
    recorder stops automation there; account selection, credentials, MFA, and consent remain
    human-only.
 3. Saves the Playwright storage state and Agentweaver `sessionStorage` sidecar.
-4. Closes and deletes the disposable Edge profile.
+4. Closes and deletes the disposable Chrome profile.
 
 ## Safe sign-in recovery
 
@@ -50,7 +50,7 @@ interactive sign-in path. Keep any planned media and fixtures unchanged:
 npm run demo:record -- close
 ```
 
-Close any remaining Microsoft Edge windows through their normal UI. If a human must complete Microsoft Entra sign-in, close any remaining Microsoft Edge
+Close any remaining Google Chrome windows through their normal UI. If a human must complete Microsoft Entra sign-in, close any remaining Google Chrome
 windows through their normal UI, then run:
 
 ```powershell
@@ -60,16 +60,16 @@ npm run demo:record -- status
 ```
 
 Proceed only after `status` reports that the recording session is authenticated. Do not
-use another tool's auth artifacts, terminate Edge by name, or clean fixtures as part of
+use another tool's auth artifacts, terminate Chrome by name, or clean fixtures as part of
 this recovery.
 
-The live Default directory is never automated. Microsoft Edge requires Edge instances
+The live Default directory is never automated. Google Chrome requires Chrome instances
 to be closed for DevTools attachment, and current Chromium releases reject remote
 debugging against the default browser data directory. The disposable copy preserves
 the required work-profile state without attaching automation to the live profile. It
-launches Edge with `--profile-directory=Default`. A copy is built in a temporary
+launches Chrome with `--profile-directory=Default`. A copy is built in a temporary
 directory and only replaces the automation copy after a complete refresh succeeds; the
-tool never falls back to an old clone or another profile. If Edge leaves a file locked,
+tool never falls back to an old clone or another profile. If Chrome leaves a file locked,
 the tool waits without terminating any process, then fails clearly if the exact source
 cannot be refreshed.
 
@@ -81,7 +81,7 @@ storage-state contents, or session-storage values.
 
 Keep ad-hoc diagnostics and probe scripts out of `.auth`; use a scratch directory instead.
 That directory is reserved for authentication state, generated capture scripts, and the
-disposable Edge profile.
+disposable Chrome profile.
 
 ## Start a persistent recording session
 
@@ -94,10 +94,10 @@ npm run demo:record -- start `
 session when it is already open and its live Agentweaver shell verifies as authenticated.
 When it is closed, they restore the protected recorder auth into the owned session and
 verify the live shell before considering Default-profile sign-in. This avoids touching
-the live Edge Default profile whenever auth remains valid. Expired or unverifiable
+the live Chrome Default profile whenever auth remains valid. Expired or unverifiable
 stored auth falls through to the existing Default-profile sign-in path, which closes
-only the owned recording session before waiting for Edge and never terminates unrelated
-Edge processes. If Microsoft Entra is reached, the displayed sign-in requires a human;
+only the owned recording session before waiting for Chrome and never terminates unrelated
+Chrome processes. If Microsoft Entra is reached, the displayed sign-in requires a human;
 the CLI does not select an account, enter credentials, MFA, or consent. The default
 session name is `agentweaver-demo`.
 

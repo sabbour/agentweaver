@@ -50,12 +50,12 @@ Usage:
   npm run demo:record -- <command> [options]
 
 Recording session commands:
-  signin   Refresh protected auth from the literal Microsoft Edge Default work profile.
+  signin   Refresh protected auth from the literal Google Chrome Default work profile.
   open     Reuse or restore recording auth; refresh Default-profile sign-in only when needed.
   start    Self-direct session setup, then optionally prepare a capture plan.
   prepare  Validate a capture plan and create playwright-cli scripts.
   capture  Self-direct authenticated setup; --unauthenticated is isolated.
-  status   Check the Edge profile, protected auth, and recording session.
+  status   Check the Chrome profile, protected auth, and recording session.
   close    Close the named persistent recording session.
   help     Show this help.
 
@@ -339,7 +339,7 @@ export async function runRecordingCommand(command, argv, {
   } else if (command === 'status') {
     const status = await recordingStatus(options);
     process.stdout.write([
-      `Microsoft Edge Default profile: ${status.edgeDefaultProfile ? 'found' : 'missing'}`,
+      `Google Chrome Default profile: ${status.chromeDefaultProfile ? 'found' : 'missing'}`,
       `Protected auth directory: ${status.authIgnored ? 'Git-ignored' : 'not Git-ignored'}`,
       `Recording authentication: ${status.authReady ? 'ready' : 'missing'}`,
       `Session "${options.session}": ${status.sessionOpen ? 'open' : 'closed'}`,
