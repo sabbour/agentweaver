@@ -77,6 +77,35 @@ function ScopedHarness({ operation, projectId }: { operation: string; projectId:
   );
 }
 
+function DeferredActionHarness({
+  operation,
+  projectId,
+  completion,
+  failure,
+}: {
+  operation: string;
+  projectId: string;
+  completion: Promise<AiExecutionContext>;
+  failure: Promise<never>;
+}) {
+  const execution = useAiExecutionContext(operation, projectId);
+  return (
+    <>
+      <span data-testid="action-provider-key">{execution.providerKey}</span>
+      <span data-testid="action-provider">
+        {execution.context?.effective_model_provider?.provider_kind}
+      </span>
+      <span data-testid="action-phase">{execution.context?.phase}</span>
+      <span data-testid="action-error">{execution.error}</span>
+      <span data-testid="action-announcement">{execution.announcement}</span>
+      <button onClick={() => {
+        void completion.then(execution.applyCompletedContext);
+        void failure.catch(execution.handleInvocationError);
+      }}>Start action</button>
+    </>
+  );
+}
+
 function OnDemandHarness() {
   const execution = useAiExecutionContext(
     'marketplace_catalog_classification',
@@ -141,6 +170,66 @@ describe('useAiExecutionContext', () => {
     expect(screen.getByTestId('scoped-provider').textContent).toBe('byok');
     expect(screen.getByTestId('scoped-error').textContent).toBe('');
     expect(screen.getByTestId('scoped-loading').textContent).toBe('false');
+  });
+
+  it('ignores completed contexts and invocation errors from actions that settle after navigation', async () => {
+    let completeOldAction!: (value: AiExecutionContext) => void;
+    let failOldAction!: (reason: ApiError) => void;
+    const completion = new Promise<AiExecutionContext>((resolve) => {
+      completeOldAction = resolve;
+    });
+    const failure = new Promise<never>((_, reject) => {
+      failOldAction = reject;
+    });
+    vi.mocked(apiClient.prepareAiExecutionContext).mockImplementation(
+      (operation) => Promise.resolve(operation === 'operation-a'
+        ? prepared('platform_github_copilot', 'key-a')
+        : prepared('byok', 'key-b')),
+    );
+
+    const view = render(
+      <DeferredActionHarness
+        operation="operation-a"
+        projectId="project-a"
+        completion={completion}
+        failure={failure}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('action-provider-key').textContent).toBe('key-a'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start action' }));
+
+    view.rerender(
+      <DeferredActionHarness
+        operation="operation-b"
+        projectId="project-b"
+        completion={completion}
+        failure={failure}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('action-provider-key').textContent).toBe('key-b'));
+
+    await act(async () => {
+      completeOldAction({
+        ...prepared('platform_github_copilot', ''),
+        phase: 'completed',
+        execution_key: null,
+        expires_at: null,
+      });
+      failOldAction(new ApiError(
+        409,
+        JSON.stringify({
+          error: 'model_provider_changed',
+          context: prepared('platform_github_copilot', 'stale-key'),
+        }),
+      ));
+      await Promise.allSettled([completion, failure]);
+    });
+
+    expect(screen.getByTestId('action-provider-key').textContent).toBe('key-b');
+    expect(screen.getByTestId('action-provider').textContent).toBe('byok');
+    expect(screen.getByTestId('action-phase').textContent).toBe('prepared');
+    expect(screen.getByTestId('action-error').textContent).toBe('');
+    expect(screen.getByTestId('action-announcement').textContent).toBe('');
   });
 
   it('announces a same-kind provider replacement detected during refresh', async () => {
