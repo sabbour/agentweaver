@@ -2,6 +2,6 @@
 "agentweaver": patch
 ---
 
-Bind supported AI actions to opaque, fingerprinted execution keys. Revalidate provider configuration at covered invocation boundaries, persist redacted provenance, and show accessible Expected, Using, and Used provider context.
+Report truthful model-provider context for supported AI actions. Agentweaver revalidates provider selection immediately before model calls and persists redacted execution provenance.
 
-Revalidate AgentHost retries and reviewer re-asks through the existing run-capability boundary before model invocation.
+If the provider changes, Agentweaver returns `409 model_provider_changed` before invocation. The UI distinguishes Expected, Using, and Used provider context.

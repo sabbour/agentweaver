@@ -121,6 +121,94 @@ The MCP transport still raises a tool error, but the message is now actionable a
 
 When the failure is the **run's** outcome rather than the **tool's** outcome, `run_task` returns a normal JSON payload with `status: "failed"` or `status: "timed_out"` instead of throwing a transport error.
 
+### Model-provider execution context
+
+The MCP server does not expose a separate execution-context tool.
+For AI-backed tools, the server prepares provider context through `POST /api/ai/execution-context`.
+It does this immediately before it sends the related API command.
+
+The preparation request contains:
+
+| Field | Required | Description |
+|---|---|---|
+| `operation` | yes | The supported AI operation that the tool will start or resume. |
+| `project_id` | depends on the operation | The project that supplies provider resolution and authorization context. |
+| `run_id` | depends on the operation | The run that supplies continuation context. |
+
+The response contains `ai_required`, `operation`, `phase`, `execution_key`, `expires_at`, and `effective_model_provider`.
+Prepared context uses `phase: "prepared"`.
+The MCP server forwards `execution_key` in `If-Model-Provider-Key`.
+It does not return that key to the MCP client.
+
+`effective_model_provider` contains these fields:
+
+- `state`
+- `provider_kind`
+- `resolution_scope`
+- `provider_scope`
+- `provider_type`
+- `model_id`
+- `provider_key`
+- `unavailable_reason`
+
+It contains no credentials, account names, or provider-binding identities.
+`provider_key` is an opaque comparison fingerprint.
+Clients must not display it or use it as execution authority.
+
+The following MCP paths prepare provider context:
+
+| MCP tool or path | AI operation |
+|---|---|
+| `blueprint_generate` | `blueprint_generation` |
+| `workflow_generate` | `workflow_generation` |
+| `skill_generate` | `skill_generation` |
+| `team_cast` in AI proposal modes | `casting_generation` |
+| `backlog_decompose_spec` | `backlog_decomposition` |
+| `skill_marketplace_browse` when classification is necessary | `marketplace_catalog_classification` |
+| `coordinator_start`, `run_submit`, and `run_task` | `orchestration` |
+| `coordinator_outcome_spec_confirm` and `coordinator_outcome_spec_revise` | `orchestration` |
+| `coordinator_steer` for redirect, amend, or recovery | `orchestration` |
+| `run_retry` | `orchestration` or `agent_turn`, based on the source run |
+| `run_review` when approval resumes AI work | `orchestration` for coordinator runs, or `agent_turn` for other runs |
+
+Agentweaver revalidates provider selection immediately before each covered model call.
+If the provider changes, the API returns `409 model_provider_changed` with redacted replacement context.
+The model call does not start.
+The API response uses this shape:
+
+```json
+{
+  "error": "model_provider_changed",
+  "message": "The effective model provider changed before model invocation.",
+  "context": {
+    "ai_required": true,
+    "operation": "orchestration",
+    "phase": "prepared",
+    "execution_key": "opaque-short-lived-key",
+    "expires_at": "2026-09-09T13:00:00Z",
+    "effective_model_provider": {
+      "state": "resolved",
+      "provider_kind": "platform_github_copilot",
+      "resolution_scope": "project",
+      "provider_scope": "platform",
+      "provider_type": null,
+      "model_id": "provider-model-name",
+      "provider_key": "opaque-comparison-fingerprint",
+      "unavailable_reason": null
+    }
+  }
+}
+```
+
+The MCP transport returns a structured tool error without provider keys.
+A retry prepares new context.
+Missing context returns `409 ai_execution_context_required`.
+Expired context returns `409 ai_execution_context_expired`.
+
+`run_status` returns the complete run projection, including redacted `effective_model_provider` when provenance exists.
+The embedded run in `run_task` preserves the same field.
+The phase meanings are **Expected** for `prepared`, **Using** for `active`, and **Used** for `completed`.
+
 ## Route parameter encoding
 
 MCP tools treat every route path parameter as data, not as part of the URL structure. Before forwarding a tool call to the Agentweaver API, tool implementations URI-escape path segments such as `project_id`, `run_id`, `agent_name`, backlog task ids, workflow ids, and session ids with `Uri.EscapeDataString()`. This means a crafted identifier containing `../`, `/`, or other reserved path characters cannot traverse to another endpoint or alter the route being called. Query-string parameters are not part of this path hardening and continue to use normal query encoding.
@@ -312,7 +400,7 @@ Get the current status and details of a run.
 |-----------|------|----------|-------------|
 | `run_id` | string | yes | Run ID |
 
-**Returns**: Run object with `status`, `task`, `agent_name`, `started_at`, `result` (when the run completes with no changes: `"no_changes"`), `diff` (when in review), and outcome fields.
+**Returns**: Run object with status, task, agent, timing, result, diff, outcome fields, and redacted `effective_model_provider` when provenance exists.
 
 Possible `status` values: `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `failed`, `merge_failed`.
 
