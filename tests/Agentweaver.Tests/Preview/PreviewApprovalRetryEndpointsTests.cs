@@ -224,9 +224,12 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task RetryPublication_RunEndsDuringHttpsWait_LateSuccessCannotPublish(bool completeLocalStream)
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task Publication_RunEndsDuringHttpsWait_LateSuccessCannotPublish(
+        bool initialApproval, bool completeLocalStream)
     {
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -257,8 +260,10 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         }));
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
-        var (runId, requestId) = await CreateRetryableRunAsync(
-            services: factory.Services, previewRunnerSessionId: "retained-process");
+        var (runId, requestId) = initialApproval
+            ? await CreateRunAsync(RunStatus.InProgress, services: factory.Services)
+            : await CreateRetryableRunAsync(
+                services: factory.Services, previewRunnerSessionId: "retained-process");
         await secrets.SetSecretAsync(PreviewRunnerCredential.SecretKey(runId), "retained-test-credential");
         var streams = factory.Services.GetRequiredService<RunStreamStore>();
         var claim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
@@ -267,14 +272,28 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"preview-pod"}}}""");
 
         using var requestLifetime = new CancellationTokenSource();
-        var response = await client.PostAsync(
-            $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null, requestLifetime.Token);
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        var retryId = (await response.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("request_id").GetString()!;
-        requestLifetime.Cancel();
+        Task<HttpResponseMessage>? initialRequest = null;
+        string approvalId;
+        if (initialApproval)
+        {
+            initialRequest = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+            {
+                target_port = 5173,
+                preview_runner_session_id = "retained-process",
+            }, requestLifetime.Token);
+            approvalId = await WaitForApprovalAsync(streams, runId);
+        }
+        else
+        {
+            var response = await client.PostAsync(
+                $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null, requestLifetime.Token);
+            response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+            approvalId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("request_id").GetString()!;
+            requestLifetime.Cancel();
+        }
         (await factory.Services.GetRequiredService<IToolApprovalGate>()
-            .GrantAsync(runId, retryId, ApprovalScope.Once)).Should().BeTrue();
+            .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
         var publicationCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var route = kube.Requests.Single(r => r.Method == "POST" && r.Path == routes);
@@ -289,10 +308,13 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var publicationCancelled = publicationCt.IsCancellationRequested;
         resume.SetResult();
 
+        if (initialRequest is not null)
+            (await initialRequest.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var expectedFailures = initialApproval ? 1 : 2;
         for (var i = 0; i < 500; i++)
         {
             if (streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e =>
-                e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed) == 2)
+                e.Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewFailed) == expectedFailures)
                 break;
             await Task.Delay(10);
         }
@@ -300,13 +322,15 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var events = streams.Get(runId)!.GetSnapshotSince(0).Events;
         events.Should().NotContain(e =>
             e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
-        events.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(2);
+        events.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(expectedFailures);
         publicationCancelled.Should().Be(completeLocalStream);
-        runner.HealthCancellationToken.Should().Be(streams.Get(runId)!.CompletionToken);
-        runner.LastBearer.Should().Be("retained-test-credential");
+        runner.HealthCancellationToken.IsCancellationRequested.Should().Be(completeLocalStream);
+        runner.LastBearer.Should().Be(initialApproval
+            ? ProjectsWebApplicationFactory.TestApiKey : "retained-test-credential");
         await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         runner.HealthCalls.Should().Be(1);
         runner.StopCalls.Should().Be(1);
+        runner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
         var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
         deleted.Should().HaveCount(2);
         deleted[0].Path.Should().Be($"{routes}/{routeName}");
@@ -314,6 +338,151 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         kube.Requests.Should().Contain(r =>
             r.Method == "PATCH" && r.Path.EndsWith("/pods/preview-pod")
             && r.Body!.Contains("safe-to-evict") && r.Body.Contains("true"));
+        using var retention = JsonDocument.Parse(kube.Requests.Last(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{claim}")).Body!);
+        retention.RootElement.GetProperty("spec").GetProperty("lifecycle")
+            .GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task Publication_RunEndsDuringPostApprovalHealth_DoesNotRegister(
+        bool initialApproval, bool completeLocalStream)
+    {
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false)
+        {
+            HealthBehavior = async ct =>
+            {
+                entered.SetResult(ct);
+                await resume.Task;
+                return new PreviewRunnerHealthResult("retained-process", 5173, true, 200);
+            },
+        };
+        var preview = new RetainedPreviewService(runner);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+            services.AddSingleton<ISecretStore>(new InMemorySecretStore());
+            services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, requestId) = initialApproval
+            ? await CreateRunAsync(RunStatus.InProgress, services: factory.Services)
+            : await CreateRetryableRunAsync(
+                services: factory.Services, previewRunnerSessionId: "retained-process");
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        Task<HttpResponseMessage>? initialRequest = null;
+        string approvalId;
+        if (initialApproval)
+        {
+            initialRequest = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+            {
+                target_port = 5173,
+                preview_runner_session_id = "retained-process",
+            });
+            approvalId = await WaitForApprovalAsync(streams, runId);
+        }
+        else
+        {
+            var response = await client.PostAsync(
+                $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+            approvalId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("request_id").GetString()!;
+        }
+        (await factory.Services.GetRequiredService<IToolApprovalGate>()
+            .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+        var healthCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        (await factory.Services.GetRequiredService<IRunStore>().TrySetTerminalStatusAsync(
+            RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (completeLocalStream)
+            streams.Complete(runId);
+        var healthCancelled = healthCt.IsCancellationRequested;
+        resume.SetResult();
+
+        if (initialRequest is not null)
+            (await initialRequest.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        healthCancelled.Should().Be(completeLocalStream);
+        preview.StartCalls.Should().Be(0, "even late healthy results must not create a terminal run's publication");
+        runner.StopCalls.Should().Be(1);
+        runner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
+        streams.Get(runId)!.GetSnapshotSince(0).Events.Should().NotContain(e =>
+            e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
+    }
+
+    [Fact]
+    public async Task OperatorPreview_AfterRunCompletion_RemainsAllowed()
+    {
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var preview = new RetainedPreviewService(runner, requireHealthCheck: false);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddSingleton<ISandboxPreviewService>(preview)));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.Completed, services: factory.Services);
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        streams.Complete(runId);
+
+        var response = await client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/port-forward", new { targetPort = 5173 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        preview.StartCalls.Should().Be(1);
+        streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e =>
+            e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady).Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AgentPreview_ApprovedActiveRun_Publishes(bool hasProcessSession)
+    {
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var preview = new RetainedPreviewService(runner, requireHealthCheck: hasProcessSession);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+        {
+            target_port = 5173,
+            preview_runner_session_id = hasProcessSession ? "retained-process" : null,
+        });
+        var approvalId = await WaitForApprovalAsync(streams, runId);
+        (await factory.Services.GetRequiredService<IToolApprovalGate>()
+            .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+
+        (await request.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        preview.StartCalls.Should().Be(1);
+        runner.HealthCalls.Should().Be(hasProcessSession ? 1 : 0);
+        runner.StopCalls.Should().Be(0);
+        streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e =>
+            e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady).Should().Be(2);
+    }
+
+    private static async Task<string> WaitForApprovalAsync(RunStreamStore streams, string runId)
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            var pending = streams.Get(runId)!.GetSnapshotSince(0).Events
+                .LastOrDefault(e => e.Type == EventTypes.SandboxPreviewPending);
+            if (pending is not null)
+                return ReadString(pending.Payload, "request_id");
+            await Task.Delay(10);
+        }
+        throw new InvalidOperationException("Preview approval was not requested.");
     }
 
     private async Task<(string RunId, string RequestId)> CreateRetryableRunAsync(
@@ -393,6 +562,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public string? LastBearer;
         public int LastPort;
         public CancellationToken HealthCancellationToken;
+        public CancellationToken StopCancellationToken;
+        public Func<CancellationToken, Task<PreviewRunnerHealthResult>>? HealthBehavior;
         public TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<PreviewRunnerHealthResult> HealthCheckAsync(
@@ -403,6 +574,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             LastBearer = bearer;
             LastPort = port;
             HealthCancellationToken = ct;
+            if (HealthBehavior is not null) return HealthBehavior(ct);
             if (unreachable) throw new PreviewRunnerHttpException("agenthost_unreachable", "unreachable");
             return Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, healthy, healthy ? 200 : 503));
         }
@@ -410,6 +582,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
         {
             StopCalls++;
+            StopCancellationToken = ct;
             sessionId.Should().Be("retained-process");
             Stopped.TrySetResult();
             return Task.CompletedTask;
@@ -428,7 +601,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             throw new InvalidOperationException("Registration must check health by run identity, not keepalive.");
     }
 
-    private sealed class RetainedPreviewService(RetainedRunnerClient runner) : ISandboxPreviewService
+    private sealed class RetainedPreviewService(RetainedRunnerClient runner, bool requireHealthCheck = true) : ISandboxPreviewService
     {
         public int StartCalls;
         public string? SessionId;
@@ -440,7 +613,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
             string? previewRunnerSessionId = null)
         {
-            runner.HealthCalls.Should().Be(1, "fresh process health must precede registration");
+            if (requireHealthCheck)
+                runner.HealthCalls.Should().Be(1, "fresh process health must precede registration");
             StartCalls++;
             SessionId = previewRunnerSessionId;
             return Task.FromResult(new PreviewSession(
