@@ -10,6 +10,7 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using k8s;
@@ -224,20 +225,26 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(false, false)]
-    public async Task Publication_RunEndsDuringHttpsWait_LateSuccessCannotPublish(
-        bool initialApproval, bool completeLocalStream)
+    [InlineData(true, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, true)]
+    public async Task Publication_RunEndsDuringHttpsOrPersistenceWait_CannotPublish(
+        bool initialApproval, bool completeLocalStream, bool pauseAtPersistence)
     {
+        PausingPreviewEventStream? persistence = null;
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var publication = new HttpClient(new PreviewPublicationHandler(async (_, ct) =>
         {
             entered.SetResult(ct);
             // Deliberately return 200 even after cancellation, reproducing a late external response.
-            await resume.Task;
+            if (!pauseAtPersistence)
+                await resume.Task;
             return new HttpResponseMessage(HttpStatusCode.OK);
         }));
         var kube = new FakeKubeHandler();
@@ -257,6 +264,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             services.AddSingleton<ISandboxPreviewService>(preview);
             services.AddSingleton<ISecretStore>(secrets);
             services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+            if (pauseAtPersistence)
+                services.AddSingleton<IRunEventStream>(sp => persistence = new PausingPreviewEventStream(
+                    new SqliteRunEventStream(sp.GetRequiredService<IConfiguration>())));
         }));
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
@@ -295,6 +305,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         (await factory.Services.GetRequiredService<IToolApprovalGate>()
             .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
         var publicationCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (persistence is not null)
+            await persistence.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var route = kube.Requests.Single(r => r.Method == "POST" && r.Path == routes);
         using var routeDocument = JsonDocument.Parse(route.Body!);
@@ -307,6 +319,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             streams.Complete(runId);
         var publicationCancelled = publicationCt.IsCancellationRequested;
         resume.SetResult();
+        persistence?.Resume.TrySetResult();
 
         if (initialRequest is not null)
             (await initialRequest.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.Conflict);
@@ -323,7 +336,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         events.Should().NotContain(e =>
             e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
         events.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(expectedFailures);
-        publicationCancelled.Should().Be(completeLocalStream);
+        if (!pauseAtPersistence)
+            publicationCancelled.Should().Be(completeLocalStream);
         runner.HealthCancellationToken.IsCancellationRequested.Should().Be(completeLocalStream);
         runner.LastBearer.Should().Be(initialApproval
             ? ProjectsWebApplicationFactory.TestApiKey : "retained-test-credential");
@@ -342,6 +356,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{claim}")).Body!);
         retention.RootElement.GetProperty("spec").GetProperty("lifecycle")
             .GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+        (await factory.Services.GetRequiredService<IRunEventStream>().GetPersistedEventsAsync(runId))
+            .Should().NotContain(e =>
+                e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
     }
 
     [Theory]

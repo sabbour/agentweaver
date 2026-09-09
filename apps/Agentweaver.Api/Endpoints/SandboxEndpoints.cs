@@ -454,8 +454,8 @@ public static class SandboxEndpoints
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 };
 
-                if (!await ValidatePreviewPublicationAsync(
-                    preview, previewService, runStore, ct).ConfigureAwait(false))
+                if (!await PublishPreviewReadyAsync(
+                    preview, readyPayload, previewService, streamStore, runStore, ct).ConfigureAwait(false))
                 {
                     const string message = "The run became terminal before preview publication completed.";
                     EmitPreviewFailure(
@@ -463,8 +463,6 @@ public static class SandboxEndpoints
                     return Results.Conflict(new { error = message });
                 }
 
-                streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewReady, readyPayload);
-                streamStore.Get(runId)?.RecordNext(EventTypes.CoordinatorPreviewReady, readyPayload);
                 EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.");
 
                 return Results.Ok(new
@@ -538,25 +536,36 @@ public static class SandboxEndpoints
         return run is not null && !EndpointHelpers.IsTerminal(run.Status);
     }
 
-    // The emitter must call this after its last wait, immediately before recording ready events.
-    // A remote replica may terminalize the durable run without completing this replica's stream.
-    internal static async Task<bool> ValidatePreviewPublicationAsync(
-        PreviewSession preview, ISandboxPreviewService previewService, IRunStore? runStore, CancellationToken ct)
+    // Run-bound emitters must use conditional persistence, not a final status read followed by
+    // RecordNext. A remote replica can terminalize the run while an event append waits.
+    internal static async Task<bool> PublishPreviewReadyAsync(
+        PreviewSession preview, object payload, ISandboxPreviewService previewService,
+        RunStreamStore streams, IRunStore? runStore, CancellationToken ct)
     {
-        var canPublish = false;
+        var published = false;
         try
         {
             ct.ThrowIfCancellationRequested();
-            var isActive = runStore is null
-                || await IsPreviewRunActiveAsync(preview.RunId, runStore, ct).ConfigureAwait(false);
-            ct.ThrowIfCancellationRequested();
-            canPublish = isActive;
-            return canPublish;
+            var entry = streams.Get(preview.RunId);
+            if (runStore is not null)
+                published = entry is not null
+                    && await entry.TryRecordPreviewReadyAsync(payload, runStore, ct).ConfigureAwait(false);
+            else
+            {
+                // Intentional operator publication may start after the run has ended.
+                entry?.RecordNext(EventTypes.SandboxPreviewReady, payload);
+                entry?.RecordNext(EventTypes.CoordinatorPreviewReady, payload);
+                published = true;
+            }
+            return published;
         }
         finally
         {
-            if (!canPublish)
-                await previewService.StopPreviewAsync(preview.Token, CancellationToken.None).ConfigureAwait(false);
+            if (!published)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await previewService.StopPreviewAsync(preview.Token, cleanup.Token).ConfigureAwait(false);
+            }
         }
     }
 

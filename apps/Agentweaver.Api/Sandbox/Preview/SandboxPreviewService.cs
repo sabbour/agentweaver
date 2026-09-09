@@ -317,8 +317,10 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     private async Task WaitForPublicationAsync(Uri previewUrl, CancellationToken ct)
     {
+        var started = _clock.GetTimestamp();
+        var publicationWindow = TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds);
         using var timeout = new CancellationTokenSource(
-            TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds), _clock);
+            publicationWindow, _clock);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         var lastFailure = "no successful HTTPS response";
 
@@ -335,6 +337,10 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                         using var request = new HttpRequestMessage(HttpMethod.Get, url);
                         using var response = await _publicationClient.SendAsync(
                             request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+                        // A transport can ignore cancellation, and timer delivery can be delayed.
+                        if (_clock.GetElapsedTime(started) >= publicationWindow)
+                            timeout.Cancel();
+                        deadline.Token.ThrowIfCancellationRequested();
                         if (response.IsSuccessStatusCode)
                             return;
 

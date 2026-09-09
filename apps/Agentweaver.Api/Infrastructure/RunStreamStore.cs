@@ -120,6 +120,55 @@ public sealed class RunStreamEntry
         return RecordNext(type, _ => payload);
     }
 
+    internal async Task<bool> TryRecordPreviewReadyAsync(object payload, IRunStore runStore, CancellationToken ct)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, CompletionToken);
+        ct = lifetime.Token;
+        var now = DateTimeOffset.UtcNow;
+        RunEvent[] events =
+        [
+            new(0, EventTypes.SandboxPreviewReady, payload, now),
+            new(0, EventTypes.CoordinatorPreviewReady, payload, now),
+        ];
+        TaskCompletionSource? previous = null;
+        if (HasDurableSequenceAuthority)
+        {
+            var recorded = await _eventStream!.AppendWhileRunActiveAsync(_runId, events, runStore, ct)
+                .ConfigureAwait(false);
+            if (recorded.Count == 0)
+                return false;
+            lock (_lock)
+            {
+                foreach (var evt in recorded)
+                    TryInsertOrValidateLocked(evt);
+                previous = Interlocked.Exchange(ref _eventSignal,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
+        }
+        else
+        {
+            if (runStore is not RunActiveClaimGuardedRunStore guarded)
+                throw new InvalidOperationException("In-memory conditional events require the guarded run store.");
+            if (!await guarded.TryWhileRunActiveAsync(RunId.Parse(_runId), () =>
+            {
+                lock (_lock)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (_isCompleted)
+                        throw new OperationCanceledException(ct);
+                    foreach (var evt in events)
+                        TryInsertOrValidateLocked(evt with { Sequence = NextInMemorySequenceLocked() });
+                    previous = Interlocked.Exchange(ref _eventSignal,
+                        new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                }
+                return Task.CompletedTask;
+            }, ct).ConfigureAwait(false))
+                return false;
+        }
+        previous!.TrySetResult();
+        return true;
+    }
+
     /// <summary>
     /// Records an event with a payload factory. When a durable stream is configured, the
     /// <paramref name="payloadFactory"/> receives the in-memory next-sequence hint while the durable

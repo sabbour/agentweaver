@@ -14,6 +14,47 @@ namespace Agentweaver.Tests;
 
 public sealed class SandboxPreviewPublicationTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Late200AfterPublicationDeadline_IsRejectedAndRollsBack(
+        bool redirected, bool delayedTimer)
+    {
+        var clock = new PublicationClock();
+        var calls = 0;
+        var publication = new PreviewPublicationHandler(async (_, ct) =>
+        {
+            if (redirected && Interlocked.Increment(ref calls) == 1)
+                return new HttpResponseMessage(HttpStatusCode.Redirect)
+                {
+                    Headers = { Location = new Uri("/app", UriKind.Relative) },
+                };
+
+            if (delayedTimer)
+            {
+                // Elapsed time is authoritative even if the deadline timer has not run yet.
+                clock.Advance(TimeSpan.FromSeconds(2));
+            }
+            else
+            {
+                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = ct.Register(() => cancelled.TrySetResult());
+                await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, clock);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(409);
+        h.ReadyEvents().Should().BeEmpty();
+        h.AssertCleanedUp();
+        publication.Requests.Should().HaveCount(redirected ? 2 : 1);
+    }
+
     [Fact]
     public async Task DnsAnd503_WithholdReadyUntilExactHttpsUrlSucceeds()
     {
@@ -173,7 +214,7 @@ public sealed class SandboxPreviewPublicationTests
         private readonly IKubernetes _client;
         private readonly SandboxPreviewService _service;
 
-        public Harness(PreviewPublicationHandler handler, int timeoutSeconds = 90)
+        public Harness(PreviewPublicationHandler handler, int timeoutSeconds = 90, TimeProvider? clock = null)
         {
             var claim = SandboxClaimConventions.DeriveAgentHostClaimName(Run.Id.ToString());
             Kube.OnGet(
@@ -188,7 +229,7 @@ public sealed class SandboxPreviewPublicationTests
                 Enabled = true,
                 ZoneSuffix = "preview.example.test",
                 PublicationTimeoutSeconds = timeoutSeconds,
-            }, NullLogger<SandboxPreviewService>.Instance, publicationClient: _http);
+            }, NullLogger<SandboxPreviewService>.Instance, clock: clock, publicationClient: _http);
             Streams.Create(Run.Id.ToString(), Run.SubmittingUser);
         }
 
@@ -210,6 +251,10 @@ public sealed class SandboxPreviewPublicationTests
             Kube.Requests.Should().Contain(r =>
                 r.Method == "PATCH" && r.Path.EndsWith("/pods/preview-pod")
                 && r.Body!.Contains("safe-to-evict") && r.Body.Contains("true"));
+            using var retention = JsonDocument.Parse(Kube.Requests.Last(r =>
+                r.Method == "PATCH" && r.Path.Contains("/sandboxclaims/")).Body!);
+            retention.RootElement.GetProperty("spec").GetProperty("lifecycle")
+                .GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
         }
 
         public void Dispose()
@@ -217,6 +262,14 @@ public sealed class SandboxPreviewPublicationTests
             _http.Dispose();
             _client.Dispose();
         }
+    }
+
+    private sealed class PublicationClock : TimeProvider
+    {
+        private long _timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
+        public void Advance(TimeSpan elapsed) => Interlocked.Add(ref _timestamp, elapsed.Ticks);
     }
 }
 
