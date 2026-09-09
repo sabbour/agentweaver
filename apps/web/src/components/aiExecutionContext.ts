@@ -38,6 +38,16 @@ function unavailableReason(reason: string | null): string | null {
   }
 }
 
+export function aiExecutionProviderScope(context: AiExecutionContext | null): string | null {
+  const scope = context?.effective_model_provider?.provider_scope;
+  switch (scope) {
+    case 'platform': return 'Platform';
+    case 'project': return 'Project';
+    case 'user': return 'Personal';
+    default: return null;
+  }
+}
+
 export function aiExecutionProviderLabel(context: AiExecutionContext | null): string {
   const provider = context?.effective_model_provider;
   if (!provider) return 'AI provider information unavailable';

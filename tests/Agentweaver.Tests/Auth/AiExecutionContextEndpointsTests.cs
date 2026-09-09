@@ -189,6 +189,59 @@ public sealed class AiExecutionContextEndpointsTests
         }
     }
 
+    [Theory]
+    [InlineData("outcome_spec_generation")]
+    [InlineData("preview_classification")]
+    [InlineData("preview_command_generation")]
+    public async Task Azure_byok_preflight_supports_outcome_drafting_and_preview_analysis(
+        string operation)
+    {
+        await using var factory = new AgentweaverWebApplicationFactory();
+        await SeedByokProviderAsync(factory);
+        var client = AuthedClient(factory);
+        var workingDirectory = Path.Combine(Path.GetTempPath(), $"byok-operation-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workingDirectory);
+        try
+        {
+            var projectResponse = await client.PostAsJsonAsync("/api/projects", new
+            {
+                name = "Azure BYOK operation project",
+                origin = "blank",
+                working_directory = workingDirectory,
+            });
+            projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+            var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("project_id").GetString();
+
+            var response = await client.PostAsJsonAsync(
+                "/api/ai/execution-context",
+                new { operation, project_id = projectId });
+
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var body = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>();
+            body!.ExecutionKey.Should().NotBeNullOrWhiteSpace();
+            body.EffectiveModelProvider!.State.Should().Be("resolved");
+            body.EffectiveModelProvider.ProviderKind.Should().Be("byok");
+            body.EffectiveModelProvider.ProviderType.Should().Be("azure");
+        }
+        finally
+        {
+            try { Directory.Delete(workingDirectory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Theory]
+    [InlineData("workflow_selection")]
+    [InlineData("story_independence_classification")]
+    [InlineData("assembly_gate_classification")]
+    public void Copilot_only_coordinator_classification_operations_reject_byok(string operationName)
+    {
+        AiOperationCatalog.TryGet(operationName, out var operation).Should().BeTrue();
+
+        operation.SupportsByok.Should().BeFalse(
+            $"{operationName} remains a Copilot-only classifier despite sharing the effective-provider executor");
+    }
+
     [Fact]
     public async Task Project_operation_requires_project_id()
     {
@@ -341,7 +394,7 @@ public sealed class AiExecutionContextEndpointsTests
         await SeedByokProviderAsync(factory);
         await using var scope = factory.Services.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
-        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        AiOperationCatalog.TryGet("rai", out var operation).Should().BeTrue();
 
         var plan = await service.PrepareAsync(
             operation,

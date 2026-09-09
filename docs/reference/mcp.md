@@ -141,6 +141,10 @@ The response contains `ai_required`, `operation`, `phase`, `execution_key`, `exp
 Prepared context uses `phase: "prepared"`.
 The MCP server forwards `execution_key` in `If-Model-Provider-Key`.
 It does not return that key to the MCP client.
+This forwarding is provider-neutral: `coordinator_start`, `run_submit`, and `run_task` can
+prepare and forward a valid BYOK context for outcome drafting, and Preview analysis continues
+with the same accepted provider. MCP clients do not need GitHub Copilot credentials when the
+effective provider is an eligible BYOK configuration.
 
 `effective_model_provider` contains these fields:
 
@@ -206,6 +210,9 @@ The MCP transport returns a structured tool error without provider keys.
 A retry prepares new context.
 Missing context returns `409 ai_execution_context_required`.
 Expired context returns `409 ai_execution_context_expired`.
+Unavailable provider responses identify the remediation without exposing credentials: configure
+an eligible BYOK provider where supported, or connect GitHub Copilot only for a
+Copilot-specific operation.
 
 `run_status` returns the complete run projection, including redacted `effective_model_provider` when provenance exists.
 The embedded run in `run_task` preserves the same field.

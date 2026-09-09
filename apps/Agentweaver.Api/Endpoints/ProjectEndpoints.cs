@@ -1056,7 +1056,17 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     .WithTags("Coordinator")
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode.";
+        operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode. " +
+            "Prepare orchestration execution context first and send its short-lived execution_key in If-Model-Provider-Key.";
+        operation.Parameters ??= [];
+        operation.Parameters.Add(new Microsoft.OpenApi.OpenApiParameter
+        {
+            Name = "If-Model-Provider-Key",
+            In = Microsoft.OpenApi.ParameterLocation.Header,
+            Required = true,
+            Description = "Short-lived execution key returned by POST /api/ai/execution-context for the orchestration operation.",
+            Schema = new Microsoft.OpenApi.OpenApiSchema { Type = Microsoft.OpenApi.JsonSchemaType.String },
+        });
         return Task.CompletedTask;
     });
     }

@@ -763,7 +763,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             _configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
             StringComparison.OrdinalIgnoreCase);
-        var prepared = requiresAgentHost && run.ModelSource == ModelSource.GitHubCopilot
+        var requiresCopilotCapability = requiresAgentHost
+            && (expectedCopilotProvider is not null
+                || (expectedCopilotProvider is null && run.ModelSource == ModelSource.GitHubCopilot));
+        var prepared = requiresCopilotCapability
             ? await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
                 run,
                 ct,
@@ -776,10 +779,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 expectedCopilotProvider?.CredentialVersion()).ConfigureAwait(false);
         if (!prepared)
         {
-            if (requiresAgentHost && run.ProjectId is { } projectId)
+            if (requiresCopilotCapability && run.ProjectId is { } projectId)
                 throw new ModelProviderConnectionRequiredException(projectId);
             throw new InvalidOperationException(
-                $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
+                $"Run {run.Id} has unavailable launch capability requirements.");
         }
     }
 

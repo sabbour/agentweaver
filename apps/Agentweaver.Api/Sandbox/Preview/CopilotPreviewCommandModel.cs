@@ -103,6 +103,7 @@ public class CopilotPreviewCommandModel : IPreviewCommandModel
                         _modelId,
                         CommandCharter,
                         BuildPrompt(digest),
+                        supportsByok: true,
                         token),
                 ProposalTimeout,
                 ct,

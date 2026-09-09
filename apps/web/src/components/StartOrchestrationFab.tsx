@@ -1,6 +1,5 @@
 import {
   apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
 import {
   Button,
   Combobox,
@@ -28,12 +27,13 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { parseNoTeamStartError } from '../api/errors';
+import { formatApiErrorMessage, parseNoTeamStartError } from '../api/errors';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import type { RefObject } from 'react';
 import { EmptyState } from './ui';
 import {
   AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -176,11 +176,7 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
         return;
       }
       setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error
-            ? err.message
-            : String(err),
+        formatApiErrorMessage(err),
       );
     } finally {
       setSavingMode(null);
@@ -229,6 +225,12 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
                 outputs before dispatch. Later review, tool approval, assembly, and merge gates
                 still apply.
               </Text>
+              <AiExecutionProviderReadiness
+                context={providerContext.context}
+                error={providerContext.error}
+                projectId={selectedProjectId}
+                onRefresh={() => void providerContext.refresh()}
+              />
               {loadError && (
                 <MessageBar intent="error">
                   <MessageBarBody>Could not load projects. Try again.</MessageBarBody>

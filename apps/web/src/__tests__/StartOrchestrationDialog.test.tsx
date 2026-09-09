@@ -81,6 +81,77 @@ describe('StartOrchestrationDialog', () => {
     expect(onStarted).toHaveBeenCalledWith('run-direct');
   });
 
+  it('shows platform Azure BYOK with its model and scope as ready for Direct', async () => {
+    vi.mocked(apiClient.prepareAiExecutionContext).mockResolvedValue({
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: 'azure-provider-key',
+      expires_at: '2099-01-01T00:00:00Z',
+      effective_model_provider: {
+        state: 'resolved',
+        provider_kind: 'byok',
+        resolution_scope: 'project',
+        provider_scope: 'platform',
+        provider_type: 'azure',
+        model_id: 'gpt-5',
+        provider_key: 'provider-fingerprint',
+        unavailable_reason: null,
+      },
+    });
+    vi.mocked(apiClient.startOrchestration).mockResolvedValue({ runId: 'run-azure' } as never);
+
+    render(
+      <Wrapper>
+        <StartOrchestrationDialog projectId="proj-1" onStarted={vi.fn()} />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Use the platform provider' },
+    });
+
+    expect((await screen.findAllByText('Expected provider: Azure BYOK. Model: gpt-5.')).length).toBe(2);
+    expect(screen.getAllByText('Scope: Platform.')).toHaveLength(2);
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Direct' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+  });
+
+  it('guides an unavailable platform provider to Platform settings and supports refresh', async () => {
+    vi.mocked(apiClient.prepareAiExecutionContext).mockResolvedValue({
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: null,
+      expires_at: null,
+      effective_model_provider: {
+        state: 'unavailable',
+        provider_kind: 'unavailable',
+        resolution_scope: 'project',
+        provider_scope: 'none',
+        provider_type: null,
+        model_id: null,
+        provider_key: null,
+        unavailable_reason: 'no_provider',
+      },
+    });
+
+    render(
+      <Wrapper>
+        <StartOrchestrationDialog projectId="proj-1" onStarted={vi.fn()} />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    expect(await screen.findByText('A Platform Administrator must configure a model provider before you can continue.')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Open Platform settings' }).getAttribute('href')).toBe('/platform-settings');
+    expect(screen.queryByRole('link', { name: /GitHub Copilot/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh provider' }));
+    await waitFor(() => expect(apiClient.prepareAiExecutionContext).toHaveBeenCalledTimes(2));
+  });
+
   it('preserves the outcome definition route under Define Outcome', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({
       default_workflow_id: 'software-delivery',
@@ -193,6 +264,7 @@ describe('StartOrchestrationDialog', () => {
       'The AI provider changed. Review the updated provider and start again.',
     )).toBeDefined();
     expect(document.body.textContent).toContain('Expected provider: Azure BYOK');
+    expect(screen.getByRole('button', { name: 'Refresh provider' })).toBeDefined();
     expect(apiClient.startOrchestration).toHaveBeenCalledTimes(1);
   });
 });

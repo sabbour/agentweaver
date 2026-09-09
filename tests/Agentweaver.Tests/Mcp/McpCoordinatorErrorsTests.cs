@@ -144,7 +144,7 @@ public sealed class McpCoordinatorErrorsTests
     }
 
     [Fact]
-    public async Task CoordinatorStart_CopilotOnlyProviderFailure_IsActionable()
+    public async Task CoordinatorStart_ProviderFailure_IsActionable()
     {
         var tools = new CoordinatorTools(CreateApiClient((request, _) =>
         {
@@ -167,7 +167,7 @@ public sealed class McpCoordinatorErrorsTests
                         provider_type = (string?)null,
                         model_id = (string?)null,
                         provider_key = (string?)null,
-                        unavailable_reason = "operation_requires_github_copilot",
+                        unavailable_reason = "no_provider",
                     },
                 }),
             });
@@ -178,9 +178,55 @@ public sealed class McpCoordinatorErrorsTests
 
         var ex = await act.Should().ThrowAsync<McpApiException>();
         ex.Which.StatusCode.Should().Be(409);
-        ex.Which.Error.Should().Contain("requires GitHub Copilot");
-        ex.Which.Hint.Should().Contain("GitHub Copilot");
+        ex.Which.Error.Should().Contain("effective AI provider");
+        ex.Which.Hint.Should().NotBeNullOrWhiteSpace();
         ex.Which.Message.Should().NotBe(OpaqueWrapperMessage);
+    }
+
+    [Fact]
+    public async Task CoordinatorStart_ResolvedAzureByokContext_ForwardsItsExecutionKey()
+    {
+        var tools = new CoordinatorTools(CreateApiClient((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/ai/execution-context")
+            {
+                request.Method.Should().Be(HttpMethod.Post);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "orchestration",
+                        phase = "prepared",
+                        execution_key = "azure-byok-execution-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "platform_byok",
+                            resolution_scope = "project",
+                            provider_scope = "platform",
+                            provider_type = "azure_openai",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                            unavailable_reason = (string?)null,
+                        },
+                    }),
+                });
+            }
+
+            request.RequestUri!.AbsolutePath.Should().Be("/api/projects/proj-1/orchestrations");
+            request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
+                .Which.Should().Be("azure-byok-execution-key");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted)
+            {
+                Content = JsonContent.Create(new { run_id = "run-1" }),
+            });
+        }, bypassPreflight: true));
+
+        var result = await tools.CoordinatorStartAsync("proj-1", "Ship it", model_id: null, ct: CancellationToken.None);
+
+        result.Should().Contain("run-1");
     }
 
     [Fact]
@@ -325,7 +371,8 @@ public sealed class McpCoordinatorErrorsTests
                     }),
                 });
             }
-            if (request.RequestUri!.AbsolutePath.EndsWith("/orchestrations", StringComparison.Ordinal))
+            if (!bypassPreflight
+                && request.RequestUri!.AbsolutePath.EndsWith("/orchestrations", StringComparison.Ordinal))
             {
                 request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
                     .Which.Should().Be("signed-provider-key");

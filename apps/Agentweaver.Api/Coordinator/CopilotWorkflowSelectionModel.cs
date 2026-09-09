@@ -67,7 +67,8 @@ public class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             var result = _effectiveModelTurn is null
                 ? await RunModelTurnAsync(context.RunId, prompt, ct).ConfigureAwait(false)
                 : await _effectiveModelTurn.RunAsync(
-                    context.RunId, context.ProjectId, _modelId, SelectionCharter, prompt, ct).ConfigureAwait(false);
+                    context.RunId, context.ProjectId, _modelId, SelectionCharter, prompt,
+                    supportsByok: false, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "Workflow selection model completed for project {ProjectId}: {Length} chars. Raw response (truncated): {Response}",
                 context.ProjectId, result?.Length ?? 0, Truncate(result));
