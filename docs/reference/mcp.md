@@ -18,28 +18,26 @@ for sign-in and consent, and completes authorization code + PKCE. See
 
 ### Repository workspace connection
 
-The `.mcp.json` at the repository root registers the canonical published Agentweaver
-endpoint automatically for MCP hosts that support workspace auto-discovery (Copilot CLI
-≥1.0.59 and equivalents). It uses the remote HTTP transport and contains no credentials:
-
-`https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/mcp`
-
-The client completes Agentweaver OAuth when it first connects. If a user-level server is
-also named `agentweaver`, this workspace entry takes precedence while working in the
-repository.
+The `.mcp.json` at the repository root does **not** register a server named `agentweaver`,
+so it never shadows your personal hosted connection. Set up the hosted endpoint once per
+**Account settings → MCP clients** in your personal MCP client config (for Copilot CLI,
+`~/.copilot/mcp-config.json`); it takes effect automatically while working in this repo,
+with no workspace override to collide with.
 
 ### Local stdio development
 
-Repository developers can still launch a separate local stdio server explicitly:
+Repository developers can launch a separate local stdio server explicitly:
 
 ```shell
 dotnet run --project apps/Agentweaver.Mcp -- --stdio
 ```
 
-Set `AGENTWEAVER_TOKEN` in the launching environment. It must be an Agentweaver broker
-token for the exact `<public-origin>/mcp` audience with the `mcp:invoke` scope. Never put
-the token in `.mcp.json`, command arguments, or source control. Optionally set
-`AGENTWEAVER_API_URL`; it defaults to `http://localhost:5000`.
+`.mcp.json` registers this local server under the distinct name **`agentweaver_local`**
+(not `agentweaver`) specifically so it can coexist with your personal hosted `agentweaver`
+entry without a name collision. Set `AGENTWEAVER_TOKEN` in the launching environment. It
+must be an Agentweaver broker token for the exact `<public-origin>/mcp` audience with the
+`mcp:invoke` scope. Never put the token in `.mcp.json`, command arguments, or source
+control. Optionally set `AGENTWEAVER_API_URL`; it defaults to `http://localhost:5000`.
 
 ::: danger Broker tokens only
 Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not
@@ -48,20 +46,24 @@ MCP credentials. Stdio mode refuses to start without a configured broker token.
 
 ### Using with GitHub Copilot CLI
 
-**Working in this repo.** `copilot` auto-discovers the workspace `.mcp.json` and connects
-to the published HTTP endpoint. Confirm the source, transport, and URL with
-`copilot mcp get agentweaver`, then use `/mcp` inside an interactive session to complete
-OAuth and confirm that the tools are live.
+**Working in this repo.** Your personal `agentweaver` entry (hosted HTTP, from
+`~/.copilot/mcp-config.json`) connects normally — the workspace `.mcp.json` has no
+same-named entry to take precedence over it. Use `/mcp show agentweaver` inside an
+interactive session to complete OAuth and confirm that the tools are live. To drive the
+local stdio server instead, use `/mcp show agentweaver_local` (or
+`copilot mcp get agentweaver_local`).
 
 ::: tip Server-name collisions
 Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
-`.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
-order. If your personal `~/.copilot/settings.json` has `agentweaver` listed under
-`disabledMcpServers` (e.g. because you disabled the workspace entry), naming a
-session override `agentweaver` will be silently skipped — check
+`.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in
+that order — a workspace entry with the same name as a user entry takes precedence while
+working in this repository. `.mcp.json` deliberately avoids the name `agentweaver` (using
+`agentweaver_local` for its local stdio server instead) so your personal hosted
+`agentweaver` connection is never silently shadowed. If you name a personal or session
+override `agentweaver_local` while it is also listed under your
+`~/.copilot/settings.json` `disabledMcpServers`, it will be silently skipped — check
 `~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
-registered server discovers zero tools. Use a distinct name to
-avoid the collision.
+registered server discovers zero tools.
 :::
 
 ## Authentication
