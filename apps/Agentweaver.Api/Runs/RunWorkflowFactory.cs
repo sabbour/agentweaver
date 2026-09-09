@@ -608,9 +608,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 string? projectId = run?.ProjectId?.ToString();
                 string? agentName = run?.AgentName;
                 string? submittingUser = run?.SubmittingUser;
+                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                    "agent-input", "run-context", ct).ConfigureAwait(false);
                 if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
                 {
-                    var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
                     {
                         projectId = agentInput!.ProjectId;
@@ -634,12 +635,13 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentName ?? "",
                     run?.StartedAt ?? DateTimeOffset.UtcNow,
                     run?.RepositoryPath ?? "",
-                    run?.ModelSource.ToApiString() ?? "github-copilot",
-                    run?.ModelId,
+                    agentInput?.ModelSource ?? run?.ModelSource.ToApiString() ?? "github-copilot",
+                    agentInput?.ModelId ?? run?.ModelId,
                     TerminalStatus: output.Status,
                     MergeResult: output.MergeResult,
                     MergeMode: output.MergeMode,
-                    SubmittingUser: submittingUser);
+                    SubmittingUser: submittingUser,
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
             });
 
         ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
@@ -668,9 +670,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 string? projectId = run?.ProjectId?.ToString();
                 string? agentName = run?.AgentName;
                 string? submittingUser = run?.SubmittingUser;
+                var agentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                    "agent-input", "run-context", ct).ConfigureAwait(false);
                 if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
                 {
-                    var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
                     {
                         projectId = agentInput!.ProjectId;
@@ -694,10 +697,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentName ?? "",
                     run?.StartedAt ?? DateTimeOffset.UtcNow,
                     run?.RepositoryPath ?? "",
-                    run?.ModelSource.ToApiString() ?? "github-copilot",
-                    run?.ModelId,
+                    agentInput?.ModelSource ?? run?.ModelSource.ToApiString() ?? "github-copilot",
+                    agentInput?.ModelId ?? run?.ModelId,
                     TerminalStatus: "no_changes",
-                    SubmittingUser: submittingUser);
+                    SubmittingUser: submittingUser,
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
             });
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
@@ -883,9 +887,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         string? projectId = run?.ProjectId?.ToString();
         string? agentName = run?.AgentName;
         string? submittingUser = run?.SubmittingUser;
+        var agentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+            "agent-input", "run-context", ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(agentName) || string.IsNullOrEmpty(submittingUser))
         {
-            var agentInput = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentInput?.ProjectId))
                 projectId = agentInput!.ProjectId;
             if (string.IsNullOrEmpty(agentName) && !string.IsNullOrEmpty(agentInput?.AgentName))
@@ -900,10 +905,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             agentName ?? "",
             run?.StartedAt ?? DateTimeOffset.UtcNow,
             run?.RepositoryPath ?? "",
-            run?.ModelSource.ToApiString() ?? "github-copilot",
-            run?.ModelId,
+            agentInput?.ModelSource ?? run?.ModelSource.ToApiString() ?? "github-copilot",
+            agentInput?.ModelId ?? run?.ModelId,
             TerminalStatus: terminalStatus,
-            SubmittingUser: submittingUser);
+            SubmittingUser: submittingUser,
+            ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
     }
 
     /// <summary>

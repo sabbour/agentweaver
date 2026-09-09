@@ -16,47 +16,54 @@ server without headers. The client discovers Agentweaver OAuth, opens a browser
 for sign-in and consent, and completes authorization code + PKCE. See
 [Connect an MCP client](../guide/mcp-cli.md) for supported-client instructions.
 
+### Repository workspace connection
+
+The `.mcp.json` at the repository root does **not** register a server named `agentweaver`,
+so it never shadows your personal hosted connection. Set up the hosted endpoint once per
+**Account settings → MCP clients** in your personal MCP client config (for Copilot CLI,
+`~/.copilot/mcp-config.json`); it takes effect automatically while working in this repo,
+with no workspace override to collide with.
+
 ### Local stdio development
 
-Set an Agentweaver broker token before starting a local stdio MCP host:
+Repository developers can launch a separate local stdio server explicitly:
 
-```
-AGENTWEAVER_TOKEN=<agentweaver-broker-token>
+```shell
+dotnet run --project apps/Agentweaver.Mcp -- --stdio
 ```
 
-`AGENTWEAVER_TOKEN` must be issued by Agentweaver for the exact
-`<public-origin>/mcp` audience and include `mcp:invoke`. The API attributes calls to its
-subject and enforces project ownership.
+`.mcp.json` registers this local server under the distinct name **`agentweaver_local`**
+(not `agentweaver`) specifically so it can coexist with your personal hosted `agentweaver`
+entry without a name collision. Set `AGENTWEAVER_TOKEN` in the launching environment. It
+must be an Agentweaver broker token for the exact `<public-origin>/mcp` audience with the
+`mcp:invoke` scope. Never put the token in `.mcp.json`, command arguments, or source
+control. Optionally set `AGENTWEAVER_API_URL`; it defaults to `http://localhost:5000`.
 
 ::: danger Broker tokens only
-Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not MCP
-credentials. Stdio mode refuses to start without a configured broker token.
+Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not
+MCP credentials. Stdio mode refuses to start without a configured broker token.
 :::
-
-Optionally override the API base URL (defaults to `http://localhost:5000`):
-
-```
-AGENTWEAVER_API_URL=http://localhost:5000
-```
-
-The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
 
 ### Using with GitHub Copilot CLI
 
-**Local (stdio), working in this repo.** No setup beyond the environment variable above —
-`copilot` auto-discovers the workspace `.mcp.json` and starts
-`dotnet run --project apps/Agentweaver.Mcp -- --stdio` on demand. Confirm the tools are
-live with `copilot mcp list` or `/mcp` inside an interactive session.
+**Working in this repo.** Your personal `agentweaver` entry (hosted HTTP, from
+`~/.copilot/mcp-config.json`) connects normally — the workspace `.mcp.json` has no
+same-named entry to take precedence over it. Use `/mcp show agentweaver` inside an
+interactive session to complete OAuth and confirm that the tools are live. To drive the
+local stdio server instead, use `/mcp show agentweaver_local` (or
+`copilot mcp get agentweaver_local`).
 
 ::: tip Server-name collisions
 Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
-`.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
-order. If your personal `~/.copilot/settings.json` has `agentweaver` listed under
-`disabledMcpServers` (e.g. because you disabled the workspace stdio server), naming a
-session override `agentweaver` will be silently skipped — check
+`.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in
+that order — a workspace entry with the same name as a user entry takes precedence while
+working in this repository. `.mcp.json` deliberately avoids the name `agentweaver` (using
+`agentweaver_local` for its local stdio server instead) so your personal hosted
+`agentweaver` connection is never silently shadowed. If you name a personal or session
+override `agentweaver_local` while it is also listed under your
+`~/.copilot/settings.json` `disabledMcpServers`, it will be silently skipped — check
 `~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
-registered server discovers zero tools. Use a distinct name to
-avoid the collision.
+registered server discovers zero tools.
 :::
 
 ## Authentication
@@ -115,6 +122,101 @@ The MCP transport still raises a tool error, but the message is now actionable a
 - `-32001`, `408`, or `504` timeouts → `Call diagnostics_get to check health, then retry.`
 
 When the failure is the **run's** outcome rather than the **tool's** outcome, `run_task` returns a normal JSON payload with `status: "failed"` or `status: "timed_out"` instead of throwing a transport error.
+
+### Model-provider execution context
+
+The MCP server does not expose a separate execution-context tool.
+For AI-backed tools, the server prepares provider context through `POST /api/ai/execution-context`.
+It does this immediately before it sends the related API command.
+
+The preparation request contains:
+
+| Field | Required | Description |
+|---|---|---|
+| `operation` | yes | The supported AI operation that the tool will start or resume. |
+| `project_id` | depends on the operation | The project that supplies provider resolution and authorization context. |
+| `run_id` | depends on the operation | The run that supplies continuation context. |
+
+The response contains `ai_required`, `operation`, `phase`, `execution_key`, `expires_at`, and `effective_model_provider`.
+Prepared context uses `phase: "prepared"`.
+The MCP server forwards `execution_key` in `If-Model-Provider-Key`.
+It does not return that key to the MCP client.
+This forwarding is provider-neutral: `coordinator_start`, `run_submit`, and `run_task` can
+prepare and forward a valid BYOK context for outcome drafting, and Preview analysis continues
+with the same accepted provider. MCP clients do not need GitHub Copilot credentials when the
+effective provider is an eligible BYOK configuration.
+
+`effective_model_provider` contains these fields:
+
+- `state`
+- `provider_kind`
+- `resolution_scope`
+- `provider_scope`
+- `provider_type`
+- `model_id`
+- `provider_key`
+- `unavailable_reason`
+
+It contains no credentials, account names, or provider-binding identities.
+`provider_key` is an opaque comparison fingerprint.
+Clients must not display it or use it as execution authority.
+
+The following MCP paths prepare provider context:
+
+| MCP tool or path | AI operation |
+|---|---|
+| `blueprint_generate` | `blueprint_generation` |
+| `workflow_generate` | `workflow_generation` |
+| `skill_generate` | `skill_generation` |
+| `team_cast` in AI proposal modes | `casting_generation` |
+| `backlog_decompose_spec` | `backlog_decomposition` |
+| `skill_marketplace_browse` when classification is necessary | `marketplace_catalog_classification` |
+| `coordinator_start`, `run_submit`, and `run_task` | `orchestration` |
+| `coordinator_outcome_spec_confirm` and `coordinator_outcome_spec_revise` | `orchestration` |
+| `coordinator_steer` for redirect, amend, or recovery | `orchestration` |
+| `run_retry` | `orchestration` or `agent_turn`, based on the source run |
+| `run_review` when approval resumes AI work | `orchestration` for coordinator runs, or `agent_turn` for other runs |
+
+Agentweaver revalidates provider selection immediately before each covered model call.
+If the provider changes, the API returns `409 model_provider_changed` with redacted replacement context.
+The model call does not start.
+The API response uses this shape:
+
+```json
+{
+  "error": "model_provider_changed",
+  "message": "The effective model provider changed before model invocation.",
+  "context": {
+    "ai_required": true,
+    "operation": "orchestration",
+    "phase": "prepared",
+    "execution_key": "opaque-short-lived-key",
+    "expires_at": "2026-09-09T13:00:00Z",
+    "effective_model_provider": {
+      "state": "resolved",
+      "provider_kind": "platform_github_copilot",
+      "resolution_scope": "project",
+      "provider_scope": "platform",
+      "provider_type": null,
+      "model_id": "provider-model-name",
+      "provider_key": "opaque-comparison-fingerprint",
+      "unavailable_reason": null
+    }
+  }
+}
+```
+
+The MCP transport returns a structured tool error without provider keys.
+A retry prepares new context.
+Missing context returns `409 ai_execution_context_required`.
+Expired context returns `409 ai_execution_context_expired`.
+Unavailable provider responses identify the remediation without exposing credentials: configure
+an eligible BYOK provider where supported, or connect GitHub Copilot only for a
+Copilot-specific operation.
+
+`run_status` returns the complete run projection, including redacted `effective_model_provider` when provenance exists.
+The embedded run in `run_task` preserves the same field.
+The phase meanings are **Expected** for `prepared`, **Using** for `active`, and **Used** for `completed`.
 
 ## Route parameter encoding
 
@@ -307,7 +409,7 @@ Get the current status and details of a run.
 |-----------|------|----------|-------------|
 | `run_id` | string | yes | Run ID |
 
-**Returns**: Run object with `status`, `task`, `agent_name`, `started_at`, `result` (when the run completes with no changes: `"no_changes"`), `diff` (when in review), and outcome fields.
+**Returns**: Run object with status, task, agent, timing, result, diff, outcome fields, and redacted `effective_model_provider` when provenance exists.
 
 Possible `status` values: `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `failed`, `merge_failed`.
 

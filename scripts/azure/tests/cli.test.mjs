@@ -5,11 +5,56 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HELP_TEXT, run } from "../cli.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { HELP_TEXT, main, run } from "../cli.mjs";
 
 function noopLog() {
   const rec = () => () => {};
   return { info: rec(), section: rec(), field: rec(), ok: rec(), skip: rec(), warn: rec(), error: rec(), debug: rec(), command: rec() };
+}
+
+function generatePrivateKeyPem() {
+  return generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
+
+function generateEncryptedPrivateKeyPem() {
+  return generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: {
+      type: "pkcs8",
+      format: "pem",
+      cipher: "aes-256-cbc",
+      passphrase: "test-only-passphrase",
+    },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
+
+function generatePublicKeyPem() {
+  return generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).publicKey;
+}
+
+function generateEcPrivateKeyPem() {
+  return generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
+
+function secretHash(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 test("run: no command prints HELP_TEXT", async () => {
@@ -67,11 +112,158 @@ test("run: routes 'deploy-from-local' by resolving variables first", async () =>
   };
   const result = await run(["deploy-from-local", "--allow-dirty"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
-  assert.deepEqual(receivedCfg, fakeCfg);
+  assert.equal(receivedCfg.NAMESPACE, fakeCfg.NAMESPACE);
+  assert.equal(receivedCfg.REPO_APP_PRIVATE_KEY_STAGED_FILE, "");
+  assert.equal(receivedCfg.RECOVER_REPO_APP_PRIVATE_KEY, false);
   assert.ok("log" in receivedOpts);
   assert.equal(receivedOpts.allowDirty, true);
   // The local deployment run() is called with (cfg, opts), never {argv, log}.
   assert.equal(receivedCfg.argv, undefined);
+});
+
+test("run: deploy-from-local stages the validated params-file key before variable discovery and cleans it up", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cli-repo-app-key-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  const sourceBytes = generatePrivateKeyPem();
+  fs.writeFileSync(sourceFile, sourceBytes);
+  let stagedFile;
+  let resolvedEnv;
+  let receivedOpts;
+  const modules = {
+    "deploy-from-local": {
+      run: async (cfg, opts) => {
+        stagedFile = cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE;
+        receivedOpts = opts;
+        assert.notEqual(stagedFile, sourceFile);
+        assert.equal(secretHash(fs.readFileSync(stagedFile)), secretHash(sourceBytes));
+        assert.equal(cfg.RECOVER_REPO_APP_PRIVATE_KEY, true);
+        return { ok: true };
+      },
+    },
+    variables: {
+      resolveVariables: async ({ env }) => {
+        resolvedEnv = env;
+        return { NAMESPACE: "agentweaver" };
+      },
+    },
+    config: {
+      loadParamsFile: () => ({ REPO_APP_PRIVATE_KEY_FILE: sourceFile }),
+    },
+  };
+
+  try {
+    await run([
+      "deploy-from-local",
+      "--params-file",
+      "scripts/azure/params.test.json",
+      "--recover-repo-app-private-key",
+      "--allow-dirty",
+    ], { log: noopLog(), modules });
+    assert.equal(resolvedEnv.REPO_APP_PRIVATE_KEY_FILE, "");
+    assert.equal(receivedOpts.allowDirty, true);
+    assert.equal(fs.existsSync(stagedFile), false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("run: deploy-from-local rejects every invalid key class before variable discovery or deployment", async (t) => {
+  const validPrivateKey = generatePrivateKeyPem();
+  const cases = [
+    ["empty file", ""],
+    ["malformed non-PEM input", "SENSITIVE-PRIVATE-KEY-MATERIAL"],
+    ["malformed private-key PEM", "-----BEGIN PRIVATE KEY-----\nnot-valid-base64\n-----END PRIVATE KEY-----"],
+    ["public-key-only PEM", generatePublicKeyPem()],
+    ["non-RSA private key", generateEcPrivateKeyPem()],
+    ["encrypted RSA private key", generateEncryptedPrivateKeyPem()],
+    ["concatenated private keys", `${validPrivateKey}${generatePrivateKeyPem()}`],
+    ["private key plus trailing content", `${validPrivateKey}\nnot-allowed`],
+  ];
+  const priorEnv = process.env.REPO_APP_PRIVATE_KEY_FILE;
+  delete process.env.REPO_APP_PRIVATE_KEY_FILE;
+  try {
+    for (const [name, contents] of cases) {
+      await t.test(name, async () => {
+        const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cli-invalid-repo-app-key-"));
+        const sourceFile = path.join(scratchRoot, "repo-app.pem");
+        fs.writeFileSync(sourceFile, contents);
+        let variablesResolved = false;
+        let deploymentCalled = false;
+        const modules = {
+          "deploy-from-local": {
+            run: async () => {
+              deploymentCalled = true;
+              throw new Error("Deployment must not be called.");
+            },
+          },
+          variables: {
+            resolveVariables: async () => {
+              variablesResolved = true;
+              throw new Error("Variable discovery must not be called.");
+            },
+          },
+          config: {
+            loadParamsFile: () => ({ REPO_APP_PRIVATE_KEY_FILE: sourceFile }),
+          },
+        };
+
+        try {
+          await assert.rejects(
+            run([
+              "deploy-from-local",
+              "--params-file",
+              "scripts/azure/params.test.json",
+            ], { log: noopLog(), modules }),
+          );
+          assert.equal(variablesResolved, false);
+          assert.equal(deploymentCalled, false);
+        } finally {
+          fs.rmSync(scratchRoot, { recursive: true, force: true });
+        }
+      });
+    }
+
+    await t.test("unreadable path", async () => {
+      let variablesResolved = false;
+      let deploymentCalled = false;
+      const modules = {
+        "deploy-from-local": {
+          run: async () => {
+            deploymentCalled = true;
+            return { ok: true };
+          },
+        },
+        variables: {
+          resolveVariables: async () => {
+            variablesResolved = true;
+            return {};
+          },
+        },
+        config: {
+          loadParamsFile: () => ({
+            REPO_APP_PRIVATE_KEY_FILE: path.join(os.tmpdir(), "missing-cli-repo-app-key.pem"),
+          }),
+        },
+      };
+
+      await assert.rejects(
+        run([
+          "deploy-from-local",
+          "--params-file",
+          "scripts/azure/params.test.json",
+        ], { log: noopLog(), modules }),
+        /could not be read/i,
+      );
+      assert.equal(variablesResolved, false);
+      assert.equal(deploymentCalled, false);
+    });
+  } finally {
+    if (priorEnv === undefined) {
+      delete process.env.REPO_APP_PRIVATE_KEY_FILE;
+    } else {
+      process.env.REPO_APP_PRIVATE_KEY_FILE = priorEnv;
+    }
+  }
 });
 
 test("run: 'deploy-from-local' without --allow-dirty passes allowDirty:false", async () => {
@@ -138,6 +330,95 @@ test("run: 'deploy-from-commit' and 'deploy-from-release' auto-load the params f
   await run(["deploy-from-release", "v1.2.3"], { log: noopLog(), modules });
   assert.equal(receivedCommitOpts.env.KEYVAULT_NAME, "kv-from-params-file");
   assert.equal(receivedReleaseOpts.env.KEYVAULT_NAME, "kv-from-params-file");
+});
+
+test("run: deploy-from-commit consumes an explicit --params-file before forwarding argv", async () => {
+  let loadedPath;
+  let received;
+  const modules = {
+    "deploy-from-commit": {
+      run: async (opts) => {
+        received = opts;
+        return { ok: true };
+      },
+    },
+    config: {
+      loadParamsFile: (value) => {
+        loadedPath = value;
+        return { KEYVAULT_NAME: "commit-kv" };
+      },
+    },
+  };
+
+  await run([
+    "deploy-from-commit",
+    "--params-file",
+    "scripts/azure/params.commit.json",
+    "origin/dev",
+  ], { log: noopLog(), modules });
+
+  assert.equal(loadedPath, "scripts/azure/params.commit.json");
+  assert.equal(received.env.KEYVAULT_NAME, "commit-kv");
+  assert.deepEqual(received.argv, ["origin/dev"]);
+});
+
+test("run: deploy-from-release consumes --params-file=<path> and preserves every other argument", async () => {
+  let loadedPath;
+  let received;
+  const modules = {
+    "deploy-from-release": {
+      run: async (opts) => {
+        received = opts;
+        return { ok: true };
+      },
+    },
+    config: {
+      loadParamsFile: (value) => {
+        loadedPath = value;
+        return { KEYVAULT_NAME: "release-kv" };
+      },
+    },
+  };
+
+  await run([
+    "deploy-from-release",
+    "v1.2.3",
+    "--params-file=scripts/azure/params.release.json",
+    "--image-source",
+    "acr-build",
+    "--dry-run",
+  ], { log: noopLog(), modules });
+
+  assert.equal(loadedPath, "scripts/azure/params.release.json");
+  assert.equal(received.env.KEYVAULT_NAME, "release-kv");
+  assert.deepEqual(received.argv, [
+    "v1.2.3",
+    "--image-source",
+    "acr-build",
+    "--dry-run",
+  ]);
+});
+
+test("run: deployment recovery flag is consumed by the CLI and forwarded as an auditable option", async () => {
+  let received;
+  const modules = {
+    "deploy-from-commit": {
+      run: async (opts) => {
+        received = opts;
+        return { ok: true };
+      },
+    },
+    config: { loadParamsFile: () => ({}) },
+  };
+
+  await run([
+    "deploy-from-commit",
+    "--recover-repo-app-private-key",
+    "origin/dev",
+  ], { log: noopLog(), modules });
+
+  assert.deepEqual(received.argv, ["origin/dev"]);
+  assert.equal(received.recoverRepoAppPrivateKey, true);
 });
 
 test("run: 'deploy-from-commit --help' and 'deploy-from-release --help' print help without loading params or calling run()", async () => {
@@ -285,4 +566,33 @@ test("run: standalone verify auto-discovers params through the deploy command pa
   });
   assert.equal(paramsPath, "scripts/azure/params.test-user.json");
   assert.equal(resolvedEnv.OAUTH_SIGNING_CERTIFICATE_NAME, "auto-signing");
+});
+
+test("main: standalone verify exits non-zero when health verification returns ok:false", async () => {
+  const processImpl = { exitCode: 0, env: {} };
+  const result = await main(["verify"], {
+    processImpl,
+    log: noopLog(),
+    modules: {
+      verify: { run: async () => ({ ok: false, pass: 4, fail: 1 }) },
+      variables: { resolveVariables: async () => ({ NAMESPACE: "agentweaver" }) },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(processImpl.exitCode, 1);
+});
+
+test("main: provision-infra exits non-zero when its final verification returns ok:false", async () => {
+  const processImpl = { exitCode: 0, env: {} };
+  const result = await main(["provision-infra"], {
+    processImpl,
+    log: noopLog(),
+    modules: {
+      "provision-infra": { run: async () => ({ ok: false, verify: { pass: 8, fail: 2 } }) },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(processImpl.exitCode, 1);
 });

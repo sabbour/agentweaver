@@ -2,6 +2,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
@@ -15,7 +16,7 @@ namespace Agentweaver.Api.Endpoints;
 /// the endpoint-bound authentication policy, so an unauthenticated
 /// request never reaches these handlers.
 ///
-/// Additive: the legacy /api/console/turn facade path is untouched.
+/// These routes are the production operator-conversation entry points.
 /// </summary>
 public static class AssistantEndpoints
 {
@@ -29,6 +30,8 @@ public static class AssistantEndpoints
             IAssistantRunService assistant,
             IProjectStore projectStore,
             IConfiguration configuration,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -54,6 +57,21 @@ public static class AssistantEndpoints
                     }
                 }
 
+                var invokesModel = !request.DeferFirstTurn
+                    && !string.IsNullOrWhiteSpace(request.Message);
+                using var execution = invokesModel
+                    ? await EndpointHelpers.BeginAiExecutionAsync(
+                        httpContext,
+                        "assistant_turn",
+                        projectId: null,
+                        executionPlans,
+                        executionPlanAccessor,
+                        ct).ConfigureAwait(false)
+                    : null;
+                execution?.Activate();
+                if (execution?.Error is not null)
+                    return execution.Error;
+
                 var result = await assistant.StartRunAsync(
                     caller,
                     request.Message,
@@ -68,6 +86,7 @@ public static class AssistantEndpoints
                 {
                     RunId = result.RunId.ToString(),
                     Status = result.Status.ToApiString(),
+                    EffectiveModelProvider = result.EffectiveModelProvider,
                     Message = result.FirstTurn?.Message,
                     ToolsInvoked = result.FirstTurn?.ToolNamesInvoked,
                 }, statusCode: StatusCodes.Status201Created);
@@ -90,7 +109,11 @@ public static class AssistantEndpoints
             {
                 return Results.Json(
                     new { error = ex.ErrorCode, message = ex.UserMessage, kind = ex.FailureKind.ToString(), retryable = ex.IsRetryable },
-                    statusCode: ProviderFailureStatus(ex.FailureKind));
+                    statusCode: ProviderFailureStatus(ex));
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
             }
             catch (Exception ex)
             {
@@ -136,6 +159,9 @@ public static class AssistantEndpoints
             string id,
             AssistantMessageRequest request,
             IAssistantRunService assistant,
+            IRunEventStream eventStream,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -146,13 +172,29 @@ public static class AssistantEndpoints
 
             try
             {
+                using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                    httpContext,
+                    "assistant_turn",
+                    projectId: null,
+                    executionPlans,
+                    executionPlanAccessor,
+                    ct).ConfigureAwait(false);
+                execution.Activate();
+                if (execution.Error is not null)
+                    return execution.Error;
                 var response = await assistant.SendMessageAsync(caller, id, message, ct).ConfigureAwait(false);
+                var provider = (await eventStream.GetPersistedEventsAsync(id, 0, ct).ConfigureAwait(false))
+                    .Where(evt => evt.Type == EventTypes.RunModelProviderResolved)
+                    .OrderByDescending(evt => evt.Sequence)
+                    .Select(evt => EffectiveModelProviderProvenance.TryReadContract(evt.Payload))
+                    .FirstOrDefault(value => value is not null);
                 return Results.Json(new AssistantMessageResponse
                 {
                     RunId = id,
                     Message = response.Message,
                     Status = Domain.RunStatus.InProgress.ToApiString(),
                     ToolsInvoked = response.ToolNamesInvoked,
+                    EffectiveModelProvider = provider,
                 });
             }
             catch (AssistantRunHttpException ex)
@@ -167,7 +209,11 @@ public static class AssistantEndpoints
             {
                 return Results.Json(
                     new { error = ex.ErrorCode, message = ex.UserMessage, kind = ex.FailureKind.ToString(), retryable = ex.IsRetryable },
-                    statusCode: ProviderFailureStatus(ex.FailureKind));
+                    statusCode: ProviderFailureStatus(ex));
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
             }
             catch (Exception ex)
             {
@@ -177,8 +223,10 @@ public static class AssistantEndpoints
         }).AuthenticatedPlatform();
     }
 
-    private static int ProviderFailureStatus(AgentProviderFailureKind kind) =>
-        kind switch
+    internal static int ProviderFailureStatus(AgentProviderException exception) =>
+        exception.ErrorCode == "model_provider_changed"
+            ? StatusCodes.Status409Conflict
+            : exception.FailureKind switch
         {
             AgentProviderFailureKind.Authorization => StatusCodes.Status401Unauthorized,
             AgentProviderFailureKind.RateLimited => StatusCodes.Status429TooManyRequests,

@@ -19,6 +19,12 @@ Anything the Assistant does is something an external MCP client (Claude Desktop,
 ## Starting a session
 
 Open **Sessions** in the left nav (it's a collapsible top-level section, next to Projects) and click **New Session**. Type your first message — the assistant responds using whichever MCP tools are relevant, and the conversation becomes an entry in your session list.
+Your message remains visible while the new session connects and while persisted history is
+reconciled. When the server copy arrives, Agentweaver replaces the pending presentation without
+showing the message twice.
+If live updates disconnect after a send succeeds, Agentweaver refreshes the durable
+conversation history and reconnects automatically. A **Retry sync** action remains available
+until the transcript can be reconciled.
 
 The Assistant uses the same signed-in Agentweaver identity as the browser request. The API
 validates that identity and current project access, then issues a five-minute Agentweaver broker
@@ -44,6 +50,7 @@ Under the hood this works by durably replaying the conversation's persisted mess
 ## Deleting a session
 
 Each row in the Sessions list has a delete action. Deleting removes the run record and its persisted transcript — this cannot be undone, so a confirmation dialog appears first.
+Because sessions are personal rather than project-owned, you can delete your own session even if the project that was open when you started it has since been deleted or you no longer have access to that project.
 
 ## See also
 

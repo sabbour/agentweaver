@@ -867,18 +867,19 @@ app.MapPost("/api/projects/{id}/github/repository", async (
                 request.Private ?? true,
                 token,
                 ct).ConfigureAwait(false);
-            return repository is null
-                ? null
-                : await projectService.ConnectCreatedRepositoryAsync(
-                    projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
+            if (repository is null)
+                return null;
+            var project = await projectService.ConnectCreatedRepositoryAsync(
+                projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
+            return new { Project = project, repository.HtmlUrl };
         },
         ct).ConfigureAwait(false);
     return connected.Outcome switch
     {
         GitHubRepositorySelectionOutcome.Issued when connected.Value is not null => Results.Ok(new
         {
-            source_repository = connected.Value.Origin.SourceRepository,
-            html_url = $"https://github.com/{connected.Value.Origin.SourceRepository}",
+            source_repository = connected.Value.Project.Origin.SourceRepository,
+            html_url = connected.Value.HtmlUrl,
         }),
         GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
             Results.Conflict(new { error = "github_binding_unavailable" }),
@@ -1055,7 +1056,17 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     .WithTags("Coordinator")
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode.";
+        operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode. " +
+            "Prepare orchestration execution context first and send its short-lived execution_key in If-Model-Provider-Key.";
+        operation.Parameters ??= [];
+        operation.Parameters.Add(new Microsoft.OpenApi.OpenApiParameter
+        {
+            Name = "If-Model-Provider-Key",
+            In = Microsoft.OpenApi.ParameterLocation.Header,
+            Required = true,
+            Description = "Short-lived execution key returned by POST /api/ai/execution-context for the orchestration operation.",
+            Schema = new Microsoft.OpenApi.OpenApiSchema { Type = Microsoft.OpenApi.JsonSchemaType.String },
+        });
         return Task.CompletedTask;
     });
     }
@@ -1193,7 +1204,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
-                    request.Name!, resolvedRepository!.SourceRepository, requestedWorkingDirectory,
+                    request.Name!,
+                    resolvedRepository!.FullName,
+                    resolvedRepository.CloneUrl,
+                    requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
                     request.DefaultModelMicrosoftFoundry, caller.User, resolvedRepository.AccessToken, ct);
             }
@@ -1368,6 +1382,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         IProjectStore projectStore,
         IProjectWorkspaceProvider workspaceProvider,
         CoordinatorRunService coordinator,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -1401,6 +1417,16 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         RunId runId;
         try
         {
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "orchestration",
+                projectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
             runId = await coordinator.StartCoordinatorRunAsync(
                 projectId,
                 request.Goal!,
@@ -1427,6 +1453,22 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         catch (ModelProviderConnectionRequiredException ex)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (AgentProviderException ex)
+        {
+            return Results.Json(
+                new
+                {
+                    error = ex.ErrorCode,
+                    message = ex.UserMessage,
+                    kind = ex.FailureKind.ToString(),
+                    retryable = ex.IsRetryable,
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
         }
 
         return Results.Created(

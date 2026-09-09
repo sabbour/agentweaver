@@ -11,7 +11,7 @@ import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import * as gitDefault from "./lib/git.mjs";
 import * as kubectlDefault from "./lib/kubectl.mjs";
-import { resolveVariables, DEFAULT_REPO_ROOT } from "./variables.mjs";
+import { resolveVariables, DEFAULT_REPO_ROOT, validateImageDigest } from "./variables.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import * as buildImagesDefault from "./steps/20-build-push-images.mjs";
 import * as verifyProvenanceDefault from "./steps/25-verify-image-provenance.mjs";
@@ -30,6 +30,7 @@ import {
   assertVersionMirrors,
   extractChangelogSection,
 } from "../changesets/shared.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 
 export class PublishedReleaseError extends Error {}
 
@@ -88,6 +89,7 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
 
 Requires an existing annotated git tag and matching GitHub Release. The
 working tree must be clean and HEAD must equal the tag commit. By default
@@ -99,6 +101,8 @@ needed for private-package auth. Pass --image-source acr-build to build
 vX.Y.Z images from source into ACR instead. Either way, this deploys them,
 verifies live provenance against the tag, waits for the AgentHost warm pool,
 and runs health verification.
+Soft-deleted canonical Repo App credentials remain inactive unless the explicit
+recovery operator flag is present.
 `;
 
 export async function previousReleaseTag(tag, { cwd, capture }) {
@@ -190,6 +194,7 @@ export async function run(opts = {}) {
     readFile = fs.readFileSync,
     validatedRelease,
     env: baseEnv = process.env,
+    recoverRepoAppPrivateKey = false,
   } = opts;
   const parsed = parseArgs(argv);
   const dryRun = parsed.dryRun || baseEnv.DRY_RUN === "true";
@@ -199,6 +204,7 @@ export async function run(opts = {}) {
     return { ok: true, help: true };
   }
 
+  const stagedRepoAppKey = stageRepoAppPrivateKeyFile(baseEnv.REPO_APP_PRIVATE_KEY_FILE);
   if (dryRun) {
     exec.setDryRun(true);
   }
@@ -215,12 +221,16 @@ export async function run(opts = {}) {
       cwd: repoRoot,
       capture: exec.capture,
     });
-    const releaseEnv = {
-      ...baseEnv,
+    const releaseEnv = { ...baseEnv };
+    // A release deployment can pin AgentHost only to the digest returned by its
+    // final GHCR promotion, never to configuration inherited from its caller.
+    delete releaseEnv.AGENTHOST_IMAGE_DIGEST;
+    Object.assign(releaseEnv, {
+      REPO_APP_PRIVATE_KEY_FILE: "",
       IMAGE_TAG: tag,
       AGENTHOST_IMAGE_TAG: tag,
       TARGET_GIT_REF: release.commit ?? tag,
-    };
+    });
     if (previous) {
       releaseEnv.PREVIOUS_IMAGE_TAG = previous;
     }
@@ -241,6 +251,8 @@ export async function run(opts = {}) {
       TARGET_GIT_REF: release.commit ?? tag,
       PREVIOUS_IMAGE_TAG: previous || undefined,
       IMAGE_SOURCE: parsed.imageSource,
+      REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+      RECOVER_REPO_APP_PRIVATE_KEY: recoverRepoAppPrivateKey,
       ...(parsed.imageSource === "ghcr"
         ? {
             GHCR_REF: tag,
@@ -263,14 +275,23 @@ export async function run(opts = {}) {
 
     log.section(`Deploying published release ${tag}`);
     const build = await buildImages.run(cfg, { exec, git, kubectl });
-    const deploy = await deployStep.run(cfg, {
+    const agentHostDigest = build?.expectedImageDigests?.["agentweaver-agent-host"];
+    if (parsed.imageSource === "ghcr" && !dryRun && agentHostDigest) {
+      validateImageDigest(agentHostDigest, "AgentHost ACR digest");
+    } else if (parsed.imageSource === "ghcr" && !dryRun) {
+      throw new Error("GHCR image promotion did not return the final AgentHost ACR digest; refusing to deploy its mutable tag.");
+    }
+    const deployCfg = parsed.imageSource === "ghcr" && !dryRun && agentHostDigest
+      ? { ...cfg, AGENTHOST_IMAGE_DIGEST: agentHostDigest }
+      : cfg;
+    const deploy = await deployStep.run(deployCfg, {
       run: exec.run,
       capture: exec.capture,
       log,
       repoRoot,
     });
     const provenance = await verifyProvenance.run(
-      { ...cfg, VERIFY_GIT_REF: release.commit ?? tag },
+      { ...deployCfg, VERIFY_GIT_REF: release.commit ?? tag },
       { exec, git, kubectl },
     );
     const warmPoolStatus = await waitForWarmPoolReady(cfg.NAMESPACE, { exec, log });
@@ -287,7 +308,7 @@ export async function run(opts = {}) {
         `${warmPoolImageCheck.mismatched.length} warm-pool pod(s) do not run the ${tag} release image.`,
       );
     }
-    const verify = await verifyStep.run(cfg, { exec, log });
+    const verify = await verifyStep.run(deployCfg, { exec, log });
 
     return {
       ok: dryRun || verify.ok,
@@ -303,6 +324,7 @@ export async function run(opts = {}) {
       dryRun,
     };
   } finally {
+    stagedRepoAppKey?.cleanup();
     if (dryRun) {
       exec.setDryRun(false);
     }

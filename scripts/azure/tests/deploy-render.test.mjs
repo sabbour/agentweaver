@@ -85,6 +85,17 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
   );
 });
 
+test("buildImageEntries() pins only AgentHost to its optional promoted ACR digest", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const entries = buildImageEntries({ ...VARS, AGENTHOST_IMAGE_DIGEST: digest });
+  assert.deepEqual(entries.at(-1), {
+    name: IMAGE_NAMES.agentHost,
+    newName: "agentweaverregistry.azurecr.io/agentweaver-agent-host",
+    digest,
+  });
+  assert.deepEqual(entries.slice(0, 3).map((entry) => entry.newTag), ["v0.9.71", "v0.9.71", "v0.9.71"]);
+});
+
 test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault certificate settings", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
   assert.equal(literals.KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
@@ -236,6 +247,22 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.doesNotMatch(rewritten, /newTag: "latest"/);
 });
 
+test("rewriteOverlayKustomization() emits AgentHost's digest instead of its tag when supplied", () => {
+  const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
+  const digest = `sha256:${"b".repeat(64)}`;
+  const rewritten = rewriteOverlayKustomization(
+    fs.readFileSync(overlayPath, "utf8"),
+    { ...VARS, AGENTHOST_IMAGE_DIGEST: digest },
+  );
+
+  assert.match(
+    rewritten,
+    new RegExp(`newName: agentweaverregistry\\.azurecr\\.io/agentweaver-agent-host\\s*\\n\\s*digest: "${digest}"`),
+  );
+  assert.doesNotMatch(rewritten, /agentweaver-agent-host\s*\n\s*newName: [^\n]+\s*\n\s*newTag:/);
+  assert.match(rewritten, /newName: agentweaverregistry\.azurecr\.io\/agentweaver-api\s*\n\s*newTag: "v0\.9\.71"/);
+});
+
 test("rewriteOverlayKustomization() rejects a partial runtime-config rewrite", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8")
@@ -287,7 +314,8 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__CopilotApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__Slug\s*\n\s*value: agentweaver-orchestrator-copilot/);
-  assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*value: repo-app-private-key/);
+  assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_PRIVATE_KEY_SECRET_NAME\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /REPO_APP_PRIVATE_KEY_SECRET_NAME: repo-app-private-key/);
   assert.match(builtYaml, /name: Auth__CopilotApp__ClientId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: copilot-app-client-id\s*\n\s*name: agentweaver-secrets/);
   assert.match(builtYaml, /name: Auth__RepoApp__AppId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: repo-app-id\s*\n\s*name: agentweaver-secrets/);
   assert.match(builtYaml, /objectName: copilot-app-client-id[\s\S]*?objectName: copilot-app-client-secret[\s\S]*?objectName: repo-app-client-id[\s\S]*?objectName: repo-app-client-secret[\s\S]*?objectName: repo-app-id/);

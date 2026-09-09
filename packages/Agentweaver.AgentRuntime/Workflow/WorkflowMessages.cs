@@ -20,7 +20,8 @@ public sealed record AgentTurnInput(
     /// <summary>Set by revision adapters when the iteration cap is reached; routes to terminal.</summary>
     bool MaxIterationsReached = false,
     /// <summary>True when this turn continues an existing session (reviewer requested changes). Causes <see cref="CopilotAIAgent.ResumeSessionAsync"/> to be called instead of CreateSessionAsync.</summary>
-    bool IsRevision = false);
+    bool IsRevision = false,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(
@@ -56,7 +57,10 @@ public sealed record AgentTurnOutput(
     /// <summary>User-facing message retained from the structured agent/provider failure.</summary>
     string? TerminalFailureMessage = null,
     /// <summary>Whether retrying the known terminal failure may succeed.</summary>
-    bool? TerminalFailureRetryable = null);
+    bool? TerminalFailureRetryable = null,
+    string? ModelSource = null,
+    string? ModelId = null,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Data surfaced to the external caller via the review request port.</summary>
 public sealed record WorkflowReviewRequest(
@@ -165,7 +169,8 @@ public sealed record ScribeTurnInput(
     string? TerminalStatus = null,
     string? MergeResult = null,
     string? MergeMode = null,
-    string? SubmittingUser = null);
+    string? SubmittingUser = null,
+    string? ByokProviderFingerprint = null);
 
 /// <summary>Input to the Rai RAI-review agent turn.</summary>
 public sealed record RaiTurnInput(

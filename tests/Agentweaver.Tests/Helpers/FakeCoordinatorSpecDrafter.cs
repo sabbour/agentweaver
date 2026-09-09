@@ -1,4 +1,12 @@
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentTools;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
+using Agentweaver.SandboxExec;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Helpers;
 
@@ -12,12 +20,74 @@ namespace Agentweaver.Tests.Helpers;
 /// </summary>
 public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
-    public CoordinatorDraftInput? LastInput { get; private set; }
+    private readonly RunStreamStore _streamStore;
+    private readonly TaskCompletionSource<bool> _blockedCancellationStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _releaseBlockedCancellation =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _blockedDraftCompleted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public Task<OutcomeSpecDraft> DraftAsync(
+    public FakeCoordinatorSpecDrafter(RunStreamStore streamStore) => _streamStore = streamStore;
+
+    public CoordinatorDraftInput? LastInput { get; private set; }
+    public bool BlockUntilCancelled { get; set; }
+    public bool BlockCancellationCallback { get; set; }
+    public bool CancellationObserved { get; private set; }
+    public Exception? ExceptionToThrow { get; set; }
+    public AgentProviderException? ProviderFailureToThrow { get; set; }
+    public Task BlockedCancellationStarted => _blockedCancellationStarted.Task;
+    public Task BlockedDraftCompleted => _blockedDraftCompleted.Task;
+
+    public void ReleaseBlockedCancellation() => _releaseBlockedCancellation.TrySetResult(true);
+
+    public async Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
     {
         LastInput = input;
+        if (ProviderFailureToThrow is { } providerFailure)
+        {
+            await EmitProviderFailureAsync(input.RunId, providerFailure);
+            throw providerFailure;
+        }
+        if (ExceptionToThrow is not null)
+            throw ExceptionToThrow;
+        if (BlockCancellationCallback)
+        {
+            var cancellationDelivered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockingRegistration = ct.Register(() =>
+            {
+                _blockedCancellationStarted.TrySetResult(true);
+                _releaseBlockedCancellation.Task.GetAwaiter().GetResult();
+            });
+            var deliveryRegistration = ct.Register(() => cancellationDelivered.TrySetResult(true));
+            try
+            {
+                await cancellationDelivered.Task.ConfigureAwait(false);
+                CancellationObserved = true;
+                throw new OperationCanceledException(ct);
+            }
+            finally
+            {
+                deliveryRegistration.Dispose();
+                blockingRegistration.Dispose();
+                _blockedDraftCompleted.TrySetResult(true);
+            }
+        }
+        if (BlockUntilCancelled)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+        }
+
         var goal = input.Goal.Trim();
         var hasContext = !string.IsNullOrWhiteSpace(memoryContext);
 
@@ -46,6 +116,24 @@ public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 : null)
             : "Revision requested: " + input.ReviseFeedback.Trim();
 
-        return Task.FromResult(new OutcomeSpecDraft(desired, scope, assumptions, questions));
+        return new OutcomeSpecDraft(desired, scope, assumptions, questions);
+    }
+
+    private async Task EmitProviderFailureAsync(string runId, AgentProviderException providerFailure)
+    {
+        var entry = _streamStore.Get(runId)
+            ?? throw new InvalidOperationException($"Missing run stream for coordinator run {runId}.");
+        await using var clientFactory = new GitHubCopilotClientFactory(
+            new ConfigurationBuilder().Build(),
+            new FixedGitHubCopilotCapabilityCredentialProvider());
+        await using var agent = new CopilotAIAgent(
+            clientFactory,
+            SandboxExecutorFactory.CreatePassthrough(),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+        agent.SetTurnStreamWriter(new RecordingChannelWriter(entry));
+        agent.EmitProviderFailure(providerFailure);
     }
 }

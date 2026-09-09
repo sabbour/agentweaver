@@ -35,10 +35,14 @@ internal static class WorkflowTriggerBacklogFactory
         string capturedBy,
         string idempotencyKey,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? capturedByUserId = null,
+        string? aiExecutionProviderKey = null)
     {
         var task = await CreateBacklogTaskAsync(
-            backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct)
+            backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct,
+            capturedByUserId: capturedByUserId,
+            aiExecutionProviderKey: aiExecutionProviderKey)
             .ConfigureAwait(false);
         var readyKeys = (await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
             .Where(t => t.State == BacklogTaskState.Ready)
@@ -77,7 +81,9 @@ internal static class WorkflowTriggerBacklogFactory
         DateTimeOffset now,
         CancellationToken ct,
         bool isAutomationInvocationPending = false,
-        BacklogTaskId? taskId = null)
+        BacklogTaskId? taskId = null,
+        string? capturedByUserId = null,
+        string? aiExecutionProviderKey = null)
     {
         if (taskId.HasValue)
         {
@@ -108,6 +114,8 @@ internal static class WorkflowTriggerBacklogFactory
             WorkflowOverrideId = definition.Id,
             SourceFilePath = idempotencyKey,
             IsAutomationInvocationPending = isAutomationInvocationPending,
+            CapturedByUserId = capturedByUserId,
+            AiExecutionProviderKey = aiExecutionProviderKey,
         };
 
         try

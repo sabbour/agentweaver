@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Tests.Helpers;
@@ -524,6 +525,7 @@ public sealed class WorkflowGeneratorTests
         create.StatusCode.Should().Be(HttpStatusCode.Created);
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
+        await factory.PrepareAiExecutionAsync(client, "casting_generation", projectId);
         var propose = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/casting/proposals",
             new { mode = "scenario", template_id = "quick-software-development" });
@@ -534,6 +536,7 @@ public sealed class WorkflowGeneratorTests
             $"/api/projects/{projectId}/casting/proposals/{proposalId}/confirm", new { });
         confirm.StatusCode.Should().Be(HttpStatusCode.OK, await confirm.Content.ReadAsStringAsync());
 
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
         var resp = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/workflows/generate",
             new { description = "A manual review-and-merge workflow." });
@@ -563,6 +566,7 @@ public sealed class WorkflowGeneratorTests
         create.StatusCode.Should().Be(HttpStatusCode.Created);
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
         var resp = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/workflows/generate",
             new { description = "A manual review-and-merge workflow." });
@@ -602,6 +606,7 @@ public sealed class WorkflowGeneratorTests
             new { workflow_generation_model = "gpt-5-mini" });
         update.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
         var resp = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/workflows/generate",
             new { description = "A manual review workflow." });
@@ -629,6 +634,7 @@ public sealed class WorkflowGeneratorTests
         create.StatusCode.Should().Be(HttpStatusCode.Created);
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
         var resp = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/workflows/generate",
             new { description = "Add a QA gate.", base_workflow_id = "default" });
@@ -669,6 +675,7 @@ public sealed class WorkflowGeneratorTests
         create.StatusCode.Should().Be(HttpStatusCode.Created);
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
         var resp = await client.PostAsJsonAsync(
             $"/api/projects/{projectId}/workflows/generate",
             new { description = "Rename the first step.", base_yaml = ValidWorkflowYaml });
@@ -744,7 +751,9 @@ public sealed class WorkflowGeneratorTests
             string? systemPromptContext = null,
             string? userId = null,
             string? projectId = null,
-            CopilotOperationCapability? copilotCapability = null)
+            CopilotOperationCapability? copilotCapability = null,
+            ByokProviderConfiguration? byokProviderConfiguration = null,
+            IModelInvocationGuard? modelInvocationGuard = null)
         {
             LastProjectId = projectId;
             LastCopilotCapability = copilotCapability;
@@ -799,6 +808,36 @@ public sealed class WorkflowGeneratorTests
             client.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestApiKey);
             return client;
+        }
+
+        public async Task PrepareAiExecutionAsync(HttpClient client, string operation, string projectId)
+        {
+            await using (var scope = Services.CreateAsyncScope())
+            {
+                var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+                var provider = await settings.GetAsync(CancellationToken.None)
+                    ?? await settings.AddAsync(
+                        new ByokProviderConfiguration(
+                            string.Empty,
+                            "Workflow test provider",
+                            "openai",
+                            "https://api.example.test/v1",
+                            "gpt-5",
+                            "test-key"),
+                        CancellationToken.None);
+                await settings.SetActiveAsync(provider.Id, CancellationToken.None);
+            }
+
+            var response = await client.PostAsJsonAsync(
+                "/api/ai/execution-context",
+                new { operation, project_id = projectId });
+            response.EnsureSuccessStatusCode();
+            var context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>()
+                ?? throw new InvalidOperationException("AI execution context response was empty.");
+            var providerKey = context.ExecutionKey
+                ?? throw new InvalidOperationException("AI execution context did not return a provider key.");
+            client.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+            client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
         }
 
         public string NewWorkingDirectory()

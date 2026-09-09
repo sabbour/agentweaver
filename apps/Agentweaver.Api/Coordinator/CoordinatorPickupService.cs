@@ -25,19 +25,22 @@ public sealed class CoordinatorPickupService
     private readonly CoordinatorRunService _coordinatorRunService;
     private readonly ILogger<CoordinatorPickupService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly AiExecutionPlanAccessor _executionPlanAccessor;
 
     public CoordinatorPickupService(
         IBacklogTaskStore backlogStore,
         IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
         ILogger<CoordinatorPickupService> logger,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        AiExecutionPlanAccessor executionPlanAccessor)
     {
         _backlogStore = backlogStore;
         _runStore = runStore;
         _coordinatorRunService = coordinatorRunService;
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _executionPlanAccessor = executionPlanAccessor;
     }
 
     /// <summary>
@@ -62,7 +65,43 @@ public sealed class CoordinatorPickupService
         // project default. The PROVIDER, however, comes from the shared resolver — a pickup run must
         // record the provider that actually serves it (BYOK or Copilot), not a hardcoded literal.
         var modelId = project.ProviderSettings.GitHubCopilotModel;
-        var effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
+        AiExecutionPlan? acceptedPlan = null;
+        string? blockedReason = null;
+        EffectiveModelProviderResult effectiveProvider;
+        if (!string.IsNullOrWhiteSpace(task.AiExecutionProviderKey))
+        {
+            try
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+                if (!AiOperationCatalog.TryGet("orchestration", out var operation))
+                    throw new InvalidOperationException("The orchestration AI operation is not registered.");
+                acceptedPlan = await executionPlans.RestoreAcceptedAsync(
+                    task.AiExecutionProviderKey,
+                    operation,
+                    project.Id,
+                    task.CapturedByUserId ?? task.CapturedBy,
+                    ct).ConfigureAwait(false);
+                effectiveProvider = acceptedPlan.Provider;
+            }
+            catch (AiExecutionPlanException)
+            {
+                effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
+                blockedReason = "model_provider_changed";
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogError(ex, "Pickup refused invalid AI execution plan for task {TaskId}", task.Id);
+                effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
+                blockedReason = "invalid_ai_execution_plan";
+            }
+        }
+        else
+        {
+            effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
+            if (effectiveProvider is EffectiveModelProviderResult.Byok)
+                blockedReason = "operation_requires_github_copilot";
+        }
 
         var run = new Run
         {
@@ -87,10 +126,20 @@ public sealed class CoordinatorPickupService
             Origin = RunOrigin.BacklogPickup,         // durable origin marker; persisted atomically in step (b)
         };
 
-        var blockedReason = (string?)null;
+        if (blockedReason is not null)
+        {
+            run = run with
+            {
+                Status = RunStatus.Failed,
+                EndedAt = now,
+                Result = blockedReason,
+            };
+        }
+
         try
         {
-            CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
+            if (blockedReason is null)
+                CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
         }
         catch (NoTeamException)
         {
@@ -158,12 +207,16 @@ public sealed class CoordinatorPickupService
         // CancellationToken.None: the run must outlive the heartbeat tick that spawned it.
         try
         {
+            using var executionScope = acceptedPlan is null
+                ? null
+                : _executionPlanAccessor.Push(acceptedPlan);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
-                run,
-                autoApproveTools: project.PickupAutoApproveTools,
-                autopilot: project.PickupAutopilot,
-                confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
-                ct: CancellationToken.None)
+                    run,
+                    autoApproveTools: project.PickupAutoApproveTools,
+                    autopilot: project.PickupAutopilot,
+                    confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
+                    ct: CancellationToken.None,
+                    effectiveProvider: effectiveProvider)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

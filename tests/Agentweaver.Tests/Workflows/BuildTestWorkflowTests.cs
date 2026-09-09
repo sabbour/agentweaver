@@ -15,6 +15,35 @@ namespace Agentweaver.Tests.Workflows;
 public sealed class BuildTestWorkflowTests
 {
     [Fact]
+    public async Task ScribeExecutor_UsesAcceptedProviderBoundary()
+    {
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner());
+        var executor = new ScribeTurnExecutor(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            agentFactory: agentFactory);
+
+        await executor.HandleAsync(new ScribeTurnInput(
+            RunId: "scribe-provider-run",
+            ProjectId: "project",
+            AgentName: "scribe",
+            RunStartedAt: DateTimeOffset.UtcNow,
+            RepositoryPath: AppContext.BaseDirectory,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ModelId: "byok-model",
+            ByokProviderFingerprint: "byok-fingerprint"),
+            context: null!,
+            CancellationToken.None);
+
+        agentFactory.LastScribeAgent!.ProviderModelSource.Should().Be(ModelSource.Byok);
+        agentFactory.LastScribeAgent.ByokProviderFingerprint.Should().Be("byok-fingerprint");
+    }
+
+    [Fact]
     public void Loader_AcceptsBuildTestNodeType()
     {
         var yaml = """
@@ -62,6 +91,7 @@ public sealed class BuildTestWorkflowTests
     public async Task BuildTestExecutor_UsesCannedPromptAndParsesApprovedVerdict()
     {
         var runner = new TestFileEditAgentRunner();
+        var agentFactory = new FakeWorkflowAgentFactory(runner);
         var executor = new BuildTestTurnExecutor(
             new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
@@ -69,7 +99,7 @@ public sealed class BuildTestWorkflowTests
             new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(),
             NullLoggerFactory.Instance,
-            agentFactory: new FakeWorkflowAgentFactory(runner));
+            agentFactory: agentFactory);
 
         var decision = await executor.HandleAsync(new AgentTurnOutput(
             RunId: "build-test-run",
@@ -80,16 +110,57 @@ public sealed class BuildTestWorkflowTests
             WorktreeBranch: "agentweaver/integration/build-test-run",
             RepositoryPath: AppContext.BaseDirectory,
             OriginatingBranch: "main",
-            ContentSafetyFlagged: false),
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ModelId: "byok-model",
+            ByokProviderFingerprint: "byok-fingerprint"),
             context: null!,
             CancellationToken.None);
 
         decision.Approved.Should().BeTrue();
+        agentFactory.LastBuildTestAgent!.ProviderModelSource.Should().Be(ModelSource.Byok);
+        agentFactory.LastBuildTestAgent.ByokProviderFingerprint.Should().Be("byok-fingerprint");
         BuildTestTurnExecutor.CannedPrompt.Should().Contain("ALL tests");
         // The model-mediated preview paragraph (start_preview_process -> observe_bound_port ->
         // start_preview) was intentionally removed from the CannedPrompt: preview is now provisioned
         // by the deterministic platform-owned PreviewStep after build-test, not by the agent.
         BuildTestTurnExecutor.CannedPrompt.Should().NotContain("start_preview");
+    }
+
+    [Fact]
+    public async Task BuildTestExecutor_ProviderFailure_IsNotConvertedToRequestChanges()
+    {
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner())
+        {
+            ProviderFailureRole = FakeAgentRole.BuildTest,
+        };
+        var executor = new BuildTestTurnExecutor(
+            new GitHubCopilotClientFactory(
+                new ConfigurationBuilder().Build(),
+                new FixedGitHubCopilotCapabilityCredentialProvider()),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            agentFactory: agentFactory);
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "build-test-provider-failure",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ByokProviderFingerprint: "byok-fingerprint"),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        await act.Should().ThrowAsync<AgentProviderException>();
     }
 
     [Fact]

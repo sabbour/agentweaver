@@ -7,9 +7,11 @@ import {
   resolveVariables,
   deriveImageTag,
   validateImageTag,
+  validateImageDigest,
   validateQualifiedImageReference,
   resolveKeyvaultName,
   InvalidImageTagError,
+  InvalidImageDigestError,
   InvalidImageReferenceError,
   MissingRequiredVariableError,
   DEFAULTS,
@@ -36,6 +38,11 @@ test("validateImageTag: accepts a v-prefixed semver tag", () => {
 test("validateImageTag: rejects anything else", () => {
   assert.throws(() => validateImageTag("my-branch", "IMAGE_TAG"), InvalidImageTagError);
   assert.throws(() => validateImageTag("1.2.3", "IMAGE_TAG"), InvalidImageTagError); // missing 'v' prefix
+});
+
+test("validateImageDigest: accepts only a complete sha256 manifest digest", () => {
+  assert.doesNotThrow(() => validateImageDigest(`sha256:${"a".repeat(64)}`, "AGENTHOST_IMAGE_DIGEST"));
+  assert.throws(() => validateImageDigest("sha256:abcd", "AGENTHOST_IMAGE_DIGEST"), InvalidImageDigestError);
 });
 
 test("validateQualifiedImageReference: accepts tag and digest forms with an explicit registry", () => {
@@ -142,6 +149,7 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.AGENTHOST_KEYVAULT_URI, `https://${TEST_KEYVAULT_NAME}.vault.azure.net/`);
   assert.equal(vars.IMAGE_TAG, "deadbee");
   assert.equal(vars.AGENTHOST_IMAGE_TAG, "deadbee", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
+  assert.equal(vars.AGENTHOST_IMAGE_DIGEST, "", "AgentHost digest is optional and has no generic default");
   assert.equal(vars.AUTH_MODE, DEFAULTS.AUTH_MODE, "Entra is the only browser sign-in mode");
   assert.equal(vars.AUTH_MODE, "Entra");
   assert.equal(vars.ENTRA_CLIENT_ID, "", "no generic default -- empty means Entra mode is not configured");
@@ -149,6 +157,7 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID, "");
   assert.equal(vars.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
   assert.equal(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
+  assert.equal(vars.REPO_APP_PRIVATE_KEY_FILE, "");
 });
 
 test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRISE_APP_OBJECT_ID env overrides beat the defaults", async () => {
@@ -161,6 +170,7 @@ test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRI
       ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
       OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-next",
       OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-next",
+      REPO_APP_PRIVATE_KEY_FILE: "C:\\secure\\repo-app.pem",
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
@@ -172,6 +182,7 @@ test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRI
   assert.equal(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID, "77777777-8888-9999-0000-111111111111");
   assert.equal(vars.OAUTH_SIGNING_CERTIFICATE_NAME, "oauth-signing-next");
   assert.equal(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "oauth-encryption-next");
+  assert.equal(vars.REPO_APP_PRIVATE_KEY_FILE, "C:\\secure\\repo-app.pem");
 });
 
 test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {
@@ -207,6 +218,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
       KATA_POOL_NAME: "customkata",
       APP_POOL_NAME: "customapp",
       IMAGE_TAG: "v2.0.0",
+      AGENTHOST_IMAGE_DIGEST: `sha256:${"c".repeat(64)}`,
       IMAGE_API: "ghcr.io/custom/agentweaver-api:v2.0.0",
       IMAGE_FRONTEND: "ghcr.io/custom/agentweaver-frontend:v2.0.0",
       IMAGE_MCP: "ghcr.io/custom/agentweaver-mcp:v2.0.0",
@@ -232,6 +244,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
   assert.equal(vars.KATA_POOL_NAME, "customkata");
   assert.equal(vars.APP_POOL_NAME, "customapp");
   assert.equal(vars.IMAGE_TAG, "v2.0.0");
+  assert.equal(vars.AGENTHOST_IMAGE_DIGEST, `sha256:${"c".repeat(64)}`);
   assert.equal(vars.IMAGE_API, "ghcr.io/custom/agentweaver-api:v2.0.0");
   assert.equal(vars.IMAGE_FRONTEND, "ghcr.io/custom/agentweaver-frontend:v2.0.0");
   assert.equal(vars.IMAGE_MCP, "ghcr.io/custom/agentweaver-mcp:v2.0.0");

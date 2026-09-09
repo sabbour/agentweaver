@@ -1,6 +1,32 @@
 export type ModelSource = 'github-copilot' | 'byok';
 export type AuthMode = 'entra';
 
+export interface EffectiveModelProvider {
+  state: 'resolved' | 'unavailable';
+  provider_kind:
+    | 'byok'
+    | 'project_github_copilot'
+    | 'platform_github_copilot'
+    | 'user_byok'
+    | 'user_github_copilot'
+    | 'unavailable';
+  resolution_scope: 'project' | 'platform' | 'user' | 'unknown';
+  provider_scope: 'project' | 'platform' | 'user' | 'none';
+  provider_type: string | null;
+  model_id: string | null;
+  provider_key: string | null;
+  unavailable_reason: string | null;
+}
+
+export interface AiExecutionContext {
+  ai_required: boolean;
+  operation: string;
+  phase: 'prepared' | 'active' | 'completed';
+  execution_key: string | null;
+  expires_at: string | null;
+  effective_model_provider: EffectiveModelProvider | null;
+}
+
 export interface ServerInfo {
   data_directory: string;
   workspace_auto_assigned?: boolean;
@@ -54,9 +80,11 @@ export interface RetryRunResponse {
 
 export interface RunDetail {
   run_id: string;
+  project_id?: string | null;
   status: RunStatus;
   retried_from?: string | null;
   model_source: ModelSource;
+  effective_model_provider?: EffectiveModelProvider | null;
   started_at: string;
   ended_at: string | null;
   result: string | null;
@@ -241,6 +269,7 @@ export interface GenerateBlueprintRequest {
 export interface GenerateBlueprintResponse {
   blueprint: Blueprint;
   generated_workflow_yaml?: string | null;
+  ai_execution_context?: AiExecutionContext | null;
 }
 
 export interface SuggestBlueprintResponse {
@@ -524,8 +553,16 @@ export interface GitHubRepositorySelectionCandidate {
   pushed_at: string | null;
 }
 
+export interface GitHubRepositoryInstallation {
+  account_login: string;
+  account_type: 'user' | 'organization';
+  repository_selection: 'all' | 'selected';
+  management_url: string;
+}
+
 export interface GitHubRepositorySelectionListResponse {
   repositories: GitHubRepositorySelectionCandidate[];
+  installations: GitHubRepositoryInstallation[];
 }
 
 export interface GitHubRepositorySelectionCodeResponse {
@@ -672,6 +709,7 @@ export interface CastProposalDto {
   run_id: string | null;
   warnings: string[];
   rationale?: string;
+  ai_execution_context?: AiExecutionContext | null;
 }
 
 export interface CreateProposalRequest {
@@ -973,6 +1011,7 @@ export interface CreateAssistantRunResponse {
   message?: string;
   /** Names of MCP tools invoked on the initial turn, if any. */
   tools_invoked?: string[];
+  effective_model_provider?: EffectiveModelProvider | null;
 }
 
 export interface SendAssistantMessageRequest {
@@ -987,6 +1026,7 @@ export interface SendAssistantMessageResponse {
   message: string;
   status: string;
   tools_invoked?: string[];
+  effective_model_provider?: EffectiveModelProvider | null;
 }
 
 // GET /api/assistant/runs?limit=50 (#346 follow-up — Tank's caller-scoped list endpoint).
@@ -1673,6 +1713,7 @@ export interface DecomposeResponse {
   proposed_items: ProposedBacklogItem[];
   was_capped: boolean;
   total_found: number;
+  ai_execution_context?: AiExecutionContext | null;
 }
 
 // ── Feature 017 — Sandbox preview port-forward ───────────────────────────────
@@ -1767,7 +1808,7 @@ export interface SkillMarketplaceDto {
   // true = a user-added URL source for this project; false/absent = a built-in config source.
   project_source?: boolean;
 }
-export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; }
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; ai_execution_context?: AiExecutionContext | null; }
 
 // POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by GitHub URL or owner/repo.
 export interface AddSkillMarketplaceSourceRequest {
@@ -1791,6 +1832,7 @@ export interface GeneratedSkillDraft {
   description: string;
   instructions: string;
   skill_markdown: string;
+  ai_execution_context?: AiExecutionContext | null;
 }
 
 // Per-skill outcome of a sync/import/upload operation.

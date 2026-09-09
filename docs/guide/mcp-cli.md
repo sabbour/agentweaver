@@ -4,7 +4,7 @@ title: Connect an MCP client
 
 # Connect an MCP client
 
-Connect Claude Desktop, VS Code, GitHub Copilot CLI, or GitHub Copilot desktop
+Connect GitHub Copilot CLI, GitHub Copilot desktop, VS Code, or Claude Desktop
 to Agentweaver through the hosted MCP endpoint.
 
 ## Before you connect
@@ -80,38 +80,6 @@ then select **Agentweaver Driver** from the agent picker. Agentweaver-created
 projects already receive this repository-level definition, so no separate
 install is needed there.
 
-## Claude Desktop
-
-1. Open **Customize → Connectors**.
-2. Add a custom connector named **Agentweaver**.
-3. Enter the MCP server URL from Agentweaver Account settings.
-4. Open **Advanced settings** and enter `agentweaver-claude` as the
-   **OAuth Client ID**. Leave **OAuth Client Secret** empty.
-5. Connect, complete browser sign-in and consent, then confirm that the
-   connector lists Agentweaver tools.
-
-Agentweaver registers `agentweaver-claude` as a public OAuth client for only
-Claude's exact hosted callback,
-`https://claude.ai/api/mcp/auth_callback`. Claude sends S256 PKCE on the
-authorization request, so no client secret, static authorization header, or
-manually copied token is used. URL-only setup is not supported because
-Agentweaver intentionally rejects HTTPS callbacks submitted through anonymous
-dynamic client registration.
-
-## VS Code
-
-1. Open the Command Palette and run **MCP: Add Server**.
-2. Choose **HTTP**, enter the MCP server URL, and select the user or workspace
-   configuration scope.
-3. Start the server and complete the browser sign-in and consent flow.
-4. Run **MCP: List Servers** and confirm that Agentweaver is running and exposes
-   tools.
-5. Select **Agentweaver Driver** from the Copilot Chat agent picker after the
-   repository-level definition is installed.
-
-VS Code writes its client-managed `mcp.json` entry. No input variable or
-authorization header is required for Agentweaver OAuth.
-
 ## GitHub Copilot CLI
 
 1. Start an interactive Copilot CLI session and run `/mcp add`.
@@ -141,6 +109,38 @@ GitHub manages this configuration surface, and labels can move between desktop
 releases. If the placement changes, search the **Customize** view for MCP
 servers; do not replace OAuth with a copied token. Select **Agentweaver Driver**
 from the agent picker after the repository-level definition is installed.
+
+## VS Code
+
+1. Open the Command Palette and run **MCP: Add Server**.
+2. Choose **HTTP**, enter the MCP server URL, and select the user or workspace
+   configuration scope.
+3. Start the server and complete the browser sign-in and consent flow.
+4. Run **MCP: List Servers** and confirm that Agentweaver is running and exposes
+   tools.
+5. Select **Agentweaver Driver** from the Copilot Chat agent picker after the
+   repository-level definition is installed.
+
+VS Code writes its client-managed `mcp.json` entry. No input variable or
+authorization header is required for Agentweaver OAuth.
+
+## Claude Desktop
+
+1. Open **Customize → Connectors**.
+2. Add a custom connector named **Agentweaver**.
+3. Enter the MCP server URL from Agentweaver Account settings.
+4. Open **Advanced settings** and enter `agentweaver-claude` as the
+   **OAuth Client ID**. Leave **OAuth Client Secret** empty.
+5. Connect, complete browser sign-in and consent, then confirm that the
+   connector lists Agentweaver tools.
+
+Agentweaver registers `agentweaver-claude` as a public OAuth client for only
+Claude's exact hosted callback,
+`https://claude.ai/api/mcp/auth_callback`. Claude sends S256 PKCE on the
+authorization request, so no client secret, static authorization header, or
+manually copied token is used. URL-only setup is not supported because
+Agentweaver intentionally rejects HTTPS callbacks submitted through anonymous
+dynamic client registration.
 
 ## Local repository development only
 

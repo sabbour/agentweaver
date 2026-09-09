@@ -1,10 +1,11 @@
 import { apiClient } from '../api/apiClient';
 import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
 import { useTimelineItems } from '../timeline/useTimelineItems';
+import { useAiExecutionContext } from './useAiExecutionContext';
 import { useSeededRunStream } from './useSeededRunStream';
 import { useCallback, useMemo } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
-import type { AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/types';
+import type { AiExecutionContext, AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/types';
 import type { TimelineItem, TurnGroupItem } from '../timeline/types';
 
 function isHumanReviewGateKind(payload: Record<string, unknown>): boolean {
@@ -41,6 +42,9 @@ export interface CoordinatorRunModel {
   /** Lifecycle status derived from events (review cycles handled). */
   derivedRunStatus: string;
   gates: CoordinatorGateState;
+  aiExecutionContext: AiExecutionContext | null;
+  aiExecutionLoading: boolean;
+  aiExecutionAvailable: boolean;
   reconnect: () => void;
   // Gate/steer actions — thin wrappers over apiClient so the TUI does not duplicate wiring.
   steer: (req: SteerCoordinatorRequest) => Promise<unknown>;
@@ -65,6 +69,7 @@ export function useCoordinatorRunModel(runId: string): CoordinatorRunModel {
   const { items, runOutcome } = useTimelineItems(events, runId, droppedEventCount);
   const isLiveRun = status === 'connecting' || status === 'streaming';
   const derivedRunStatus = deriveRunStatusFromEvents(events, isLiveRun);
+  const providerContext = useAiExecutionContext('orchestration', undefined, runId, Boolean(runId));
 
   const gates = useMemo<CoordinatorGateState>(() => {
     // Outcome-spec: drafted but not confirmed. Assembly review: requested but not resolved.
@@ -124,19 +129,76 @@ export function useCoordinatorRunModel(runId: string): CoordinatorRunModel {
     };
   }, [events, items]);
 
-  const steer = useCallback((req: SteerCoordinatorRequest) => apiClient.steerCoordinator(runId, req), [runId]);
-  const sendMessage = useCallback((instruction: string) => apiClient.steerCoordinator(runId, { kind: 'send', instruction }), [runId]);
-  const stop = useCallback(() => apiClient.steerCoordinator(runId, { kind: 'stop' }), [runId]);
-  const confirmOutcomeSpec = useCallback((allowTaskPromotion?: boolean) => apiClient.confirmOutcomeSpec(runId, allowTaskPromotion ?? false), [runId]);
-  const reviseOutcomeSpec = useCallback((feedback: string) => apiClient.reviseOutcomeSpec(runId, feedback), [runId]);
-  const reviewAssembly = useCallback(
-    (decision: AssemblyReviewDecision, comment?: string) => apiClient.reviewAssembly(runId, decision, comment),
-    [runId],
+  const steer = useCallback(async (req: SteerCoordinatorRequest) => {
+    if (req.kind !== 'stop') providerContext.setPhase('active');
+    try {
+      const result = await apiClient.steerCoordinator(
+        runId,
+        req,
+        req.kind === 'stop' ? undefined : providerContext.providerKey,
+      );
+      if (req.kind !== 'stop') providerContext.setPhase('completed');
+      return result;
+    } catch (err) {
+      if (req.kind !== 'stop') providerContext.handleInvocationError(err);
+      throw err;
+    }
+  }, [providerContext, runId]);
+  const sendMessage = useCallback(
+    (instruction: string) => steer({ kind: 'send', instruction }),
+    [steer],
   );
+  const stop = useCallback(() => apiClient.steerCoordinator(runId, { kind: 'stop' }), [runId]);
+  const confirmOutcomeSpec = useCallback(async (allowTaskPromotion?: boolean) => {
+    providerContext.setPhase('active');
+    try {
+      const result = await apiClient.confirmOutcomeSpec(
+        runId,
+        allowTaskPromotion ?? false,
+        providerContext.providerKey,
+      );
+      providerContext.setPhase('completed');
+      return result;
+    } catch (err) {
+      providerContext.handleInvocationError(err);
+      throw err;
+    }
+  }, [providerContext, runId]);
+  const reviseOutcomeSpec = useCallback(async (feedback: string) => {
+    providerContext.setPhase('active');
+    try {
+      const result = await apiClient.reviseOutcomeSpec(runId, feedback, providerContext.providerKey);
+      providerContext.setPhase('completed');
+      return result;
+    } catch (err) {
+      providerContext.handleInvocationError(err);
+      throw err;
+    }
+  }, [providerContext, runId]);
+  const reviewAssembly = useCallback(async (decision: AssemblyReviewDecision, comment?: string) => {
+    if (decision !== 'decline') providerContext.setPhase('active');
+    try {
+      const result = await apiClient.reviewAssembly(
+        runId,
+        decision,
+        comment,
+        decision === 'decline' ? undefined : providerContext.providerKey,
+      );
+      if (decision !== 'decline') providerContext.setPhase('completed');
+      return result;
+    } catch (err) {
+      if (decision !== 'decline') providerContext.handleInvocationError(err);
+      throw err;
+    }
+  }, [providerContext, runId]);
 
   return {
     runId, events, items, runOutcome, status, error, droppedEventCount, isLiveRun,
-    derivedRunStatus, gates, reconnect,
+    derivedRunStatus, gates,
+    aiExecutionContext: providerContext.context,
+    aiExecutionLoading: providerContext.loading,
+    aiExecutionAvailable: providerContext.available,
+    reconnect,
     steer, sendMessage, stop, confirmOutcomeSpec, reviseOutcomeSpec, reviewAssembly,
   };
 }

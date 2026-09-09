@@ -42,6 +42,8 @@ patches:
 # IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base
 # manifests' placeholder image exactly; `newName`/`newTag` are rewritten per
 # deploy from cfg.ACR_LOGIN_SERVER / cfg.IMAGE_TAG / cfg.AGENTHOST_IMAGE_TAG.
+# GHCR release deployments replace only AgentHost's `newTag` with its promoted
+# ACR `digest`, which changes the warm-pool template generation.
 images:
   - name: agentweaverregistry.azurecr.io/agentweaver-api
     newName: agentweaverregistry.azurecr.io/agentweaver-api
@@ -95,6 +97,7 @@ configMapGenerator:
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
       - "COPILOT_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/copilot-app/callback"
       - "REPO_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/repo-app/callback"
+      - "REPO_APP_PRIVATE_KEY_SECRET_NAME=repo-app-private-key"
       - "KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="

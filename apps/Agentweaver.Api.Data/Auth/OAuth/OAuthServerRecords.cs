@@ -22,6 +22,7 @@ public sealed class OAuthAuthorizationTransaction
     public string? ClientState { get; set; }
     public string? BrowserSessionId { get; set; }
     public string? Subject { get; set; }
+    public string? ContinuationDecision { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? ConsumedAt { get; set; }
 }

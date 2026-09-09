@@ -163,6 +163,13 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                     _approvalStore,
                     _toolApprovalGate,
                     _loggerFactory.CreateLogger<CopilotAIAgent>());
+            if (agent is IProviderBoundWorkflowTurnAgent providerBoundAgent
+                && !string.IsNullOrWhiteSpace(input.ModelSource))
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
 
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
@@ -235,6 +242,14 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             }
 
             EmitVerdict(writer, subWriter, input.RunId, verdict, response);
+        }
+        catch (WorkflowAgentInfrastructureException ex) when (ex.IsModelProviderChanged)
+        {
+            throw ex.ToModelProviderChanged(input.ModelSource);
+        }
+        catch (AgentProviderException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

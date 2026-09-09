@@ -91,7 +91,10 @@ public static class BlueprintEndpoints
         GenerateBlueprintRequest request,
         BlueprintService blueprints,
         IProjectStore projectStore,
+        IConfiguration configuration,
         IOptions<GenerationModelOptions> generationOptions,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Description))
@@ -104,20 +107,42 @@ public static class BlueprintEndpoints
                 return Results.BadRequest(new { error = "Invalid project id." });
             project = await projectStore.GetAsync(pid, ct).ConfigureAwait(false);
             if (project is null) return Results.NotFound();
-            if (!httpContext.GetCaller().Owns(project.Owner))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await ProjectAuthorization
+                .RequireAccessAsync(httpContext, project, configuration, ProjectRole.Owner, ct)
+                .ConfigureAwait(false) is { } denied)
+            {
+                return denied;
+            }
         }
 
         var caller = httpContext.GetCaller();
+        using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+            httpContext,
+            "blueprint_generation",
+            project?.Id,
+            executionPlans,
+            executionPlanAccessor,
+            ct).ConfigureAwait(false);
+        execution.Activate();
+        if (execution.Error is not null)
+            return execution.Error;
         var options = generationOptions.Value;
-        var result = await blueprints.GenerateAsync(
-            request.Description!,
-            ct,
-            caller.User,
-            request.TargetRepository,
-            request.ProjectId,
-            project is null ? null : options.ResolveBlueprintModel(project.BlueprintGenerationModel),
-            project is null ? null : options.ResolveWorkflowModel(project.WorkflowGenerationModel));
+        BlueprintGenerationResult result;
+        try
+        {
+            result = await blueprints.GenerateAsync(
+                request.Description!,
+                ct,
+                caller.User,
+                request.TargetRepository,
+                request.ProjectId,
+                project is null ? null : options.ResolveBlueprintModel(project.BlueprintGenerationModel),
+                project is null ? null : options.ResolveWorkflowModel(project.WorkflowGenerationModel));
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
+        }
         if (!result.Succeeded)
         {
             if (IsProviderFailure(result.FailureKind))
@@ -154,6 +179,7 @@ public static class BlueprintEndpoints
             Blueprint = BlueprintDto.FromModel(result.Blueprint!),
             GeneratedWorkflowYaml = result.GeneratedWorkflowYaml,
             Warnings = result.Warnings,
+            AiExecutionContext = executionPlans.ToResponse(execution.Plan!, "completed"),
         });
     }
 

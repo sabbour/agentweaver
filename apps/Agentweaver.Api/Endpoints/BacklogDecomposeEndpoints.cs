@@ -67,7 +67,8 @@ public sealed record DecomposeResponse(
     /// <summary>True when the agent extracted more than 50 items and the list was truncated.</summary>
     [property: JsonPropertyName("was_capped")] bool WasCapped,
     /// <summary>Total items extracted before applying the 50-item cap.</summary>
-    [property: JsonPropertyName("total_found")] int TotalFound);
+    [property: JsonPropertyName("total_found")] int TotalFound,
+    [property: JsonPropertyName("ai_execution_context")] AiExecutionContextResponse? AiExecutionContext = null);
 
 /// <summary>
 /// Spec-to-backlog decomposition endpoints (Feature 014).
@@ -132,6 +133,8 @@ public static class BacklogDecomposeEndpoints
             ProjectWorkspaceService projectWorkspaceService,
             IRunStore runStore,
             MemoryDbContext db,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(id, out var projectId))
@@ -218,6 +221,17 @@ public static class BacklogDecomposeEndpoints
                 }
             }
 
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "backlog_decomposition",
+                projectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
+
             // Run the decomposition agent turn.
             DecomposeAgentResult agentResult;
             try
@@ -226,6 +240,8 @@ public static class BacklogDecomposeEndpoints
             }
             catch (Exception ex)
             {
+                if (ex is AiExecutionPlanException planException)
+                    return EndpointHelpers.AiExecutionError(planException);
                 return Results.Problem(
                     $"Decomposition failed: {ex.Message}",
                     statusCode: 500);
@@ -286,7 +302,8 @@ public static class BacklogDecomposeEndpoints
             return Results.Ok(new DecomposeResponse(
                 proposedItems,
                 agentResult.WasCapped,
-                agentResult.TotalFound));
+                agentResult.TotalFound,
+                executionPlans.ToResponse(execution.Plan!, "completed")));
         }).WithTags("Backlog");
     }
 

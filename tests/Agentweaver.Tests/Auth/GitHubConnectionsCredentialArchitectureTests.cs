@@ -131,14 +131,18 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
 
         var orchestrator = File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "RunOrchestrator.cs"));
         orchestrator
-            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, ct)")
-            .And.Contain("PrepareGitHubCapabilitySnapshotsAsync(newAgentRun, ct)");
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(")
+            .And.Contain("newAgentRun,")
+            .And.Contain("expectedCopilotBindingId");
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Coordinator", "CoordinatorRunService.cs"))
-            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping)");
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(")
+            .And.Contain("expectedCopilotBindingId");
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Program.cs"))
             .Should().Contain("AddScoped<RunGitHubCapabilitySnapshotLifecycle>");
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "WorkflowRestartService.cs"))
-            .Should().Contain("PrepareForLaunchAsync(run, ct)");
+            .Should().Contain("PrepareForLaunchAsync(")
+            .And.Contain("expectedCopilotBindingId: run.ModelSource == ModelSource.GitHubCopilot")
+            .And.Contain("expectedCopilotCredentialVersion: acceptedBoundary?.Provider.CredentialVersion()");
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public class CopilotPreviewClassifier : IPreviewClassifier
         "{\"preview_only\": false}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotPreviewClassifier> _logger;
     private readonly string? _modelId;
 
@@ -63,10 +64,12 @@ public class CopilotPreviewClassifier : IPreviewClassifier
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotPreviewClassifier> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
     }
@@ -93,7 +96,11 @@ public class CopilotPreviewClassifier : IPreviewClassifier
                 throw new InvalidOperationException($"{classificationName} classification requires a run-bound Copilot capability snapshot.");
 
             var result = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(runId, charter, prompt, token),
+                token => _effectiveModelTurn is null
+                    ? RunModelTurnAsync(runId, charter, prompt, token)
+                    : _effectiveModelTurn.RunAsync(
+                        runId, projectId, _modelId, charter, prompt,
+                        supportsByok: true, token),
                 ClassificationTimeout,
                 responseProperty,
                 ct,
@@ -105,7 +112,7 @@ public class CopilotPreviewClassifier : IPreviewClassifier
                 classificationName, runId, result?.ToString() ?? "unparseable/timed-out");
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex, "{ClassificationName} classification failed for run {RunId}.", classificationName, runId);
             return null;

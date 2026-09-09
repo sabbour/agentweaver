@@ -1,4 +1,5 @@
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
@@ -17,7 +18,7 @@ namespace Agentweaver.Api.Runs;
 /// MAF workflow via RunWorkflowFactory. The workflow owns lifecycle, HITL,
 /// checkpointing, and merge orchestration.
 /// </summary>
-public sealed class RunOrchestrator
+public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
 {
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
@@ -29,6 +30,7 @@ public sealed class RunOrchestrator
     private readonly IConfiguration _configuration;
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly IRunEventStream? _eventStream;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly ILogger<RunOrchestrator> _logger;
 
     /// <summary>
@@ -139,7 +141,8 @@ public sealed class RunOrchestrator
         IConfiguration configuration,
         ILogger<RunOrchestrator> logger,
         IRunAgentHostContextResolver? runAgentHostContextResolver,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -151,12 +154,37 @@ public sealed class RunOrchestrator
         _configuration = configuration;
         _runAgentHostContextResolver = runAgentHostContextResolver;
         _eventStream = eventStream;
+        _executionPlanAccessor = executionPlanAccessor;
         _logger = logger;
     }
 
     public async Task StartRunAsync(Run run, CancellationToken ct)
     {
-        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+        EffectiveModelProviderResult? acceptedProvider = null;
+        string? acceptedByokProviderFingerprint = null;
+        if (_executionPlanAccessor?.Current is { Operation: "agent_turn" } accepted
+            && accepted.ProjectId == run.ProjectId)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            acceptedProvider = (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+            run = run with { ModelSource = acceptedProvider.ToModelSource() };
+            if (acceptedProvider is EffectiveModelProviderResult.Byok expectedByok)
+            {
+                var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+                var configuration = await settings.GetAsync(ct).ConfigureAwait(false);
+                if (configuration is null || !GenerationModelProviderExecutor.Matches(configuration, expectedByok))
+                    throw await executionPlans.ChangedAsync(accepted, ct).ConfigureAwait(false);
+                acceptedByokProviderFingerprint = expectedByok.ConfigurationFingerprint;
+            }
+        }
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            ct,
+            acceptedProvider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? acceptedProvider
+                : null).ConfigureAwait(false);
         WorktreeInfo worktreeInfo;
         try
         {
@@ -185,6 +213,15 @@ public sealed class RunOrchestrator
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+            if (acceptedProvider is not null)
+            {
+                entry.RecordNext(
+                    EventTypes.RunModelProviderResolved,
+                    acceptedProvider.ToProvenancePayload(
+                        run.Id.ToString(),
+                        run.ModelId,
+                        EffectiveModelProviderProvenance.ScopeProject));
+            }
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
 
@@ -201,7 +238,8 @@ public sealed class RunOrchestrator
                 systemPromptContext,
                 run.ProjectId?.ToString(),
                 run.AgentName,
-                started.StartedAt);
+                started.StartedAt,
+                ByokProviderFingerprint: acceptedByokProviderFingerprint);
 
             // Create the per-run CTS before starting the workflow so the same token reaches both
             // the agent execution and the registry's Abandon path. Using CancellationToken.None as
@@ -245,7 +283,14 @@ public sealed class RunOrchestrator
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
-        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+        var childProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            ct,
+            childProvider.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? childProvider.Provider
+                : null).ConfigureAwait(false);
 
         // Provision a per-child worktree. For dependent subtasks the dispatch loop sets
         // OriginatingBranch to the coordinator integration branch, which already contains completed
@@ -278,6 +323,12 @@ public sealed class RunOrchestrator
             await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+            entry.RecordNext(
+                EventTypes.RunModelProviderResolved,
+                childProvider.Provider.ToProvenancePayload(
+                    run.Id.ToString(),
+                    run.ModelId,
+                    EffectiveModelProviderProvenance.ScopeProject));
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
 
@@ -294,7 +345,8 @@ public sealed class RunOrchestrator
                 systemPromptContext,
                 run.ProjectId?.ToString(),
                 run.AgentName,
-                started.StartedAt);
+                started.StartedAt,
+                ByokProviderFingerprint: childProvider.ByokProviderFingerprint);
 
             var runCts = new CancellationTokenSource();
             var ctsRegistered = false;
@@ -326,7 +378,14 @@ public sealed class RunOrchestrator
     /// </summary>
     public async Task StartReservedProjectRunAsync(Run run, CancellationToken ct)
     {
-        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+        var reservedProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            ct,
+            reservedProvider.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? reservedProvider.Provider
+                : null).ConfigureAwait(false);
         WorktreeInfo worktreeInfo;
         try
         {
@@ -369,6 +428,12 @@ public sealed class RunOrchestrator
             EmitRunStartedMetrics(started);
 
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+            entry.RecordNext(
+                EventTypes.RunModelProviderResolved,
+                reservedProvider.Provider.ToProvenancePayload(
+                    run.Id.ToString(),
+                    run.ModelId,
+                    EffectiveModelProviderProvenance.ScopeProject));
 
             var (taskWithHarvest2, systemPromptContext2) = await BuildContextAsync(started, ct);
 
@@ -385,7 +450,8 @@ public sealed class RunOrchestrator
                 systemPromptContext2,
                 run.ProjectId?.ToString(),
                 run.AgentName,
-                started.StartedAt);
+                started.StartedAt,
+                ByokProviderFingerprint: reservedProvider.ByokProviderFingerprint);
 
             // Create the per-run CTS before starting the workflow so the same token reaches both
             // the agent execution and the registry's Abandon path.
@@ -432,11 +498,24 @@ public sealed class RunOrchestrator
         if (string.IsNullOrEmpty(run.WorktreeBranch))
             throw new InvalidOperationException($"Run {run.Id} has no worktree branch; cannot start revision.");
 
-        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+        var revisionProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            ct,
+            revisionProvider.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? revisionProvider.Provider
+                : null).ConfigureAwait(false);
 
         // Reuse the existing stream entry so prior events are preserved for replay.
         var entry = _streamStore.Get(run.Id.ToString())
             ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+        entry.RecordNext(
+            EventTypes.RunModelProviderResolved,
+            revisionProvider.Provider.ToProvenancePayload(
+                run.Id.ToString(),
+                run.ModelId,
+                EffectiveModelProviderProvenance.ScopeProject));
 
         var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
             run with { Task = revisedTask }, ct);
@@ -455,7 +534,8 @@ public sealed class RunOrchestrator
             run.ProjectId?.ToString(),
             run.AgentName,
             run.StartedAt,
-            IsRevision: true);
+            IsRevision: true,
+            ByokProviderFingerprint: revisionProvider.ByokProviderFingerprint);
 
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
@@ -499,7 +579,14 @@ public sealed class RunOrchestrator
             throw new InvalidOperationException(
                 $"Handoff for run {newAgentRun.Id} requires a non-empty PriorWorktreeBranch to preserve prior work.");
 
-        await PrepareGitHubCapabilitySnapshotsAsync(newAgentRun, ct).ConfigureAwait(false);
+        var handoffProvider = await ResolveDurableProviderBoundaryAsync(newAgentRun, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            newAgentRun,
+            ct,
+            handoffProvider.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? handoffProvider.Provider
+                : null).ConfigureAwait(false);
 
         // Prompt-ready accumulated guidance (all prior rejection rounds). Prefer the coordinator's
         // deterministic rendering; fall back to rendering the bundle if the producer left it null.
@@ -596,6 +683,12 @@ public sealed class RunOrchestrator
 
             // NEW stream entry keyed on the NEW run id — do NOT reuse the locked-out author's stream.
             var entry = _streamStore.Create(newAgentRun.Id.ToString(), newAgentRun.SubmittingUser);
+            entry.RecordNext(
+                EventTypes.RunModelProviderResolved,
+                handoffProvider.Provider.ToProvenancePayload(
+                    newAgentRun.Id.ToString(),
+                    newAgentRun.ModelId,
+                    EffectiveModelProviderProvenance.ScopeProject));
             entry.RecordNext("coordinator.child_revision_handoff", evidence);
 
             var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
@@ -618,7 +711,8 @@ public sealed class RunOrchestrator
                 newAgentRun.ProjectId?.ToString(),
                 newAgentRun.AgentName,
                 started.StartedAt,
-                IsRevision: false);
+                IsRevision: false,
+                ByokProviderFingerprint: handoffProvider.ByokProviderFingerprint);
 
             var runCts = new CancellationTokenSource();
             var ctsRegistered = false;
@@ -655,7 +749,10 @@ public sealed class RunOrchestrator
             runCts.Dispose();
     }
 
-    private async Task PrepareGitHubCapabilitySnapshotsAsync(Run run, CancellationToken ct)
+    private async Task PrepareGitHubCapabilitySnapshotsAsync(
+        Run run,
+        CancellationToken ct,
+        EffectiveModelProviderResult? expectedCopilotProvider = null)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
@@ -666,16 +763,152 @@ public sealed class RunOrchestrator
             _configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
             StringComparison.OrdinalIgnoreCase);
-        var prepared = requiresAgentHost
-            ? await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false)
-            : await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false);
+        var requiresCopilotCapability = requiresAgentHost
+            && (expectedCopilotProvider is not null
+                || (expectedCopilotProvider is null && run.ModelSource == ModelSource.GitHubCopilot));
+        var prepared = requiresCopilotCapability
+            ? await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+                run,
+                ct,
+                expectedCopilotBindingId: expectedCopilotProvider?.ProviderId(),
+                expectedCopilotCredentialVersion: expectedCopilotProvider?.CredentialVersion()).ConfigureAwait(false)
+            : await lifecycle.PrepareForLaunchAsync(
+                run,
+                ct,
+                expectedCopilotProvider?.ProviderId(),
+                expectedCopilotProvider?.CredentialVersion()).ConfigureAwait(false);
         if (!prepared)
         {
-            if (requiresAgentHost && run.ProjectId is { } projectId)
+            if (requiresCopilotCapability && run.ProjectId is { } projectId)
                 throw new ModelProviderConnectionRequiredException(projectId);
             throw new InvalidOperationException(
-                $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
+                $"Run {run.Id} has unavailable launch capability requirements.");
         }
+    }
+
+    public async Task<ResolvedRunModelProviderBoundary>
+        ResolveDurableProviderBoundaryAsync(Run run, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var platformScoped = string.Equals(run.AgentName, "Operator", StringComparison.Ordinal);
+        var resolutionProjectId = platformScoped ? null : run.ProjectId;
+        var expectedOperation = platformScoped ? "assistant_turn" : run.ParentRunId is null
+            && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+                ? "orchestration"
+                : "agent_turn";
+        var accepted = _executionPlanAccessor?.Current is { } candidate
+            && string.Equals(candidate.Operation, expectedOperation, StringComparison.Ordinal)
+            && candidate.ProjectId == resolutionProjectId
+                ? candidate
+                : null;
+        EffectiveModelProviderResult provider;
+        if (accepted is not null)
+        {
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            provider = (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+        }
+        else
+        {
+            var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+            provider = await resolver.ResolveAsync(resolutionProjectId, ct).ConfigureAwait(false);
+        }
+        if (provider.ToModelSource() != run.ModelSource)
+        {
+            throw new AgentProviderException(
+                provider.ToModelSource(),
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective model provider changed before the revision turn.",
+                isRetryable: true);
+        }
+
+        if (_eventStream is not null)
+        {
+            IReadOnlyList<RunEvent> events;
+            var provenanceReadable = true;
+            try
+            {
+                events = await _eventStream
+                    .GetPersistedEventsAsync(run.Id.ToString(), 0, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (NotSupportedException)
+            {
+                events = [];
+                provenanceReadable = false;
+            }
+            var expectedEvent = events.LastOrDefault(
+                evt => evt.Type == EventTypes.RunModelProviderResolved);
+            var expected = EffectiveModelProviderProvenance.TryReadContract(expectedEvent?.Payload);
+            if (expectedEvent is null && !string.IsNullOrWhiteSpace(run.ParentRunId))
+            {
+                try
+                {
+                    var parentEvents = await _eventStream
+                        .GetPersistedEventsAsync(run.ParentRunId, 0, ct)
+                        .ConfigureAwait(false);
+                    expectedEvent = parentEvents.LastOrDefault(
+                        evt => evt.Type == EventTypes.RunModelProviderResolved);
+                    expected = EffectiveModelProviderProvenance.TryReadContract(expectedEvent?.Payload);
+                }
+                catch (NotSupportedException)
+                {
+                    // Lightweight test streams have no durable read surface.
+                    provenanceReadable = false;
+                }
+            }
+            if (expectedEvent is { } durableEvent)
+            {
+                if (expected is null
+                    || !EffectiveModelProviderProvenance.MatchesDurableProvider(
+                        durableEvent.Payload,
+                        provider,
+                        expected.ResolutionScope,
+                        expected.ModelId))
+                {
+                    throw new AgentProviderException(
+                        provider.ToModelSource(),
+                        AgentProviderFailureKind.Configuration,
+                        "model_provider_changed",
+                        "The effective model provider changed before the revision turn.",
+                        isRetryable: true);
+                }
+            }
+            else if (provenanceReadable && accepted is null)
+            {
+                throw new AgentProviderException(
+                    provider.ToModelSource(),
+                    AgentProviderFailureKind.Configuration,
+                    "model_provider_changed",
+                    "The durable model provider provenance is unavailable for this continuation.",
+                    isRetryable: true);
+            }
+        }
+
+        if (provider is not EffectiveModelProviderResult.Byok expectedByok)
+            return new ResolvedRunModelProviderBoundary(provider, null);
+
+        var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        var configuration = await settings.GetAsync(ct).ConfigureAwait(false);
+        if (configuration is null || !GenerationModelProviderExecutor.Matches(configuration, expectedByok))
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective BYOK provider changed before the revision turn.",
+                isRetryable: true);
+        }
+        return new ResolvedRunModelProviderBoundary(provider, expectedByok.ConfigurationFingerprint);
+    }
+
+    /// <summary>
+    /// Verifies that a continuation still resolves to the provider recorded for the run. Callers
+    /// that mutate review or steering state must invoke this before making those mutations.
+    /// </summary>
+    public async Task ValidateDurableProviderBoundaryAsync(Run run, CancellationToken ct)
+    {
+        _ = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
     }
 
     private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(

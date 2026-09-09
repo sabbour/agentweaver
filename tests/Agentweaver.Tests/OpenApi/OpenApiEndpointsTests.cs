@@ -49,6 +49,24 @@ public sealed class OpenApiEndpointsTests : IDisposable
         var startOrchestration = paths.GetProperty("/api/projects/{id}/orchestrations").GetProperty("post");
         startOrchestration.GetProperty("operationId").GetString().Should().Be("StartProjectOrchestration");
         startOrchestration.GetProperty("security").GetArrayLength().Should().BeGreaterThan(0);
+        startOrchestration.GetProperty("parameters").EnumerateArray()
+            .Should().Contain(parameter =>
+                parameter.GetProperty("name").GetString() == "If-Model-Provider-Key"
+                && parameter.GetProperty("in").GetString() == "header"
+                && parameter.GetProperty("required").GetBoolean());
+
+        var executionContext = paths.GetProperty("/api/ai/execution-context").GetProperty("post");
+        executionContext.GetProperty("operationId").GetString().Should().Be("ResolveAiExecutionContext");
+        executionContext.GetProperty("requestBody").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/AiExecutionContextRequest");
+        executionContext.GetProperty("responses").GetProperty("200").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/AiExecutionContextResponse");
+        executionContext.GetProperty("responses").GetProperty("409").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/AiExecutionContextErrorResponse");
+        executionContext.GetProperty("description").GetString().Should().Contain("If-Model-Provider-Key");
 
         var outcomeSpec = paths.GetProperty("/api/runs/{id}/outcome-spec").GetProperty("get");
         outcomeSpec.GetProperty("operationId").GetString().Should().Be("GetCoordinatorOutcomeSpec");

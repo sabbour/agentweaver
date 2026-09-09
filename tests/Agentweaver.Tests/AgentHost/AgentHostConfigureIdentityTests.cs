@@ -23,13 +23,17 @@ public sealed class AgentHostConfigureIdentityTests
     public void ConfigureRequest_carries_projectId_and_agentName_into_run_configuration()
     {
         var request = JsonSerializer.Deserialize<ConfigureRequest>(
-            """{"runId":"run-335","projectId":"project-335","agentName":"Stark"}""",
+            """{"runId":"run-335","projectId":"project-335","agentName":"Stark","modelProviderKey":"accepted-fingerprint"}""",
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         request.Should().NotBeNull();
         var configuration = request!.ToRunConfiguration();
         configuration.ProjectId.Should().Be("project-335");
         configuration.AgentName.Should().Be("Stark");
+        configuration.ModelProviderKey.Should().Be("accepted-fingerprint");
+        var state = new AgentHostRuntimeState();
+        state.TryConfigure(configuration).Should().BeTrue();
+        state.ModelProviderKey.Should().Be("accepted-fingerprint");
     }
 
     [Fact]

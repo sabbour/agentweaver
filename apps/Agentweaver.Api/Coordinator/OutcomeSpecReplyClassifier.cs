@@ -89,6 +89,7 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
         "{\"decision\": \"confirm\"} or {\"decision\": \"revise\"}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotOutcomeSpecReplyClassifier> _logger;
     private readonly string? _modelId;
 
@@ -96,10 +97,12 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotOutcomeSpecReplyClassifier> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         // A low-latency binary classification on the synchronous steering path: resolve through the
         // validated generation-model options, which default to a small/fast model rather than the
         // shared frontier generation model.
@@ -125,7 +128,11 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
             // must fail closed to revise within a few seconds rather than hang the request. Timeout
             // and any other failure both resolve to null (revise) below.
             var decision = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(context.RunId, prompt, token),
+                token => _effectiveModelTurn is null
+                    ? RunModelTurnAsync(context.RunId, prompt, token)
+                    : _effectiveModelTurn.RunAsync(
+                        context.RunId, context.ProjectId, _modelId, ClassifierCharter, prompt,
+                        supportsByok: false, token),
                 ClassificationTimeout,
                 ct,
                 onTimeout: () => _logger.LogWarning(
@@ -137,7 +144,7 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
                 context.RunId, decision?.ToString() ?? "unparseable/timed-out");
             return decision;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex,
                 "Outcome-spec reply classification model turn failed for run {RunId}; caller will fail closed to revise.",

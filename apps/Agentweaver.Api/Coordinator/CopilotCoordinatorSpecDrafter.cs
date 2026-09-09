@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
@@ -47,6 +48,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly RunStreamStore _streamStore;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
+    private readonly IModelInvocationGuard? _modelInvocationGuard;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _outcomeSpecModel;
@@ -61,7 +64,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         RunStreamStore streamStore,
         ILoggerFactory loggerFactory,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -71,6 +76,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _toolApprovalGate = toolApprovalGate;
         _streamStore = streamStore;
         _loggerFactory = loggerFactory;
+        _byokProviderConfiguration = byokProviderConfiguration;
+        _modelInvocationGuard = modelInvocationGuard;
         _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
@@ -110,7 +117,12 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 _sandboxPolicyStore,
                 _approvalStore,
                 _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+                _loggerFactory.CreateLogger<CopilotAIAgent>(),
+                byokProviderConfiguration: _byokProviderConfiguration,
+                modelInvocationGuard: _modelInvocationGuard);
+            agent.ConfigureProviderBoundary(
+                ResolveAcceptedModelSource(input),
+                input.ByokProviderFingerprint);
 
             // Stream the drafting turn onto the COORDINATOR run stream so the reused run timeline
             // shows the coordinator's live output (intent, any grounding tool calls, and the drafted
@@ -151,6 +163,22 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 
     private string ResolveOutcomeSpecModel(string? projectModel) =>
         string.IsNullOrWhiteSpace(projectModel) ? _outcomeSpecModel : projectModel.Trim();
+
+    private static ModelSource ResolveAcceptedModelSource(CoordinatorDraftInput input)
+    {
+        var modelSource = ModelSourceExtensions.FromApiString(input.ModelSource);
+        if (modelSource == ModelSource.Byok && string.IsNullOrWhiteSpace(input.ByokProviderFingerprint))
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The accepted BYOK provider fingerprint is unavailable for outcome-spec drafting.",
+                isRetryable: true);
+        }
+
+        return modelSource;
+    }
 
     /// <summary>
     /// Reads the project's dispatchable team roster from <paramref name="repositoryPath"/> and returns

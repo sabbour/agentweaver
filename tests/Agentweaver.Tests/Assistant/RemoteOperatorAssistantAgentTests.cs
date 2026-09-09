@@ -17,6 +17,18 @@ namespace Agentweaver.Tests.Assistant;
 public sealed class RemoteOperatorAssistantAgentTests
 {
     [Fact]
+    public void Remote_provider_change_preserves_the_conflict_outcome()
+    {
+        var classified = RemoteOperatorAssistantAgent.ClassifyOrWrap(
+            new WorkflowAgentInfrastructureException(
+                "model_provider_changed", "The accepted model provider changed before invocation.", isRetryable: true),
+            "run-provider-change", "Remote turn failed");
+        var providerError = classified.Should().BeOfType<AgentProviderException>().Subject;
+        providerError.ErrorCode.Should().Be("model_provider_changed");
+        Agentweaver.Api.Endpoints.AssistantEndpoints.ProviderFailureStatus(providerError).Should().Be(409);
+    }
+
+    [Fact]
     public async Task RunTurn_LaunchesAgentHostWithCurrentMcpBrokerToken()
     {
         var lifecycle = new RecordingPodLifecycle();

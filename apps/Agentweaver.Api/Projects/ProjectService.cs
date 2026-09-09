@@ -20,18 +20,23 @@ public sealed class ProjectService
     private readonly ProjectGitInitializer _gitInit;
     private readonly GitHubConnectionsPersistenceStore _githubConnections;
     private readonly ILogger<ProjectService> _logger;
+    private readonly Uri _repoAppBaseOrigin;
 
     public ProjectService(
         IProjectStore store,
         IProjectWorkspaceProvider workspace,
         ProjectGitInitializer gitInit,
         GitHubConnectionsPersistenceStore githubConnections,
+        IConfiguration configuration,
         ILogger<ProjectService> logger)
     {
         _store = store;
         _workspace = workspace;
         _gitInit = gitInit;
         _githubConnections = githubConnections;
+        _repoAppBaseOrigin = new Uri(
+            (configuration["Auth:RepoApp:BaseUrl"] ?? "https://github.com").TrimEnd('/'),
+            UriKind.Absolute);
         _logger = logger;
     }
 
@@ -119,6 +124,7 @@ public sealed class ProjectService
     public async Task<Project> CreateFromGitHubAsync(
         string name,
         string sourceRepository,
+        string cloneUrl,
         string requestedPath,
         string? defaultProvider,
         string? defaultModelCopilot,
@@ -130,7 +136,9 @@ public sealed class ProjectService
         ValidateName(name);
         if (string.IsNullOrWhiteSpace(sourceRepository))
             throw new ArgumentException("Source repository must not be empty.", nameof(sourceRepository));
-        ValidateGitHubHttpsUrl(sourceRepository);
+        if (string.IsNullOrWhiteSpace(cloneUrl))
+            throw new ArgumentException("Clone URL must not be empty.", nameof(cloneUrl));
+        ValidateGitHubHttpsUrl(cloneUrl);
 
         var id = ProjectId.New();
         var workingDir = await _workspace.ResolveWorkingDirectoryAsync(id, requestedPath, ct)
@@ -152,7 +160,7 @@ public sealed class ProjectService
         {
             defaultBranch = _gitInit.Clone(
                 workingDir,
-                sourceRepository,
+                cloneUrl,
                 accessToken,
                 GitClonePurpose.ProjectCreation);
         }
@@ -418,15 +426,18 @@ public sealed class ProjectService
         };
     }
 
-    private static void ValidateGitHubHttpsUrl(string sourceRepository)
+    private void ValidateGitHubHttpsUrl(string sourceRepository)
     {
         if (!Uri.TryCreate(sourceRepository, UriKind.Absolute, out var uri) ||
             uri.Scheme != Uri.UriSchemeHttps ||
-            !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
-            !sourceRepository.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase) ||
-            !string.IsNullOrEmpty(uri.UserInfo))
+            !string.Equals(uri.IdnHost, _repoAppBaseOrigin.IdnHost, StringComparison.OrdinalIgnoreCase) ||
+            uri.Port != _repoAppBaseOrigin.Port ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Fragment))
         {
-            throw new ArgumentException("source_repository must be an HTTPS GitHub URL starting with https://github.com/.", nameof(sourceRepository));
+            throw new ArgumentException(
+                "source_repository must be an HTTPS URL on the configured GitHub origin.",
+                nameof(sourceRepository));
         }
     }
 

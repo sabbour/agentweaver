@@ -10,22 +10,25 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
 | `Auth__OAuth__PublicOrigin` | Production | Canonical Agentweaver issuer origin. The only accepted audience is this origin plus `/mcp`. |
 | `AGENTWEAVER_TOKEN` | Stdio only | Agentweaver broker token with audience `<public-origin>/mcp` and scope `mcp:invoke`. |
 
-## `.mcp.json` example
+## Local stdio `.mcp.json` example
 
 ```json
 {
   "mcpServers": {
     "agentweaver": {
       "command": "dotnet",
-      "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
+      "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build", "--", "--stdio"],
       "env": {
-        "AGENTWEAVER_API_URL": "http://localhost:5000",
-        "AGENTWEAVER_TOKEN": "<your-personal-token>"
+        "AGENTWEAVER_API_URL": "http://localhost:5000"
       }
     }
   }
 }
 ```
+
+Set `AGENTWEAVER_TOKEN` in the environment that launches the MCP client. Do not store
+the token in `.mcp.json` or source control. The repository root `.mcp.json` uses the
+published HTTP endpoint instead of this explicit local-development configuration.
 
 ## Authentication & health
 

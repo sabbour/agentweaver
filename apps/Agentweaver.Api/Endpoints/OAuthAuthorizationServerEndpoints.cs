@@ -89,7 +89,6 @@ public static class OAuthAuthorizationServerEndpoints
         var request = context.GetOpenIddictServerRequest();
         if (request is null)
             return Results.BadRequest(new { error = Errors.InvalidRequest });
-        var redirectUri = request.RedirectUri!;
         var scope = NormalizeScopes(request.GetScopes());
         if (!scope.Contains(OAuthServerConfiguration.McpScope, StringComparer.Ordinal)
             || !await HasExactResourceAsync(
@@ -98,12 +97,44 @@ public static class OAuthAuthorizationServerEndpoints
             return OAuthForbid(Errors.InvalidTarget, "The request must target the configured MCP resource.");
         }
 
+        var consentApplication = await ResolveConsentApplicationAsync(
+            applications, request, ct).ConfigureAwait(false);
+        if (consentApplication is null)
+        {
+            return Results.BadRequest(new
+            {
+                error = Errors.InvalidRequest,
+                error_description = "The OAuth client or validated redirect URI could not be resolved.",
+            });
+        }
+
         var browser = await browserSessions.GetCurrentAsync(context, ct).ConfigureAwait(false);
         if (browser is null)
         {
             var handle = await SaveTransactionAsync(
-                db, request, scope, browserSessionId: null, subject: null, ct).ConfigureAwait(false);
-            return Results.Redirect($"/auth/entra/authorize?oauth_return_handle={Uri.EscapeDataString(handle)}");
+                db,
+                request,
+                scope,
+                browserSessionId: null,
+                subject: null,
+                continuationDecision: HttpMethods.IsPost(context.Request.Method) ? "reauthenticate" : null,
+                ct).ConfigureAwait(false);
+            var continuationPath =
+                $"/auth/entra/authorize?oauth_return_handle={Uri.EscapeDataString(handle)}";
+            if (!HttpMethods.IsPost(context.Request.Method))
+                return Results.Redirect(continuationPath);
+
+            var reauthenticationStyleNonce =
+                Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.ContentSecurityPolicy =
+                OAuthConsentContentSecurityPolicy.CreateNoForm(reauthenticationStyleNonce);
+            return Results.Content(
+                RenderReauthentication(
+                    consentApplication.ClientName,
+                    continuationPath,
+                    reauthenticationStyleNonce),
+                "text/html; charset=utf-8");
         }
 
         if (HttpMethods.IsPost(context.Request.Method))
@@ -114,7 +145,8 @@ public static class OAuthAuthorizationServerEndpoints
             var transaction = await ClaimTransactionAsync(db, handle, browser, request, ct).ConfigureAwait(false);
             if (transaction is null)
                 return OAuthForbid(Errors.InvalidRequest, "The consent transaction is invalid or expired.");
-            if (decision != "approve")
+            var consentApproved = decision == "approve";
+            if (!consentApproved)
                 return OAuthForbid(Errors.AccessDenied, "The resource owner denied the request.");
 
             await UpsertConsentAsync(db, browser.EntraObjectId, request.ClientId!, scope, ct).ConfigureAwait(false);
@@ -130,19 +162,54 @@ public static class OAuthAuthorizationServerEndpoints
             return SignIn(browser.EntraObjectId, scope, configuration.Resource.AbsoluteUri);
 
         var consentHandle = await SaveTransactionAsync(
-            db, request, scope, browser.Id, browser.EntraObjectId, ct).ConfigureAwait(false);
-        var application = await applications.FindByClientIdAsync(request.ClientId!, ct).ConfigureAwait(false);
-        var descriptor = new OpenIddictApplicationDescriptor();
-        if (application is not null)
-            await applications.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
-        var clientName = descriptor.DisplayName ?? request.ClientId!;
+            db, request, scope, browser.Id, browser.EntraObjectId, continuationDecision: null, ct)
+            .ConfigureAwait(false);
         var styleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.ContentSecurityPolicy =
-            $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+            OAuthConsentContentSecurityPolicy.Create(
+                styleNonce,
+                consentApplication.CallbackSource);
         return Results.Content(
-            RenderConsent(request, scope, consentHandle, clientName, browser.EntraObjectId, styleNonce),
+            RenderConsent(
+                request,
+                scope,
+                consentHandle,
+                consentApplication.ClientName,
+                browser.EntraObjectId,
+                styleNonce),
             "text/html; charset=utf-8");
+    }
+
+    private static async Task<ConsentApplication?> ResolveConsentApplicationAsync(
+        IOpenIddictApplicationManager applications,
+        OpenIddictRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.ClientId)
+            || string.IsNullOrWhiteSpace(request.RedirectUri))
+        {
+            return null;
+        }
+
+        var application = await applications.FindByClientIdAsync(
+            request.ClientId, ct).ConfigureAwait(false);
+        if (application is null)
+            return null;
+
+        // OpenIddict has already matched this redirect against the application, including
+        // RFC 8252 loopback port substitution. Serialize that validated request value.
+        if (!OAuthConsentContentSecurityPolicy.TrySerializeCallbackSource(
+                request.RedirectUri, out var callbackSource))
+        {
+            return null;
+        }
+
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
+        return new ConsentApplication(
+            descriptor.DisplayName ?? request.ClientId,
+            callbackSource);
     }
 
     private static async Task<IResult> ResumeAsync(
@@ -161,6 +228,7 @@ public static class OAuthAuthorizationServerEndpoints
         var transaction = await db.OAuthAuthorizationTransactions.AsNoTracking()
             .SingleOrDefaultAsync(x => x.HandleHash == hash, ct).ConfigureAwait(false);
         var claimed = transaction is not null
+            && transaction.ContinuationDecision is null or "reauthenticate"
             && transaction.ExpiresAt > DateTimeOffset.UtcNow
             && await db.OAuthAuthorizationTransactions
                 .Where(x => x.HandleHash == hash && x.ConsumedAt == null)
@@ -179,6 +247,7 @@ public static class OAuthAuthorizationServerEndpoints
             ["code_challenge"] = transaction.CodeChallenge,
             ["code_challenge_method"] = CodeChallengeMethods.Sha256,
             ["resource"] = configuration.Resource.AbsoluteUri,
+            ["prompt"] = transaction.ContinuationDecision == "reauthenticate" ? "consent" : null,
         };
         return Results.Redirect(QueryString.Create(query!).ToUriComponent().Insert(0, "/oauth/authorize"));
     }
@@ -248,6 +317,7 @@ public static class OAuthAuthorizationServerEndpoints
         string[] scopes,
         string? browserSessionId,
         string? subject,
+        string? continuationDecision,
         CancellationToken ct)
     {
         var handle = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
@@ -261,6 +331,7 @@ public static class OAuthAuthorizationServerEndpoints
             ClientState = request.State,
             BrowserSessionId = browserSessionId,
             Subject = subject,
+            ContinuationDecision = continuationDecision,
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -280,6 +351,7 @@ public static class OAuthAuthorizationServerEndpoints
         var transaction = await db.OAuthAuthorizationTransactions.AsNoTracking()
             .SingleOrDefaultAsync(x => x.HandleHash == hash, ct).ConfigureAwait(false);
         if (transaction is null
+            || transaction.ContinuationDecision is not null
             || transaction.ExpiresAt <= DateTimeOffset.UtcNow
             || transaction.BrowserSessionId != browser.Id
             || transaction.Subject != browser.EntraObjectId
@@ -403,7 +475,7 @@ public static class OAuthAuthorizationServerEndpoints
                 .card { width: min(560px, 100%); overflow: hidden; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
                 .content { padding: 32px; }
                 .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
-                .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: #242424; color: #faf8f5; font-size: 12px; font-weight: 700; letter-spacing: -.03em; }
+                .brand-mark { width: 28px; height: 28px; display: block; object-fit: contain; }
                 h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
                 .intro { margin: 10px 0 0; color: #3c3c3c; font-size: 15px; }
                 .client { margin: 24px 0; padding: 16px; background: #f3f1ed; border: 1px solid #e6e6e6; border-radius: 10px; }
@@ -433,7 +505,7 @@ public static class OAuthAuthorizationServerEndpoints
             <body>
               <main class="card" aria-labelledby="consent-title">
                 <section class="content">
-                  <div class="brand"><span class="brand-mark" aria-hidden="true">AW</span><span>Agentweaver</span></div>
+                  <div class="brand"><img class="brand-mark" src="/agentweaver.png" alt="Agentweaver logo"><span>Agentweaver</span></div>
                   <h1 id="consent-title">Allow access to Agentweaver?</h1>
                   <p class="intro">An MCP client wants to connect to your Agentweaver account.</p>
                   <div class="client">
@@ -457,4 +529,47 @@ public static class OAuthAuthorizationServerEndpoints
             </html>
             """;
     }
+
+    private static string RenderReauthentication(
+        string clientName,
+        string continuationPath,
+        string styleNonce)
+    {
+        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
+
+        return $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Sign in again | Agentweaver</title>
+              <style nonce="{{Encode(styleNonce)}}">
+                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
+                * { box-sizing: border-box; }
+                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+                .card { width: min(520px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+                .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
+                .brand-mark { width: 28px; height: 28px; display: block; object-fit: contain; }
+                h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
+                p { margin: 12px 0 0; color: #3c3c3c; font-size: 15px; }
+                .client-name { font-weight: 600; overflow-wrap: anywhere; }
+                .primary { display: inline-block; margin-top: 24px; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-size: 14px; font-weight: 600; text-decoration: none; }
+                .primary:hover { background: #3c3c3c; }
+                .primary:focus-visible { outline: 2px solid #242424; outline-offset: 3px; }
+              </style>
+            </head>
+            <body>
+              <main class="card" aria-labelledby="reauthentication-title">
+                <div class="brand"><img class="brand-mark" src="/agentweaver.png" alt="Agentweaver logo"><span>Agentweaver</span></div>
+                <h1 id="reauthentication-title">Sign in again to continue</h1>
+                <p>Your Agentweaver session expired before you finished authorizing <span class="client-name">{{Encode(clientName)}}</span>.</p>
+                <a class="primary" href="{{Encode(continuationPath)}}">Sign in again</a>
+              </main>
+            </body>
+            </html>
+            """;
+    }
+
+    private sealed record ConsentApplication(string ClientName, string CallbackSource);
 }

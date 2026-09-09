@@ -1688,7 +1688,9 @@ public sealed class GitHubConnectionsPersistenceStore(
         string entraObjectId,
         DateTimeOffset now,
         DateTimeOffset expiresAt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedBindingId = null,
+        string? expectedCredentialVersion = null)
     {
         if (!Enum.IsDefined(purpose) ||
             (projectId is not null && string.IsNullOrWhiteSpace(projectId)) ||
@@ -1698,6 +1700,15 @@ public sealed class GitHubConnectionsPersistenceStore(
 
         var binding = await GetActiveCopilotBindingOrPlatformDefaultAsync(projectId, ct).ConfigureAwait(false);
         if (binding is null)
+            return null;
+        if (expectedBindingId is not null
+            && !string.Equals(binding.Id, expectedBindingId, StringComparison.Ordinal))
+            return null;
+        if (expectedCredentialVersion is not null
+            && !string.Equals(
+                binding.CredentialVersion,
+                expectedCredentialVersion,
+                StringComparison.Ordinal))
             return null;
         if (projectId is null &&
             !string.Equals(binding.Id, PlatformDefaultCopilotBindingRecord.SingletonId, StringComparison.Ordinal))
@@ -2166,17 +2177,31 @@ public sealed class GitHubConnectionsPersistenceStore(
         string targetRunId,
         string? projectId,
         CancellationToken ct = default)
+        => await TryInheritCapabilitySnapshotsAsync(
+            sourceRunId, targetRunId, projectId, includeCopilot: true, ct).ConfigureAwait(false);
+
+    internal async Task<bool> TryInheritRepositoryCapabilitySnapshotAsync(
+        string sourceRunId, string targetRunId, string? projectId, CancellationToken ct = default)
+        => await TryInheritCapabilitySnapshotsAsync(
+            sourceRunId, targetRunId, projectId, includeCopilot: false, ct).ConfigureAwait(false);
+
+    private async Task<bool> TryInheritCapabilitySnapshotsAsync(
+        string sourceRunId, string targetRunId, string? projectId, bool includeCopilot, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(projectId))
             return false;
 
-        var source = await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false);
+        var source = (await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false))
+            .Where(snapshot => includeCopilot || snapshot.Purpose != GitHubCapabilityPurpose.UnattendedCopilot)
+            .ToList();
         if (source.Count == 0)
         {
             return await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
         }
 
-        var target = await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false);
+        var target = (await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false))
+            .Where(snapshot => includeCopilot || snapshot.Purpose != GitHubCapabilityPurpose.UnattendedCopilot)
+            .ToList();
         if (target.Count != 0)
             return target.Count == source.Count &&
                 target.Select(snapshot => snapshot.Purpose).SequenceEqual(source.Select(snapshot => snapshot.Purpose));
@@ -2302,7 +2327,8 @@ public sealed class GitHubConnectionsPersistenceStore(
     public async Task<CapabilitySnapshotBackfillResult> CaptureRootCapabilitySnapshotsAsync(
         string runId,
         string projectId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool includeCopilot = true)
     {
         var resolved = new List<RunGitHubCapabilitySnapshotRecord>();
         var unattendedRepository = await TryResolveUnattendedRepositorySnapshotAsync(runId, projectId, ct)
@@ -2311,7 +2337,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             resolved.Add(unattendedRepository);
         var unattendedCopilot = await TryResolveUnattendedCopilotSnapshotAsync(runId, projectId, ct)
             .ConfigureAwait(false);
-        if (unattendedCopilot is not null)
+        if (includeCopilot && unattendedCopilot is not null)
             resolved.Add(unattendedCopilot);
 
         if (resolved.Count == 0)
@@ -2389,6 +2415,20 @@ public sealed class GitHubConnectionsPersistenceStore(
             CredentialVersion = binding.CredentialVersion, GrantDigest = binding.GrantDigest,
             CapturedAt = DateTimeOffset.UtcNow,
         };
+    }
+
+    internal async Task<bool> CaptureAcceptedCopilotSnapshotAsync(
+        string runId, string projectId, string bindingId, string? credentialVersion, CancellationToken ct)
+    {
+        var existing = (await GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false))
+            .SingleOrDefault(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+        var snapshot = existing ?? await TryResolveUnattendedCopilotSnapshotAsync(runId, projectId, ct)
+            .ConfigureAwait(false);
+        if (snapshot is null
+            || snapshot.SourceBindingId != bindingId
+            || snapshot.CredentialVersion != credentialVersion)
+            return false;
+        return existing is not null || await TryInsertCapabilitySnapshotAsync(snapshot, ct).ConfigureAwait(false);
     }
 
     internal async Task<CopilotBindingSnapshotSource?> GetActiveCopilotBindingOrPlatformDefaultAsync(

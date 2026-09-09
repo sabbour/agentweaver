@@ -388,6 +388,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         ConfirmOutcomeSpecRequest? request,
         IRunStore runStore,
         CoordinatorRunService coordinator,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -407,11 +409,35 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return ForbiddenError();
 
         var caller = httpContext.GetCaller();
-        var outcome = await coordinator.ConfirmOutcomeSpecAsync(
-            id,
-            CallerDisplayName(caller),
-            request?.AllowTaskPromotion ?? false,
-            ct);
+        using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+            httpContext,
+            "orchestration",
+            run.ProjectId,
+            executionPlans,
+            executionPlanAccessor,
+            ct).ConfigureAwait(false);
+        execution.Activate();
+        if (execution.Error is not null)
+            return execution.Error;
+
+        CoordinatorGateOutcome outcome;
+        try
+        {
+            outcome = await coordinator.ConfirmOutcomeSpecAsync(
+                id,
+                CallerDisplayName(caller),
+                request?.AllowTaskPromotion ?? false,
+                ct);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
+        }
+        catch (AgentProviderException ex)
+        {
+            return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
+                ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
+        }
 
         return outcome switch
         {
@@ -438,6 +464,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         ReviseOutcomeSpecRequest request,
         IRunStore runStore,
         CoordinatorRunService coordinator,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -460,7 +488,31 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return ForbiddenError();
 
         var caller = httpContext.GetCaller();
-        var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
+        using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+            httpContext,
+            "orchestration",
+            run.ProjectId,
+            executionPlans,
+            executionPlanAccessor,
+            ct).ConfigureAwait(false);
+        execution.Activate();
+        if (execution.Error is not null)
+            return execution.Error;
+
+        CoordinatorGateOutcome outcome;
+        try
+        {
+            outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
+        }
+        catch (AgentProviderException ex)
+        {
+            return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
+                ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
+        }
 
         return outcome switch
         {
@@ -570,6 +622,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         SteerRequest request,
         IRunStore runStore,
         CoordinatorSteeringService steering,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -578,6 +632,27 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
 
         if (string.IsNullOrWhiteSpace(request.Kind))
             return BadRequestError("kind_required", "kind is required.");
+        var normalizedKind = request.Kind.Trim().ToLowerInvariant();
+        if (normalizedKind == SteeringKind.Pause)
+        {
+            return BadRequestError(
+                "steering_invalid",
+                "Steering verb 'pause' is descoped in Phase 2. Use 'stop' for an immediate halt, or 'redirect'/'amend' to change direction at the next turn boundary.");
+        }
+        if (!SteeringKind.IsSupported(normalizedKind))
+        {
+            return BadRequestError(
+                "steering_invalid",
+                $"Unknown steering verb '{request.Kind}'. Supported verbs: stop, send, redirect, amend.");
+        }
+        if (normalizedKind is not SteeringKind.Send
+            && SteeringKind.IsNextBoundary(normalizedKind)
+            && string.IsNullOrWhiteSpace(request.Instruction))
+        {
+            return BadRequestError(
+                "steering_invalid",
+                $"A '{normalizedKind}' directive requires a non-empty instruction.");
+        }
 
         Run? run;
         try { run = await runStore.GetAsync(runId, ct); }
@@ -592,6 +667,18 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return ForbiddenError();
 
         var caller = httpContext.GetCaller();
+        using var execution = normalizedKind == SteeringKind.Stop
+            ? null
+            : await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "orchestration",
+                run.ProjectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+        execution?.Activate();
+        if (execution?.Error is not null)
+            return execution.Error;
 
         try
         {
@@ -620,6 +707,15 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 new { error = "steering_recovery_exhausted", message = ex.Message },
                 statusCode: StatusCodes.Status409Conflict);
         }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
+        }
+        catch (AgentProviderException ex)
+        {
+            return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
+                ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -640,6 +736,9 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         IRunStore runStore,
         Agentweaver.Api.Coordinator.AssemblyReviewGate reviewGate,
         IServiceScopeFactory scopeFactory,
+        RunOrchestrator orchestrator,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -659,6 +758,35 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return ForbiddenError();
 
         var caller = httpContext.GetCaller();
+        using var execution = request.Approved || request.RequestChanges
+            ? await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "orchestration",
+                run.ProjectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false)
+            : null;
+        execution?.Activate();
+        if (execution?.Error is not null)
+            return execution.Error;
+
+        if (execution is not null)
+        {
+            try
+            {
+                await orchestrator.ValidateDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
+            }
+            catch (AgentProviderException ex)
+            {
+                return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
+                    ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
+            }
+        }
 
         var decision = new Agentweaver.Api.Coordinator.AssemblyReviewDecision(
             Approved: request.Approved,

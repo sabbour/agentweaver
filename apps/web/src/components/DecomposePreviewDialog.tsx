@@ -24,6 +24,8 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { CheckmarkCircleRegular, InfoRegular } from '@fluentui/react-icons';
 import { EmptyState } from './ui';
 import type { ProposedBacklogItem } from '../api/types';
+import { AiExecutionProviderHint, AiExecutionProviderReadiness } from './AiExecutionProviderHint';
+import type { AiExecutionContext } from '../api/types';
 
 const useStyles = makeStyles({
   grid: {
@@ -74,6 +76,11 @@ export interface DecomposePreviewDialogProps {
   totalFound: number;
   isLoading: boolean;
   error?: string | null;
+  executionContext?: AiExecutionContext | null;
+  providerLoading?: boolean;
+  providerError?: string | null;
+  projectId?: string;
+  onRefreshProvider?: () => void;
 }
 
 export function DecomposePreviewDialog({
@@ -85,6 +92,11 @@ export function DecomposePreviewDialog({
   totalFound,
   isLoading,
   error,
+  executionContext = null,
+  providerLoading = false,
+  providerError,
+  projectId,
+  onRefreshProvider,
 }: DecomposePreviewDialogProps) {
   const styles = useStyles();
 
@@ -100,7 +112,15 @@ export function DecomposePreviewDialog({
               }
             >Preview proposed backlog items</DialogTitle>
           <DialogContent>
-            {isLoading ? (
+              {onRefreshProvider && (
+                <AiExecutionProviderReadiness
+                  context={executionContext}
+                  error={providerError}
+                  projectId={projectId}
+                  onRefresh={onRefreshProvider}
+                />
+              )}
+              {isLoading ? (
               <div className={styles.loadingRow}>
                 <Spinner size="extra-tiny" aria-hidden="true" />
                 <Text>Analyzing spec file...</Text>
@@ -164,13 +184,15 @@ export function DecomposePreviewDialog({
             <Button appearance="secondary" onClick={onClose} disabled={isLoading}>
               Cancel
             </Button>
-            <Button
-              appearance="primary"
-              disabled={isLoading || !!error || proposedItems.length === 0}
-              onClick={() => void onConfirm()}
-            >
-              {isLoading ? 'Loading...' : 'Create tasks'}
-            </Button>
+            <AiExecutionProviderHint context={executionContext}>
+              <Button
+                appearance="primary"
+                disabled={isLoading || providerLoading || !!error || proposedItems.length === 0}
+                onClick={() => void onConfirm()}
+              >
+                {isLoading ? 'Loading...' : 'Create tasks'}
+              </Button>
+            </AiExecutionProviderHint>
           </DialogActions>
         </DialogBody>
       </DialogSurface>

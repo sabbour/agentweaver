@@ -25,8 +25,10 @@ import { DAG_NODE_SEP,
   NODE_W,
   RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
 import { PodIndicator } from './PodIndicator';
 import { STEERING_HELP } from './steeringHelp';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import '@xyflow/react/dist/style.css';
 import {
   AlertRegular,
@@ -536,8 +538,14 @@ interface CoordinatorTopologyGraphProps {
   edges: TopologyEdge[];
 }
 
-export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
+export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext(
+    'orchestration',
+    projectId,
+    coordinatorRunId,
+    Boolean(projectId && coordinatorRunId),
+  );
 
   const [steerReq, setSteerReq] = useState<SteerRequest | null>(null);
   const [instruction, setInstruction] = useState('');
@@ -561,19 +569,28 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
     if (!steerReq) return;
     setBusy(true);
     setError(null);
+    if (steerReq.kind !== 'stop') providerContext.setPhase('active');
     try {
       const targetChildRunId = steerReq.node.kind === 'subtask' ? steerReq.node.childRunId : undefined;
-      await apiClient.steerCoordinator(coordinatorRunId, {
+      const request = {
         kind: steerReq.kind,
         target_child_run_id: targetChildRunId,
         instruction: steerReq.kind === 'stop' ? undefined : instruction.trim() || undefined,
-      });
+      };
+      if (steerReq.kind === 'stop') {
+        await apiClient.steerCoordinator(coordinatorRunId, request);
+      } else {
+        await apiClient.steerCoordinator(coordinatorRunId, request, providerContext.providerKey);
+      }
+      if (steerReq.kind !== 'stop') providerContext.setPhase('completed');
       closeSteer();
     } catch (err) {
-      setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setError(steerReq.kind !== 'stop' && providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and send again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
-  }, [steerReq, instruction, coordinatorRunId, closeSteer]);
+  }, [steerReq, instruction, coordinatorRunId, closeSteer, providerContext]);
 
   // Build forward edges from server dependency edges. As pure layout glue (not
   // topology computation), connect the coordinator node to root subtasks ONLY
@@ -713,15 +730,29 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" disabled={busy} onClick={closeSteer}>Cancel</Button>
-              <Button
-                appearance="primary"
-                disabled={busy || (!!needsInstruction && !instruction.trim())}
-                onClick={() => void submitSteer()}
-              >
-                {busy ? 'Sending' : steerReq?.kind === 'stop' ? 'Stop' : 'Send'}
-              </Button>
+              {steerReq?.kind === 'stop' ? (
+                <Button
+                  appearance="primary"
+                  disabled={busy}
+                  onClick={() => void submitSteer()}
+                >
+                  {busy ? 'Sending' : 'Stop'}
+                </Button>
+              ) : (
+                <AiExecutionProviderHint context={providerContext.context}>
+                  <Button
+                    appearance="primary"
+                    disabled={busy || (!!needsInstruction && !instruction.trim())
+                      || providerContext.loading || !providerContext.available}
+                    onClick={() => void submitSteer()}
+                  >
+                    {busy ? 'Sending' : 'Send'}
+                  </Button>
+                </AiExecutionProviderHint>
+              )}
               {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
             </DialogActions>
+            <AiProviderChangeAnnouncement message={providerContext.announcement} />
           </DialogBody>
         </DialogSurface>
       </Dialog>

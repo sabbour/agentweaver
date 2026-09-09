@@ -2,6 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage } from '../api/errors';
 import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
+import { useAiExecutionContext } from './useAiExecutionContext';
 import { useEffect, useState } from 'react';
 import type {
   CommitResponse,
@@ -11,6 +12,7 @@ import type {
   WorkspaceFileDiff,
   WorkspaceFileEntry,
   WorkspaceNode,
+  AiExecutionContext,
 } from '../api/types';
 const POLL_INTERVAL_MS = 3000;
 const RETRY_POLL_INTERVAL_MS = 15000;
@@ -44,6 +46,9 @@ export interface ArtifactBrowserAdapter {
   approveAcceptedStatus?: string;
   requestChanges?: (runId: string, comment: string) => Promise<void>;
   decline?: (runId: string) => Promise<void>;
+  aiExecutionContext?: AiExecutionContext | null;
+  aiExecutionLoading?: boolean;
+  aiExecutionAvailable?: boolean;
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -86,6 +91,10 @@ export interface ArtifactBrowserState {
   requestChanges: (comment: string) => Promise<void>;
   approveLabel: string;
   approveAriaLabel: string;
+  approvalUsesAi: boolean;
+  aiExecutionContext: AiExecutionContext | null;
+  aiExecutionLoading: boolean;
+  aiExecutionAvailable: boolean;
 }
 
 export function useArtifactBrowser(
@@ -102,6 +111,12 @@ export function useArtifactBrowser(
   const normalizedRunStatus = normalizeRunStatus(runStatus);
   const isHistorical = isTerminalRunStatus(normalizedRunStatus);
   const isLive = normalizedRunStatus === 'in_progress';
+  const standardProviderContext = useAiExecutionContext(
+    'agent_turn',
+    undefined,
+    runId,
+    Boolean(runId && !adapter && normalizedRunStatus === 'awaiting_review'),
+  );
 
   const [filter, setFilter] = useState<FilterValue>('all');
   const [files, setFiles] = useState<WorkspaceFileEntry[]>([]);
@@ -428,11 +443,19 @@ export function useArtifactBrowser(
         await adapter.requestChanges(runId, comment);
         setRequestChangesResult({ run_id: runId, status: 'changes_requested' });
       } else {
-        const resp = await apiClient.requestChanges(runId, comment);
+        standardProviderContext.setPhase('active');
+        const resp = await apiClient.requestChanges(
+          runId,
+          comment,
+          standardProviderContext.providerKey,
+        );
+        standardProviderContext.setPhase('completed');
         setRequestChangesResult(resp);
       }
       onRequestChangesSuccess?.();
     } catch (err) {
+      if (!adapter && !standardProviderContext.handleInvocationError(err))
+        standardProviderContext.setPhase('prepared');
       if (err instanceof ApiError) {
         setRequestChangesError(
           err.status === 403
@@ -483,5 +506,9 @@ export function useArtifactBrowser(
     requestChanges,
     approveLabel: adapter?.approveLabel ?? 'Commit and Merge',
     approveAriaLabel: adapter?.approveAriaLabel ?? 'Commit and merge to originating branch',
+    approvalUsesAi: Boolean(adapter?.approve),
+    aiExecutionContext: adapter?.aiExecutionContext ?? standardProviderContext.context,
+    aiExecutionLoading: adapter?.aiExecutionLoading ?? standardProviderContext.loading,
+    aiExecutionAvailable: adapter?.aiExecutionAvailable ?? standardProviderContext.available,
   };
 }

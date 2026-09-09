@@ -211,6 +211,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         // construct this generator directly with a fake IAgentRunner and don't exercise resolution.
         var modelSource = ModelSource.GitHubCopilot;
         CopilotOperationCapability? capability = null;
+        ByokProviderConfiguration? byokProviderConfiguration = null;
+        IModelInvocationGuard? modelInvocationGuard = null;
         if (_scopeFactory is not null)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -220,6 +222,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 parsedProjectId, userId, ProjectModelProviderCapabilityPurpose.BlueprintGeneration, ct).ConfigureAwait(false);
             modelSource = plan.ModelSource;
             capability = plan.Capability;
+            byokProviderConfiguration = plan.ByokProviderConfiguration;
+            modelInvocationGuard = plan.ModelInvocationGuard;
         }
 
         var scratch = Path.Combine(AppPaths.DataDirectory, "blueprint-scratch", Guid.NewGuid().ToString("N"));
@@ -238,7 +242,9 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 ct: ct,
                 userId: userId,
                 projectId: projectId,
-                copilotCapability: capability).ConfigureAwait(false);
+                copilotCapability: capability,
+                byokProviderConfiguration: byokProviderConfiguration,
+                modelInvocationGuard: modelInvocationGuard).ConfigureAwait(false);
         }
         finally
         {

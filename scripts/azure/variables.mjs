@@ -69,10 +69,12 @@ export const DEFAULTS = Object.freeze({
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
 const SHORT_SHA_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_TAG_RE = /^v\d+\.\d+\.\d+/;
+const IMAGE_DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 const QUALIFIED_IMAGE_REFERENCE_RE =
   /^(?<registry>(?:localhost(?::\d+)?|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:(?::\d+)|(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:\:\d+)?)))\/(?<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)(?::(?<tag>[\w][\w.-]{0,127})|@(?<digest>sha256:[A-Fa-f0-9]{64}))$/;
 
 export class InvalidImageTagError extends Error {}
+export class InvalidImageDigestError extends Error {}
 export class InvalidImageReferenceError extends Error {}
 
 /** Thrown when a variable with no safe generic default (e.g. KEYVAULT_NAME) is unresolved. */
@@ -114,6 +116,20 @@ export function validateImageTag(tag, name) {
     return true;
   }
   throw new InvalidImageTagError(`${name}='${tag}' is not a valid tag (expected git SHA or vX.Y.Z semver).`);
+}
+
+/**
+ * Validates an immutable OCI manifest digest used to pin only AgentHost
+ * release deployments after ACR promotion.
+ * @param {string} digest
+ * @param {string} name field name, used only in the error message.
+ * @returns {true}
+ */
+export function validateImageDigest(digest, name) {
+  if (!IMAGE_DIGEST_RE.test(String(digest ?? ""))) {
+    throw new InvalidImageDigestError(`${name}='${digest}' is not a valid sha256 manifest digest.`);
+  }
+  return true;
 }
 
 /**
@@ -237,6 +253,7 @@ export async function resolveVariables(options = {}) {
     env.OAUTH_SIGNING_CERTIFICATE_NAME || DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME;
   const OAUTH_ENCRYPTION_CERTIFICATE_NAME =
     env.OAUTH_ENCRYPTION_CERTIFICATE_NAME || DEFAULTS.OAUTH_ENCRYPTION_CERTIFICATE_NAME;
+  const REPO_APP_PRIVATE_KEY_FILE = env.REPO_APP_PRIVATE_KEY_FILE || "";
   // These are deliberately opt-in: a local Azure CLI timeout does not prove
   // whether a remote ACR build/import completed, so callers must reconcile
   // the target tag/digest before deciding whether a retry is safe.
@@ -276,6 +293,10 @@ export async function resolveVariables(options = {}) {
   if (env.AGENTHOST_IMAGE_TAG) {
     validateImageTag(AGENTHOST_IMAGE_TAG, "AGENTHOST_IMAGE_TAG");
   }
+  const AGENTHOST_IMAGE_DIGEST = env.AGENTHOST_IMAGE_DIGEST || "";
+  if (AGENTHOST_IMAGE_DIGEST) {
+    validateImageDigest(AGENTHOST_IMAGE_DIGEST, "AGENTHOST_IMAGE_DIGEST");
+  }
 
   const ACR_LOGIN_SERVER = `${ACR_NAME}.azurecr.io`;
 
@@ -295,6 +316,7 @@ export async function resolveVariables(options = {}) {
     APP_POOL_NAME,
     IMAGE_TAG,
     AGENTHOST_IMAGE_TAG,
+    AGENTHOST_IMAGE_DIGEST,
     ACR_LOGIN_SERVER,
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
@@ -308,6 +330,7 @@ export async function resolveVariables(options = {}) {
     ENTRA_ENTERPRISE_APP_OBJECT_ID,
     OAUTH_SIGNING_CERTIFICATE_NAME,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME,
+    REPO_APP_PRIVATE_KEY_FILE,
     ACR_BUILD_TIMEOUT_MS,
     ACR_IMPORT_TIMEOUT_MS,
     TENANT_ID,
@@ -335,6 +358,9 @@ export function printSummary(vars, log) {
   log.field("App pool", vars.APP_POOL_NAME);
   log.field("Image tag", vars.IMAGE_TAG);
   log.field("AgentHost tag", vars.AGENTHOST_IMAGE_TAG);
+  if (vars.AGENTHOST_IMAGE_DIGEST) {
+    log.field("AgentHost digest", vars.AGENTHOST_IMAGE_DIGEST);
+  }
   log.field("Key Vault", vars.KEYVAULT_NAME);
   log.field("OAuth signing certificate", vars.OAUTH_SIGNING_CERTIFICATE_NAME);
   log.field("OAuth encryption certificate", vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME);

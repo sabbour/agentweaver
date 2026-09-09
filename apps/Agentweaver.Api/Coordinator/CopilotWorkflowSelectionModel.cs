@@ -39,16 +39,19 @@ public class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
         "{\"selected\": \"bug-fix\", \"rationale\": \"A one-line null check is a targeted defect fix.\"}";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotWorkflowSelectionModel> _logger;
     private readonly string? _modelId;
 
     public CopilotWorkflowSelectionModel(
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotWorkflowSelectionModel> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         _modelId = configuration["Providers:GitHubCopilot:Model"];
     }
 
@@ -61,13 +64,17 @@ public class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
                 throw new InvalidOperationException(
                     "Workflow selection requires a run-bound Copilot capability snapshot.");
 
-            var result = await RunModelTurnAsync(context.RunId, prompt, ct).ConfigureAwait(false);
+            var result = _effectiveModelTurn is null
+                ? await RunModelTurnAsync(context.RunId, prompt, ct).ConfigureAwait(false)
+                : await _effectiveModelTurn.RunAsync(
+                    context.RunId, context.ProjectId, _modelId, SelectionCharter, prompt,
+                    supportsByok: false, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "Workflow selection model completed for project {ProjectId}: {Length} chars. Raw response (truncated): {Response}",
                 context.ProjectId, result?.Length ?? 0, Truncate(result));
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex,
                 "Workflow selection model turn failed for project {ProjectId}; selector will use the default.",

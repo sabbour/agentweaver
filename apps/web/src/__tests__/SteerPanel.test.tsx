@@ -13,10 +13,43 @@ import {
   vi,
 } from 'vitest';
 import type { ReactNode } from 'react';
+const providerContext = vi.hoisted(() => ({
+  context: {
+    ai_required: true,
+    operation: 'orchestration',
+    phase: 'prepared' as const,
+    execution_key: 'signed-provider-key',
+    expires_at: '2099-01-01T00:00:00Z',
+    effective_model_provider: {
+      state: 'resolved' as const,
+      provider_kind: 'platform_github_copilot' as const,
+      resolution_scope: 'project' as const,
+      provider_scope: 'platform' as const,
+      provider_type: null,
+      model_id: 'gpt-5',
+      provider_key: 'provider-fingerprint',
+      unavailable_reason: null,
+    },
+  },
+  providerKey: 'signed-provider-key',
+  available: true,
+  loading: false,
+  error: null,
+  announcement: '',
+  refresh: vi.fn(),
+  handleInvocationError: vi.fn(() => false),
+  applyCompletedContext: vi.fn(),
+  applyProvider: vi.fn(),
+  setPhase: vi.fn(),
+}));
+
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     steerCoordinator: vi.fn(),
   },
+}));
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => providerContext,
 }));
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -29,6 +62,10 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  providerContext.available = true;
+  providerContext.loading = false;
+  providerContext.announcement = '';
+  providerContext.handleInvocationError.mockReturnValue(false);
 });
 afterEach(() => {
   cleanup();
@@ -73,6 +110,23 @@ describe('SteerPanel — rendering', () => {
     const placeholder = textarea.getAttribute('placeholder') ?? '';
     expect(placeholder).toContain('re-running the affected subtask');
   });
+
+  it('discloses the expected provider and disables only AI-continuing actions when unavailable', () => {
+    providerContext.available = false;
+
+    render(
+      <Wrapper>
+        <SteerPanel runId="run-1" />
+      </Wrapper>,
+    );
+
+    expect(screen.getAllByText('Expected provider: GitHub Copilot. Model: gpt-5.')).not.toHaveLength(0);
+    expect(screen.getByTestId('steer-panel-send').getAttribute('aria-describedby')).toBeTruthy();
+    expect((screen.getByTestId('steer-panel-send') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('steer-panel-redirect') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('steer-panel-amend') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('steer-panel-stop') as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -95,6 +149,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
       expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
         'run-blocked-1',
         { kind: 'redirect', instruction: 'Re-run subtask 3 against main' },
+        'signed-provider-key',
       ),
     );
   });
@@ -114,6 +169,7 @@ describe('SteerPanel — Reroute to coordinator', () => {
       const call = vi.mocked(apiClient.steerCoordinator).mock.calls[0];
       expect(call[0]).toBe('run-blocked-1');
       expect(call[1].kind).toBe('redirect');
+      expect(call[2]).toBe('signed-provider-key');
       // The auto-generated instruction for integration_conflict should reference re-running
       expect(call[1].instruction).toContain('re-running');
     });
@@ -336,6 +392,7 @@ describe('SteerPanel — steering verb contract', () => {
       expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
         'run-1',
         { kind: 'send', instruction: 'Just a heads up' },
+        'signed-provider-key',
       ),
     );
   });
@@ -355,6 +412,7 @@ describe('SteerPanel — steering verb contract', () => {
       expect(vi.mocked(apiClient.steerCoordinator)).toHaveBeenCalledWith(
         'coord-1',
         { kind: 'redirect', instruction: 'Unblock and use v2', target_child_run_id: 'child-7' },
+        'signed-provider-key',
       ),
     );
   });

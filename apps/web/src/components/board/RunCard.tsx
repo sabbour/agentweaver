@@ -7,6 +7,11 @@ import { AgentAvatar } from '../AgentAvatar';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { RunCardDto } from '../../api/types';
+import {
+  AiExecutionProviderHint,
+  AiProviderChangeAnnouncement,
+} from '../AiExecutionProviderHint';
+import { useAiExecutionContext } from '../../hooks/useAiExecutionContext';
 const useStyles = makeStyles({
   card: {
     display: 'flex',
@@ -144,6 +149,12 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
   const [retrying, setRetrying] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const providerContext = useAiExecutionContext(
+    'orchestration',
+    projectId,
+    card.run_id,
+    card.status === 'failed' || card.status === 'merge_failed',
+  );
 
   // Coordinator-run detail pages (CoordinatorRunPage -> /api/runs/{id}/...) are run_id-keyed for
   // EVERY coordinator run, so navigate by the canonical run_id. (workflow_run_id is null for both
@@ -162,9 +173,13 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
     setRetrying(true);
     setError(null);
     try {
-      const res = await apiClient.retryRun(card.run_id);
+      const res = await apiClient.retryRun(card.run_id, providerContext.providerKey);
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and retry again.');
+        return;
+      }
       setError(err instanceof ApiError
         ? `Retry failed: API error ${err.status}: ${err.body}`
         : err instanceof Error
@@ -255,15 +270,20 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
         </Caption1>
       )}
       {isRetryable && (
-        <Button
-          appearance="subtle"
-          size="small"
-          disabled={retrying}
-          onClick={handleRetry}
-          data-testid="run-card-retry"
-        >
-          Retry
-        </Button>
+        <>
+          <AiExecutionProviderHint context={providerContext.context}>
+            <Button
+              appearance="subtle"
+              size="small"
+              disabled={retrying || providerContext.loading || !providerContext.available}
+              onClick={handleRetry}
+              data-testid="run-card-retry"
+            >
+              Retry
+            </Button>
+          </AiExecutionProviderHint>
+          <AiProviderChangeAnnouncement message={providerContext.announcement} />
+        </>
       )}
       {error && <Text className={styles.error}>{error}</Text>}
     </div>

@@ -49,6 +49,7 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
         "markdown: {\"produces_code\": true} or {\"produces_code\": false}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotAssemblyGateCodeClassifier> _logger;
     private readonly string? _modelId;
 
@@ -56,10 +57,12 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotAssemblyGateCodeClassifier> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
     }
@@ -80,7 +83,16 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
                 try
                 {
                     result = await RunWithTimeoutAsync(
-                        token => RunModelTurnAsync(context.RunId, BuildPrompt(context), token),
+                        token => _effectiveModelTurn is null
+                            ? RunModelTurnAsync(context.RunId, BuildPrompt(context), token)
+                            : _effectiveModelTurn.RunAsync(
+                                context.RunId,
+                                context.ProjectId,
+                                _modelId,
+                                ClassifierCharter,
+                                BuildPrompt(context),
+                                supportsByok: false,
+                                token),
                         ClassificationTimeout,
                         ct,
                         onTimeout: () => _logger.LogWarning(
@@ -91,7 +103,8 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
                 {
                     throw;
                 }
-                catch (Exception ex) when (attempt < MaxClassificationAttempts)
+                catch (Exception ex) when (attempt < MaxClassificationAttempts
+                    && !EffectiveRunModelTurnExecutor.IsProviderChange(ex))
                 {
                     _logger.LogWarning(
                         ex,
@@ -114,7 +127,7 @@ public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex,
                 "Assembly-gate code classification failed for run {RunId}; retaining Build & Test.",

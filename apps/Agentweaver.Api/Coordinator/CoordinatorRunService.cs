@@ -57,6 +57,7 @@ public sealed class CoordinatorRunService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunOptionsStore _runOptions;
     private readonly IBacklogTaskStore _backlogStore;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
@@ -86,7 +87,8 @@ public sealed class CoordinatorRunService
         IConfiguration configuration,
         ILogger<CoordinatorRunService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -100,6 +102,7 @@ public sealed class CoordinatorRunService
         _scopeFactory = scopeFactory;
         _runOptions = runOptions;
         _backlogStore = backlogStore;
+        _executionPlanAccessor = executionPlanAccessor;
         _logger = logger;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
@@ -140,7 +143,7 @@ public sealed class CoordinatorRunService
 
         // The resolver — not a hardcoded literal — decides the run's durable ModelSource, so a BYOK
         // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
 
         var run = new Run
         {
@@ -202,7 +205,9 @@ public sealed class CoordinatorRunService
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
-        var effectiveProvider = await ResolveEffectiveProviderAsync(source.ProjectId, ct).ConfigureAwait(false);
+        if (source.ProjectId is not { } projectId)
+            throw new InvalidOperationException("A coordinator retry requires a project-scoped run.");
+        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
 
         var run = new Run
         {
@@ -251,9 +256,17 @@ public sealed class CoordinatorRunService
     /// accountable human), because Autopilot does not bypass the confirmation gate.
     /// </summary>
     public async Task StartReservedCoordinatorRunAsync(
-        Run reservedRun, bool autoApproveTools, bool autopilot, string confirmedBy, CancellationToken ct)
+        Run reservedRun,
+        bool autoApproveTools,
+        bool autopilot,
+        string confirmedBy,
+        CancellationToken ct,
+        EffectiveModelProviderResult? effectiveProvider = null)
     {
-        await ActivateAsync(reservedRun, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+        await ActivateAsync(
+                reservedRun,
+                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                effectiveProvider: effectiveProvider)
             .ConfigureAwait(false);
 
         // Fire-and-forget bounded loop: confirm the spec once it arms — but ONLY when Autopilot is
@@ -277,7 +290,13 @@ public sealed class CoordinatorRunService
         string? submittingUserDisplayName = null,
         EffectiveModelProviderResult? effectiveProvider = null)
     {
-        await PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run,
+            _appStopping,
+            effectiveProvider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                ? effectiveProvider
+                : null).ConfigureAwait(false);
 
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
@@ -292,7 +311,10 @@ public sealed class CoordinatorRunService
             ?? await ResolveEffectiveProviderAsync(run.ProjectId, _appStopping).ConfigureAwait(false);
         entry.RecordNext(
             EventTypes.RunModelProviderResolved,
-            resolvedProvider.ToProvenancePayload(runId, run.ModelId));
+            resolvedProvider.ToProvenancePayload(
+                runId,
+                run.ModelId,
+                EffectiveModelProviderProvenance.ScopeProject));
 
         var outcomeSpecGenerationModel = await ResolveOutcomeSpecGenerationModelAsync(
             run.ProjectId!.Value, _appStopping).ConfigureAwait(false);
@@ -306,7 +328,10 @@ public sealed class CoordinatorRunService
             run.ModelId,
             WorkflowOverrideId: workflowOverrideId,
             OutcomeSpecGenerationModel: outcomeSpecGenerationModel,
-            SubmittingUserDisplayName: submittingUserDisplayName);
+            SubmittingUserDisplayName: submittingUserDisplayName,
+            ModelSource: resolvedProvider.ToModelSource().ToApiString(),
+            ByokProviderFingerprint: (resolvedProvider as EffectiveModelProviderResult.Byok)
+                ?.ConfigurationFingerprint);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;
@@ -330,14 +355,21 @@ public sealed class CoordinatorRunService
         }
     }
 
-    private async Task PrepareGitHubCapabilitySnapshotsAsync(Run run, CancellationToken ct)
+    private async Task PrepareGitHubCapabilitySnapshotsAsync(
+        Run run,
+        CancellationToken ct,
+        EffectiveModelProviderResult? expectedCopilotProvider = null)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
         if (lifecycle is null)
             return;
 
-        if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForLaunchAsync(
+                run,
+                ct,
+                expectedCopilotProvider?.ProviderId(),
+                expectedCopilotProvider?.CredentialVersion()).ConfigureAwait(false))
             throw new InvalidOperationException(
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
     }
@@ -354,6 +386,19 @@ public sealed class CoordinatorRunService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
         return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderForInvocationAsync(
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        if (_executionPlanAccessor?.Current is { Operation: "orchestration" } accepted)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+        }
+        return await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -377,7 +422,12 @@ public sealed class CoordinatorRunService
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+                run,
+                ct,
+                expectedCopilotBindingId: effectiveProvider.ProviderId(),
+                expectedCopilotCredentialVersion: effectiveProvider.CredentialVersion())
+            .ConfigureAwait(false))
             throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
     }
 
@@ -489,6 +539,18 @@ public sealed class CoordinatorRunService
     private async Task<CoordinatorGateOutcome> SubmitDecisionAsync(
         string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
     {
+        if (RunId.TryParse(runId, out var parsedRunId))
+        {
+            var persistedRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (persistedRun is not null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null)
+                    await orchestrator.ValidateDurableProviderBoundaryAsync(persistedRun, ct).ConfigureAwait(false);
+            }
+        }
+
         var streamingRun = _registry.Get(runId);
         if (streamingRun is null)
         {
@@ -843,6 +905,14 @@ public sealed class CoordinatorRunService
                     "User must re-link their GitHub account.", runId);
                 await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.AuthRequiredErrorCode).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ContainsOutcomeSpecDraftTimeout(ex))
+            {
+                _logger.LogError(
+                    ex,
+                    "Coordinator run {RunId} exceeded the outcome-spec drafting deadline; transitioning to Failed",
+                    runId);
+                await FailRunSafeAsync(runId, entry, "outcome_spec_draft_timeout").ConfigureAwait(false);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Coordinator watch loop failed for run {RunId}; transitioning to Failed", runId);
@@ -851,6 +921,10 @@ public sealed class CoordinatorRunService
         }, _appStopping);
     }
 
+    private static bool ContainsOutcomeSpecDraftTimeout(Exception? exception) =>
+        exception is CoordinatorOutcomeSpecDraftTimeoutException
+        || (exception?.InnerException is not null && ContainsOutcomeSpecDraftTimeout(exception.InnerException));
+
     private async Task WatchAsync(
         string runId, StreamingRun streamingRun, RunStreamEntry entry, string ownerUser, CancellationToken ct)
     {
@@ -858,6 +932,21 @@ public sealed class CoordinatorRunService
         {
             switch (evt)
             {
+                case ExecutorFailedEvent failed:
+                    var isDraftTimeout = ContainsOutcomeSpecDraftTimeout(failed.Data);
+                    var providerFailure = isDraftTimeout ? null : FindProviderFailure(failed.Data);
+                    var reason = isDraftTimeout
+                        ? "outcome_spec_draft_timeout"
+                        : providerFailure?.ErrorCode ?? $"coordinator_executor_failed:{failed.ExecutorId}";
+                    _logger.LogError(
+                        failed.Data,
+                        "Coordinator executor {ExecutorId} failed for run {RunId}; transitioning to Failed with {Reason}",
+                        failed.ExecutorId,
+                        runId,
+                        reason);
+                    await FailRunSafeAsync(runId, entry, reason, providerFailure).ConfigureAwait(false);
+                    return;
+
                 case RequestInfoEvent rie:
                     // Suspended at the await-confirmation gate. The draft executor already emitted
                     // coordinator.outcome_spec and marked the entry awaiting-review.
@@ -1677,6 +1766,13 @@ public sealed class CoordinatorRunService
     }
 
     private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason = "watch_loop_error")
+        => await FailRunSafeAsync(runId, entry, reason, providerFailure: null).ConfigureAwait(false);
+
+    private async Task FailRunSafeAsync(
+        string runId,
+        RunStreamEntry entry,
+        string reason,
+        AgentProviderException? providerFailure)
     {
         try
         {
@@ -1694,7 +1790,24 @@ public sealed class CoordinatorRunService
                     runId);
                 return;
             }
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
+            if (!entry.HasEventType(EventTypes.RunFailed))
+            {
+                if (providerFailure is null)
+                {
+                    entry.RecordNext(EventTypes.RunFailed, new { reason });
+                }
+                else
+                {
+                    entry.RecordNext(EventTypes.RunFailed, new
+                    {
+                        reason = providerFailure.ErrorCode,
+                        errorCode = providerFailure.ErrorCode,
+                        message = providerFailure.UserMessage,
+                        category = providerFailure.FailureKind.ToString(),
+                        retryable = providerFailure.IsRetryable,
+                    });
+                }
+            }
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
         }
@@ -1710,6 +1823,17 @@ public sealed class CoordinatorRunService
             await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
         }
+    }
+
+    private static AgentProviderException? FindProviderFailure(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AgentProviderException providerFailure)
+                return providerFailure;
+        }
+
+        return null;
     }
 
     /// <summary>

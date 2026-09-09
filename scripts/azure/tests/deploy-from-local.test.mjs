@@ -1,7 +1,7 @@
 // deploy-from-local.test.mjs -- Tests for deploy-from-local.mjs: dirty-tree rejection (+
 // allowDirty override), tag minting (HEAD short SHA, never the VERSION-
-// derived tag), the orchestration call sequence (20 -> 25 -> 30 -> warm-pool
-// wait), and the warm-pool wait/verify logic (not-ready-then-ready polling,
+// derived tag), the orchestration call sequence (20 -> 30 -> 25 -> warm-pool
+// wait -> 40), and the warm-pool wait/verify logic (not-ready-then-ready polling,
 // digest/tag match and mismatch). All collaborators are injected fakes -- no
 // real git/kubectl/az/exec calls.
 
@@ -254,7 +254,13 @@ test("verifyWarmPoolImage: falls back to tag-string comparison when the ACR dige
 
 // -------------------- run() orchestration --------------------
 
-function makeOrchestrationFakes({ dirty = false, warmPoolReplicas = 2, warmPoolReady = 2, imageMatch = true } = {}) {
+function makeOrchestrationFakes({
+  dirty = false,
+  warmPoolReplicas = 2,
+  warmPoolReady = 2,
+  imageMatch = true,
+  verificationOk = true,
+} = {}) {
   const calls = [];
   const exec = {
     capture: async (cmd, args, opts) => {
@@ -309,8 +315,16 @@ function makeOrchestrationFakes({ dirty = false, warmPoolReplicas = 2, warmPoolR
       return { HOST: "agentweaver.example.com" };
     },
   };
+  const verifyStep = {
+    run: async (cfg) => {
+      calls.push({ type: "step40", cfg });
+      return verificationOk
+        ? { ok: true, pass: 12, fail: 0, results: [] }
+        : { ok: false, pass: 11, fail: 1, results: [{ ok: false, message: "API unavailable" }] };
+    },
+  };
 
-  return { calls, exec, git, kubectl, buildStep, provenanceStep, deployStep, log: noopLog(), sleep: async () => {} };
+  return { calls, exec, git, kubectl, buildStep, provenanceStep, deployStep, verifyStep, log: noopLog(), sleep: async () => {} };
 }
 
 test("run(): refuses a dirty working tree by default", async () => {
@@ -331,7 +345,7 @@ test("run(): mints HEAD short SHA and never reuses cfg.IMAGE_TAG (the VERSION-de
   assert.notEqual(result.imageTag, CFG.IMAGE_TAG);
 });
 
-test("run(): calls steps in order 20 -> 30 -> 25 -> warm-pool-wait, passing the minted tag through", async () => {
+test("run(): calls steps in order 20 -> 30 -> 25 -> warm-pool-wait -> 40, passing the minted tag through", async () => {
   // 30 (deploy) must run BEFORE 25 (provenance verify): steps/25 is a
   // post-deploy safety net that checks the digest actually running live in
   // the cluster, so it must observe the NEW deployment, not the stale
@@ -341,8 +355,10 @@ test("run(): calls steps in order 20 -> 30 -> 25 -> warm-pool-wait, passing the 
   const fakes = makeOrchestrationFakes();
   await run(CFG, fakes);
 
-  const stepOrder = fakes.calls.filter((c) => ["step20", "step25", "step30"].includes(c.type)).map((c) => c.type);
-  assert.deepEqual(stepOrder, ["step20", "step30", "step25"]);
+  const stepOrder = fakes.calls
+    .filter((c) => ["step20", "step25", "step30", "step40"].includes(c.type))
+    .map((c) => c.type);
+  assert.deepEqual(stepOrder, ["step20", "step30", "step25", "step40"]);
 
   const step20Call = fakes.calls.find((c) => c.type === "step20");
   assert.equal(step20Call.cfg.IMAGE_TAG, "bbbbbbb");
@@ -355,6 +371,8 @@ test("run(): calls steps in order 20 -> 30 -> 25 -> warm-pool-wait, passing the 
 
   const warmPoolPoll = fakes.calls.filter((c) => c.type === "capture" && c.cmd === "kubectl" && c.args[1] === "sandboxwarmpool");
   assert.ok(warmPoolPoll.length >= 1);
+  assert.ok(fakes.calls.findIndex((c) => c.type === "step40") > fakes.calls.findIndex((c) =>
+    c.type === "capture" && c.cmd === "kubectl" && c.args[1] === "sandboxwarmpool"));
 });
 
 test("run(): succeeds end-to-end when the warm pool becomes ready and runs the expected image", async () => {
@@ -362,6 +380,16 @@ test("run(): succeeds end-to-end when the warm pool becomes ready and runs the e
   const result = await run(CFG, fakes);
   assert.equal(result.warmPool.ready, true);
   assert.equal(result.warmPool.imageCheck.ok, true);
+  assert.equal(result.verify.ok, true);
+  assert.equal(result.ok, true);
+});
+
+test("run(): propagates a failed post-deploy health verification as ok:false", async () => {
+  const fakes = makeOrchestrationFakes({ verificationOk: false });
+  const result = await run(CFG, fakes);
+
+  assert.equal(result.verify.ok, false);
+  assert.equal(result.ok, false);
 });
 
 test("run(): throws when the warm pool is ready but running a mismatched image (never silently succeeds)", async () => {

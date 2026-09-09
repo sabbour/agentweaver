@@ -305,7 +305,41 @@ public sealed class McpToolSchemaTests
     }
 
     private static RunTools CreateRunTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
-        new(CreateApiClient(handler));
+        new(CreateApiClient((request, ct) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri!.AbsolutePath == "/api/ai/execution-context")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "orchestration",
+                        phase = "prepared",
+                        execution_key = "opaque-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "project",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                        },
+                    }),
+                });
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri!.AbsolutePath.EndsWith("/orchestrations", StringComparison.Ordinal))
+            {
+                request.Headers.GetValues("If-Model-Provider-Key").Should().Equal("opaque-provider-key");
+            }
+
+            return handler(request, ct);
+        }));
 
     private static AgentweaverApiClient CreateApiClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
     {

@@ -16,6 +16,8 @@ import {
   DismissCircleRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
+import { AiExecutionProviderHint, AiExecutionProviderStatus, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useState } from 'react';
 import type { ReviewResponse } from '../api/types';
 const useStyles = makeStyles({
@@ -83,6 +85,7 @@ interface ReviewPanelProps {
 
 export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext('agent_turn', undefined, runId, false);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ReviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,11 +96,19 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
     setError(null);
     setRetriableMessage(null);
     try {
-      const resp = await apiClient.submitReview(runId, approved);
+      if (approved && providerContext.context) providerContext.setPhase('active');
+      const resp = await apiClient.submitReview(
+        runId,
+        approved,
+        approved ? providerContext.providerKey : undefined,
+      );
+      if (approved) providerContext.setPhase('completed');
       setResult(resp);
       onReviewComplete?.(resp);
     } catch (err) {
-      if (err instanceof RetriableReviewError) {
+      if (approved && providerContext.handleInvocationError(err)) {
+        setRetriableMessage('Review the AI provider and approve again.');
+      } else if (err instanceof RetriableReviewError) {
         setRetriableMessage(err.serverMessage);
       } else if (err instanceof ApiError) {
         if (err.status === 403) {
@@ -139,10 +150,19 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
         </div>
         <div className={styles.resultRow}>
           <Text>Status:</Text>
-          <span className={styles.statusRow}>
-            {statusIcon}
-            <Text>{result.status}</Text>
-          </span>
+          {result.status !== 'declined' ? (
+            <AiExecutionProviderStatus context={providerContext.context}>
+              <span className={styles.statusRow}>
+                {statusIcon}
+                <Text>{result.status}</Text>
+              </span>
+            </AiExecutionProviderStatus>
+          ) : (
+            <span className={styles.statusRow}>
+              {statusIcon}
+              <Text>{result.status}</Text>
+            </span>
+          )}
         </div>
         {result.merge_result && (
           <Text className={styles.mergeResult}>{result.merge_result}</Text>
@@ -169,14 +189,19 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
       )}
       {error && <Text className={styles.error}>{error}</Text>}
       <div className={styles.actions} role="group" aria-label="Review actions">
-        <Button
-          appearance="primary"
-          icon={pending ? <Spinner size="tiny" /> : undefined}
-          disabled={pending}
-          onClick={() => void submit(true)}
-        >
-          Approve
-        </Button>
+        <AiExecutionProviderHint context={providerContext.context}>
+          <Button
+            appearance="primary"
+            icon={pending ? <Spinner size="tiny" /> : undefined}
+            disabled={pending || (
+              providerContext.context !== null
+              && (providerContext.loading || !providerContext.available)
+            )}
+            onClick={() => void submit(true)}
+          >
+            Approve
+          </Button>
+        </AiExecutionProviderHint>
         <Button
           appearance="secondary"
           disabled={pending}
@@ -185,6 +210,7 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
           Decline
         </Button>
       </div>
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>
   );
 }

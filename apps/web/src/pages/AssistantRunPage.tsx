@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Spinner,
   Text,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage, parseApiBody } from '../api/errors';
@@ -18,6 +19,15 @@ import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import { RunTimeline } from '../components/RunTimeline';
 import { Composer } from '../components/ui/copilot';
 import { ApprovalGate } from '../components/ui/agentic';
+import {
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from '../components/AiExecutionProviderHint';
+import {
+  aiExecutionContextFromEvents,
+  aiExecutionProviderLabel,
+} from '../components/aiExecutionContext';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
 const useStyles = makeStyles({
   page: {
@@ -138,6 +148,20 @@ interface PendingApproval {
   commandHash: string;
   toolName: string;
   targetRunId: string;
+}
+
+interface OptimisticUserMessage {
+  id: string;
+  runId: string;
+  text: string;
+  normalizedText: string;
+  expectedServerOccurrence: number | null;
+  snapshotRequestGenerationAtSend: number;
+  status: 'sending' | 'syncing';
+}
+
+function normalizeMessageText(text: string): string {
+  return text.trim();
 }
 
 /**
@@ -283,23 +307,21 @@ export interface AssistantRunPageProps {
 export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
+  const location = useLocation();
   const effectiveProjectId = projectId ?? params.projectId;
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
+  const providerContext = useAiExecutionContext('assistant_turn');
 
-  // The operator run id is created lazily on the first composer submit; until then the
-  // stream stays disabled ('') and the page shows the empty invitation state. If the page
-  // loads with `?runId=...` already in the URL (a refresh, a bookmark, or the browser back
-  // button), resume that run instead of losing it — the conversation otherwise had no way
-  // to survive navigating away (#346 follow-up).
-  const [runId, setRunId] = useState<string>(() => searchParams.get('runId') ?? '');
+  // The URL is the conversation source of truth. AssistantRoute preserves this page while
+  // assigning a newly-created session's first run id, then resets it when navigation moves
+  // between two already-established run ids.
+  const runId = routeRunId;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Optimistically-rendered user message, shown immediately on send and cleared once the
-  // server-confirmed copy shows up in the event stream (#item-1) — see the render + effect
-  // below.
-  const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticUserMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -316,6 +338,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // new conversation started later (e.g. via "New Session" from the Sessions page).
   const pendingResumeFromRunIdRef = useRef<string | null>(null);
   const sendingRef = useRef(false);
+  const optimisticMessageIdRef = useRef(0);
+  const automaticReconciliationAttemptedRef = useRef(new Set<string>());
 
   // Populate (not submit) the composer with an example prompt — the user still reviews
   // and hits send themselves, matching the Composer's normal edit-then-submit flow rather
@@ -332,16 +356,18 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     });
   }, []);
 
-  const { events, status: streamStatus } = useSeededRunStream(runId);
-
-  // Keep the URL in sync with the active run id so a refresh or shared link resumes the
-  // same conversation instead of dropping back to the empty invitation state.
-  useEffect(() => {
-    if (routeRunId === runId) return;
-    const next = new URLSearchParams(searchParams);
-    if (runId) next.set('runId', runId); else next.delete('runId');
-    setSearchParams(next, { replace: true });
-  }, [routeRunId, runId, searchParams, setSearchParams]);
+  const {
+    events,
+    baselineEvents,
+    baselineReady,
+    snapshotRequestGeneration,
+    baselineRequestGeneration,
+    status: streamStatus,
+    error: streamError,
+    seedError,
+    reconnect,
+    refresh,
+  } = useSeededRunStream(runId);
 
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),
@@ -355,10 +381,133 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     const lastMessage = renderedMessages.at(-1);
     return `${renderedMessages.length}:${lastMessage?.role ?? ''}:${lastMessage?.text ?? ''}`;
   }, [renderedMessages]);
+  const serverUserMessageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const message of renderedMessages) {
+      if (message.role !== 'user') continue;
+      const normalizedText = normalizeMessageText(message.text);
+      counts.set(normalizedText, (counts.get(normalizedText) ?? 0) + 1);
+    }
+    return counts;
+  }, [renderedMessages]);
+  const baselineUserMessageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    const baselineTimeline = buildRunTimeline(
+      baselineEvents,
+      { stripSerializedWorkPlan: false },
+    );
+    for (const step of baselineTimeline.steps) {
+      for (const message of step.messages) {
+        if (message.role !== 'user') continue;
+        const normalizedText = normalizeMessageText(message.text);
+        counts.set(normalizedText, (counts.get(normalizedText) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [baselineEvents]);
+  const optimisticExpectedOccurrences = useMemo(() => {
+    const nextExpectedOccurrence = new Map(baselineUserMessageCounts);
+    const expectedByMessageId = new Map<string, number>();
+    const postSendPendingByText = new Map<string, OptimisticUserMessage[]>();
+    if (baselineReady && baselineRequestGeneration !== null) {
+      for (const message of optimisticMessages) {
+        if (
+          message.runId !== runId
+          || message.expectedServerOccurrence !== null
+          || baselineRequestGeneration <= message.snapshotRequestGenerationAtSend
+        ) {
+          continue;
+        }
+        const messages = postSendPendingByText.get(message.normalizedText) ?? [];
+        messages.push(message);
+        postSendPendingByText.set(message.normalizedText, messages);
+      }
+    }
+    const baselineIncludedOccurrences = new Map<string, number>();
+    for (const [normalizedText, messages] of postSendPendingByText) {
+      const baselineCount = baselineUserMessageCounts.get(normalizedText) ?? 0;
+      // A later snapshot can claim only its trailing repeated occurrences. If it contains
+      // no older occurrence beyond the pending group, keep waiting rather than treating
+      // an unknown pre-send message as confirmation.
+      if (baselineCount <= messages.length) continue;
+      messages.forEach((message, index) => {
+        baselineIncludedOccurrences.set(
+          message.id,
+          baselineCount - messages.length + index + 1,
+        );
+      });
+    }
+    for (const message of optimisticMessages) {
+      if (message.runId !== runId) continue;
+      const currentMaximum = nextExpectedOccurrence.get(message.normalizedText) ?? 0;
+      const expectedServerOccurrence = message.expectedServerOccurrence
+        ?? baselineIncludedOccurrences.get(message.id)
+        ?? (baselineReady ? currentMaximum + 1 : null);
+      if (expectedServerOccurrence === null) continue;
+      nextExpectedOccurrence.set(
+        message.normalizedText,
+        Math.max(currentMaximum, expectedServerOccurrence),
+      );
+      expectedByMessageId.set(message.id, expectedServerOccurrence);
+    }
+    return expectedByMessageId;
+  }, [
+    baselineReady,
+    baselineRequestGeneration,
+    baselineUserMessageCounts,
+    optimisticMessages,
+    runId,
+  ]);
+  const visibleOptimisticMessages = useMemo(
+    () => optimisticMessages.filter((message) => {
+      if (message.runId !== runId) return false;
+      const expectedServerOccurrence = optimisticExpectedOccurrences.get(message.id);
+      return expectedServerOccurrence === undefined
+        || (serverUserMessageCounts.get(message.normalizedText) ?? 0)
+            < expectedServerOccurrence;
+    }),
+    [optimisticExpectedOccurrences, optimisticMessages, runId, serverUserMessageCounts],
+  );
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
   );
+  const activeProviderContext = useMemo(
+    () => aiExecutionContextFromEvents(
+      events,
+      'assistant_turn',
+      busy ? 'active' : 'completed',
+    ) ?? providerContext.context,
+    [busy, events, providerContext.context],
+  );
+
+  const reconcileDurableHistory = useCallback(async () => {
+    setReconciliationError(null);
+    try {
+      await refresh();
+    } catch {
+      setReconciliationError(
+        'The sent message could not be confirmed from saved history. Retry sync to reconcile it.',
+      );
+    } finally {
+      reconnect();
+    }
+  }, [reconnect, refresh]);
+
+  useEffect(() => {
+    if (!runId || streamStatus !== 'error') return;
+    const candidates = optimisticMessages.filter(
+      (message) => message.runId === runId && message.status === 'syncing',
+    );
+    const unattempted = candidates.filter(
+      (message) => !automaticReconciliationAttemptedRef.current.has(message.id),
+    );
+    if (unattempted.length === 0) return;
+    for (const message of unattempted) {
+      automaticReconciliationAttemptedRef.current.add(message.id);
+    }
+    void reconcileDurableHistory();
+  }, [optimisticMessages, reconcileDurableHistory, runId, streamStatus]);
 
   const updateShouldStickToBottom = useCallback(() => {
     const node = transcriptRef.current;
@@ -376,29 +525,15 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     lastRenderedMessageSignatureRef.current = '';
   }, [runId]);
 
-  // Clear the optimistic pending message once its server-confirmed counterpart appears in
-  // the parsed timeline (a "user" role message with the same text) — the real message then
-  // renders through the normal RunTimeline path instead (#item-1).
-  useEffect(() => {
-    if (!pendingMessage) return;
-    const confirmed = timelineModel.steps.some((step) => step.messages.some(
-      (msg) => msg.role === 'user' && msg.text.trim() === pendingMessage.text.trim(),
-    ));
-    const syncPendingMessage = async () => {
-      if (confirmed) setPendingMessage(null);
-    };
-    void syncPendingMessage();
-  }, [pendingMessage, timelineModel]);
-
   // Always reveal the user's own just-sent optimistic message, even if they had scrolled up
   // to read history; once they're back at the bottom, assistant streaming can keep following.
   useEffect(() => {
-    if (!pendingMessage) return;
+    if (visibleOptimisticMessages.length === 0) return;
     shouldStickToBottomRef.current = true;
     requestAnimationFrame(() => {
       scrollLatestMessageIntoView('smooth');
     });
-  }, [pendingMessage, scrollLatestMessageIntoView]);
+  }, [scrollLatestMessageIntoView, visibleOptimisticMessages.length]);
 
   // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —
   // without this, reopening `?runId=...` left the viewport scrolled to the top of a long
@@ -431,8 +566,39 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     setInput('');
     setBusy(true);
     setError(null);
-    setPendingMessage({ id: `pending-${Date.now()}`, text: message });
+    const normalizedText = normalizeMessageText(message);
     const isNewRun = !runId;
+    const isResumingPriorConversation = isNewRun
+      && pendingResumeFromRunIdRef.current !== null;
+    const existingExpectedOccurrence = optimisticMessages
+      .filter((candidate) => (
+        candidate.runId === runId
+        && candidate.normalizedText === normalizedText
+        && candidate.expectedServerOccurrence !== null
+      ))
+      .reduce(
+        (maximum, candidate) => Math.max(
+          maximum,
+          candidate.expectedServerOccurrence ?? 0,
+        ),
+        0,
+      );
+    const expectedServerOccurrence = baselineReady && !isResumingPriorConversation
+      ? Math.max(
+          serverUserMessageCounts.get(normalizedText) ?? 0,
+          existingExpectedOccurrence,
+        ) + 1
+      : null;
+    const optimisticMessage: OptimisticUserMessage = {
+      id: `pending-${++optimisticMessageIdRef.current}`,
+      runId,
+      text: message,
+      normalizedText,
+      expectedServerOccurrence,
+      snapshotRequestGenerationAtSend: snapshotRequestGeneration,
+      status: 'sending',
+    };
+    setOptimisticMessages((current) => [...current, optimisticMessage]);
     try {
       if (isNewRun) {
         const created = await apiClient.createAssistantRun({
@@ -440,21 +606,48 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           defer_first_turn: true,
           project_id: effectiveProjectId,
           resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
-        });
+        }, providerContext.providerKey);
+        providerContext.applyProvider(created.effective_model_provider, 'active');
         // Consumed (or not needed) — clear so it never leaks into a later, unrelated new
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
-        setRunId(created.run_id);
+        setOptimisticMessages((current) => current.map((candidate) => (
+          candidate.id === optimisticMessage.id
+            ? { ...candidate, runId: created.run_id }
+            : candidate
+        )));
+        const next = new URLSearchParams(searchParams);
+        next.set('runId', created.run_id);
+        setSearchParams(next, { replace: true, state: location.state });
         // Create the conversation first so React can bind its SSE stream while this request is
         // still running. Supplying the opening message to createAssistantRun would keep the run id
         // hidden until the entire model turn completed, making the first reply impossible to stream.
-        await apiClient.sendAssistantMessage(created.run_id, { message });
+        const response = await apiClient.sendAssistantMessage(
+          created.run_id,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       } else {
-        await apiClient.sendAssistantMessage(runId, { message });
+        const response = await apiClient.sendAssistantMessage(
+          runId,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       }
+      setOptimisticMessages((current) => current.map((candidate) => (
+        candidate.id === optimisticMessage.id
+          ? { ...candidate, status: 'syncing' }
+          : candidate
+      )));
     } catch (err) {
-      setPendingMessage(null);
-      if (
+      setOptimisticMessages((current) => current.filter(
+        (candidate) => candidate.id !== optimisticMessage.id,
+      ));
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and send again.');
+      } else if (
         isNewRun &&
         err instanceof ApiError &&
         err.status === 429 &&
@@ -476,7 +669,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // the next submit auto-seeds a fresh run with whatever history we can recover, then
         // reset to the start state so the user can send that next message.
         pendingResumeFromRunIdRef.current = runId;
-        setRunId('');
+        const next = new URLSearchParams(searchParams);
+        next.delete('runId');
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation could not be found, so it can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else if (
         !isNewRun &&
@@ -489,7 +684,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // are dormant, not sealed, and wake transparently). Remember its id (same auto-seed
         // handoff as the run_not_found case above) and reset to the start state.
         pendingResumeFromRunIdRef.current = runId;
-        setRunId('');
+        const next = new URLSearchParams(searchParams);
+        next.delete('runId');
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation has ended and can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else {
         setError(formatApiErrorMessage(err));
@@ -498,7 +695,20 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       sendingRef.current = false;
       setBusy(false);
     }
-  }, [busy, effectiveProjectId, input, runId]);
+  }, [
+    busy,
+    effectiveProjectId,
+    input,
+    location.state,
+    optimisticMessages,
+    providerContext,
+    baselineReady,
+    runId,
+    searchParams,
+    serverUserMessageCounts,
+    snapshotRequestGeneration,
+    setSearchParams,
+  ]);
 
   return (
     <div className={styles.page} data-testid="assistant-run-page">
@@ -546,15 +756,24 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             emptyHint="Messages, tool calls, and activity will appear here as the assistant responds."
           />
         )}
-        {pendingMessage && (
-          <div className={styles.pendingMessage} data-testid="assistant-pending-message">
+        {visibleOptimisticMessages.map((pendingMessage) => (
+          <div
+            className={styles.pendingMessage}
+            data-testid="assistant-pending-message"
+            key={pendingMessage.id}
+          >
             <div className={styles.pendingMessageRow}>
-              <Spinner size="extra-tiny" aria-label="Sending" />
+              <Spinner
+                size="extra-tiny"
+                aria-label={pendingMessage.status === 'sending' ? 'Sending' : 'Syncing'}
+              />
               <span className={styles.pendingMessageText}>{pendingMessage.text}</span>
             </div>
-            <span className={styles.pendingMessageStatus}>Sending…</span>
+            <span className={styles.pendingMessageStatus}>
+              {pendingMessage.status === 'sending' ? 'Sending…' : 'Sent · syncing…'}
+            </span>
           </div>
-        )}
+        ))}
         {pendingApprovals.length > 0 && (
           <div className={styles.approvals} data-testid="assistant-approvals">
             {pendingApprovals.map((approval) => (
@@ -571,6 +790,25 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             <MessageBarBody data-testid="assistant-error">{error}</MessageBarBody>
           </MessageBar>
         )}
+        {runId && (streamStatus === 'error' || seedError || reconciliationError) && (
+          <MessageBar intent="warning" data-testid="assistant-reconciliation-warning">
+            <MessageBarBody>
+              {reconciliationError
+                ?? (seedError
+                  ? `Saved conversation history could not be refreshed: ${seedError}`
+                  : `Live updates disconnected${streamError ? `: ${streamError}` : '.'} Sent messages are reconciled from saved history.`)}
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button
+                appearance="transparent"
+                size="small"
+                onClick={() => void reconcileDurableHistory()}
+              >
+                Retry sync
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
         <Composer
           textareaRef={composerTextareaRef}
           value={input}
@@ -585,13 +823,17 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           // itself is gated via disableSend, so the user can keep typing (and even queue
           // up their next message) while the previous one is still in flight; handleSubmit
           // already guards against a duplicate dispatch via `busy`/`sendingRef`.
-          disableSend={busy || !input.trim()}
+          disableSend={busy || providerContext.loading || !providerContext.available || !input.trim()}
+          sendTooltip={aiExecutionProviderLabel(providerContext.context)}
         />
-        <Text className={styles.composerStatus} aria-live="polite">
-          {runId
-            ? `Connected to operator run ${runId} · stream ${streamStatus}`
-            : 'Your first message creates an operator run.'}
-        </Text>
+        <AiExecutionProviderStatus context={activeProviderContext}>
+          <Text className={styles.composerStatus}>
+            {runId
+              ? `Connected to operator run ${runId} · stream ${streamStatus}`
+              : 'Your first message creates an operator run.'}
+          </Text>
+        </AiExecutionProviderStatus>
+        <AiProviderChangeAnnouncement message={providerContext.announcement} />
       </div>
     </div>
   );

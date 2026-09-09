@@ -8,6 +8,44 @@ A **Run** is a unit of work that Agentweaver executes on your behalf. You descri
 
 ## Starting a run
 
+### Model provider context
+
+Supported AI actions show three provider states:
+
+- **Expected provider** shows the provider selected before submission.
+- **Using** shows the provider for active execution.
+- **Used** shows the provider recorded for completed execution.
+
+The labels include the provider kind and the model name when it is available.
+Screen readers announce changes, including replacement by another provider of the same kind.
+The UI and API do not expose credentials, account names, or provider-binding identities.
+
+Agentweaver revalidates provider selection immediately before each covered model call.
+If the selection changes after preparation, the API returns `409 model_provider_changed`.
+This response occurs before model invocation and includes a redacted replacement context.
+The UI shows the replacement as new **Expected provider** context.
+
+The API binds an execution key to the caller, operation, project, and provider configuration.
+The key expires after five minutes.
+Missing or expired keys require new context.
+
+Coordinator outcome drafting and Preview analysis use the effective model provider, including
+a configured BYOK provider. Other coordinator classifier actions can still require GitHub
+Copilot when their execution path is Copilot-specific.
+Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
+
+Custom API clients prepare context through `POST /api/ai/execution-context`.
+The request contains `operation` and the applicable `project_id` or `run_id`.
+The response contains `phase: "prepared"`, `execution_key`, `expires_at`, and `effective_model_provider`.
+The provider object contains redacted kind, scope, type, model, availability, and comparison data.
+
+Send `execution_key` in `If-Model-Provider-Key` for the corresponding action.
+Do not display or send the public `provider_key` as authority.
+It is an opaque comparison fingerprint, not an execution key.
+If preparation or a guarded invocation returns `409 model_provider_changed`, stop the operation,
+use the replacement context, and prepare a new key. If the provider is unavailable, configure an
+eligible BYOK provider or the operation's required GitHub Copilot capability, then retry.
+
 ### Coordinator orchestration
 
 From inside a project, open the **Board** page and click **Start task** (or use the **Start task** button from the runs list or Flow page).

@@ -21,6 +21,37 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: {
+      ai_required: true,
+      operation: 'orchestration',
+      phase: 'prepared',
+      execution_key: 'signed-provider-key',
+      expires_at: '2099-01-01T00:00:00Z',
+      effective_model_provider: {
+        state: 'resolved',
+        provider_kind: 'platform_github_copilot',
+        resolution_scope: 'project',
+        provider_scope: 'platform',
+        provider_type: null,
+        model_id: 'gpt-5',
+        provider_key: 'provider-fingerprint',
+        unavailable_reason: null,
+      },
+    },
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+  }),
+}));
+
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -69,6 +100,8 @@ describe('RunCard — Retry button', () => {
       </Wrapper>,
     );
     expect(screen.getByTestId('run-card-retry')).toBeTruthy();
+    expect(screen.getByText('Expected provider: GitHub Copilot. Model: gpt-5.')).toBeTruthy();
+    expect(screen.getByTestId('run-card-retry').getAttribute('aria-describedby')).toBeTruthy();
   });
 
   it('renders Retry button when status is "merge_failed"', () => {
@@ -123,7 +156,7 @@ describe('RunCard — Retry button', () => {
     fireEvent.click(screen.getByTestId('run-card-retry'));
 
     await waitFor(() =>
-      expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('run-123'),
+      expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('run-123', 'signed-provider-key'),
     );
 
     await waitFor(() =>

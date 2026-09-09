@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { userInfo } from "node:os";
 import * as logDefault from "./lib/log.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -38,27 +39,42 @@ function mergeParamsIntoEnv(baseEnv, paramsFile) {
 }
 
 /**
- * Resolves the env a deploy subcommand should use: explicit `--params-file` flag
- * takes precedence over auto-discovered `params.<username>.json`; explicit process
- * env vars always win over params-file values (see mergeParamsIntoEnv). Shared by
- * every subcommand that deploys real infrastructure (deploy-from-local,
- * deploy-from-commit, deploy-from-release) so none of them silently fall back to
- * requiring every variable to be set by hand in the shell.
+ * Resolves the env and forwarded argv a deploy subcommand should use. An explicit
+ * `--params-file` flag takes precedence over auto-discovered
+ * `params.<username>.json`, and its flag/value tokens are removed before strict
+ * subcommand parsers receive argv. Explicit process env vars always win over
+ * params-file values (see mergeParamsIntoEnv).
  */
-async function resolveDeployEnv(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
+async function resolveDeployInputs(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
   const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
-  const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
   let paramsFilePath = null;
-  if (paramsFileIdx !== -1) {
-    paramsFilePath = rest[paramsFileIdx].includes("=")
-      ? rest[paramsFileIdx].split("=").slice(1).join("=")
-      : rest[paramsFileIdx + 1];
-  } else {
+  let recoverRepoAppPrivateKey = false;
+  const argv = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--params-file" || arg.startsWith("--params-file=")) {
+      const inline = arg.startsWith("--params-file=");
+      paramsFilePath = inline ? arg.slice("--params-file=".length) : rest[i + 1];
+      if (!paramsFilePath) {
+        throw new Error("--params-file requires a value");
+      }
+      if (!inline) i += 1;
+    } else if (arg === "--recover-repo-app-private-key") {
+      recoverRepoAppPrivateKey = true;
+    } else {
+      argv.push(arg);
+    }
+  }
+  if (!paramsFilePath) {
     paramsFilePath = findParamsFile();
     if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
   }
   const paramsFile = loadParamsFile(paramsFilePath);
-  return mergeParamsIntoEnv(process.env, paramsFile);
+  return {
+    env: mergeParamsIntoEnv(process.env, paramsFile),
+    argv,
+    recoverRepoAppPrivateKey,
+  };
 }
 
 const SUBCOMMANDS = Object.freeze([
@@ -165,7 +181,13 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
+    const { env, recoverRepoAppPrivateKey } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    if (recoverRepoAppPrivateKey) {
+      throw new Error("--recover-repo-app-private-key is valid only for deployment commands.");
+    }
     const cfg = await resolveVariables({ env });
     return mod.run(cfg, { log });
   }
@@ -176,10 +198,31 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
-    const cfg = await resolveVariables({ env });
-    const allowDirty = rest.includes("--allow-dirty");
-    return mod.run(cfg, { log, allowDirty });
+    const {
+      env,
+      argv: deployArgs,
+      recoverRepoAppPrivateKey,
+    } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    const stagedRepoAppKey = stageRepoAppPrivateKeyFile(env.REPO_APP_PRIVATE_KEY_FILE);
+    try {
+      const cfg = {
+        ...(await resolveVariables({
+          env: {
+            ...env,
+            REPO_APP_PRIVATE_KEY_FILE: "",
+          },
+        })),
+        REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+        RECOVER_REPO_APP_PRIVATE_KEY: recoverRepoAppPrivateKey,
+      };
+      const allowDirty = deployArgs.includes("--allow-dirty");
+      return await mod.run(cfg, { log, allowDirty });
+    } finally {
+      stagedRepoAppKey?.cleanup();
+    }
   }
 
   if (command === "deploy-from-commit" || command === "deploy-from-release") {
@@ -190,23 +233,57 @@ export async function run(argv = [], opts = {}) {
     // Same per-user params.<username>.json auto-load as deploy-from-local -- these
     // subcommands also deploy real infrastructure and previously required every
     // variable (e.g. KEYVAULT_NAME) to be set by hand in the shell.
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
-    return mod.run({ argv: rest, log, env });
+    const {
+      env,
+      argv: deployArgs,
+      recoverRepoAppPrivateKey,
+    } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    return mod.run({
+      argv: deployArgs,
+      log,
+      env,
+      recoverRepoAppPrivateKey,
+    });
   }
 
   return mod.run({ argv: rest, log });
 }
 
-/* c8 ignore start -- process.argv entry point, not exercised by unit tests */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  run(process.argv.slice(2)).catch((err) => {
+/**
+ * Executes the CLI command and maps an explicit unsuccessful command result
+ * to a non-zero process exit code.
+ */
+export async function main(argv = process.argv.slice(2), opts = {}) {
+  const {
+    processImpl = process,
+    log = logDefault,
+    ...runOpts
+  } = opts;
+
+  try {
+    const result = await run(argv, { ...runOpts, log });
+    if (result?.ok === false) {
+      processImpl.exitCode = 1;
+    }
+    return result;
+  } catch (err) {
     // Expected failures (missing prereqs, bad args, etc.) should read like a
     // normal CLI error, not a Node stack trace. Full stack is still
     // available via DEBUG=1 / AGENTWEAVER_DEBUG=1, matching log.debug()'s
     // existing gating convention.
-    const showStack = Boolean(process.env.DEBUG || process.env.AGENTWEAVER_DEBUG);
-    logDefault.error((showStack && err?.stack) || err?.message || String(err));
-    process.exitCode = 1;
-  });
+    const env = processImpl.env ?? process.env;
+    const showStack = Boolean(env.DEBUG || env.AGENTWEAVER_DEBUG);
+    log.error((showStack && err?.stack) || err?.message || String(err));
+    processImpl.exitCode = 1;
+    return undefined;
+  }
+}
+
+/* c8 ignore start -- process.argv entry point */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
 }
 /* c8 ignore stop */

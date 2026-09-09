@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -48,9 +49,37 @@ public sealed class RunOrchestratorChildRevisionHandoffTests : IAsyncDisposable
         _memoryConn.Open();
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        var secrets = new InMemorySecretStore();
+        services.AddSingleton<ISecretStore>(secrets);
+        services.AddScoped<GitHubConnectionsPersistenceStore>();
+        services.AddScoped<ByokProviderConfigurationService>();
+        services.AddScoped<EffectiveModelProviderResolver>();
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
-            scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Database.EnsureCreated();
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default-handoff-test",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            db.SaveChanges();
+        }
+        secrets.SetSecretAsync(
+            "copilot-app-platform-default-handoff-test",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "test-token",
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin = "test-user",
+            })).GetAwaiter().GetResult();
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
     }
 

@@ -53,6 +53,7 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
     {
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
 
         // Preserve the display GitHub login separately from the durable auth subject used by the
         // resulting background run.

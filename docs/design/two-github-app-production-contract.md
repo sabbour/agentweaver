@@ -146,10 +146,12 @@ are never client authority. On consumption, the server obtains the canonical ID 
 stored scope and resolves clone metadata server-side; malformed, expired, consumed, revoked,
 or cross-subject codes are indistinguishable unavailable authority.
 
-The browse response contains only full name, owner login, private visibility, default branch,
-and pushed-at timestamp. The canonical numeric ID is persistence-only and never appears in this
-response. It contains no provider permission object, derived access label, repository contents,
-clone URL, credential data, or raw provider response.
+The browse response contains repository full name, owner login, private visibility, default branch,
+and pushed-at timestamp, plus safe installation navigation metadata: account login/type,
+`all`/`selected` repository scope, and a validated provider-supplied management URL. The canonical
+numeric IDs remain persistence-only and never appear in this response. It contains no provider
+permission object, derived access label, repository contents, clone URL, credential data, or raw
+provider response.
 Public/metadata visibility is not proof of operational access.
 
 ## Sandbox and private-key boundary

@@ -68,6 +68,36 @@ public sealed class ByokTurnRefreshTests
     }
 
     [Fact]
+    public async Task AcceptedCopilotBoundary_IgnoresAmbientByokConfiguration()
+    {
+        var byokProvider = new StubByokProviderConfigurationProvider(ByokProvider());
+        await using var agent = CreateAgent(
+            new CountingCopilotCapabilityCredentialProvider(),
+            byokProvider);
+        agent.ConfigureProviderBoundary(ModelSource.GitHubCopilot, byokProviderFingerprint: null);
+
+        (await agent.ResolveByokProviderConfigurationAsync(CancellationToken.None))
+            .Should().BeNull();
+        byokProvider.GetCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AcceptedByokBoundary_RejectsSameIdConfigurationEdits()
+    {
+        var prepared = ByokProvider();
+        var edited = prepared with { BaseUrl = "https://replacement.example/v1" };
+        await using var agent = CreateAgent(
+            new CountingCopilotCapabilityCredentialProvider(),
+            new StubByokProviderConfigurationProvider(edited));
+        agent.ConfigureProviderBoundary(ModelSource.Byok, prepared.ExecutionFingerprint());
+
+        var act = async () => await agent.ResolveByokProviderConfigurationAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<AgentProviderException>()
+            .WithMessage("*changed before model invocation*");
+    }
+
+    [Fact]
     public async Task CopilotMode_LiveCredential_DoesNotRefresh()
     {
         var credentials = new CountingCopilotCapabilityCredentialProvider(

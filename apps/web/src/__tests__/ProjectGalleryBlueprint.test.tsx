@@ -26,6 +26,23 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+    restorePreparedContext: vi.fn(),
+  }),
+}));
+
 // Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
 // now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
 function projectsPage(items: Project[]) {
@@ -299,7 +316,11 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));
 
     await waitFor(() =>
-      expect(apiClient.generateBlueprint).toHaveBeenCalledWith('handle job searches'),
+      expect(apiClient.generateBlueprint).toHaveBeenCalledWith(
+        'handle job searches',
+        undefined,
+        'signed-provider-key',
+      ),
     );
     // Preview card surfaces the generated blueprint and its roster.
     await waitFor(() => expect(screen.getByLabelText('Generated blueprint preview')).toBeDefined());

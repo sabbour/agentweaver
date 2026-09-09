@@ -57,6 +57,7 @@ public class CopilotPreviewCommandModel : IPreviewCommandModel
         "{\"previewable\": true, \"command\": \"<shell command>\", \"cwd\": \"<relative dir or .>\"}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotPreviewCommandModel> _logger;
     private readonly string? _modelId;
 
@@ -64,10 +65,12 @@ public class CopilotPreviewCommandModel : IPreviewCommandModel
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotPreviewCommandModel> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         // Reuse the designated fast/cheap classifier tier (defaults to a small model) so the fallback
         // stays low-latency and low-cost — this is a bounded resolution, not a generation task.
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
@@ -92,7 +95,16 @@ public class CopilotPreviewCommandModel : IPreviewCommandModel
             }
 
             var proposal = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(context.RunId, BuildPrompt(digest), token),
+                token => _effectiveModelTurn is null
+                    ? RunModelTurnAsync(context.RunId, BuildPrompt(digest), token)
+                    : _effectiveModelTurn.RunAsync(
+                        context.RunId,
+                        context.ProjectId,
+                        _modelId,
+                        CommandCharter,
+                        BuildPrompt(digest),
+                        supportsByok: true,
+                        token),
                 ProposalTimeout,
                 ct,
                 onTimeout: () => _logger.LogWarning(
@@ -111,7 +123,7 @@ public class CopilotPreviewCommandModel : IPreviewCommandModel
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex,
                 "Preview command model failed for run {RunId}; preserving preview_command_unresolved.",

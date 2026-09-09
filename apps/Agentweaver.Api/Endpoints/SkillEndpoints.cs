@@ -124,16 +124,40 @@ public static class SkillEndpoints
 
         // POST /api/projects/{id}/skills/generate — generate an unsaved SKILL.md draft server-side.
         app.MapPost("/api/projects/{id}/skills/generate", async (
-            HttpContext http, string id, GenerateSkillRequest body, SkillCatalogService svc, ISkillGenerator generator, CancellationToken ct) =>
+            HttpContext http,
+            string id,
+            GenerateSkillRequest body,
+            IProjectStore projects,
+            IConfiguration configuration,
+            ISkillGenerator generator,
+            AiExecutionPlanService executionPlans,
+            AiExecutionPlanAccessor executionPlanAccessor,
+            CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
+            var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(
+                http,
+                id,
+                projects,
+                configuration,
+                ProjectRole.Contributor,
+                ct).ConfigureAwait(false);
+            if (failure is not null)
+                return failure;
             var caller = http.GetCaller();
-            var (outcome, _) = await svc.ListAsync(projectId, caller, ct);
-            if (outcome == SkillOutcome.NotFound)
-                return Results.NotFound();
             if (body is null || string.IsNullOrWhiteSpace(body.Description ?? body.Prompt))
                 return Results.BadRequest(new { error = "description is required." });
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                http,
+                "skill_generation",
+                projectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
             try
             {
                 var draft = await generator.GenerateAsync(
@@ -141,11 +165,18 @@ public static class SkillEndpoints
                     caller.User,
                     ct,
                     projectId: projectId.ToString());
-                return Results.Ok(draft);
+                return Results.Ok(draft with
+                {
+                    AiExecutionContext = executionPlans.ToResponse(execution.Plan!, "completed"),
+                });
             }
             catch (SkillGenerationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
             }
         });
 
@@ -266,7 +297,7 @@ public static class SkillEndpoints
         }).WithName("RemoveProjectSkillMarketplaceSource").WithTags("Skills");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
-            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
+            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, AiExecutionPlanService executionPlans, AiExecutionPlanAccessor executionPlanAccessor, CancellationToken ct) =>
         {
             var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Viewer, ct);
             if (failure is not null) return failure;
@@ -280,9 +311,44 @@ public static class SkillEndpoints
             // A URL source with no configured subpath auto-detects its layout (heuristic, then a
             // capability-gated LLM classifier); config definitions keep the existing hardcoded-subpath
             // browse path unchanged.
-            var (outcome, error, result) = source.IsAuto
-                ? await svc.BrowseMarketplaceAutoAsync(projectId, source.Owner, source.Repo, source.Branch, body?.Query, page, pageSize, caller, ct, source.ParseStrategy)
-                : await svc.BrowseMarketplaceAsync(projectId, source.Owner, source.Repo, source.Branch, source.Subpath!, body?.Query, page, pageSize, caller, ct);
+            SkillOutcome outcome;
+            string? error;
+            MarketplaceBrowsePage? result;
+            AiExecutionPlan? acceptedPlan = null;
+            try
+            {
+                (outcome, error, result) = source.IsAuto
+                    ? await svc.BrowseMarketplaceAutoAsync(
+                        projectId,
+                        source.Owner,
+                        source.Repo,
+                        source.Branch,
+                        body?.Query,
+                        page,
+                        pageSize,
+                        caller,
+                        ct,
+                        source.ParseStrategy,
+                        async executionCt =>
+                        {
+                            AiOperationCatalog.TryGet("marketplace_catalog_classification", out var operation);
+                            var plan = await executionPlans.AcceptAsync(
+                                http.Request.Headers[AiExecutionPlanHeaders.ProviderKey].FirstOrDefault(),
+                                operation,
+                                projectId,
+                                caller,
+                                executionCt).ConfigureAwait(false);
+                            acceptedPlan = plan;
+                            return new MarketplaceModelExecution(
+                                () => executionPlanAccessor.Push(plan),
+                                plan.Provider is EffectiveModelProviderResult.Byok);
+                        })
+                    : await svc.BrowseMarketplaceAsync(projectId, source.Owner, source.Repo, source.Branch, source.Subpath!, body?.Query, page, pageSize, caller, ct);
+            }
+            catch (AiExecutionPlanException ex)
+            {
+                return EndpointHelpers.AiExecutionError(ex);
+            }
             if (outcome != SkillOutcome.Ok)
             {
                 return outcome switch
@@ -303,6 +369,9 @@ public static class SkillEndpoints
                 page = result.Page,
                 page_size = result.PageSize,
                 has_more = result.HasMore,
+                ai_execution_context = result.AiUsed && acceptedPlan is not null
+                    ? executionPlans.ToResponse(acceptedPlan, "completed")
+                    : null,
             });
         }).WithName("BrowseSkillMarketplace").WithTags("Skills");
 

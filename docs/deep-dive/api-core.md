@@ -17,6 +17,70 @@ The API core architecture centers on:
 
 Domain internals are covered by the focused deep dives for [Auth & security](./auth-security.md), [orchestration](./orchestration.md), [sandboxing](./sandbox.md), [memory and decisions](./memory-decisions.md), [data persistence](./data-persistence.md), and [Git integration](./git-integration.md). The API core composes those domains rather than reimplementing their internal logic.
 
+## Effective model provider admission
+
+`EffectiveModelProviderResolver` remains the selection authority.
+`AiExecutionPlanService` encrypts caller-, project-, and operation-bound acceptance with an authenticated execution key.
+BYOK configuration fingerprints include execution parameters.
+Copilot identity includes the binding credential version.
+The public provider fingerprint does not grant execution authority.
+
+Covered synchronous actions reject changed provider configuration with `409 model_provider_changed` before model invocation.
+Run continuations compare current resolver output with durable provenance.
+They never reconstruct provider authority from event identifiers.
+The runtime guard awaits provenance persistence before the next covered model call.
+Multi-pass generators retain the accepted BYOK configuration rather than select another ambient provider.
+Repository-only retry inheritance does not carry stale Copilot credentials into a newly accepted retry.
+
+The admission contract covers these boundaries:
+
+| Path | Boundary |
+| --- | --- |
+| Generation, casting, backlog decomposition | Opaque admission, configuration fence, accepted configuration, pre-call provenance |
+| Coordinator spec drafting | Effective-provider boundary, accepted BYOK configuration, and runtime invocation guard |
+| Preview classifiers and preview command proposal | Effective-provider run fence, accepted BYOK configuration, and pre-call provenance |
+| Other coordinator selection/classifier actions | Copilot-only run fence and pre-call provenance |
+| Worker and reviewer turns, including AgentHost | Accepted provider context and guard before application-issued calls, re-asks, and SDK retries |
+| Assistant and RemoteOperator dispatch | Opaque admission, platform scope, launch fence, pre-dispatch revalidation |
+| Retry, revision, restart, queued pickup | Current resolver comparison against accepted fingerprints |
+| MCP actions | API execution-key preparation and forwarding |
+| Web provider context | Accessible Expected/Using/Used labels and stable fingerprint comparison |
+
+AgentHost revalidates before each application-issued model attempt through `POST /api/runs/{id}/model-provider/validate`.
+The callback requires the existing run capability and the immutable provider fingerprint from pod configuration.
+The API compares that fingerprint with the current resolver and accepted run provenance.
+It awaits provenance persistence before it permits the call.
+Provider changes return `409 model_provider_changed` without a model call.
+The pod callback has no independent selection authority.
+
+Public provider context contains redacted provider kind, scope, type, model, availability, and an opaque comparison fingerprint.
+It does not contain credentials, account names, or provider-binding identities.
+The UI maps `prepared`, `active`, and `completed` phases to **Expected provider**, **Using**, and **Used**.
+
+There is no registered `/api/console/turn` route in this host.
+`GET /api/auth/session` returns authentication metadata and `ai_configured`, not a model response.
+`ResolveForSessionAsync` supplies that metadata and execution-context preparation.
+It has no direct production model-call consumer.
+The production conversation routes use the guarded Assistant and AgentHost path.
+
+This is not proof of every request inside the external Copilot service.
+Focused tests use fake model providers.
+They do not prove live SDK, Kubernetes, or MCP process behavior.
+
+### Execution-key configuration
+
+`AiExecution:ProviderKeySigningKey` takes precedence when configured.
+Otherwise, the service derives a purpose-specific key from the existing server-only `Auth:CopilotApp:ClientSecret`.
+`Auth:RepoApp:ClientSecret` is the next fallback.
+Existing Kubernetes deployments already provision these App secrets.
+This change does not add a required mounted secret.
+Production deployments without either App secret require an explicit execution signing key.
+Development and test environments also permit `Auth:ApiKey` as a fallback.
+
+All API and worker replicas must use the same secret.
+Secret rotation invalidates prepared and queued execution keys.
+Queued work then requires fresh submission.
+
 ## The Host in One Picture
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.
@@ -187,6 +251,26 @@ The exact service/store calls differ by feature, but the responsibilities stay s
 - Keep public protocol routes outside normal protected API assumptions only when middleware exemptions explicitly support that.
 
 Where this lives: `apps/Agentweaver.Api/Endpoints/`; `apps/Agentweaver.Api/Workflows/`; `apps/Agentweaver.Api/ReviewPolicies/`; `apps/Agentweaver.Api/Diagnostics/`; `apps/Agentweaver.Api/Metrics/`.
+
+### Effective model-provider context
+
+Before a first-party UI starts a generative action, it calls
+`POST /api/ai/execution-context` with the operation name and, for project-scoped work, the
+project id. The endpoint does not accept prompts and does not start execution. It resolves the
+same project, platform, or user provider context used by the execution layer and returns a redacted
+`effective_model_provider` object for an accessible **Expected provider** hint.
+
+The contract distinguishes where the action was resolved from where the provider is configured.
+For example, a workflow-generation action in a project can return
+`resolution_scope: "project"`, `provider_scope: "platform"`, and `provider_kind: "byok"` when
+the project inherits deployment-wide BYOK. `provider_key` is an opaque comparison value and must
+never be displayed.
+
+Run-associated execution persists `run.model_provider_resolved`. `GET /api/runs/{id}` projects the
+latest durable event as `effective_model_provider`; it returns `null` when no resolution was
+recorded and never invents provider identity from the coarse `Run.ModelSource` field. Assistant
+creation and every Assistant turn emit the event so a provider switch is visible even when the
+conversation keeps the same run id.
 
 ## Streaming and Durable Run Events
 

@@ -1,6 +1,5 @@
 import {
   apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
 import {
   Button,
   Combobox,
@@ -28,10 +27,16 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { parseNoTeamStartError } from '../api/errors';
+import { formatApiErrorMessage, parseNoTeamStartError } from '../api/errors';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import type { RefObject } from 'react';
 import { EmptyState } from './ui';
+import {
+  AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 // Inline action to start an orchestration, with a project selector so the
 // user can choose the target project regardless of the current route context.
 // Mirrors StartOrchestrationDialog's goal field + submit semantics; adds the
@@ -70,6 +75,12 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
   const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
+  const providerContext = useAiExecutionContext(
+    'orchestration',
+    selectedProjectId,
+    undefined,
+    Boolean(selectedProjectId),
+  );
 
   // Load the project list once the dialog is opened, and default the project
   // selection to the active project at open-time (the FAB lives in AppShell and
@@ -139,23 +150,33 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
     setNoTeamError(null);
     try {
       const result = mode === 'direct'
-        ? await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride, 'direct')
-        : await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride);
+        ? await apiClient.startOrchestration(
+            selectedProjectId,
+            goal.trim(),
+            workflowOverride,
+            'direct',
+            providerContext.providerKey)
+        : await apiClient.startOrchestration(
+            selectedProjectId,
+            goal.trim(),
+            workflowOverride,
+            undefined,
+            providerContext.providerKey);
       setOpen(false);
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
     } catch (err) {
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and start again.');
+        return;
+      }
       const noTeam = parseNoTeamStartError(err);
       if (noTeam) {
         setNoTeamError(noTeam.message);
         return;
       }
       setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error
-            ? err.message
-            : String(err),
+        formatApiErrorMessage(err),
       );
     } finally {
       setSavingMode(null);
@@ -204,6 +225,12 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
                 outputs before dispatch. Later review, tool approval, assembly, and merge gates
                 still apply.
               </Text>
+              <AiExecutionProviderReadiness
+                context={providerContext.context}
+                error={providerContext.error}
+                projectId={selectedProjectId}
+                onRefresh={() => void providerContext.refresh()}
+              />
               {loadError && (
                 <MessageBar intent="error">
                   <MessageBarBody>Could not load projects. Try again.</MessageBarBody>
@@ -301,21 +328,26 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
             <Button appearance="secondary" disabled={saving} onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button
-              appearance="secondary"
-              disabled={!selectedProjectId || !goal.trim() || saving}
-              onClick={() => void handleSubmit('define_outcome')}
-            >
-              {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
-            </Button>
-            <Button
-              appearance="primary"
-              disabled={!selectedProjectId || !goal.trim() || saving}
-              onClick={() => void handleSubmit('direct')}
-            >
-              {savingMode === 'direct' ? 'Starting' : 'Direct'}
-            </Button>
+            <AiExecutionProviderHint context={providerContext.context}>
+              <Button
+                appearance="secondary"
+                disabled={!selectedProjectId || !goal.trim() || saving || providerContext.loading || !providerContext.available}
+                onClick={() => void handleSubmit('define_outcome')}
+              >
+                {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
+              </Button>
+            </AiExecutionProviderHint>
+            <AiExecutionProviderHint context={providerContext.context}>
+              <Button
+                appearance="primary"
+                disabled={!selectedProjectId || !goal.trim() || saving || providerContext.loading || !providerContext.available}
+                onClick={() => void handleSubmit('direct')}
+              >
+                {savingMode === 'direct' ? 'Starting' : 'Direct'}
+              </Button>
+            </AiExecutionProviderHint>
             {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            <AiProviderChangeAnnouncement message={providerContext.announcement} />
           </DialogActions>
         </DialogBody>
       </DialogSurface>

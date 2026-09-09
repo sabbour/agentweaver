@@ -35,6 +35,8 @@ import {
   PageHeader,
   PageSection,
 } from '../components/ui';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../components/AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
@@ -296,6 +298,7 @@ const STEP_LABELS: Record<Step, string> = {
 export function CastingWizardPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const generationContext = useAiExecutionContext('casting_generation', projectId);
   const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>('cast');
@@ -386,11 +389,14 @@ export function CastingWizardPage() {
       const req: CreateProposalRequest = { mode: 'free_text', goal: composedGoal };
       if (universe) req.universe = universe;
       if (teamSize !== 4) req.team_size = teamSize;
-      const p = await apiClient.createProposal(projectId, req);
+      const p = await apiClient.createProposal(projectId, req, generationContext.providerKey);
+      generationContext.applyCompletedContext(p.ai_execution_context);
       setFormulateProposal(p);
       setSelectedRoleIds(p.members.map((m) => m.role.id));
     } catch (err) {
-      setFormulateError(
+      setFormulateError(generationContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and formulate again.'
+        :
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
           : err instanceof Error ? err.message : String(err),
@@ -407,11 +413,14 @@ export function CastingWizardPage() {
       const req: CreateProposalRequest = { mode: 'analysis' };
       if (universe) req.universe = universe;
       if (teamSize !== 4) req.team_size = teamSize;
-      const p = await apiClient.createProposal(projectId, req);
+      const p = await apiClient.createProposal(projectId, req, generationContext.providerKey);
+      generationContext.applyCompletedContext(p.ai_execution_context);
       setAnalyzeProposal(p);
       setSelectedRoleIds(p.members.map((m) => m.role.id));
     } catch (err) {
-      setAnalyzeError(
+      setAnalyzeError(generationContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and analyze again.'
+        :
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
           : err instanceof Error ? err.message : String(err),
@@ -609,13 +618,15 @@ export function CastingWizardPage() {
                     )}
                     <div className={styles.panelActionRow}>
                       {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-                      <Button
-                        appearance="primary"
-                        disabled={goal.trim() === '' || formulateLoading}
-                        onClick={() => void handleFormulate()}
-                      >
-                        {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
-                      </Button>
+                      <AiExecutionProviderHint context={generationContext.context}>
+                        <Button
+                          appearance="primary"
+                          disabled={goal.trim() === '' || formulateLoading || generationContext.loading || !generationContext.available}
+                          onClick={() => void handleFormulate()}
+                        >
+                          {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
+                        </Button>
+                      </AiExecutionProviderHint>
                     </div>
                   </>
                 )}
@@ -678,14 +689,17 @@ export function CastingWizardPage() {
                         The system will analyze your project and suggest roles.
                       </Text>
                       {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-                      <Button
-                        appearance="primary"
-                        disabled={analyzeLoading}
-                        onClick={() => void handleAnalyze()}
-                      >
-                        {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
-                      </Button>
+                      <AiExecutionProviderHint context={generationContext.context}>
+                        <Button
+                          appearance="primary"
+                          disabled={analyzeLoading || generationContext.loading || !generationContext.available}
+                          onClick={() => void handleAnalyze()}
+                        >
+                          {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
+                        </Button>
+                      </AiExecutionProviderHint>
                     </div>
+                    <AiProviderChangeAnnouncement message={generationContext.announcement} />
                     {analyzeError && (
                       <MessageBar intent="error">
                         <MessageBarBody>{analyzeError}</MessageBarBody>

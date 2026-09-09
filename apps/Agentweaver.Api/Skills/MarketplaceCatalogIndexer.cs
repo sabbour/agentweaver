@@ -29,7 +29,21 @@ public sealed record MarketplaceCatalogIndex(
     string Fingerprint,
     string Strategy,
     IReadOnlyList<MarketplaceCatalogEntry> Entries,
-    bool RequiresGitHubConnection = false);
+    bool RequiresGitHubConnection = false,
+    bool ModelInvoked = false);
+
+public sealed class MarketplaceModelExecution(
+    Func<IDisposable> activate,
+    bool useByok) : IDisposable
+{
+    private IDisposable? _lease;
+
+    public bool UseByok { get; } = useByok;
+
+    public void Activate() => _lease ??= activate();
+
+    public void Dispose() => Interlocked.Exchange(ref _lease, null)?.Dispose();
+}
 
 /// <summary>
 /// Cache of parsed catalog indexes keyed by <c>owner/repo@branch#fingerprint</c>. Because the fingerprint
@@ -110,7 +124,8 @@ public interface IMarketplaceCatalogIndexer
         CallerContext? caller = null,
         Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
         Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null,
-        bool useByok = false) =>
+        bool useByok = false,
+        Func<CancellationToken, Task<MarketplaceModelExecution>>? beginModelExecutionAsync = null) =>
         GetOrBuildForProjectAsync(owner, repo, branch, blobs, capabilityReference, parseStrategy, ct, projectId, caller);
 }
 
@@ -176,27 +191,20 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         CallerContext? caller = null,
         Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
         Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null,
-        bool useByok = false)
+        bool useByok = false,
+        Func<CancellationToken, Task<MarketplaceModelExecution>>? beginModelExecutionAsync = null)
     {
         var repository = $"{owner}/{repo}";
         var fingerprint = ComputeFingerprint(blobs);
         var strategy = string.IsNullOrWhiteSpace(parseStrategy) ? "auto" : parseStrategy.Trim().ToLowerInvariant();
         var classifierRequested = strategy is "auto" or "llm" && _classifier is not null;
-        var key = $"{repository}@{branch}#{fingerprint}#strategy={strategy}#classifier={classifierRequested}";
+        var authorizationScope = projectId?.ToString() ?? "legacy";
+        var key = $"{repository}@{branch}#{fingerprint}#strategy={strategy}#classifier={classifierRequested}#scope={authorizationScope}";
         if (_cache.TryGet(key, out var cached))
         {
-            // A cached LLM result still requires the caller's active binding. Validate it without
-            // creating a capability record; heuristic indexes remain freely cacheable. The
-            // deployment-wide BYOK provider is not project-scoped credential material, so a BYOK
-            // caller may always read a cached LLM result.
-            if (cached.Strategy != "llm" || useByok ||
-                (hasCapabilityAsync is null && !string.IsNullOrWhiteSpace(capabilityReference)) ||
-                (hasCapabilityAsync is not null && await hasCapabilityAsync(ct).ConfigureAwait(false)))
-                return cached;
-
-            return new MarketplaceCatalogIndex(
-                repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
-                RequiresGitHubConnection: true);
+            // Reading a cached catalog does not invoke a model or consume caller-bound credentials.
+            // Fence only the uncached classifier path below.
+            return cached.ModelInvoked ? cached with { ModelInvoked = false } : cached;
         }
 
         MarketplaceCatalogIndex index;
@@ -212,48 +220,59 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
             index = new MarketplaceCatalogIndex(
                 repository, branch, fingerprint, "skillmd", Array.Empty<MarketplaceCatalogEntry>());
         }
-        else if (classifierRequested && useByok)
-        {
-            // BYOK bypasses Copilot capability issuance entirely — it is the deployment-wide
-            // default, not project- or caller-scoped credential material.
-            try
-            {
-                var treePaths = blobs.Select(b => b.Path).ToList();
-                var llmEntries = await BuildWithLlmByokAsync(owner, repo, branch, blobs, treePaths, ct).ConfigureAwait(false);
-                index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
-            }
-            catch (GitHubCopilotUnauthorizedException)
-            {
-                return new MarketplaceCatalogIndex(
-                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
-                    RequiresGitHubConnection: true);
-            }
-        }
         else if (classifierRequested)
         {
-            // Issue only after every cache and deterministic path has returned, immediately before the
-            // one uncached model call. The callback keeps the capability server-side and avoids durable
-            // unused records for heuristic and cache-hit browses.
-            if (string.IsNullOrWhiteSpace(capabilityReference) && issueCapabilityAsync is not null)
-                capabilityReference = await issueCapabilityAsync(ct).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(capabilityReference))
-            {
-                return new MarketplaceCatalogIndex(
-                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
-                    RequiresGitHubConnection: true);
-            }
+            using var modelExecution = beginModelExecutionAsync is null
+                ? null
+                : await beginModelExecutionAsync(ct).ConfigureAwait(false);
+            modelExecution?.Activate();
+            var invokeWithByok = modelExecution?.UseByok ?? useByok;
 
-            try
+            if (invokeWithByok)
             {
-                var llmEntries = await BuildWithLlmAsync(
-                    owner, repo, branch, blobs, capabilityReference!, ct, projectId, caller).ConfigureAwait(false);
-                index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
+                // BYOK bypasses Copilot capability issuance entirely — it is the deployment-wide
+                // default, not project- or caller-scoped credential material.
+                try
+                {
+                    var treePaths = blobs.Select(b => b.Path).ToList();
+                    var llmEntries = await BuildWithLlmByokAsync(owner, repo, branch, blobs, treePaths, ct).ConfigureAwait(false);
+                    index = new MarketplaceCatalogIndex(
+                        repository, branch, fingerprint, "llm", llmEntries, ModelInvoked: true);
+                }
+                catch (GitHubCopilotUnauthorizedException)
+                {
+                    return new MarketplaceCatalogIndex(
+                        repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                        RequiresGitHubConnection: true);
+                }
             }
-            catch (GitHubCopilotUnauthorizedException)
+            else
             {
-                return new MarketplaceCatalogIndex(
-                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
-                    RequiresGitHubConnection: true);
+                // Issue only after every cache and deterministic path has returned, immediately before the
+                // one uncached model call. The callback keeps the capability server-side and avoids durable
+                // unused records for heuristic and cache-hit browses.
+                if (string.IsNullOrWhiteSpace(capabilityReference) && issueCapabilityAsync is not null)
+                    capabilityReference = await issueCapabilityAsync(ct).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(capabilityReference))
+                {
+                    return new MarketplaceCatalogIndex(
+                        repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                        RequiresGitHubConnection: true);
+                }
+
+                try
+                {
+                    var llmEntries = await BuildWithLlmAsync(
+                        owner, repo, branch, blobs, capabilityReference!, ct, projectId, caller).ConfigureAwait(false);
+                    index = new MarketplaceCatalogIndex(
+                        repository, branch, fingerprint, "llm", llmEntries, ModelInvoked: true);
+                }
+                catch (GitHubCopilotUnauthorizedException)
+                {
+                    return new MarketplaceCatalogIndex(
+                        repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                        RequiresGitHubConnection: true);
+                }
             }
         }
         else

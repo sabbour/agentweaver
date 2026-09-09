@@ -1,0 +1,208 @@
+using Agentweaver.Api.Auth;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Security;
+using Agentweaver.Api.Sandbox;
+using Agentweaver.Domain;
+
+namespace Agentweaver.Api.Endpoints;
+
+public static class AiExecutionContextEndpoints
+{
+    public static void MapAiExecutionContextEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.MapPost("/api/ai/execution-context", ResolveAsync)
+            .WithName("ResolveAiExecutionContext")
+            .WithTags("AI execution")
+            .Accepts<AiExecutionContextRequest>("application/json")
+            .Produces<AiExecutionContextResponse>(StatusCodes.Status200OK)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description =
+                    "Prepares a short-lived, caller- and provider-bound AI execution context. " +
+                    "Send the returned execution_key as the If-Model-Provider-Key header on the " +
+                    "corresponding guarded operation. A valid BYOK provider is returned as a " +
+                    "resolved effective_model_provider where that operation supports BYOK. " +
+                    "A 409 provider/context error includes replacement context when the provider changed.";
+                return Task.CompletedTask;
+            })
+            .AuthenticatedSelfOrMcp();
+        app.MapPost("/api/runs/{id}/model-provider/validate", ValidateRunProviderAsync)
+            .WithName("ValidateRunModelProvider")
+            .WithTags("AI execution")
+            .Accepts<ValidateRunProviderRequest>("application/json")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces<AiExecutionContextErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description =
+                    "Validates the provider fingerprint held by a run-capability caller before " +
+                    "a guarded model invocation. A model_provider_changed response means the " +
+                    "caller must stop and prepare fresh execution context.";
+                return Task.CompletedTask;
+            })
+            .RunCapability();
+    }
+
+    public sealed record ValidateRunProviderRequest(
+        [property: System.Text.Json.Serialization.JsonPropertyName("expected_provider_key")] string? ExpectedProviderKey);
+
+    private static async Task<IResult> ValidateRunProviderAsync(
+        HttpContext context, string id, ValidateRunProviderRequest request,
+        IRunAuthorshipCapabilityStore capabilities, IRunStore runs,
+        RunModelInvocationGuard guard, CancellationToken ct)
+    {
+        if (!RunId.TryParse(CoordinatorSubRunIds.StripSyntheticSuffix(id), out var runId))
+            return Results.BadRequest();
+        if (context.Request.Headers[RunAuthorshipHeaders.RunId].ToString() != id
+            || !await capabilities.ValidateAsync(
+                id, context.Request.Headers[RunAuthorshipHeaders.RunToken].ToString(), ct).ConfigureAwait(false))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (await runs.GetAsync(runId, ct).ConfigureAwait(false) is null)
+            return Results.NotFound();
+        if (string.IsNullOrWhiteSpace(request.ExpectedProviderKey))
+            return Results.Conflict(new { error = "model_provider_changed" });
+        try
+        {
+            await guard.PrepareAsync(id, ct, expectedProviderKey: request.ExpectedProviderKey).ConfigureAwait(false);
+            return Results.NoContent();
+        }
+        catch (Exception ex) when (ex is AiExecutionPlanException
+            || ex is AgentProviderException { ErrorCode: "model_provider_changed" })
+        {
+            return Results.Conflict(new
+            {
+                error = "model_provider_changed",
+                message = "The accepted model provider changed before invocation.",
+            });
+        }
+    }
+
+    private static async Task<IResult> ResolveAsync(
+        HttpContext httpContext,
+        AiExecutionContextRequest request,
+        AiExecutionPlanService plans,
+        IProjectStore projectStore,
+        IRunStore runStore,
+        IConfiguration configuration,
+        CancellationToken ct)
+    {
+        if (!AiOperationCatalog.TryGet(request.Operation, out var operation))
+        {
+            return Results.BadRequest(new
+            {
+                error = "invalid_ai_operation",
+                message = "operation must name a supported generative AI action.",
+            });
+        }
+
+        var caller = httpContext.GetCaller();
+        ProjectId? projectId = null;
+        Run? run = null;
+        if (!string.IsNullOrWhiteSpace(request.ProjectId))
+        {
+            if (!ProjectId.TryParse(request.ProjectId, out var parsedProjectId))
+                return Results.BadRequest(new { error = "invalid_project_id", message = "project_id is invalid." });
+
+            var project = await projectStore.GetAsync(parsedProjectId, ct).ConfigureAwait(false);
+            if (project is null)
+                return Results.NotFound();
+            var minimumRole = operation.MinimumProjectRole ?? ProjectRole.Viewer;
+            if (await ProjectAuthorization
+                .RequireAccessAsync(httpContext, project, configuration, minimumRole, ct)
+                .ConfigureAwait(false) is { } denied)
+            {
+                return denied;
+            }
+            projectId = parsedProjectId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.RunId))
+        {
+            if (!RunId.TryParse(request.RunId, out var parsedRunId))
+                return Results.BadRequest(new { error = "invalid_run_id", message = "run_id is invalid." });
+            run = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is null)
+                return Results.NotFound();
+            if (projectId is not null && run.ProjectId != projectId)
+                return Results.NotFound();
+            if (projectId is null && run.ProjectId is { } runProjectId)
+            {
+                var project = await projectStore.GetAsync(runProjectId, ct).ConfigureAwait(false);
+                if (project is null)
+                    return Results.NotFound();
+                var minimumRole = operation.MinimumProjectRole ?? ProjectRole.Viewer;
+                if (await ProjectAuthorization
+                    .RequireAccessAsync(httpContext, project, configuration, minimumRole, ct)
+                    .ConfigureAwait(false) is { } denied)
+                {
+                    return denied;
+                }
+                projectId = runProjectId;
+            }
+        }
+
+        if (run is not null)
+        {
+            if (await EndpointHelpers.RequireRunAccessAsync(
+                    httpContext,
+                    run,
+                    operation.MinimumProjectRole ?? ProjectRole.Viewer,
+                    ct).ConfigureAwait(false) is { } runDenied)
+            {
+                return runDenied;
+            }
+        }
+        var permitsOwnedNonProjectRun = run is { ProjectId: null }
+            && string.Equals(operation.Name, "agent_turn", StringComparison.Ordinal);
+        if (operation.ResolutionMode == AiResolutionMode.RequiredProject
+            && projectId is null
+            && !permitsOwnedNonProjectRun)
+        {
+            return Results.BadRequest(new
+            {
+                error = "project_id_required",
+                message = $"project_id is required for {operation.Name}.",
+            });
+        }
+        if (operation.ResolutionMode is AiResolutionMode.Platform or AiResolutionMode.User
+            && projectId is not null)
+        {
+            return Results.BadRequest(new
+            {
+                error = "project_id_not_supported",
+                message = $"project_id is not used for {operation.Name}.",
+            });
+        }
+        if (operation.RequiresPlatformRole
+            && (operation.ResolutionMode != AiResolutionMode.OptionalProject || projectId is null)
+            && !(operation.AllowsBroker
+                && string.Equals(
+                    caller.AuthenticationScheme,
+                    AgentweaverAuthenticationSchemes.BrokerBearer,
+                    StringComparison.Ordinal))
+            && caller.PlatformRoles.Count == 0)
+            return Results.Forbid();
+        if (!HasRequiredCallerIdentity(operation, caller))
+            return Results.Forbid();
+
+        var plan = await plans.PrepareAsync(operation, projectId, caller, ct).ConfigureAwait(false);
+        return Results.Ok(plans.ToResponse(plan, "prepared"));
+    }
+
+    internal static bool HasRequiredCallerIdentity(
+        AiOperationDefinition operation,
+        CallerContext caller) =>
+        operation.ResolutionMode != AiResolutionMode.User
+        || !string.IsNullOrWhiteSpace(caller.EntraObjectId);
+}

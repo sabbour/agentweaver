@@ -1,16 +1,16 @@
 {
   "mcpServers": {
-    "agentweaver": {
+    "agentweaver_local": {
       "command": "dotnet",
       "args": [
         "run",
         "--project",
         "apps/Agentweaver.Mcp",
-        "--no-build"
+        "--",
+        "--stdio"
       ],
       "env": {
-        "AGENTWEAVER_API_URL": "http://localhost:5000",
-        "AGENTWEAVER_API_KEY": ""
+        "AGENTWEAVER_API_URL": "http://localhost:5000"
       }
     },
     "squad_state": {

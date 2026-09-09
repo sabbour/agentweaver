@@ -33,6 +33,12 @@ import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AiCredits } from '../components/AiCredits';
+import {
+  AiExecutionProviderHint,
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from '../components/AiExecutionProviderHint';
+import { aiExecutionContextFromEvents } from '../components/aiExecutionContext';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { SlidePanel } from '../components/SlidePanel';
@@ -54,6 +60,7 @@ import {
   workflowNodeTypes,
 } from '../components/WorkflowGraphPanel';
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
 import { layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
@@ -359,6 +366,12 @@ function apiErrorCode(err: unknown): string | undefined {
 
 function readEventTimestamp(p: Record<string, unknown>): string | undefined {
   return readStr(p, ['timestamp_utc', 'timestampUtc', 'updated_at', 'updatedAt', 'timestamp']);
+}
+
+function parseTimestamp(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefined {
@@ -2264,6 +2277,13 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [runTimingState, setRunTimingState] = useState<{
+    runId: string;
+    startedAt: number | undefined;
+    endedAt: number | undefined;
+  }>({ runId: '', startedAt: undefined, endedAt: undefined });
+  const runStartedAt = runTimingState.runId === (runId ?? '') ? runTimingState.startedAt : undefined;
+  const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
 
   const {
     events,
@@ -2331,6 +2351,24 @@ export function CoordinatorRunPage() {
   // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
   // never have a work-plan or outcome-plan; skip coordinator-only artifact fetches entirely.
   const [isChildRun, setIsChildRun] = useState(false);
+  const providerContext = useAiExecutionContext(
+    isChildRun ? 'agent_turn' : 'orchestration',
+    projectId,
+    runId,
+    Boolean(projectId && runId),
+  );
+  const activeProviderContext = useMemo(
+    () => {
+      const context = aiExecutionContextFromEvents(
+        events,
+        isChildRun ? 'agent_turn' : 'orchestration',
+      );
+      return context && isTerminalRunStatus(runLevelStatus)
+        ? { ...context, phase: 'completed' as const }
+        : context;
+    },
+    [events, isChildRun, runLevelStatus],
+  );
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -2447,6 +2485,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
       setCoordStatusReason(undefined);
       setCoordinatorSteerable(undefined);
@@ -2513,6 +2552,11 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setRunTimingState({
+        runId,
+        startedAt: parseTimestamp(detail?.started_at),
+        endedAt: parseTimestamp(detail?.ended_at),
+      });
       if (wp) consecutiveWorkPlanNotReady = 0;
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
@@ -3508,12 +3552,14 @@ export function CoordinatorRunPage() {
     { pending: 0, waiting: 0, blocked: 0, failed: 0 },
   );
   const hasRunningSessionItem = flatSessionTree.some((node) => node.startedAt !== undefined && node.completedAt === undefined);
-  const elapsedNow = useTickingNow(hasRunningSessionItem);
-  const earliestStart = flatSessionTree.reduce<number | undefined>(
+  const earliestNodeStart = flatSessionTree.reduce<number | undefined>(
     (min, node) => (node.startedAt == null ? min : min == null ? node.startedAt : Math.min(min, node.startedAt)),
     undefined,
   );
-  const elapsedLabel = earliestStart ? fmtTotal(elapsedNow - earliestStart) : '0s';
+  const earliestStart = earliestNodeStart ?? runStartedAt;
+  const elapsedNow = useTickingNow(hasRunningSessionItem || (!viewState.terminal && earliestStart !== undefined));
+  const elapsedEnd = viewState.terminal ? (runEndedAt ?? elapsedNow) : elapsedNow;
+  const elapsedLabel = earliestStart ? fmtTotal(Math.max(0, elapsedEnd - earliestStart)) : '0s';
   const runStatusText = viewState.label;
   const taskCountsLabel = `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`;
 
@@ -3783,7 +3829,7 @@ export function CoordinatorRunPage() {
     setRetryStatus('Retry requested. Reconnecting to coordinator progress…');
     setStopError(null);
     try {
-      const res = await apiClient.retryRun(runId);
+      const res = await apiClient.retryRun(runId, providerContext.providerKey);
       if (res.resumed) {
         setRunLevelStatus('in_progress');
         setRetryStatus('Retry resumed from the last failure point. Coordinator progress is reconnecting.');
@@ -3794,11 +3840,21 @@ export function CoordinatorRunPage() {
       }
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
-      setRetryError(formatApiErrorMessage(err, 'Could not retry this run.'));
+      setRetryError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and retry again.'
+        : formatApiErrorMessage(err, 'Could not retry this run.'));
       setRetrying(false);
       setRetryStatus(null);
     }
-  }, [reconnectStream, runId, projectId, retrying, navigate, setRunLevelStatus]);
+  }, [
+    navigate,
+    projectId,
+    providerContext,
+    reconnectStream,
+    retrying,
+    runId,
+    setRunLevelStatus,
+  ]);
 
   const handleStopRun = useCallback(async () => {
     if (!runId || stopping) return;
@@ -3980,13 +4036,34 @@ export function CoordinatorRunPage() {
     getFileDiff: (rid, path) => apiClient.getAssemblyFileDiff(rid, path),
     getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
     getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
-    approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
+    approve: async (rid) => {
+      providerContext.setPhase('active');
+      try {
+        await apiClient.reviewAssembly(rid, 'approve', undefined, providerContext.providerKey);
+        providerContext.setPhase('completed');
+      } catch (err) {
+        providerContext.handleInvocationError(err);
+        throw err;
+      }
+    },
     approveLabel: 'Approve & merge',
     approveAriaLabel: 'Approve human review and continue to merge',
     approveAcceptedStatus: 'review_accepted',
-    requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
+    requestChanges: async (rid, comment) => {
+      providerContext.setPhase('active');
+      try {
+        await apiClient.reviewAssembly(rid, 'request_changes', comment, providerContext.providerKey);
+        providerContext.setPhase('completed');
+      } catch (err) {
+        providerContext.handleInvocationError(err);
+        throw err;
+      }
+    },
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
-  }), []);
+    aiExecutionContext: providerContext.context,
+    aiExecutionLoading: providerContext.loading,
+    aiExecutionAvailable: providerContext.available,
+  }), [providerContext]);
 
   // Run-wide changes summary: the coordinator's collective integration diff (assembly files).
   // getAssemblyFiles returns [] before assembly runs, so this stays null until real changes exist.
@@ -4133,24 +4210,42 @@ export function CoordinatorRunPage() {
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
     setAutomationError(null);
+    if (decision === 'approve') providerContext.setPhase('active');
     try {
-      await apiClient.reviewAssembly(runId, decision);
+      await apiClient.reviewAssembly(
+        runId,
+        decision,
+        undefined,
+        decision === 'approve' ? providerContext.providerKey : undefined,
+      );
+      if (decision === 'approve') providerContext.setPhase('completed');
       reconnectStream();
     } catch (err) {
-      setAutomationError(`Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
+      setAutomationError(decision === 'approve' && providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and approve again.'
+        : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [reconnectStream, runId]);
+  }, [providerContext, reconnectStream, runId]);
 
   const handleAssemblyRequestChanges = useCallback(async (_stepId: string, comment: string) => {
     if (!runId) return;
     setAutomationError(null);
+    providerContext.setPhase('active');
     try {
-      await apiClient.reviewAssembly(runId, 'request_changes', comment);
+      await apiClient.reviewAssembly(
+        runId,
+        'request_changes',
+        comment,
+        providerContext.providerKey,
+      );
+      providerContext.setPhase('completed');
       reconnectStream();
     } catch (err) {
-      setAutomationError(`Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
+      setAutomationError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and request changes again.'
+        : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [reconnectStream, runId]);
+  }, [providerContext, reconnectStream, runId]);
 
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
@@ -4656,16 +4751,24 @@ export function CoordinatorRunPage() {
                     View trace
                   </Button>
                 )}
-                <Button
-                  appearance={isRetryable ? 'secondary' : 'subtle'}
-                  size="small"
-                  icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
-                  disabled={!isRetryable || retrying}
-                  onClick={() => void handleRetry()}
-                  data-testid="coordinator-retry-button"
-                  aria-label={retryAriaLabel}
-                  title={retryHint}
-                />
+                {activeProviderContext && (
+                  <AiExecutionProviderStatus context={activeProviderContext}>
+                    <span aria-hidden="true" />
+                  </AiExecutionProviderStatus>
+                )}
+                <AiExecutionProviderHint context={providerContext.context}>
+                  <Button
+                    appearance={isRetryable ? 'secondary' : 'subtle'}
+                    size="small"
+                    icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
+                    disabled={!isRetryable || retrying || providerContext.loading || !providerContext.available}
+                    onClick={() => void handleRetry()}
+                    data-testid="coordinator-retry-button"
+                    aria-label={retryAriaLabel}
+                    title={retryHint}
+                  />
+                </AiExecutionProviderHint>
+                <AiProviderChangeAnnouncement message={providerContext.announcement} />
                 <Button
                   appearance={viewState.canStop ? 'secondary' : 'subtle'}
                   size="small"
@@ -4776,6 +4879,9 @@ export function CoordinatorRunPage() {
           <section className={styles.centerZone} aria-label="Selected task">
             {reviewActionable && approvalSteps.length > 0 && (
               <div className={styles.approvalGateWrap}>
+                <AiExecutionProviderStatus context={providerContext.context}>
+                  <span aria-hidden="true" />
+                </AiExecutionProviderStatus>
                 <AgentStepList
                   steps={approvalSteps}
                   onApprove={() => void handleAssemblyApproval('approve')}

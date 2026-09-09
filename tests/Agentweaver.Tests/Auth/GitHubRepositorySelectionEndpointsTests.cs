@@ -34,6 +34,14 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         repository.TryGetProperty("authorization_id", out _).Should().BeFalse();
         repository.TryGetProperty("permissions", out _).Should().BeFalse();
         repository.TryGetProperty("clone_url", out _).Should().BeFalse();
+        var installation = browseBody.GetProperty("installations").EnumerateArray().Single();
+        installation.GetProperty("account_login").GetString().Should().Be("octo");
+        installation.GetProperty("account_type").GetString().Should().Be("user");
+        installation.GetProperty("repository_selection").GetString().Should().Be("selected");
+        installation.GetProperty("management_url").GetString()
+            .Should().Be("https://github.com/settings/installations/72");
+        installation.TryGetProperty("installation_id", out _).Should().BeFalse();
+        installation.TryGetProperty("permissions", out _).Should().BeFalse();
 
         var issue = await client.PostAsJsonAsync(
             "/api/github/repository-selections",
@@ -112,7 +120,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         });
         created.StatusCode.Should().Be(HttpStatusCode.Created);
         var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
-        createdBody.GetProperty("source_repository").GetString().Should().Be("https://github.com/octo/secure-repo");
+        createdBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
 
         var reused = await client.PostAsJsonAsync("/api/projects", new
         {
@@ -300,10 +308,9 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                 Content = new StringContent(
                     request.RequestUri!.AbsolutePath switch
                     {
-                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
-                        "/app/installations/72/access_tokens" => """{"token":"ghs_installation_token","expires_at":"2030-01-01T00:00:00Z"}""",
-                        "/installation/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
-                        "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git"}""",
+                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
+                        "/user/installations/72/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+                        "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git","html_url":"https://github.com/octo/new-repo"}""",
                         _ => "{}",
                     },
                         Encoding.UTF8,
