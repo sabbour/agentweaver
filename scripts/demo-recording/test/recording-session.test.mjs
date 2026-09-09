@@ -10,7 +10,7 @@ import {
   assertAuthenticatedSnapshot,
   assertAuthRootWithinRepository,
   assertIgnoredAuthRoot,
-  buildEdgeLaunchOptions,
+  buildChromeLaunchOptions,
   captureRecordingPlan,
   openRecordingSession,
   parsePlaywrightSessionList,
@@ -20,15 +20,15 @@ import {
   refreshRecordingAuthentication,
   recordingAuthPaths,
   resolveCaptureBeatPrerequisites,
-  resolveLiteralEdgeDefaultProfile,
+  resolveLiteralChromeDefaultProfile,
   resolveSafeAuthDestination,
   selectCaptureBeats,
-  shouldCopyEdgeProfileEntry,
+  shouldCopyChromeProfileEntry,
   presentInteractiveSignInShell,
   waitForAuthenticatedSnapshot,
   waitForInteractiveSignInCompletion,
-  validateLiteralEdgeDefaultProfile,
-  waitForEdgeToClose,
+  validateLiteralChromeDefaultProfile,
+  waitForChromeToClose,
 } from '../lib/recording-session.mjs';
 
 const packageRoot = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
@@ -39,7 +39,7 @@ test('recording commands use one canonical session and protected auth root', () 
     session: 'agentweaver-demo',
     baseUrl: 'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io',
     authRoot: 'scripts/demo-recording/.auth',
-    waitForEdgeMs: 300_000,
+    waitForChromeMs: 300_000,
   });
 });
 
@@ -203,27 +203,27 @@ test('recording auth paths keep every authentication artifact under one root', (
   }
 });
 
-test('Edge sign-in is fixed to the literal Default profile and a disposable data root', () => {
-  const profile = resolveLiteralEdgeDefaultProfile('C:\\Users\\tester\\AppData\\Local');
+test('Chrome sign-in is fixed to the literal Default profile and a disposable data root', () => {
+  const profile = resolveLiteralChromeDefaultProfile('C:\\Users\\tester\\AppData\\Local');
   assert.equal(profile.profileDirectory, 'Default');
-  assert.equal(profile.profilePath.endsWith(path.join('Microsoft', 'Edge', 'User Data', 'Default')), true);
+  assert.equal(profile.profilePath.endsWith(path.join('Google', 'Chrome', 'User Data', 'Default')), true);
 
-  const launch = buildEdgeLaunchOptions('scripts/demo-recording/.auth/edge-default-automation');
-  assert.equal(launch.channel, 'msedge');
+  const launch = buildChromeLaunchOptions('scripts/demo-recording/.auth/chrome-default-automation');
+  assert.equal(launch.channel, 'chrome');
   assert.ok(launch.args.includes('--profile-directory=Default'));
-  assert.match(launch.userDataDir, /edge-default-automation$/);
+  assert.match(launch.userDataDir, /chrome-default-automation$/);
 });
 
-test('Edge sign-in validates the exact Default profile identity from Local State', async () => {
+test('Chrome sign-in validates the exact Default profile identity from Local State', async () => {
   const localAppData = 'C:\\Users\\tester\\AppData\\Local';
-  const profile = resolveLiteralEdgeDefaultProfile(localAppData);
+  const profile = resolveLiteralChromeDefaultProfile(localAppData);
   const seen = [];
   const access = async (candidate) => { seen.push(candidate); };
   const readFile = async () => JSON.stringify({
     profile: { info_cache: { Default: { name: 'Work' } } },
   });
 
-  await assert.doesNotReject(() => validateLiteralEdgeDefaultProfile(profile, {
+  await assert.doesNotReject(() => validateLiteralChromeDefaultProfile(profile, {
     localAppData,
     access,
     readFile,
@@ -231,14 +231,14 @@ test('Edge sign-in validates the exact Default profile identity from Local State
   assert.deepEqual(seen, [profile.profilePath, profile.localStatePath]);
 
   await assert.rejects(
-    () => validateLiteralEdgeDefaultProfile(
+    () => validateLiteralChromeDefaultProfile(
       { ...profile, profileDirectory: 'Profile 1' },
       { localAppData, access, readFile },
     ),
     /except the literal Default profile/,
   );
   await assert.rejects(
-    () => validateLiteralEdgeDefaultProfile(profile, {
+    () => validateLiteralChromeDefaultProfile(profile, {
       localAppData,
       access,
       readFile: async () => JSON.stringify({ profile: { info_cache: {} } }),
@@ -247,12 +247,12 @@ test('Edge sign-in validates the exact Default profile identity from Local State
   );
 });
 
-test('Edge profile copy retains identity data but excludes caches and lock files', () => {
-  const root = path.resolve('edge-profile', 'Default');
-  assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'Network', 'Cookies'), root), true);
-  assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'Preferences'), root), true);
-  assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'Cache', 'cache.bin'), root), false);
-  assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'LOCK'), root), false);
+test('Chrome profile copy retains identity data but excludes caches and lock files', () => {
+  const root = path.resolve('chrome-profile', 'Default');
+  assert.equal(shouldCopyChromeProfileEntry(path.join(root, 'Network', 'Cookies'), root), true);
+  assert.equal(shouldCopyChromeProfileEntry(path.join(root, 'Preferences'), root), true);
+  assert.equal(shouldCopyChromeProfileEntry(path.join(root, 'Cache', 'cache.bin'), root), false);
+  assert.equal(shouldCopyChromeProfileEntry(path.join(root, 'LOCK'), root), false);
 });
 
 test('pruneCacheDirectories removes known-safe cache dirs but preserves identity data', async () => {
@@ -357,7 +357,7 @@ test('recording auth must stay inside the repository', () => {
   );
 });
 
-test('auth refresh closes only the owned Playwright session before inspecting Edge', async () => {
+test('auth refresh closes only the owned Playwright session before inspecting Chrome', async () => {
   const events = [];
   await refreshRecordingAuthentication(
     { session: 'agentweaver-demo' },
@@ -369,7 +369,7 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
 });
 
-test('open reuses an already-open verified recording session without refreshing Edge Default', async () => {
+test('open reuses an already-open verified recording session without refreshing Chrome Default', async () => {
   const events = [];
   await openRecordingSession(
     { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
@@ -382,7 +382,7 @@ test('open reuses an already-open verified recording session without refreshing 
   assert.deepEqual(events, ['verify:agentweaver-demo']);
 });
 
-test('open restores protected recording auth before refreshing the Edge Default profile', async () => {
+test('open restores protected recording auth before refreshing the Chrome Default profile', async () => {
   const events = [];
   await openRecordingSession(
     { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
@@ -569,7 +569,7 @@ test('auth destinations reject a junction that escapes the ignored auth root', a
   const id = `${process.pid}-${Date.now()}`;
   const authRoot = path.join(packageRoot, '.auth', `junction-test-${id}`);
   const outsideTarget = path.join(packageRoot, 'test', `.auth-escape-target-${id}`);
-  const junction = path.join(authRoot, 'edge-default-automation');
+  const junction = path.join(authRoot, 'chrome-default-automation');
   await fs.mkdir(authRoot, { recursive: true });
   await fs.mkdir(outsideTarget, { recursive: true });
   try {
@@ -592,7 +592,7 @@ test('playwright-cli session status parsing finds named open sessions', () => {
   const sessions = parsePlaywrightSessionList(`### Browsers
 - agentweaver-demo:
   - status: open
-  - browser-type: msedge
+  - browser-type: chrome
 - other:
   - status: closed
 `);
@@ -600,16 +600,16 @@ test('playwright-cli session status parsing finds named open sessions', () => {
   assert.equal(sessions.get('other').status, 'closed');
 });
 
-test('Edge process wait gives a clear close flow without terminating processes', async () => {
+test('Chrome process wait gives a clear close flow without terminating processes', async () => {
   let calls = 0;
   let message = '';
-  await waitForEdgeToClose({
+  await waitForChromeToClose({
     timeoutMs: 100,
     pollMs: 1,
     getProcessIds: async () => (++calls === 1 ? ['10'] : []),
     write: (value) => { message += value; },
   });
-  assert.match(message, /Close all Microsoft Edge windows/);
+  assert.match(message, /Close all Google Chrome windows/);
 });
 
 test('top-level help documents the complete recording workflow', () => {
@@ -617,7 +617,7 @@ test('top-level help documents the complete recording workflow', () => {
   for (const command of ['signin', 'open', 'start', 'prepare', 'capture', 'status', 'close']) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
-  assert.match(help, /Microsoft Edge Default work profile/);
+  assert.match(help, /Google Chrome Default work profile/);
   assert.match(help, /Reuse or restore recording auth/);
   assert.match(help, /capture  Self-direct authenticated setup/);
 });

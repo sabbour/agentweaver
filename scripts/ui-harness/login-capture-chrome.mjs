@@ -1,11 +1,11 @@
 /**
- * DEPRECATED: This script uses plain Chromium (channel msedge) WITHOUT the real Edge
+ * DEPRECATED: This script uses plain Chromium (channel chrome) WITHOUT the real Chrome
  * Default profile's User Data directory. It will fail Conditional Access on Entra-
  * protected staging deployments.
  *
- * Use scripts/ui-harness/login-edge-default.mjs instead, which supports:
+ * Use scripts/ui-harness/login-chrome-default.mjs instead, which supports:
  *   - launchPersistentContext with the real Default profile (Option A, preferred)
- *   - connectOverCDP to an already-running Edge at port 9222 (Option B, --cdp)
+ *   - connectOverCDP to an already-running Chrome at port 9222 (Option B, --cdp)
  *
  * See scripts/ui-harness/SKILL.md → Authentication section.
  */
@@ -17,19 +17,19 @@ import { sanitizeUrl } from '../harness-shared/redaction.mjs';
 const base = process.argv[2];
 const outDir = process.argv[3];
 
-// Use real Edge channel — Conditional Access requires managed browser/device.
+// Use real Chrome channel — Conditional Access requires managed browser/device.
 const browser = await chromium.launch({
   headless: false,
-  channel: 'msedge',
+  channel: 'chrome',
 });
 const context = await browser.newContext();
 const page = await context.newPage();
 page.setDefaultTimeout(180000);
 page.setDefaultNavigationTimeout(180000);
 
-console.log('Opening app in Edge:', base);
+console.log('Opening app in Chrome:', base);
 await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 180000 });
-console.log('Complete Entra sign-in in the Edge window.');
+console.log('Complete Entra sign-in in the Chrome window.');
 console.log('When the authenticated app shell is visible, press Resume in the Playwright Inspector.');
 await page.pause();
 

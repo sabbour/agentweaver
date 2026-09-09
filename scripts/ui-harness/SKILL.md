@@ -30,33 +30,33 @@ login flow may visit configured identity-provider origins.
 ## Authentication
 
 Agentweaver staging uses Microsoft Entra Conditional Access, which blocks plain
-Chromium (and device-code flow). Authentication must use the managed **Edge Default
+Chromium (and device-code flow). Authentication must use the managed **Chrome Default
 profile** on Windows (enrolled device).
 
-### Option A — Edge is not currently running (preferred)
+### Option A — Chrome is not currently running (preferred)
 
-Close all Edge windows first (save any open work — they will be lost), then:
+Close all Chrome windows first (save any open work — they will be lost), then:
 
 ```powershell
-node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
+node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain>
 ```
 
-This launches the real Edge Default profile (`%LOCALAPPDATA%\Microsoft\Edge\User Data`).
+This launches the real Chrome Default profile (`%LOCALAPPDATA%\Google\Chrome\User Data`).
 Entra SSO often completes automatically. If the sign-in page appears, complete it in the
-Edge window, then press Resume in the Playwright Inspector.
+Chrome window, then press Resume in the Playwright Inspector.
 
-### Option B — Edge is already running (CDP attach)
+### Option B — Chrome is already running (CDP attach)
 
-Relaunch Edge with remote debugging (requires closing the current Edge first):
+Relaunch Chrome with remote debugging (requires closing the current Chrome first):
 
 ```powershell
-Start-Process msedge.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Microsoft\Edge\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
+Start-Process chrome.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Google\Chrome\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
 ```
 
 Then connect and capture:
 
 ```powershell
-node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain> --cdp
+node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain> --cdp
 ```
 
 ### What is saved
@@ -75,9 +75,9 @@ never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
 Playwright shape before it creates a scenario session. It starts that session's
 headless browser worker, but it does not launch or automate the login flow.
 
-> **Legacy note**: `login-capture-edge.mjs` and the `tools.mjs login` command use plain
-> Chromium (channel `msedge` without the Default profile user-data-dir). They may fail
-> Conditional Access. Prefer `login-edge-default.mjs` for Entra-protected staging.
+> **Legacy note**: `login-capture-chrome.mjs` and the `tools.mjs login` command use plain
+> Chromium (channel `chrome` without the Default profile user-data-dir). They may fail
+> Conditional Access. Prefer `login-chrome-default.mjs` for Entra-protected staging.
 
 ## Run a persona flow
 
