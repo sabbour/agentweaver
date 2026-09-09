@@ -11,7 +11,7 @@ import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import * as gitDefault from "./lib/git.mjs";
 import * as kubectlDefault from "./lib/kubectl.mjs";
-import { resolveVariables, DEFAULT_REPO_ROOT } from "./variables.mjs";
+import { resolveVariables, DEFAULT_REPO_ROOT, validateImageDigest } from "./variables.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import * as buildImagesDefault from "./steps/20-build-push-images.mjs";
 import * as verifyProvenanceDefault from "./steps/25-verify-image-provenance.mjs";
@@ -221,13 +221,16 @@ export async function run(opts = {}) {
       cwd: repoRoot,
       capture: exec.capture,
     });
-    const releaseEnv = {
-      ...baseEnv,
+    const releaseEnv = { ...baseEnv };
+    // A release deployment can pin AgentHost only to the digest returned by its
+    // final GHCR promotion, never to configuration inherited from its caller.
+    delete releaseEnv.AGENTHOST_IMAGE_DIGEST;
+    Object.assign(releaseEnv, {
       REPO_APP_PRIVATE_KEY_FILE: "",
       IMAGE_TAG: tag,
       AGENTHOST_IMAGE_TAG: tag,
       TARGET_GIT_REF: release.commit ?? tag,
-    };
+    });
     if (previous) {
       releaseEnv.PREVIOUS_IMAGE_TAG = previous;
     }
@@ -272,14 +275,23 @@ export async function run(opts = {}) {
 
     log.section(`Deploying published release ${tag}`);
     const build = await buildImages.run(cfg, { exec, git, kubectl });
-    const deploy = await deployStep.run(cfg, {
+    const agentHostDigest = build?.expectedImageDigests?.["agentweaver-agent-host"];
+    if (parsed.imageSource === "ghcr" && !dryRun && agentHostDigest) {
+      validateImageDigest(agentHostDigest, "AgentHost ACR digest");
+    } else if (parsed.imageSource === "ghcr" && !dryRun) {
+      throw new Error("GHCR image promotion did not return the final AgentHost ACR digest; refusing to deploy its mutable tag.");
+    }
+    const deployCfg = parsed.imageSource === "ghcr" && !dryRun && agentHostDigest
+      ? { ...cfg, AGENTHOST_IMAGE_DIGEST: agentHostDigest }
+      : cfg;
+    const deploy = await deployStep.run(deployCfg, {
       run: exec.run,
       capture: exec.capture,
       log,
       repoRoot,
     });
     const provenance = await verifyProvenance.run(
-      { ...cfg, VERIFY_GIT_REF: release.commit ?? tag },
+      { ...deployCfg, VERIFY_GIT_REF: release.commit ?? tag },
       { exec, git, kubectl },
     );
     const warmPoolStatus = await waitForWarmPoolReady(cfg.NAMESPACE, { exec, log });
@@ -296,7 +308,7 @@ export async function run(opts = {}) {
         `${warmPoolImageCheck.mismatched.length} warm-pool pod(s) do not run the ${tag} release image.`,
       );
     }
-    const verify = await verifyStep.run(cfg, { exec, log });
+    const verify = await verifyStep.run(deployCfg, { exec, log });
 
     return {
       ok: dryRun || verify.ok,
