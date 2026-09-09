@@ -115,6 +115,7 @@ GET /auth/github/repo-app/installation/callback | ProtocolManaged
 GET /health | OperationalAnonymous
 GET /healthz/workspace | OperationalAnonymous
 GET /oauth/authorize | ProtocolManaged
+GET /oauth/continue | ProtocolManaged
 GET /oauth/resume | ProtocolManaged
 GET /openapi/{documentName}.json | OperationalAnonymous
 GET /openapi/{documentName}.yaml | OperationalAnonymous
