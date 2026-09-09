@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using k8s;
 using Agentweaver.AgentRuntime;
@@ -64,6 +65,79 @@ public sealed class PreviewStepTests : IDisposable
         Str(ready, "session_id").Should().Be("gw-token");
         Str(ready, "preview_runner_session_id").Should().Be("proc-sess-1");
         Str(ready, "preview_url").Should().NotBeNullOrEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task WorkflowStepAppendFailure_PreservesCommittedPreviewOutcome(bool approved)
+    {
+        var failure = new InvalidOperationException("preview workflow-step append failed");
+        var logger = new PreviewDiagnosticLogger<PreviewStep>(failure);
+        using var publication = new HttpClient(new PreviewPublicationHandler());
+        var kube = new FakeKubeHandler();
+        const string routes = "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes";
+        kube.OnGet(routes, """{"kind":"HTTPRouteList","items":[]}""");
+        var claim = SandboxClaimConventions.DeriveAgentHostClaimName(RunId);
+        kube.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claim}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"preview-pod"}}}""");
+        using var kubernetes = new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, kube);
+        var preview = new SandboxPreviewService(kubernetes, new SandboxPreviewOptions
+        {
+            Enabled = true,
+            ZoneSuffix = "preview.example.test",
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        var h = new Harness(
+            _worktree, autoApprove: approved, approvalTimeout: TimeSpan.FromMilliseconds(25),
+            previewService: preview, pauseAtPersistence: true, logger: logger);
+        h.Persistence!.WorkflowStepFailure = failure;
+        h.Persistence.Resume.SetResult();
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        var report = await logger.Reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        report.Level.Should().Be(LogLevel.Warning);
+        report.Message.Should().Contain("Failed to record Preview workflow step").And.Contain(RunId);
+        report.Exception.Should().BeSameAs(failure);
+        logger.Reports.Should().Be(1);
+        var durable = await h.Persistence.GetPersistedEventsAsync(RunId);
+        var beforeDiagnostic = h.Persistence.EventsAtWorkflowStepFailure!;
+        if (approved)
+        {
+            h.TerminalKinds().Should().Equal(EventTypes.SandboxPreviewReady);
+            h.All(EventTypes.CoordinatorPreviewReady).Should().ContainSingle();
+            durable.Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
+                .Select(e => e.Type).Should().Equal(EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+            beforeDiagnostic.Count(e =>
+                e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady).Should().Be(2);
+            durable.Should().NotContain(e => e.Type == EventTypes.SandboxPreviewFailed);
+            kube.Requests.Should().ContainSingle(r => r.Method == "POST" && r.Path == routes);
+            kube.Requests.Should().ContainSingle(r =>
+                r.Method == "POST" && r.Path == "/api/v1/namespaces/agentweaver/services");
+        }
+        else
+        {
+            h.TerminalKinds().Should().Equal(EventTypes.SandboxPreviewFailed);
+            Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("approval_timed_out");
+            Str(h.Single(EventTypes.SandboxPreviewFailed), "retry_available").Should().Be("true");
+            Str(h.Single(EventTypes.SandboxPreviewFailed), "preview_runner_session_id").Should().Be("proc-sess-1");
+            beforeDiagnostic.Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed);
+            durable.Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed);
+            durable.Should().NotContain(e =>
+                e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
+            kube.Requests.Should().NotContain(r => r.Method == "POST");
+        }
+        durable.Where(e => e.Type == EventTypes.WorkflowStep)
+            .Should().OnlyContain(e => Str(e.Payload, "status") == "started" || Str(e.Payload, "status") == "pending");
+        kube.Requests.Should().NotContain(r => r.Method == "DELETE");
+        h.PreviewRunner.StopCalls.Should().Be(0);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+        h.PreviewRunner.StartCalls.Should().Be(1, "the durable outcome must still prevent duplicate execution");
+        h.PreviewRunner.StopCalls.Should().Be(0);
+        h.TerminalKinds().Should().ContainSingle();
+        logger.Reports.Should().Be(1);
     }
 
     [Fact]
@@ -555,7 +629,10 @@ public sealed class PreviewStepTests : IDisposable
     [InlineData(false, false)]
     [InlineData(true, true)]
     [InlineData(false, true)]
-    public async Task RunEndsDuringHttpsOrPersistenceWait_CannotPublish(bool completeLocalStream, bool pauseAtPersistence)
+    [InlineData(false, true, true)]
+    [InlineData(false, true, true, true)]
+    public async Task RunEndsDuringHttpsOrPersistenceWait_CannotPublish(
+        bool completeLocalStream, bool pauseAtPersistence, bool conditionalAppendFails = false, bool workflowStepFails = false)
     {
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -590,8 +667,13 @@ public sealed class PreviewStepTests : IDisposable
         var routeName = routeDocument.RootElement.GetProperty("metadata").GetProperty("name").GetString();
         kube.OnGet($"{routes}/{routeName}", route.Body!);
 
-        (await h.RunStore.TrySetTerminalStatusAsync(
-            Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (conditionalAppendFails)
+            h.Persistence!.ConditionalFailure = new InvalidOperationException("conditional append failed");
+        else
+            (await h.RunStore.TrySetTerminalStatusAsync(
+                Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (workflowStepFails)
+            h.Persistence!.WorkflowStepFailure = new InvalidOperationException("preview workflow-step append failed");
         if (completeLocalStream)
             h.Streams.Complete(RunId);
         var publicationCancelled = publicationCt.IsCancellationRequested;
@@ -603,6 +685,7 @@ public sealed class PreviewStepTests : IDisposable
         if (!pauseAtPersistence)
             publicationCancelled.Should().Be(completeLocalStream);
         h.Types().Should().NotContain(EventTypes.SandboxPreviewReady).And.NotContain(EventTypes.CoordinatorPreviewReady);
+        h.All(EventTypes.SandboxPreviewFailed).Should().ContainSingle();
         h.PreviewRunner.StopCalls.Should().Be(1);
         h.PreviewRunner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
         var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
@@ -717,7 +800,8 @@ public sealed class PreviewStepTests : IDisposable
             IPreviewCommandModel? commandModel = null,
             TimeSpan? approvalTimeout = null,
             ISandboxPreviewService? previewService = null,
-            bool pauseAtPersistence = false)
+            bool pauseAtPersistence = false,
+            ILogger<PreviewStep>? logger = null)
         {
             var configuration = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?> { ["Database:Path"] = Path.Combine(worktree, "runs.db") }).Build();
@@ -762,7 +846,7 @@ public sealed class PreviewStepTests : IDisposable
                 Streams,
                 RunStore,
                 runtime,
-                NullLogger<PreviewStep>.Instance,
+                logger ?? NullLogger<PreviewStep>.Instance,
                 secretStore: null,
                 podRegistry: podRegistry,
                 commandModel: commandModel);

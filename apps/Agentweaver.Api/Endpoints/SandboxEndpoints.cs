@@ -43,8 +43,11 @@ public static class SandboxEndpoints
             if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
                 return denied;
 
-            return await StartPreviewForRunAsync(
+            var result = await StartPreviewForRunAsync(
                 runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
+            if (previewService.Enabled && result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK })
+                EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
+            return result;
         });
 
         // POST /api/runs/{runId}/sandbox/preview
@@ -100,6 +103,7 @@ public static class SandboxEndpoints
                 var reason = timedOut ? "approval_timed_out" : "approval_denied";
                 EmitPreviewFailure(
                     streamStore,
+                    logger,
                     runId,
                     request.TargetPort,
                     reason,
@@ -123,7 +127,7 @@ public static class SandboxEndpoints
                 if (!await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
                 {
                     const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
-                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                    EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
                         previewRunnerSessionId: request.PreviewRunnerSessionId);
                     return Results.Conflict(new { error = message });
                 }
@@ -134,7 +138,7 @@ public static class SandboxEndpoints
                         request.TargetPort, previewRunnerClient, publicationLifetime.Token).ConfigureAwait(false))
                 {
                     const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
-                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                    EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
                         previewRunnerSessionId: request.PreviewRunnerSessionId);
                     return Results.Conflict(new { error = message });
                 }
@@ -143,12 +147,14 @@ public static class SandboxEndpoints
                     runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger,
                     publicationLifetime.Token, request.PreviewRunnerSessionId, runStore).ConfigureAwait(false);
                 published = result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
+                if (published && previewService.Enabled)
+                    EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
                 return result;
             }
             catch (OperationCanceledException) when (runCt.IsCancellationRequested && !ct.IsCancellationRequested)
             {
                 const string message = "The run ended before preview publication completed.";
-                EmitPreviewFailure(streamStore, runId, request.TargetPort, "registration_failed", message,
+                EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "registration_failed", message,
                     previewRunnerSessionId: request.PreviewRunnerSessionId);
                 return Results.Conflict(new { error = message });
             }
@@ -423,7 +429,7 @@ public static class SandboxEndpoints
         if (runStore is not null && !await IsPreviewRunActiveAsync(runId, runStore, ct).ConfigureAwait(false))
         {
             const string message = "The run became terminal before preview publication started.";
-            EmitPreviewFailure(streamStore, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
+            EmitPreviewFailure(streamStore, logger, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
             return Results.Conflict(new { error = message });
         }
 
@@ -459,12 +465,11 @@ public static class SandboxEndpoints
                 {
                     const string message = "The run became terminal before preview publication completed.";
                     EmitPreviewFailure(
-                        streamStore, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
+                        streamStore, logger, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
                     return Results.Conflict(new { error = message });
                 }
 
-                EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.");
-
+                // Let callers retain the process before they report ancillary workflow diagnostics.
                 return Results.Ok(new
                 {
                     session_id    = preview.Token,
@@ -480,7 +485,7 @@ public static class SandboxEndpoints
             // Single-owner emission: the helper emitted nothing — this caller emits exactly one
             // preview_failed for the typed error and returns the matching HTTP status.
             EmitPreviewFailure(
-                streamStore, runId, targetPort, registration.Reason!, registration.Message!,
+                streamStore, logger, runId, targetPort, registration.Reason!, registration.Message!,
                 previewRunnerSessionId: previewRunnerSessionId);
             return registration.Status switch
             {
@@ -651,6 +656,7 @@ public static class SandboxEndpoints
 
     private static void EmitPreviewFailure(
         RunStreamStore streamStore,
+        ILogger logger,
         string runId,
         int targetPort,
         string reason,
@@ -676,7 +682,7 @@ public static class SandboxEndpoints
             expired_at = expiredAt?.ToString("O"),
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
-        EmitPreviewWorkflowStep(streamStore, runId, "failed", message);
+        EmitPreviewWorkflowStep(streamStore, runId, "failed", message, logger);
     }
 
     private static async Task CompletePreviewRetryAsync(
@@ -710,6 +716,7 @@ public static class SandboxEndpoints
                     logger).ConfigureAwait(false);
                 EmitPreviewFailure(
                     streamStore,
+                    logger,
                     runId,
                     retry.TargetPort,
                     "registration_failed",
@@ -731,7 +738,7 @@ public static class SandboxEndpoints
                             runId, retry.PreviewRunnerSessionId, "preview_session_exited",
                             previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
                         EmitPreviewFailure(
-                            streamStore, runId, retry.TargetPort, "preview_session_exited",
+                            streamStore, logger, runId, retry.TargetPort, "preview_session_exited",
                             "Preview session has exited or is unreachable; a preview URL cannot be published.",
                             retry.PreviewRunnerSessionId);
                         return;
@@ -749,8 +756,8 @@ public static class SandboxEndpoints
                     ct,
                     retry.PreviewRunnerSessionId,
                     runStore).ConfigureAwait(false);
-                if (registrationResult is not Microsoft.AspNetCore.Http.IStatusCodeHttpResult
-                    { StatusCode: StatusCodes.Status200OK })
+                var published = registrationResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
+                if (!published)
                 {
                     await TryStopRetainedProcessAsync(
                         runId,
@@ -760,6 +767,10 @@ public static class SandboxEndpoints
                         turnTokens,
                         secretStore,
                         logger).ConfigureAwait(false);
+                }
+                else if (previewService.Enabled)
+                {
+                    EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
                 }
                 return;
             }
@@ -779,6 +790,7 @@ public static class SandboxEndpoints
 
             EmitPreviewFailure(
                 streamStore,
+                logger,
                 runId,
                 retry.TargetPort,
                 timedOut ? "approval_timed_out" : "approval_denied",
@@ -796,7 +808,7 @@ public static class SandboxEndpoints
                 runId, retry.PreviewRunnerSessionId, "run_terminal",
                 previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
             EmitPreviewFailure(
-                streamStore, runId, retry.TargetPort, "registration_failed",
+                streamStore, logger, runId, retry.TargetPort, "registration_failed",
                 "The run ended before preview publication completed.", retry.PreviewRunnerSessionId);
         }
         catch (Exception ex)
@@ -807,6 +819,7 @@ public static class SandboxEndpoints
                 previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
             EmitPreviewFailure(
                 streamStore,
+                logger,
                 runId,
                 retry.TargetPort,
                 "registration_failed",
@@ -916,19 +929,32 @@ public static class SandboxEndpoints
         catch { return false; }
     }
 
-    private static void EmitPreviewWorkflowStep(
+    internal static void EmitPreviewWorkflowStep(
         RunStreamStore streamStore,
         string runId,
         string status,
-        string message) =>
-        streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+        string message,
+        ILogger logger)
+    {
+        // This diagnostic must not replace a committed preview outcome or trigger process cleanup.
+        try
         {
-            step = "preview",
-            status,
-            label = "Preview",
-            message,
-            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
-        });
+            streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+            {
+                step = "preview",
+                status,
+                label = "Preview",
+                message,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to record Preview workflow step {Status} for run {RunId}; preview outcome is unchanged.",
+                status, runId);
+        }
+    }
 
     private static (int? WorkPlanId, string? TreeHash) LatestPreviewContext(RunStreamStore streamStore, string runId)
     {

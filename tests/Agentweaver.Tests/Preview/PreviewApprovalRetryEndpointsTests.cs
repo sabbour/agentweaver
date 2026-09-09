@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using k8s;
 
 namespace Agentweaver.Tests.Preview;
@@ -139,8 +140,13 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     [InlineData(true, false)]
     [InlineData(false, false)]
     [InlineData(false, true)]
-    public async Task AgentTimeout_RetryRetainsSessionAndRechecksHealthAfterApproval(bool healthy, bool unreachable)
+    [InlineData(true, false, true)]
+    public async Task AgentTimeout_RetryRetainsSessionAndRechecksHealthAfterApproval(
+        bool healthy, bool unreachable, bool workflowStepFails = false)
     {
+        var failure = new InvalidOperationException("preview workflow-step append failed");
+        var logger = new PreviewDiagnosticLogger<Program>(failure);
+        PausingPreviewEventStream? persistence = null;
         var runner = new RetainedRunnerClient(healthy, unreachable);
         var preview = new RetainedPreviewService(runner);
         var secrets = new InMemorySecretStore();
@@ -151,6 +157,19 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             services.AddSingleton<ISandboxPreviewService>(preview);
             services.AddSingleton<ISecretStore>(secrets);
             services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+            if (workflowStepFails)
+            {
+                services.AddSingleton<ILogger<Program>>(logger);
+                services.AddSingleton<IRunEventStream>(sp =>
+                {
+                    persistence = new PausingPreviewEventStream(new SqliteRunEventStream(sp.GetRequiredService<IConfiguration>()))
+                    {
+                        WorkflowStepFailure = failure,
+                    };
+                    persistence.Resume.SetResult();
+                    return persistence;
+                });
+            }
             services.AddTransient(sp => new AgentPreviewGate(
                 sp.GetRequiredService<IToolApprovalGate>(),
                 sp.GetRequiredService<IRunOptionsStore>(),
@@ -181,6 +200,15 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         runner.StopCalls.Should().Be(0);
         preview.StartCalls.Should().Be(0);
 
+        if (workflowStepFails)
+        {
+            var report = await logger.Reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            report.Level.Should().Be(LogLevel.Warning);
+            report.Message.Should().Contain("Failed to record Preview workflow step").And.Contain(runId);
+            report.Exception.Should().BeSameAs(failure);
+            persistence!.EventsAtWorkflowStepFailure!.Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed);
+            persistence.WorkflowStepFailure = null;
+        }
         approvalTimeout = TimeSpan.FromSeconds(10);
         var requestId = ReadString(expired.Payload, "approval_request_id");
         var retryResponse = await client.PostAsync(
@@ -225,6 +253,115 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     }
 
     [Theory]
+    [InlineData("agent")]
+    [InlineData("retry")]
+    [InlineData("operator")]
+    public async Task ReadyWorkflowStepAppendFailure_KeepsPublishedProcessAndRouting(string source)
+    {
+        var failure = new InvalidOperationException("preview workflow-step append failed");
+        var logger = new PreviewDiagnosticLogger<Program>(failure);
+        PausingPreviewEventStream? persistence = null;
+        using var publication = new HttpClient(new PreviewPublicationHandler());
+        var kube = new FakeKubeHandler();
+        const string routes = "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes";
+        kube.OnGet(routes, """{"kind":"HTTPRouteList","items":[]}""");
+        using var kubernetes = new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, kube);
+        var preview = new SandboxPreviewService(kubernetes, new SandboxPreviewOptions
+        {
+            Enabled = true,
+            ZoneSuffix = "preview.example.test",
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var secrets = new InMemorySecretStore();
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+            services.AddSingleton<ISecretStore>(secrets);
+            services.AddSingleton<IAgentHostTurnTokenRegistry>(new EmptyTurnTokens());
+            services.AddSingleton<ILogger<Program>>(logger);
+            services.AddSingleton<IRunEventStream>(sp =>
+            {
+                persistence = new PausingPreviewEventStream(new SqliteRunEventStream(sp.GetRequiredService<IConfiguration>()))
+                {
+                    WorkflowStepFailure = failure,
+                };
+                persistence.Resume.SetResult();
+                return persistence;
+            });
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, requestId) = source == "retry"
+            ? await CreateRetryableRunAsync(services: factory.Services, previewRunnerSessionId: "retained-process")
+            : await CreateRunAsync(source == "operator" ? RunStatus.Completed : RunStatus.InProgress,
+                services: factory.Services);
+        await secrets.SetSecretAsync(PreviewRunnerCredential.SecretKey(runId), "retained-test-credential");
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var claim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        kube.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claim}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"preview-pod"}}}""");
+
+        if (source == "operator")
+        {
+            streams.Complete(runId);
+            var response = await client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/port-forward", new { targetPort = 5173 });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+        else
+        {
+            Task<HttpResponseMessage>? initialRequest = null;
+            string approvalId;
+            if (source == "agent")
+            {
+                initialRequest = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+                {
+                    target_port = 5173,
+                    preview_runner_session_id = "retained-process",
+                });
+                approvalId = await WaitForApprovalAsync(streams, runId);
+            }
+            else
+            {
+                var response = await client.PostAsync(
+                    $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null);
+                response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+                approvalId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("request_id").GetString()!;
+            }
+            (await factory.Services.GetRequiredService<IToolApprovalGate>()
+                .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+            if (initialRequest is not null)
+                (await initialRequest.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        var report = await logger.Reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        report.Level.Should().Be(LogLevel.Warning);
+        report.Message.Should().Contain("Failed to record Preview workflow step").And.Contain(runId);
+        report.Exception.Should().BeSameAs(failure);
+        logger.Reports.Should().Be(1);
+        persistence!.EventsAtWorkflowStepFailure!.Where(e =>
+            e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
+            .Select(e => e.Type).Should().Equal(EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+        var durable = await persistence.GetPersistedEventsAsync(runId);
+        foreach (var events in new[] { durable, streams.Get(runId)!.GetSnapshotSince(0).Events })
+        {
+            events.Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
+                .Select(e => e.Type).Should().Equal(EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+            events.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(source == "retry" ? 1 : 0);
+            events.Where(e => e.Type == EventTypes.WorkflowStep)
+                .Select(e => JsonSerializer.SerializeToNode(e.Payload)!["status"]!.GetValue<string>())
+                .Should().OnlyContain(status => status == "pending");
+        }
+        runner.StopCalls.Should().Be(0);
+        runner.HealthCalls.Should().Be(source == "operator" ? 0 : 1);
+        kube.Requests.Should().ContainSingle(r => r.Method == "POST" && r.Path == routes);
+        kube.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path == "/api/v1/namespaces/agentweaver/services");
+        kube.Requests.Should().NotContain(r => r.Method == "DELETE");
+    }
+
+    [Theory]
     [InlineData(true, true, false, false)]
     [InlineData(true, false, false, false)]
     [InlineData(false, true, false, false)]
@@ -234,8 +371,10 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     [InlineData(false, true, true, false)]
     [InlineData(false, false, true, false)]
     [InlineData(false, false, true, true)]
+    [InlineData(false, false, true, true, true)]
     public async Task Publication_FailureDuringHttpsOrPersistenceWait_CleansUpWithoutReady(
-        bool initialApproval, bool completeLocalStream, bool pauseAtPersistence, bool conditionalAppendFails)
+        bool initialApproval, bool completeLocalStream, bool pauseAtPersistence, bool conditionalAppendFails,
+        bool workflowStepFails = false)
     {
         PausingPreviewEventStream? persistence = null;
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -319,6 +458,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         else
             (await runStore.TrySetTerminalStatusAsync(
                 RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (workflowStepFails)
+            persistence!.WorkflowStepFailure = new InvalidOperationException("preview workflow-step append failed");
         if (completeLocalStream)
             streams.Complete(runId);
         var publicationCancelled = publicationCt.IsCancellationRequested;
@@ -506,22 +647,38 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             streams.Get(runId).Should().BeNull("publication must not create an entry with incomplete history");
     }
 
-    [Fact]
-    public async Task RetryExpiredApproval_TimesOutAgain_RetainsProcess()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetryExpiredApproval_TimesOutAgain_RetainsProcess(bool workflowStepFails)
     {
+        var failure = new InvalidOperationException("preview workflow-step append failed");
+        var logger = new PreviewDiagnosticLogger<Program>(failure);
+        PausingPreviewEventStream? persistence = null;
+        var approvalTimeout = TimeSpan.FromMilliseconds(25);
         var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
         var preview = new RetainedPreviewService(runner);
         using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
             services.AddSingleton<IPreviewRunnerHttpClient>(runner);
             services.AddSingleton<ISandboxPreviewService>(preview);
+            services.AddSingleton<ILogger<Program>>(logger);
+            services.AddSingleton<IRunEventStream>(sp =>
+            {
+                persistence = new PausingPreviewEventStream(new SqliteRunEventStream(sp.GetRequiredService<IConfiguration>()))
+                {
+                    WorkflowStepFailure = workflowStepFails ? failure : null,
+                };
+                persistence.Resume.SetResult();
+                return persistence;
+            });
             services.AddTransient(sp => new AgentPreviewGate(
                 sp.GetRequiredService<IToolApprovalGate>(),
                 sp.GetRequiredService<IRunOptionsStore>(),
                 sp.GetRequiredService<RunStreamStore>(),
                 autoApproveConfigured: false,
                 NullLogger<AgentPreviewGate>.Instance,
-                TimeSpan.FromMilliseconds(25)));
+                approvalTimeout));
         }));
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
@@ -532,6 +689,17 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var response = await client.PostAsync(
             $"/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", null);
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var retryId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("request_id").GetString()!;
+        if (workflowStepFails)
+        {
+            var report = await logger.Reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            report.Level.Should().Be(LogLevel.Warning);
+            report.Message.Should().Contain("Failed to record Preview workflow step").And.Contain(runId);
+            report.Exception.Should().BeSameAs(failure);
+            logger.Reports.Should().Be(1);
+            persistence!.EventsAtWorkflowStepFailure!.Count(e =>
+                e.Type == EventTypes.SandboxPreviewFailed).Should().Be(2);
+        }
         for (var i = 0; i < 500; i++)
         {
             if (streams.Get(runId)!.GetSnapshotSince(0).Events.Count(e => e.Type == EventTypes.SandboxPreviewFailed) == 2)
@@ -543,9 +711,47 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             .Where(e => e.Type == EventTypes.SandboxPreviewFailed).ToList();
         failures.Should().HaveCount(2);
         ReadString(failures[1].Payload, "reason").Should().Be("approval_timed_out");
+        ReadString(failures[1].Payload, "approval_request_id").Should().Be(retryId);
+        ReadString(failures[1].Payload, "preview_runner_session_id").Should().Be("retained-process");
+        ReadString(failures[1].Payload, "retry_available").Should().Be("True");
+        var durable = await persistence!.GetPersistedEventsAsync(runId);
+        durable.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(2);
+        durable.Should().NotContain(e =>
+            e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
         runner.StopCalls.Should().Be(0);
         runner.HealthCalls.Should().Be(0);
         preview.StartCalls.Should().Be(0);
+        preview.StopCalls.Should().Be(0);
+
+        if (workflowStepFails)
+        {
+            persistence.WorkflowStepFailure = null;
+            approvalTimeout = TimeSpan.FromSeconds(10);
+            var next = await client.PostAsync(
+                $"/api/runs/{runId}/sandbox/preview-approvals/{retryId}/retry", null);
+            next.StatusCode.Should().Be(HttpStatusCode.Accepted);
+            var nextId = (await next.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("request_id").GetString()!;
+            (await factory.Services.GetRequiredService<IToolApprovalGate>()
+                .GrantAsync(runId, nextId, ApprovalScope.Once)).Should().BeTrue();
+            for (var i = 0; i < 500; i++)
+            {
+                if (streams.Get(runId)!.GetSnapshotSince(0).Events.Any(e =>
+                    e.Type == EventTypes.WorkflowStep && ReadString(e.Payload, "status") == "completed"))
+                    break;
+                await Task.Delay(10);
+            }
+
+            durable = await persistence.GetPersistedEventsAsync(runId);
+            durable.Count(e => e.Type == EventTypes.SandboxPreviewFailed).Should().Be(2);
+            durable.Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
+                .Select(e => e.Type).Should().Equal(EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+            runner.StopCalls.Should().Be(0);
+            runner.HealthCalls.Should().Be(1);
+            preview.StartCalls.Should().Be(1);
+            preview.StopCalls.Should().Be(0);
+            preview.SessionId.Should().Be("retained-process");
+            logger.Reports.Should().Be(1);
+        }
     }
 
     private static async Task<string> WaitForApprovalAsync(RunStreamStore streams, string runId)
@@ -680,6 +886,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     private sealed class RetainedPreviewService(RetainedRunnerClient runner, bool requireHealthCheck = true) : ISandboxPreviewService
     {
         public int StartCalls;
+        public int StopCalls;
         public string? SessionId;
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
@@ -704,7 +911,11 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             Task.FromResult(PreviewLifecycleState.Previewable);
         public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
             Task.FromResult(false);
-        public Task StopPreviewAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task StopPreviewAsync(string token, CancellationToken ct = default)
+        {
+            StopCalls++;
+            return Task.CompletedTask;
+        }
         public Task<int> ReapAsync(CancellationToken ct = default) => Task.FromResult(0);
     }
 }
