@@ -159,9 +159,11 @@ test("published release validation requires a GitHub Release", async () => {
 
 test("deploy-from-release builds, deploys, verifies provenance, waits, then verifies health", async () => {
   const order = [];
+  let buildCfg;
+  let deployCfg;
   const steps = {
-    buildImages: { run: async () => { order.push("build"); return {}; } },
-    deployStep: { run: async () => { order.push("deploy"); return {}; } },
+    buildImages: { run: async (cfg) => { buildCfg = cfg; order.push("build"); return {}; } },
+    deployStep: { run: async (cfg) => { deployCfg = cfg; order.push("deploy"); return {}; } },
     verifyProvenance: {
       run: async () => {
         order.push("provenance");
@@ -197,22 +199,35 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
     resolveVariables: async ({ env }) => ({
       IMAGE_TAG: env.IMAGE_TAG,
       AGENTHOST_IMAGE_TAG: env.AGENTHOST_IMAGE_TAG,
+      AGENTHOST_IMAGE_DIGEST: env.AGENTHOST_IMAGE_DIGEST,
       ACR_NAME: "acr",
       ACR_LOGIN_SERVER: "acr.azurecr.io",
       NAMESPACE: "agentweaver",
     }),
+    env: { AGENTHOST_IMAGE_DIGEST: `sha256:${"b".repeat(64)}` },
     steps,
   });
 
   assert.equal(result.ok, true);
   assert.deepEqual(order, ["build", "deploy", "provenance", "warm-pool", "health"]);
+  assert.equal(buildCfg.IMAGE_TAG, "v1.2.3");
+  assert.equal(buildCfg.AGENTHOST_IMAGE_TAG, "v1.2.3");
+  assert.equal(buildCfg.AGENTHOST_IMAGE_DIGEST, undefined);
+  assert.equal(deployCfg.AGENTHOST_IMAGE_DIGEST, undefined);
 });
 
-test("deploy-from-release --image-source ghcr wires GHCR_REF/OWNER/REPOSITORY/TOKEN into cfg", async () => {
+test("deploy-from-release --image-source ghcr pins AgentHost only to its returned promotion digest", async () => {
   let capturedCfg;
+  let deployCfg;
+  let resolvedEnv;
   const steps = {
-    buildImages: { run: async (cfg) => { capturedCfg = cfg; return {}; } },
-    deployStep: { run: async () => ({}) },
+    buildImages: {
+      run: async (cfg) => {
+        capturedCfg = cfg;
+        return { expectedImageDigests: { "agentweaver-agent-host": `sha256:${"a".repeat(64)}` } };
+      },
+    },
+    deployStep: { run: async (cfg) => { deployCfg = cfg; return {}; } },
     verifyProvenance: { run: async () => ({ results: [{ status: "ok" }] }) },
     verifyStep: { run: async () => ({ ok: true, pass: 1, fail: 0 }) },
   };
@@ -234,13 +249,18 @@ test("deploy-from-release --image-source ghcr wires GHCR_REF/OWNER/REPOSITORY/TO
     log,
     readFile,
     validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
-    resolveVariables: async ({ env }) => ({
-      IMAGE_TAG: env.IMAGE_TAG,
-      AGENTHOST_IMAGE_TAG: env.AGENTHOST_IMAGE_TAG,
-      ACR_NAME: "acr",
-      ACR_LOGIN_SERVER: "acr.azurecr.io",
-      NAMESPACE: "agentweaver",
-    }),
+    resolveVariables: async ({ env }) => {
+      resolvedEnv = env;
+      return {
+        IMAGE_TAG: env.IMAGE_TAG,
+        AGENTHOST_IMAGE_TAG: env.AGENTHOST_IMAGE_TAG,
+        AGENTHOST_IMAGE_DIGEST: env.AGENTHOST_IMAGE_DIGEST,
+        ACR_NAME: "acr",
+        ACR_LOGIN_SERVER: "acr.azurecr.io",
+        NAMESPACE: "agentweaver",
+      };
+    },
+    env: { AGENTHOST_IMAGE_DIGEST: `sha256:${"b".repeat(64)}` },
     resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
     steps,
   });
@@ -251,6 +271,56 @@ test("deploy-from-release --image-source ghcr wires GHCR_REF/OWNER/REPOSITORY/TO
   assert.equal(capturedCfg.GHCR_OWNER, "sabbour");
   assert.equal(capturedCfg.GHCR_REPOSITORY, "agentweaver");
   assert.equal(capturedCfg.GHCR_TOKEN, "tok");
+  assert.equal(resolvedEnv.AGENTHOST_IMAGE_DIGEST, undefined);
+  assert.equal(capturedCfg.AGENTHOST_IMAGE_DIGEST, undefined);
+  assert.equal(deployCfg.AGENTHOST_IMAGE_DIGEST, `sha256:${"a".repeat(64)}`);
+});
+
+test("deploy-from-release GHCR --dry-run does not pin an ambient AgentHost digest", async () => {
+  let deployCfg;
+  let resolvedEnv;
+  const exec = fakeExec();
+  exec.capture = async (cmd, args) => {
+    if (cmd === "git" && args[0] === "tag") {
+      return { code: 0, stdout: "v1.2.3\nv1.2.2\n" };
+    }
+    if (cmd === "kubectl") {
+      return { code: 1, stdout: "", json: null };
+    }
+    return { code: 0, stdout: "" };
+  };
+
+  const result = await run({
+    argv: ["v1.2.3", "--image-source", "ghcr", "--dry-run"],
+    repoRoot: "/repo",
+    exec,
+    log,
+    readFile,
+    validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+    resolveVariables: async ({ env }) => {
+      resolvedEnv = env;
+      return {
+        IMAGE_TAG: "v1.2.3",
+        AGENTHOST_IMAGE_TAG: "v1.2.3",
+        AGENTHOST_IMAGE_DIGEST: env.AGENTHOST_IMAGE_DIGEST,
+        ACR_NAME: "acr",
+        ACR_LOGIN_SERVER: "acr.azurecr.io",
+        NAMESPACE: "agentweaver",
+      };
+    },
+    env: { AGENTHOST_IMAGE_DIGEST: `sha256:${"b".repeat(64)}` },
+    resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
+    steps: {
+      buildImages: { run: async () => ({}) },
+      deployStep: { run: async (cfg) => { deployCfg = cfg; return {}; } },
+      verifyProvenance: { run: async () => ({ results: [{ status: "ok" }] }) },
+      verifyStep: { run: async () => ({ ok: true, pass: 1, fail: 0 }) },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(resolvedEnv.AGENTHOST_IMAGE_DIGEST, undefined);
+  assert.equal(deployCfg.AGENTHOST_IMAGE_DIGEST, undefined);
 });
 
 test("deploy-from-release --image-source ghcr fails closed without a GitHub origin remote", async () => {

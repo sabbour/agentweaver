@@ -42,6 +42,8 @@ patches:
 # IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base
 # manifests' placeholder image exactly; `newName`/`newTag` are rewritten per
 # deploy from cfg.ACR_LOGIN_SERVER / cfg.IMAGE_TAG / cfg.AGENTHOST_IMAGE_TAG.
+# GHCR release deployments replace only AgentHost's `newTag` with its promoted
+# ACR `digest`, which changes the warm-pool template generation.
 images:
   - name: agentweaverregistry.azurecr.io/agentweaver-api
     newName: agentweaverregistry.azurecr.io/agentweaver-api
