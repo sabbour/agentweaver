@@ -133,6 +133,23 @@ usefully claimed resources without recomputing health rules in the browser.
 The expanded metadata is intentionally bounded. It does not expose credentials, secret
 values, internal IP addresses, raw Kubernetes objects, condition messages, or logs.
 
+Every resource card can expand independently. Select a card with the mouse, or focus it
+and press <kbd>Enter</kbd> or <kbd>Space</kbd>. Expanded cards show the details that are
+most useful for that resource:
+
+- cluster cards show snapshot timing and unhealthy check reasons;
+- warm pools show ready, available, and allocated capacity;
+- warm instances show their pool, claim, run, project, state, and age;
+- claims show their phase, readiness, bound sandbox, pool, run, and age;
+- agent pods show their claim/run relationship, state, and age.
+
+Resources that need attention expand on first load. Claimed warm instances and bound
+claims also start expanded so their ownership chain is visible immediately. Healthy
+resources stay compact. Expanding or collapsing one card does not change the other cards,
+and the selection is preserved while the page polls for a new diagnostics snapshot.
+When the API supplies both a project and run relationship, the expanded card includes
+safe links to the project and orchestration detail pages.
+
 ## Sandbox claims table
 
 Lists all SandboxClaim CRD objects in the namespace:

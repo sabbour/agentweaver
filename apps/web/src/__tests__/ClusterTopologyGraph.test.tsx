@@ -1,6 +1,14 @@
-import { ClusterTopologyGraph } from '../components/ClusterTopologyGraph';
+import {
+  buildClusterTopology,
+  ClusterTopologyGraph,
+  initiallyExpandedTopologyIds,
+  TOPOLOGY_EXPANDED_HEIGHT,
+  TOPOLOGY_NODE_HEIGHT,
+  TOPOLOGY_ROW_GAP,
+} from '../components/ClusterTopologyGraph';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentType, ReactNode } from 'react';
@@ -25,13 +33,28 @@ vi.mock('@xyflow/react', async (importActual) => {
       nodeTypes,
     }: {
       className?: string;
-      nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>;
-      nodeTypes: Record<string, ComponentType<{ data: Record<string, unknown> }>>;
+      nodes: Array<{
+        id: string;
+        type?: string;
+        data: Record<string, unknown>;
+        position: { x: number; y: number };
+        style?: { height?: string | number };
+      }>;
+      nodeTypes: Record<string, ComponentType<{ id: string; data: Record<string, unknown> }>>;
     }) => (
       <div className={className} data-testid="mock-reactflow">
         {nodes.map((node) => {
           const NodeComponent = nodeTypes[node.type ?? ''];
-          return <NodeComponent key={node.id} data={node.data} />;
+          return (
+            <div
+              key={node.id}
+              data-testid={`flow-node-${node.id}`}
+              data-position={`${node.position.x},${node.position.y}`}
+              data-height={node.style?.height}
+            >
+              <NodeComponent id={node.id} data={node.data} />
+            </div>
+          );
         })}
       </div>
     ),
@@ -124,11 +147,172 @@ describe('ClusterTopologyGraph', () => {
     expect(screen.getByLabelText('Cluster: 3 / 3 checks healthy')).toBeTruthy();
     expect(screen.getByLabelText('agentweaver-agent-host: Warm pool · 2 / 2 ready')).toBeTruthy();
     expect(screen.getAllByLabelText('sandbox-available: Warm instance · available')).toHaveLength(2);
-    expect(screen.getByLabelText('sandbox-claimed: Warm instance · claimed · run-001')).toBeTruthy();
+    expect(screen.getAllByLabelText('sandbox-claimed: Warm instance · claimed')).toHaveLength(2);
     expect(screen.getByLabelText('claim-001: Sandbox claim · bound')).toBeTruthy();
     expect(screen.getByLabelText('agent-001: Agent pod · ready')).toBeTruthy();
-    expect(screen.getAllByRole('link', { name: 'run-001' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'run-001' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'View run' })).toHaveLength(2);
     expect(screen.getByText('Unclaimed warm instance')).toBeTruthy();
+  });
+
+  it('initially expands resources that need attention plus claimed and bound relationships', () => {
+    const data = createData([
+      {
+        name: 'sandbox-available',
+        status: 'available',
+        claimed: false,
+        age_seconds: 120,
+      },
+      {
+        name: 'sandbox-claimed',
+        status: 'claimed',
+        claimed: true,
+        claim_name: 'claim-001',
+        run_id: 'run-001',
+        project_id: 'proj-001',
+        age_seconds: 180,
+      },
+      {
+        name: 'sandbox-unavailable',
+        status: 'unavailable',
+        claimed: false,
+        age_seconds: 30,
+      },
+    ]);
+
+    render(<Wrapper><ClusterTopologyGraph data={data} /></Wrapper>);
+
+    expect(screen.getByTestId('cluster-topology-toggle-cluster').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: /Expand sandbox-available/ }).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: /Collapse sandbox-claimed/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: /Collapse sandbox-unavailable/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: /Collapse claim-001/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Not resolved')).toBeTruthy();
+  });
+
+  it('discloses the reason for unhealthy cluster checks on first render', () => {
+    const data = createData([]);
+    data.checks = [
+      {
+        name: 'Warm pool',
+        status: 'critical',
+        message: 'No available agent-host sandboxes',
+        latencyMs: 14,
+      },
+    ];
+
+    render(<Wrapper><ClusterTopologyGraph data={data} /></Wrapper>);
+
+    expect(screen.getByRole('button', { name: /Collapse Cluster/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('No available agent-host sandboxes')).toBeTruthy();
+  });
+
+  it('toggles cards independently with mouse and keyboard while keeping multiple cards expanded', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <ClusterTopologyGraph
+          data={createData([{
+            name: 'sandbox-available',
+            status: 'available',
+            claimed: false,
+            age_seconds: 120,
+          }])}
+        />
+      </Wrapper>,
+    );
+
+    const cluster = screen.getByRole('button', { name: /Expand Cluster/ });
+    const pool = screen.getByRole('button', { name: /Expand agentweaver-agent-host/ });
+    await user.click(cluster);
+    pool.focus();
+    await user.keyboard('{Enter}');
+
+    expect(cluster.getAttribute('aria-expanded')).toBe('true');
+    expect(pool.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('cluster-topology-details-cluster')).toBeTruthy();
+    expect(screen.getByText('Allocated')).toBeTruthy();
+
+    await user.keyboard(' ');
+    expect(pool.getAttribute('aria-expanded')).toBe('false');
+    expect(cluster.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('preserves user expansion state when polling replaces diagnostics objects', async () => {
+    const user = userEvent.setup();
+    const first = createData([{
+      name: 'sandbox-available',
+      status: 'available',
+      claimed: false,
+      age_seconds: 120,
+    }]);
+    const { rerender } = render(<Wrapper><ClusterTopologyGraph data={first} /></Wrapper>);
+    await user.click(screen.getByRole('button', { name: /Expand sandbox-available/ }));
+
+    rerender(
+      <Wrapper>
+        <ClusterTopologyGraph
+          data={{
+            ...first,
+            generated_utc: '2026-08-31T00:00:30.000Z',
+            warm_pools: first.warm_pools?.map((pool) => ({
+              ...pool,
+              instances: pool.instances?.map((instance) => ({ ...instance, age_seconds: 150 })),
+            })),
+          }}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByRole('button', { name: /Collapse sandbox-available/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('2m')).toBeTruthy();
+  });
+
+  it('reflows expanded cards in their own columns without overlap or unstable edges', () => {
+    const data = createData([
+      { name: 'one', status: 'claimed', claimed: true, claim_name: 'claim-one', age_seconds: 30 },
+      { name: 'two', status: 'claimed', claimed: true, claim_name: 'claim-two', age_seconds: 40 },
+      { name: 'three', status: 'available', claimed: false, age_seconds: 50 },
+    ]);
+    const expandedIds = initiallyExpandedTopologyIds(data);
+    const model = buildClusterTopology(data, { expandedIds, onToggle: vi.fn() });
+    const instances = model.nodes.filter((node) => node.id.startsWith('instance-'));
+
+    expect(instances.map((node) => node.position.y)).toEqual([
+      0,
+      TOPOLOGY_EXPANDED_HEIGHT + TOPOLOGY_ROW_GAP,
+      (TOPOLOGY_EXPANDED_HEIGHT + TOPOLOGY_ROW_GAP) * 2,
+    ]);
+    expect(instances[0].style?.height).toBe(TOPOLOGY_EXPANDED_HEIGHT);
+    expect(instances[2].style?.height).toBe(TOPOLOGY_NODE_HEIGHT);
+    expect(new Set(model.edges.map((edge) => edge.id)).size).toBe(model.edges.length);
+    expect(model.edges.every((edge) =>
+      model.nodes.some((node) => node.id === edge.source)
+      && model.nodes.some((node) => node.id === edge.target))).toBe(true);
+  });
+
+  it('uses a narrow-viewport-safe responsive card width and stable disclosure markup', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    render(
+      <Wrapper>
+        <ClusterTopologyGraph
+          data={createData([{
+            name: 'sandbox-available',
+            status: 'available',
+            claimed: false,
+            age_seconds: 120,
+          }])}
+        />
+      </Wrapper>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Expand sandbox-available/ }));
+    const card = screen.getByTestId(/cluster-topology-node-instance-/);
+    expect(getComputedStyle(card).width).not.toBe('0px');
+    expect(screen.getByTestId(/cluster-topology-details-instance-/).textContent).toMatchInlineSnapshot(
+      `"StateavailableClaimUnclaimedRunNoneProjectNot resolvedAge2mPoolagentweaver-agent-host"`,
+    );
   });
 
   it('preserves full long node names for hover and wrapping', () => {
@@ -194,9 +378,9 @@ describe('ClusterTopologyGraph', () => {
       </Wrapper>,
     );
 
-    expect(screen.getByText(longPoolName).getAttribute('title')).toBe(longPoolName);
+    expect(screen.getAllByText(longPoolName).some((element) => element.getAttribute('title') === longPoolName)).toBe(true);
     expect(screen.getAllByText(longInstanceName).some((element) => element.getAttribute('title') === longInstanceName)).toBe(true);
-    expect(screen.getByText(longClaimName).getAttribute('title')).toBe(longClaimName);
+    expect(screen.getAllByText(longClaimName).some((element) => element.getAttribute('title') === longClaimName)).toBe(true);
     expect(screen.getByText(longPodName).getAttribute('title')).toBe(longPodName);
   });
 
@@ -219,7 +403,7 @@ describe('ClusterTopologyGraph', () => {
       </Wrapper>,
     );
 
-    expect(screen.getByLabelText('sandbox-claimed: Warm instance · claimed · run-001')).toBeTruthy();
+    expect(screen.getAllByLabelText('sandbox-claimed: Warm instance · claimed')).toHaveLength(2);
     expect(screen.queryByText('Unclaimed warm instance')).toBeNull();
     expect(screen.getByText('Claimed by claim-001')).toBeTruthy();
   });
