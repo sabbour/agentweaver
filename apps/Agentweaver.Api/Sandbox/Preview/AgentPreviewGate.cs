@@ -65,6 +65,7 @@ public sealed class AgentPreviewGate
     private readonly IRunStore? _runStore;
     private readonly IProjectStore? _projectStore;
     private readonly ILogger<AgentPreviewGate> _logger;
+    private readonly TimeSpan _completionGrace;
 
     /// <summary>
     /// Builds the preview approval gate, resolving the global auto-approve flag and approval
@@ -103,7 +104,8 @@ public sealed class AgentPreviewGate
         ILogger<AgentPreviewGate> logger,
         TimeSpan? approvalTimeout = null,
         IRunStore? runStore = null,
-        IProjectStore? projectStore = null)
+        IProjectStore? projectStore = null,
+        TimeSpan? completionGrace = null)
     {
         _approvalGate = approvalGate;
         _runOptions = runOptions;
@@ -113,6 +115,7 @@ public sealed class AgentPreviewGate
         _fallbackApprovalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
         _runStore = runStore;
         _projectStore = projectStore;
+        _completionGrace = completionGrace ?? TimeSpan.FromSeconds(2);
     }
 
     /// <summary>
@@ -243,13 +246,81 @@ public sealed class AgentPreviewGate
         DateTimeOffset expiresAt,
         Task<bool> approvalTask)
     {
-        var approved = await approvalTask.ConfigureAwait(false);
+        var remaining = expiresAt - DateTimeOffset.UtcNow + _completionGrace;
+        if (remaining < _completionGrace)
+            remaining = _completionGrace;
+
+        bool approved;
+        try
+        {
+            approved = await approvalTask.WaitAsync(remaining).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            var terminalState = _approvalGate.GetRequestState(runId, requestId);
+            if (terminalState is ToolApprovalRequestState.Approved
+                or ToolApprovalRequestState.Denied
+                or ToolApprovalRequestState.Expired)
+            {
+                return new PreviewApprovalResult(
+                    terminalState == ToolApprovalRequestState.Approved
+                        ? PreviewApprovalOutcome.Approved
+                        : terminalState == ToolApprovalRequestState.Expired
+                            ? PreviewApprovalOutcome.TimedOut
+                            : PreviewApprovalOutcome.Denied,
+                    requestId,
+                    expiresAt);
+            }
+
+            _logger.LogError(
+                "start_preview approval waiter exceeded its completion deadline: requestId={RequestId} runId={RunId}",
+                requestId.Length >= 8 ? requestId[..8] : requestId,
+                runId);
+            EmitBackstopTimeout(runId, requestId);
+            _ = approvalTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return new PreviewApprovalResult(PreviewApprovalOutcome.TimedOut, requestId, expiresAt);
+        }
+
         var outcome = approved
             ? PreviewApprovalOutcome.Approved
             : _approvalGate.GetRequestState(runId, requestId) == ToolApprovalRequestState.Expired
                 ? PreviewApprovalOutcome.TimedOut
                 : PreviewApprovalOutcome.Denied;
+        _logger.LogInformation(
+            "start_preview approval completed: requestId={RequestId} runId={RunId} outcome={Outcome}",
+            requestId.Length >= 8 ? requestId[..8] : requestId,
+            runId,
+            outcome);
         return new PreviewApprovalResult(outcome, requestId, expiresAt);
+    }
+
+    private void EmitBackstopTimeout(string runId, string requestId)
+    {
+        var stream = _streams.Get(runId);
+        if (stream is null || stream.GetSnapshotSince(0).Events.Any(evt =>
+            {
+                if (evt.Type != EventTypes.ToolApprovalResolved)
+                    return false;
+                var payload = System.Text.Json.JsonSerializer.SerializeToElement(evt.Payload);
+                return payload.TryGetProperty("requestId", out var persistedRequestId)
+                    && string.Equals(persistedRequestId.GetString(), requestId, StringComparison.Ordinal);
+            }))
+        {
+            return;
+        }
+
+        stream.RecordNext(EventTypes.ToolApprovalResolved, new
+        {
+            requestId,
+            runId,
+            approved = false,
+            expired = true,
+            reason = "approval_waiter_timeout",
+        });
     }
 
     internal async Task<TimeSpan> ResolveApprovalTimeoutForRunAsync(string runId, CancellationToken ct)

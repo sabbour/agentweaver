@@ -115,8 +115,24 @@ public static class SandboxEndpoints
                     retryAvailable: timedOut,
                     expiredAt: outcome.ExpiresAt);
                 return Results.Json(
-                    new { error = timedOut ? "Preview approval expired." : "Preview approval was denied." },
-                    statusCode: StatusCodes.Status403Forbidden);
+                    timedOut
+                        ? new
+                        {
+                            error = "Preview approval expired.",
+                            error_code = "preview_approval_timeout",
+                            request_id = outcome.RequestId,
+                            retryable = true,
+                        }
+                        : new
+                        {
+                            error = "Preview approval was denied.",
+                            error_code = "preview_approval_denied",
+                            request_id = outcome.RequestId,
+                            retryable = false,
+                        },
+                    statusCode: timedOut
+                        ? StatusCodes.Status408RequestTimeout
+                        : StatusCodes.Status403Forbidden);
             }
 
             var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;

@@ -147,6 +147,28 @@ public sealed class AgentPreviewGateTests
     }
 
     [Fact]
+    public async Task RequestApproval_BrokenWaiter_HitsCompletionBackstop()
+    {
+        var approvalGate = new NeverCompletingApprovalGate();
+        var streams = new RunStreamStore();
+        streams.Create(RunId, "owner");
+        var gate = new AgentPreviewGate(
+            approvalGate,
+            new InMemoryRunOptionsStore(),
+            streams,
+            autoApproveConfigured: false,
+            NullLogger<AgentPreviewGate>.Instance,
+            approvalTimeout: TimeSpan.FromMilliseconds(20),
+            completionGrace: TimeSpan.FromMilliseconds(20));
+
+        var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+
+        outcome.Outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
+        streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(evt => evt.Type == EventTypes.ToolApprovalResolved);
+    }
+
+    [Fact]
     public async Task BeginApproval_RetryCreatesFreshLinkedRequest()
     {
         var gate = CreateGate(
@@ -257,5 +279,27 @@ public sealed class AgentPreviewGateTests
                 Environment.SetEnvironmentVariable(ApprovalTimeoutEnvVar, previousValue);
             }
         }
+    }
+
+    private sealed class NeverCompletingApprovalGate : IToolApprovalGate
+    {
+        public Task<bool> WaitForApprovalAsync(
+            string runId,
+            string requestId,
+            string toolName,
+            string? url,
+            TimeSpan timeout,
+            CancellationToken ct) =>
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+
+        public Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope) =>
+            Task.FromResult(false);
+
+        public bool Deny(string runId, string requestId) => false;
+        public bool IsAutoApproved(string runId, string toolName, string? url) => false;
+        public ToolApprovalRequestState GetRequestState(string runId, string requestId) =>
+            ToolApprovalRequestState.Pending;
+        public void Clear(string runId) { }
+        public void RegisterParentRun(string childRunId, string parentRunId) { }
     }
 }

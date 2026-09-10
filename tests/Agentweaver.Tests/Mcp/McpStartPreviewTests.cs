@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
@@ -108,8 +109,69 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
 
         var error = await act.Should().ThrowAsync<McpApiException>();
         error.Which.StatusCode.Should().Be(-32001);
-        error.Which.Error.Should().Contain("Preview registration timed out");
+        error.Which.Error.Should().Contain("Preview registration did not complete");
         error.Which.Hint.Should().Contain("run_status");
+    }
+
+    [Fact]
+    public async Task StartPreview_InternalDeadline_StopsHungRequest()
+    {
+        using var http = new HttpClient(new HangingHandler());
+        var api = new AgentweaverApiClient(
+            http,
+            new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey));
+        var tools = new RunTools(api, TimeSpan.FromMilliseconds(50));
+
+        var act = () => tools.StartPreviewAsync(
+            "run-preview-hung",
+            8080,
+            session_id: null,
+            ct: CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<McpApiException>();
+        error.Which.ApiErrorCode.Should().Be("preview_registration_timeout");
+        error.Which.Error.Should().Contain("50 milliseconds");
+        error.Which.Hint.Should().Contain("review it");
+    }
+
+    [Fact]
+    public async Task StartPreview_ApprovalDecision_CompletesOriginalRequest()
+    {
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = Path.Combine(Path.GetTempPath(), "agentweaver-mcp-preview-approval"),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "approval completion test",
+            SubmittingUser = ProjectsWebApplicationFactory.TestUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var streams = _factory.Services.GetRequiredService<RunStreamStore>();
+        streams.Create(runId.ToString(), ProjectsWebApplicationFactory.TestUser);
+
+        var tools = CreateTools();
+        var preview = tools.StartPreviewAsync(
+            runId.ToString(),
+            3000,
+            session_id: null,
+            ct: CancellationToken.None);
+        var requestId = await WaitForApprovalRequestIdAsync(streams, runId.ToString());
+
+        using var client = _factory.CreateAuthenticatedClient();
+        var approval = await client.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-approvals",
+            new { request_id = requestId, scope = "once" });
+
+        approval.StatusCode.Should().Be(HttpStatusCode.OK);
+        Func<Task> previewResult = async () => _ = await preview;
+        await previewResult.Should().ThrowAsync<McpApiException>()
+            .Where(ex => ex.StatusCode == 409);
+        streams.Get(runId.ToString())!.GetSnapshotSince(0).Events
+            .Should().Contain(evt => evt.Type == EventTypes.ToolApprovalResolved);
     }
 
     [Fact]
@@ -178,6 +240,17 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
             Task.FromException<HttpResponseMessage>(exception);
     }
 
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
     private sealed class CancelledHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -204,5 +277,25 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
                 Content = new StringContent("{}", Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private static async Task<string> WaitForApprovalRequestIdAsync(
+        RunStreamStore streams,
+        string runId)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!timeout.IsCancellationRequested)
+        {
+            var approval = streams.Get(runId)!.GetSnapshotSince(0).Events
+                .FirstOrDefault(evt => evt.Type == EventTypes.ToolApprovalRequired);
+            if (approval is not null)
+            {
+                var payload = JsonSerializer.SerializeToElement(approval.Payload);
+                return payload.GetProperty("requestId").GetString()!;
+            }
+            await Task.Delay(10, timeout.Token);
+        }
+
+        throw new TimeoutException("Approval request was not emitted.");
     }
 }

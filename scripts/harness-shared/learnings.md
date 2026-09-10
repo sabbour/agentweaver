@@ -1028,3 +1028,14 @@ Production run 54ef771f-a369-490f-a2da-abc74663cf16 failed in coordinator-direct
 - status: fixed
 
 Correction to the earlier Build Test fallback entry: production run 54ef771f-a369-490f-a2da-abc74663cf16 first failed to redeem its project Copilot credential before any AgentHost claim was created. Deterministic decomposition swallowed that actionable connection-required exception, then restricted-workflow validation produced a secondary Build & Test error that masked the primary cause. Provider connection failures must propagate immediately with correlation/cause metadata, and cleanup must treat a missing claim as already complete. The software-delivery fallback remains valid only for provider-ready code runs.
+
+---
+
+## start_preview callers need an independent completion deadline
+
+- date: 2026-09-10
+- category: bug
+- surface: mcp
+- status: fixed
+
+A start_preview tools/call could remain open for the full project approval window, and a broken approval waiter had no outer completion backstop. MCP and in-sandbox start_preview calls now use a three-minute registration deadline; AgentPreviewGate independently bounds waiter completion, emits an expired resolution on backstop timeout, and the API returns an explicit retryable 408 for approval expiry. Regression coverage includes a hanging MCP request, hanging sandbox API request, a never-completing waiter, and an approval decision completing the original MCP request.

@@ -50,6 +50,13 @@ policy controls the approval gate; it is not evidence that a run came from backl
 heartbeat pickup. If a request is durably pending, review surfaces keep showing it
 until the gate resolves it or its owning run is no longer actionable.
 
+`start_preview` approval waits and preview registration calls have finite deadlines.
+An approval-window timeout returns an explicit retryable response, and MCP or
+in-sandbox tool calls stop after three minutes rather than holding a run indefinitely.
+If that client deadline expires before approval or publication completes, verify the
+run and preview process, then retry `start_preview`; Agentweaver creates a new approval
+request when one is still required.
+
 If approval data cannot be loaded, the review page shows an error with **Retry**. An
 empty panel is shown only after the server successfully confirms that no actionable
 approval remains.

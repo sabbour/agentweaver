@@ -98,9 +98,12 @@ public sealed record RunTaskResult
 }
 
 [McpServerToolType]
-public sealed class RunTools(AgentweaverApiClient api)
+public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistrationTimeout = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    internal static readonly TimeSpan PreviewRegistrationTimeout = TimeSpan.FromMinutes(3);
+    private readonly TimeSpan _previewRegistrationTimeout =
+        previewRegistrationTimeout ?? PreviewRegistrationTimeout;
 
     [McpServerTool(Name = "run_submit", UseStructuredContent = true), Description("Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control.")]
     public async Task<RunSubmitResult> RunSubmitAsync(
@@ -304,17 +307,31 @@ public sealed class RunTools(AgentweaverApiClient api)
         [Description("Run ID whose sandbox pod hosts the server to expose")] string run_id,
         [Description("Port the server is listening on inside the sandbox pod, e.g. 3000")] int port,
         [Description("Optional preview process session_id returned by observe_bound_port. Supplying it lets the server verify the process is still healthy before publication.")] string? session_id = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await StartPreviewWithTimeoutAsync(
+            run_id, port, session_id, _previewRegistrationTimeout, ct).ConfigureAwait(false);
+
+    private async Task<string> StartPreviewWithTimeoutAsync(
+        string runId,
+        int port,
+        string? sessionId,
+        TimeSpan timeout,
+        CancellationToken ct)
     {
         const string pathPrefix = "/api/runs/";
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
         try
         {
             var body = new
             {
                 target_port = port,
-                preview_runner_session_id = string.IsNullOrWhiteSpace(session_id) ? null : session_id,
+                preview_runner_session_id = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId,
             };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/sandbox/preview", body, ct);
+            var result = await api.PostAsync<JsonElement>(
+                $"/api/runs/{Uri.EscapeDataString(runId)}/sandbox/preview",
+                body,
+                timeoutCts.Token).ConfigureAwait(false);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -322,22 +339,27 @@ public sealed class RunTools(AgentweaverApiClient api)
         {
             throw new McpApiException(
                 -32001,
-                "Preview registration timed out while waiting for the sandbox or preview gateway.",
-                $"{pathPrefix}{Uri.EscapeDataString(run_id)}/sandbox/preview",
+                $"Preview registration did not complete within {FormatDuration(timeout)}.",
+                $"{pathPrefix}{Uri.EscapeDataString(runId)}/sandbox/preview",
                 "preview_registration_timeout",
-                "Call run_status to confirm the sandbox is still running, then retry start_preview with the verified port.");
+                "Call run_status to confirm the sandbox is still running. If approval is still required, review it and retry start_preview with the verified port.");
         }
         catch (HttpRequestException ex)
         {
             throw new McpApiException(
                 0,
                 $"Preview registration could not reach Agentweaver: {ex.Message}",
-                $"{pathPrefix}{Uri.EscapeDataString(run_id)}/sandbox/preview",
+                $"{pathPrefix}{Uri.EscapeDataString(runId)}/sandbox/preview",
                 "preview_registration_unreachable",
                 "Call diagnostics_get, then retry start_preview when the API is healthy.");
         }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
+
+    private static string FormatDuration(TimeSpan timeout) =>
+        timeout < TimeSpan.FromSeconds(1)
+            ? $"{timeout.TotalMilliseconds:n0} milliseconds"
+            : $"{timeout.TotalSeconds:n0} seconds";
 
     [McpServerTool(Name = "run_show_artifacts", UseStructuredContent = true), Description("List the files changed by a run.")]
     public async Task<RunArtifactsResult> RunShowArtifactsAsync(
