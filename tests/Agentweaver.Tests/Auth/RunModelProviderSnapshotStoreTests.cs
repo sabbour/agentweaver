@@ -183,7 +183,8 @@ public sealed class RunModelProviderSnapshotStoreTests
 
         var action = () => fixture.CreateStore().TryGetAsync(run, CancellationToken.None);
 
-        await action.Should().ThrowAsync<AgentProviderException>();
+        var exception = await action.Should().ThrowAsync<AgentProviderException>();
+        exception.Which.ErrorCode.Should().Be("model_provider_snapshot_unavailable");
     }
 
     [Fact]
@@ -236,7 +237,7 @@ public sealed class RunModelProviderSnapshotStoreTests
         var action = () => fixture.CreateStore().TryGetAsync(run, CancellationToken.None);
 
         var exception = await action.Should().ThrowAsync<AgentProviderException>();
-        exception.Which.ErrorCode.Should().Be("model_provider_changed");
+        exception.Which.ErrorCode.Should().Be("model_provider_snapshot_unavailable");
         exception.Which.Message.Should().NotContain("secret");
     }
 

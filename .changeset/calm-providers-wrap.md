@@ -2,4 +2,4 @@
 "agentweaver": patch
 ---
 
-Clarify run provider readiness and failure diagnostics, prevent duplicate provider claims, and keep coordinator controls readable at narrow widths.
+Clarify run provider readiness and snapshot failures, prevent duplicate provider claims and snapshot captures, and keep coordinator controls readable at narrow widths.

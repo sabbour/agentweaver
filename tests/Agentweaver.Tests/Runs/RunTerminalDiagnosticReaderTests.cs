@@ -74,6 +74,24 @@ public sealed class RunTerminalDiagnosticReaderTests
         System.Text.Json.JsonSerializer.Serialize(diagnostic).Should().NotContain("must-not-escape");
     }
 
+    [Theory]
+    [InlineData("model_provider_snapshot_unavailable")]
+    [InlineData("github_copilot_capability_snapshot_unavailable")]
+    public void TryRead_IdentifiesRunSnapshotFailuresWithoutCallingTheProviderUnavailable(string errorCode)
+    {
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            errorCode,
+            retryable = true,
+        });
+
+        RunTerminalDiagnosticReader.TryRead(payload, DateTime.UtcNow, out var diagnostic).Should().BeTrue();
+
+        diagnostic!.Code.Should().Be(errorCode);
+        diagnostic.Component.Should().Be("provider_snapshot");
+        diagnostic.Message.Should().Be($"Run failed with code '{errorCode}'. Retry is available.");
+    }
+
     [Fact]
     public void TryRead_RedactsUnsafeMessageInsteadOfProxyingIt()
     {

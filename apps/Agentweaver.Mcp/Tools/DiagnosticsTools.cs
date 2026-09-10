@@ -83,6 +83,8 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
             or "a2a_transport_failure"
             or "agent_host_turn_incomplete"
             or "github_copilot_auth_required"
+            or "github_copilot_capability_snapshot_unavailable"
+            or "model_provider_snapshot_unavailable"
             or "shell_execution_timeout"
             or "assembly_blocked"
             or "assembly_failed"

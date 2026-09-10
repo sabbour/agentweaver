@@ -48,7 +48,7 @@ public sealed class RunModelProviderSnapshotStore(
     {
         var boundary = await TryGetAsync(run.Id, ct).ConfigureAwait(false);
         if (boundary is not null && boundary.Provider.ToModelSource() != run.ModelSource)
-            throw SnapshotUnavailable();
+            throw SnapshotMismatch();
         return boundary;
     }
 
@@ -204,6 +204,13 @@ public sealed class RunModelProviderSnapshotStore(
     private static AgentProviderException SnapshotUnavailable() => new(
         ModelSource.GitHubCopilot,
         AgentProviderFailureKind.Configuration,
+        "model_provider_snapshot_unavailable",
+        "The run's accepted model provider snapshot is unavailable. Retry the run to create a new snapshot.",
+        isRetryable: true);
+
+    private static AgentProviderException SnapshotMismatch() => new(
+        ModelSource.GitHubCopilot,
+        AgentProviderFailureKind.Configuration,
         "model_provider_changed",
         "The accepted model provider snapshot is unavailable.",
         isRetryable: true);
@@ -296,7 +303,7 @@ public sealed class RunModelProviderSnapshotStore(
                     expectedByok.ConfigurationFingerprint,
                     StringComparison.Ordinal))
             {
-                throw SnapshotUnavailable();
+                throw SnapshotMismatch();
             }
 
             return;
@@ -305,7 +312,7 @@ public sealed class RunModelProviderSnapshotStore(
         if (boundary.ByokProviderConfiguration is not null
             || boundary.ByokProviderFingerprint is not null)
         {
-            throw SnapshotUnavailable();
+            throw SnapshotMismatch();
         }
     }
 

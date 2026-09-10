@@ -254,6 +254,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       correlation_ids: {},
       cause_chain: [],
     });
+
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
     const failedRunEvents = [
       {
@@ -290,6 +291,33 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.textContent).not.toContain(instruction);
     await expandRunControls();
     expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('identifies a missing capability snapshot without claiming provider mismatch or unavailability', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'failed',
+      effective_model_provider: null,
+    } as never);
+    vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
+      code: 'github_copilot_capability_snapshot_unavailable',
+      message: "Run failed with code 'github_copilot_capability_snapshot_unavailable'. Retry is available.",
+      component: 'provider_snapshot',
+      timestamp: '2026-09-10T19:29:06Z',
+      retryable: true,
+      correlation_ids: {},
+      cause_chain: [],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const diagnostic = await screen.findByTestId('terminal-failure-diagnostic');
+    expect(diagnostic.textContent).toContain('The run-bound GitHub Copilot capability snapshot was missing');
+    expect(diagnostic.textContent).toContain('reconnect GitHub only if the new run reports an authorization failure');
+    expect(diagnostic.textContent).not.toContain('provider changed');
+    expect(diagnostic.textContent).not.toContain('provider unavailable');
+    expect(screen.getByTestId('run-header').textContent).not.toContain('Used GitHub Copilot');
+    expect(screen.getByTestId('run-header').textContent).toContain('Expected provider: GitHub Copilot');
   });
 
   it('treats assemble_ready as a terminal run status in the detail view', async () => {

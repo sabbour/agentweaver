@@ -158,6 +158,8 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
         var c when c.StartsWith("a2a_", StringComparison.Ordinal) => "a2a",
         var c when c.StartsWith("agent_host_", StringComparison.Ordinal) ||
                    c.StartsWith("agent_turn_", StringComparison.Ordinal) => "agent_host",
+        "github_copilot_capability_snapshot_unavailable" or
+        "model_provider_snapshot_unavailable" => "provider_snapshot",
         var c when c.StartsWith("sandbox_", StringComparison.Ordinal) => "sandbox",
         var c when c.StartsWith("workflow_", StringComparison.Ordinal) => "workflow",
         _ => "run",

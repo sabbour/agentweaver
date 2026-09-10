@@ -19,6 +19,8 @@ public static class StructuredRunFailureTerminal
         "a2a_transport_failure",
         "agent_host_turn_incomplete",
         "github_copilot_auth_required",
+        "github_copilot_capability_snapshot_unavailable",
+        "model_provider_snapshot_unavailable",
         "shell_execution_timeout",
     };
     private static readonly SandboxOutputRedactor DiagnosticRedactor =

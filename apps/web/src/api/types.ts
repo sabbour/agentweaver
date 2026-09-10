@@ -139,6 +139,8 @@ export function safeTerminalFailureMessage(_message: string, code: string, retry
     'a2a_transport_failure',
     'agent_host_turn_incomplete',
     'github_copilot_auth_required',
+    'github_copilot_capability_snapshot_unavailable',
+    'model_provider_snapshot_unavailable',
     'shell_execution_timeout',
   ]);
   const safeCode = allowedCodes.has(code) ? code : 'agent_turn_internal_error';

@@ -4631,6 +4631,13 @@ export function CoordinatorRunPage() {
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
+  const terminalDiagnosticAction = terminalDiagnostic?.code === 'model_provider_snapshot_unavailable'
+    ? 'Agentweaver could not load the provider snapshot saved for this run. Retry creates a new snapshot; this does not mean the configured provider changed or became unavailable.'
+    : terminalDiagnostic?.code === 'github_copilot_capability_snapshot_unavailable'
+      ? 'The run-bound GitHub Copilot capability snapshot was missing, expired, or could not be redeemed. Retry creates a new run snapshot; reconnect GitHub only if the new run reports an authorization failure.'
+      : terminalDiagnostic?.retryable === true
+        ? 'Retry the run; open the trace if the failure repeats.'
+        : 'Open the trace to investigate the recorded failure.';
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -4739,9 +4746,7 @@ export function CoordinatorRunPage() {
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
-                {terminalDiagnostic.retryable === true
-                  ? ' Retry the run; open the trace if the failure repeats.'
-                  : ' Open the trace to investigate the recorded failure.'}
+                {' '}{terminalDiagnosticAction}
               </MessageBarBody>
               <MessageBarActions>
                 <Button

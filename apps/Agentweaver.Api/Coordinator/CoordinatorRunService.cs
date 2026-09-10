@@ -186,7 +186,8 @@ public sealed class CoordinatorRunService
                 workflowOverrideId,
                 direct: startMode == CoordinatorStartMode.Direct,
                 submittingUserDisplayName: submittingUserDisplayName,
-                effectiveProvider: effectiveProvider)
+                effectiveProvider: effectiveProvider,
+                providerSnapshotCaptured: capturedSnapshot is not null)
             .ConfigureAwait(false);
 
         // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
@@ -340,7 +341,8 @@ public sealed class CoordinatorRunService
                 new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
-                effectiveProviderBoundary: effectiveProviderBoundary)
+                effectiveProviderBoundary: effectiveProviderBoundary,
+                providerSnapshotCaptured: capturedSnapshot is not null)
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
@@ -393,7 +395,8 @@ public sealed class CoordinatorRunService
         Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null,
         EffectiveModelProviderResult? effectiveProvider = null,
-        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null)
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null,
+        bool providerSnapshotCaptured = false)
     {
         // Resolve/capture once before any capability preparation. In particular, a reserved pickup
         // may carry a provider accepted by its atomic reservation transaction; do not fence one
@@ -407,10 +410,13 @@ public sealed class CoordinatorRunService
                 : null);
         var resolvedProvider = effectiveProvider ?? resolvedBoundary!.Provider;
 
-        if (resolvedBoundary is not null)
-            await CaptureProviderSnapshotAsync(run, resolvedBoundary, _appStopping).ConfigureAwait(false);
-        else
-            await CaptureProviderSnapshotAsync(run, resolvedProvider, _appStopping).ConfigureAwait(false);
+        if (!providerSnapshotCaptured)
+        {
+            if (resolvedBoundary is not null)
+                await CaptureProviderSnapshotAsync(run, resolvedBoundary, _appStopping).ConfigureAwait(false);
+            else
+                await CaptureProviderSnapshotAsync(run, resolvedProvider, _appStopping).ConfigureAwait(false);
+        }
 
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,

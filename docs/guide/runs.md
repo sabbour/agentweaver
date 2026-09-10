@@ -279,6 +279,17 @@ to that trace's focused view; they are navigation handles, not raw telemetry pay
 The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
 available without repeating the provider or error code in separate status fragments.
 
+Provider snapshot failures are separate from provider health and authorization:
+
+- `model_provider_snapshot_unavailable` means Agentweaver could not load the immutable
+  provider snapshot saved for the run.
+- `github_copilot_capability_snapshot_unavailable` means the run-bound Copilot capability
+  snapshot was missing, expired, or could not be redeemed.
+
+Both diagnostics recommend retrying to create a new run snapshot. They do not claim that
+the configured provider changed, became unavailable, or requires reconnection. Reconnect
+GitHub only when a new run reports `github_copilot_auth_required`.
+
 The projection contains only a bounded error code, safe message, component,
 timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
 It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
