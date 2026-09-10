@@ -31,6 +31,24 @@ The same preview status appears in the human-review file panel so you do not hav
 
 For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
 
+### Tool approvals
+
+The run tree, **Needs input** count, approval cards, board badge, and global notification
+center use the same server-projected pending set. Each request appears once, even when
+the live stream reconnects or both a durable gate event and a display event exist.
+Resolved, denied, expired, cleared, duplicate, terminal-run, and orphaned requests are
+not actionable.
+
+Coordinator approvals can originate from the coordinator itself, a coordinator phase,
+or a child run. Agentweaver maps the request to its owning scope while keeping the
+operator on the top-level run review page. Approval authorization is unchanged, and
+Agentweaver never approves a request automatically because it disappeared from the
+pending set.
+
+If approval data cannot be loaded, the review page shows an error with **Retry**. An
+empty panel is shown only after the server successfully confirms that no actionable
+approval remains.
+
 ### Request changes and steering
 
 When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).

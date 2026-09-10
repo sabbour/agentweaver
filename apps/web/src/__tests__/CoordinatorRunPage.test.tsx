@@ -54,6 +54,7 @@ vi.mock('../api/apiClient', () => ({
     }),
     getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     getRunEvents: vi.fn().mockResolvedValue([]),
+    getPendingApprovals: vi.fn().mockResolvedValue({ run_id: 'coord-run-1', count: 0, approvals: [] }),
     // OutcomePlanPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
@@ -168,6 +169,11 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+  vi.mocked(apiClient.getPendingApprovals).mockResolvedValue({
+    run_id: 'coord-run-1',
+    count: 0,
+    approvals: [],
+  });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
 

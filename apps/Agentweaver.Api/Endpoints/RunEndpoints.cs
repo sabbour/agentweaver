@@ -622,6 +622,43 @@ app.MapGet("/api/runs/{id}/events", async (
     return Results.Ok(result);
 });
 
+app.MapGet("/api/runs/{id}/pending-approvals", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    PendingToolApprovalRunsQuery pendingApprovals,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
+
+    var rootRunId = run.ParentRunId ?? run.Id.ToString();
+    var items = await pendingApprovals.GetPendingApprovalsAsync([rootRunId], ct).ConfigureAwait(false);
+    return Results.Ok(new PendingApprovalsResponse
+    {
+        RunId = rootRunId,
+        Count = items.Count,
+        Approvals = items.Select(item => new PendingApprovalDto
+        {
+            RootRunId = item.RootRunId,
+            OwningRunId = item.OwningStreamId,
+            ActionRunId = item.ActionRunId,
+            RequestId = item.RequestId,
+            ToolName = item.ToolName,
+            Url = item.Url,
+            Message = item.Message,
+            RequestedAt = item.RequestedUtc,
+            ExpiresAt = item.ExpiresUtc,
+            IsShell = item.IsShell,
+        }).ToList(),
+    });
+});
+
 // GET /api/runs/{id}/graph — return the run's dynamic workflow graph descriptor (the per-run
 // visualization). Built from the same code that wires the MAF workflow (no runtime reflection):
 // plumbing adapters/storers/terminals are collapsed/dropped and edges transitively re-stitched.

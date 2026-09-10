@@ -332,6 +332,13 @@ export class AgentweaverApiClient {
     return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
   }
 
+  getPendingApprovals(runId: string): Promise<import('./types').PendingApprovalsResponse> {
+    return this.request<import('./types').PendingApprovalsResponse>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/pending-approvals`,
+    );
+  }
+
   getRunTokenBreakdown(runId: string): Promise<import('./types').RunAgentTokenBreakdownDto> {
     return this.request<import('./types').RunAgentTokenBreakdownDto>('GET', `/runs/${encodeURIComponent(runId)}/token-breakdown`);
   }

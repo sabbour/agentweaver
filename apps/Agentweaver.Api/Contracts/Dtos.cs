@@ -459,6 +459,29 @@ public sealed record ToolApprovalRequest
     public string Scope { get; init; } = "once";
 }
 
+/// <summary>Canonical actionable approval returned by GET /api/runs/{id}/pending-approvals.</summary>
+public sealed record PendingApprovalDto
+{
+    [JsonPropertyName("root_run_id")] public required string RootRunId { get; init; }
+    [JsonPropertyName("owning_run_id")] public required string OwningRunId { get; init; }
+    [JsonPropertyName("action_run_id")] public required string ActionRunId { get; init; }
+    [JsonPropertyName("request_id")] public required string RequestId { get; init; }
+    [JsonPropertyName("tool_name")] public string? ToolName { get; init; }
+    [JsonPropertyName("url")] public string? Url { get; init; }
+    [JsonPropertyName("message")] public string? Message { get; init; }
+    [JsonPropertyName("requested_at")] public required DateTimeOffset RequestedAt { get; init; }
+    [JsonPropertyName("expires_at")] public DateTimeOffset? ExpiresAt { get; init; }
+    [JsonPropertyName("is_shell")] public bool IsShell { get; init; }
+}
+
+/// <summary>One canonical pending set for a run and all of its coordinator scopes/children.</summary>
+public sealed record PendingApprovalsResponse
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("count")] public int Count { get; init; }
+    [JsonPropertyName("approvals")] public required IReadOnlyList<PendingApprovalDto> Approvals { get; init; }
+}
+
 /// <summary>Request body for POST /api/runs/{id}/questions/{requestId}/answer.</summary>
 public sealed record AnswerQuestionRequest
 {

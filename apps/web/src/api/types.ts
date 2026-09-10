@@ -49,6 +49,25 @@ export type RunStatus =
   | 'merge_failed'
   | 'assemble_ready';
 
+export interface PendingApprovalDto {
+  root_run_id: string;
+  owning_run_id: string;
+  action_run_id: string;
+  request_id: string;
+  tool_name: string | null;
+  url: string | null;
+  message: string | null;
+  requested_at: string;
+  expires_at: string | null;
+  is_shell: boolean;
+}
+
+export interface PendingApprovalsResponse {
+  run_id: string;
+  count: number;
+  approvals: PendingApprovalDto[];
+}
+
 export interface RunSandboxInfo {
   backend: string;
   isRealIsolation: boolean;

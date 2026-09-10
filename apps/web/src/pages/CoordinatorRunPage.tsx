@@ -61,6 +61,7 @@ import {
   workflowNodeTypes,
 } from '../components/WorkflowGraphPanel';
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
+import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
@@ -104,6 +105,7 @@ import type {
   EffectiveModelProvider,
   PortForwardSessionDto,
   RunAgentTokenBreakdownDto,
+  PendingApprovalDto,
   RunTerminalDiagnostic,
   RunStatus,
   WorkPlanResponse,
@@ -124,22 +126,12 @@ const CoordPanelContext = createContext<((nodeId: string, opts?: { closeTopology
 // Topology status helpers
 // ---------------------------------------------------------------------------
 
-function pendingApprovalsByRun(events: RunStreamEvent[], coordinatorRunId: string): Map<string, number> {
-  const pending = new Map<string, string>();
-  for (const event of events) {
-    const requestId = String(event.payload.requestId ?? event.payload.request_id ?? event.payload.commandHash ?? event.payload.command_hash ?? '');
-    if (!requestId) continue;
-    const childRunId = String(event.payload.childRunId ?? event.payload.child_run_id ?? '');
-    const targetRunId = childRunId || coordinatorRunId;
-    const key = `${targetRunId}:${requestId}`;
-    if (event.type === 'tool.approval_required' || event.type === 'tool.approval_context' || event.type === 'shell.approval_required' || event.type === 'coordinator.child_approval_required') {
-      pending.set(key, targetRunId);
-    } else if (event.type === 'tool.approval_resolved' || event.type === 'coordinator.child_approval_resolved') {
-      pending.delete(key);
-    }
-  }
+function pendingApprovalsByRun(approvals: PendingApprovalDto[]): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const targetRunId of pending.values()) counts.set(targetRunId, (counts.get(targetRunId) ?? 0) + 1);
+  for (const approval of approvals) {
+    const targetRunId = approval.action_run_id;
+    counts.set(targetRunId, (counts.get(targetRunId) ?? 0) + 1);
+  }
   return counts;
 }
 
@@ -2310,6 +2302,19 @@ export function CoordinatorRunPage() {
     reconnect: reconnectStream,
     refresh: refreshStreamEvents,
   } = useSeededRunStream(runId ?? '');
+  const approvalRefreshKey = useMemo(
+    () => `${streamStatus}:` + events
+      .filter((event) => event.type.includes('approval') || event.type === 'tool.result' || event.type === 'tool.error')
+      .map((event) => `${event.sequence}:${event.type}`)
+      .join('|'),
+    [events, streamStatus],
+  );
+  const {
+    approvals: pendingApprovals,
+    loading: pendingApprovalsLoading,
+    error: pendingApprovalsError,
+    refresh: refreshPendingApprovals,
+  } = usePendingApprovals(runId ?? '', approvalRefreshKey);
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
@@ -3289,7 +3294,10 @@ export function CoordinatorRunPage() {
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
   const [outcomePlanClarificationReconcileEpoch, setOutcomePlanClarificationReconcileEpoch] = useState(0);
-  const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
+  const pendingApprovalCounts = useMemo(
+    () => pendingApprovalsByRun(pendingApprovals),
+    [pendingApprovals],
+  );
   const outcomePlanClarificationBaseSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -4678,7 +4686,7 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || providerContext.error || providerContext.context?.effective_model_provider?.state === 'unavailable' || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
+      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || providerContext.error || providerContext.context?.effective_model_provider?.state === 'unavailable' || workPlanError || pendingApprovalsError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
           {retryStatus && (
             <MessageBar intent="info" data-testid="coordinator-retry-status">
@@ -4698,6 +4706,14 @@ export function CoordinatorRunPage() {
               <MessageBarBody>Work plan refresh failed: {workPlanError.message}{workPlanError.detail ? ` ${workPlanError.detail}` : ''}</MessageBarBody>
               <MessageBarActions>
                 <Button appearance="transparent" size="small" onClick={reconnectStream}>Refresh</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {pendingApprovalsError && (
+            <MessageBar intent="error" data-testid="approval-review-error">
+              <MessageBarBody>Approval review data could not be loaded: {pendingApprovalsError}</MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" size="small" onClick={() => void refreshPendingApprovals()}>Retry</Button>
               </MessageBarActions>
             </MessageBar>
           )}
@@ -5023,6 +5039,10 @@ export function CoordinatorRunPage() {
                     onToggleAutopilot: () => toggleAutopilot(!autopilot),
                     onToggleAutoApprove: () => toggleAutoApprove(!autoApprove),
                   }}
+                  pendingApprovals={pendingApprovals}
+                  pendingApprovalsLoading={pendingApprovalsLoading}
+                  pendingApprovalsError={pendingApprovalsError}
+                  onRetryPendingApprovals={() => void refreshPendingApprovals()}
                 />
               </div>
             </div>
