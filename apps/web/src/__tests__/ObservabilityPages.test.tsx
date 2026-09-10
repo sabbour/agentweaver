@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ObservabilityAgentsPage } from '../pages/observability/ObservabilityAgentsPage';
 import { ObservabilityTracesPage } from '../pages/observability/ObservabilityTracesPage';
@@ -16,6 +17,7 @@ vi.mock('../api/apiClient', () => ({
     listProjectRuns: vi.fn(),
     getTeam: vi.fn(),
     getProjectMetrics: vi.fn(),
+    getRunTerminalDiagnostic: vi.fn(),
   },
 }));
 
@@ -112,6 +114,7 @@ beforeEach(() => {
     layout: 'canonical',
     migration_available: false,
   });
+  vi.mocked(apiClient.getRunTerminalDiagnostic).mockRejectedValue(new ApiError(404, 'not found'));
 });
 
 afterEach(() => {
@@ -251,6 +254,68 @@ describe('observability pages', () => {
     });
 
     expect(transactionTracePanelSpy).toHaveBeenCalledWith(expect.objectContaining({ runId: 'coord-run-1' }));
+  });
+
+  it('shows only the safe terminal diagnostic and exposes correlation trace links for failed runs', async () => {
+    const secret = 'secret-not-in-ui-53de';
+    const toolOutput = 'The deployment tool completed normally.';
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature';
+    const githubToken = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const azureKey = `${'A'.repeat(86)}==`;
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [{
+        workflow_run_id: 'coord-run-failed',
+        execution_id: 'coord-run-failed',
+        task: 'Failed coordinator flow',
+        agent_name: 'Coordinator',
+        status: 'failed',
+        coordinator_status: 'failed',
+        started_at: '2026-09-09T00:00:00.000Z',
+      }],
+      page: 1, page_size: 100, total_count: 1, total_pages: 1,
+    });
+    vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
+      code: 'agent_host_turn_incomplete',
+      message: `${toolOutput} https://agentweaver.blob.core.windows.net/runs/log?sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D`,
+      component: 'agent_host',
+      timestamp: '2026-09-09T00:01:00.000Z',
+      retryable: true,
+      correlation_ids: {
+        correlation_id: '0f8fad5bd9cb469fa16570867728950e',
+        request_id: githubToken,
+        trace_id: azureKey,
+      },
+      cause_chain: ['IOException', 'https://operator:password@example.test/trace', 'at C:\\agent\\Worker.cs', jwt],
+    });
+
+    render(
+      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const diagnostic = screen.getByTestId('trace-terminal-diagnostic-coord-run-failed');
+    expect(diagnostic.textContent).toContain('Terminal failure · agent_host');
+    expect(diagnostic.textContent).toContain("Run failed with code 'agent_host_turn_incomplete'. Retry is available.");
+    expect(diagnostic.textContent).not.toContain('abc%2Bdef%3D');
+    expect(diagnostic.textContent).not.toContain('Authorization');
+    expect(diagnostic.textContent).not.toContain(secret);
+    expect(screen.getByRole('link', { name: 'correlation_id: 0f8fad5bd9cb469fa16570867728950e' }).getAttribute('href'))
+      .toBe('/projects/p1/observability/traces?run=coord-run-failed&correlation=0f8fad5bd9cb469fa16570867728950e');
+    expect(diagnostic.textContent).not.toContain(jwt);
+    expect(diagnostic.textContent).not.toContain(githubToken);
+    expect(diagnostic.textContent).not.toContain(azureKey);
+    expect(diagnostic.textContent).not.toContain('password');
+    expect(diagnostic.textContent).not.toContain('Worker.cs');
+    expect(diagnostic.textContent).not.toContain(toolOutput);
+
+    fireEvent.click(screen.getByTestId('trace-failure-filter'));
+    expect(screen.getByText('Show all traces')).toBeDefined();
   });
 
   it('passes active and retired role titles into AgentTokenBreakdown on the agents page', async () => {

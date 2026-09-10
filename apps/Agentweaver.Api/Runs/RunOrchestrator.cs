@@ -31,6 +31,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly IRunEventStream? _eventStream;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
+    private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly ILogger<RunOrchestrator> _logger;
 
     /// <summary>
@@ -142,7 +143,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         ILogger<RunOrchestrator> logger,
         IRunAgentHostContextResolver? runAgentHostContextResolver,
         IRunEventStream? eventStream = null,
-        AiExecutionPlanAccessor? executionPlanAccessor = null)
+        AiExecutionPlanAccessor? executionPlanAccessor = null,
+        RunModelProviderSnapshotStore? providerSnapshots = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -155,6 +157,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         _runAgentHostContextResolver = runAgentHostContextResolver;
         _eventStream = eventStream;
         _executionPlanAccessor = executionPlanAccessor;
+        _providerSnapshots = providerSnapshots;
         _logger = logger;
     }
 
@@ -178,6 +181,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 acceptedByokProviderFingerprint = expectedByok.ConfigurationFingerprint;
             }
         }
+        var durableProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        acceptedProvider ??= durableProvider.Provider;
+        acceptedByokProviderFingerprint ??= durableProvider.ByokProviderFingerprint;
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
             ct,
@@ -790,6 +796,29 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         ResolveDurableProviderBoundaryAsync(Run run, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
+        var canBootstrapSnapshot = _providerSnapshots is not null
+            && string.IsNullOrWhiteSpace(run.WorktreePath);
+        if (_providerSnapshots is not null)
+        {
+            var snapshot = await _providerSnapshots.TryGetAsync(run, ct).ConfigureAwait(false);
+            if (snapshot is not null)
+                return snapshot;
+            var sourceRunId = run.RetriedFrom ?? run.ParentRunId;
+            if (RunId.TryParse(sourceRunId, out var parsedSourceRunId)
+                && await _providerSnapshots.TryGetAsync(parsedSourceRunId, ct).ConfigureAwait(false)
+                    is { } inherited)
+            {
+                if (inherited.Provider.ToModelSource() != run.ModelSource)
+                    throw new AgentProviderException(
+                        inherited.Provider.ToModelSource(),
+                        AgentProviderFailureKind.Configuration,
+                        "model_provider_changed",
+                        "The inherited model provider does not match the accepted run.",
+                        isRetryable: true);
+                return await _providerSnapshots.CaptureAsync(
+                    run, inherited.Provider, inherited.ByokProviderConfiguration, ct).ConfigureAwait(false);
+            }
+        }
         var platformScoped = string.Equals(run.AgentName, "Operator", StringComparison.Ordinal);
         var resolutionProjectId = platformScoped ? null : run.ProjectId;
         var expectedOperation = platformScoped ? "assistant_turn" : run.ParentRunId is null
@@ -874,8 +903,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                         isRetryable: true);
                 }
             }
-            else if (provenanceReadable && accepted is null)
+            else if (provenanceReadable && accepted is null && !canBootstrapSnapshot)
             {
+                // Pre-snapshot runs have no private provider identity to replay. Continue using
+                // the established fail-closed provenance fence instead of adopting new settings.
                 throw new AgentProviderException(
                     provider.ToModelSource(),
                     AgentProviderFailureKind.Configuration,
@@ -886,7 +917,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
 
         if (provider is not EffectiveModelProviderResult.Byok expectedByok)
-            return new ResolvedRunModelProviderBoundary(provider, null);
+            return _providerSnapshots is null
+                ? new ResolvedRunModelProviderBoundary(provider, null)
+                : await _providerSnapshots.CaptureAsync(run, provider, null, ct).ConfigureAwait(false);
 
         var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
         var configuration = await settings.GetAsync(ct).ConfigureAwait(false);
@@ -899,7 +932,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 "The effective BYOK provider changed before the revision turn.",
                 isRetryable: true);
         }
-        return new ResolvedRunModelProviderBoundary(provider, expectedByok.ConfigurationFingerprint);
+        return _providerSnapshots is null
+            ? new ResolvedRunModelProviderBoundary(provider, expectedByok.ConfigurationFingerprint, configuration)
+            : await _providerSnapshots.CaptureAsync(run, provider, configuration, ct).ConfigureAwait(false);
     }
 
     /// <summary>

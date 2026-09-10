@@ -12,7 +12,7 @@ public sealed class GitHubAuthTools(AgentweaverApiClient api)
         ["pending", "completed", "failed", "expired"];
 
     [McpServerTool(Name = "github_repo_app_connect"), Description(
-        "Begin the current human's Repo App authorization. Returns an opaque transaction ID, a browser URL, and expiry. Open browser_url in a browser already signed in to Agentweaver as the initiating Entra user, then poll github_repo_app_authorization_status. No credential, OAuth state, or callback cookie is returned.")]
+        "Begin the current human's Repo App authorization. Returns an opaque transaction ID, a browser URL, and expiry. Open browser_url; if Agentweaver asks for Entra sign-in, finish it in that browser to resume this handoff. After GitHub completes, return to MCP and poll github_repo_app_authorization_status. No credential, OAuth state, callback cookie, or final callback data is returned.")]
     public async Task<string> GitHubRepoAppConnectAsync(CancellationToken ct)
     {
         try
@@ -48,7 +48,7 @@ public sealed class GitHubAuthTools(AgentweaverApiClient api)
     }
 
     [McpServerTool(Name = "project_copilot_app_connect"), Description(
-        "Begin an Owner-authorized, project-bound Copilot App connection. Returns an opaque transaction ID, browser URL, and expiry. Open browser_url in a browser already signed in to Agentweaver as the initiating Entra user, then poll project_copilot_app_authorization_status. No credential, OAuth state, callback cookie, repository, installation, or permission data is returned.")]
+        "Begin an Owner-authorized, project-bound Copilot App connection. Returns an opaque transaction ID, browser URL, and expiry. Open browser_url; if Agentweaver asks for Entra sign-in, finish it in that browser to resume this handoff. After GitHub completes, return to MCP and poll project_copilot_app_authorization_status. No credential, OAuth state, callback cookie, repository, installation, permission, or final callback data is returned.")]
     public async Task<string> ProjectCopilotAppConnectAsync(
         [Description("Agentweaver project ID to bind. The backend derives and verifies current Owner authority.")] string project_id,
         CancellationToken ct)

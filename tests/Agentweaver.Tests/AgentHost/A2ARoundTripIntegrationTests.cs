@@ -221,8 +221,7 @@ public sealed class A2ARoundTripIntegrationTests
 
             var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
             ex.Which.Reason.Should().Be("shell_execution_timeout");
-            ex.Which.Message.Should().Contain("hard deadline");
-            ex.Which.Message.Should().NotContain("Internal error");
+            ex.Which.Message.Should().Be("Run failed with code 'shell_execution_timeout'. Retry is available.");
             ex.Which.IsRetryable.Should().BeTrue();
             var forwarded = await workerEvents.Reader.ReadAsync(TestCt);
             forwarded.Type.Should().Be(EventTypes.RunFailed);

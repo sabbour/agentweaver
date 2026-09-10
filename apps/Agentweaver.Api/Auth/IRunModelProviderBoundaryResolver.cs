@@ -4,7 +4,8 @@ namespace Agentweaver.Api.Auth;
 
 public sealed record ResolvedRunModelProviderBoundary(
     EffectiveModelProviderResult Provider,
-    string? ByokProviderFingerprint);
+    string? ByokProviderFingerprint,
+    ByokProviderConfiguration? ByokProviderConfiguration = null);
 
 public interface IRunModelProviderBoundaryResolver
 {

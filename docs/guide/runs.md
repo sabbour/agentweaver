@@ -20,9 +20,14 @@ The labels include the provider kind and the model name when it is available.
 Screen readers announce changes, including replacement by another provider of the same kind.
 The UI and API do not expose credentials, account names, or provider-binding identities.
 
-Agentweaver revalidates provider selection immediately before each covered model call.
-If the selection changes after preparation, the API returns `409 model_provider_changed`.
-This response occurs before model invocation and includes a redacted replacement context.
+Agentweaver records an immutable provider and capability snapshot when a run starts. Provider
+enablement, disablement, or configuration changes apply to future runs only; they do not switch
+or cancel an in-flight run during assembly, revision, recovery, or replay. The UI continues to
+show the provider accepted for that run.
+
+The platform still revalidates that the accepted provider credential remains usable immediately
+before each covered model call. A revoked or expired credential fails closed with
+`409 model_provider_changed` before model invocation and includes a redacted replacement context.
 The UI shows the replacement as new **Expected provider** context.
 
 The API binds an execution key to the caller, operation, project, and provider configuration.
@@ -231,10 +236,34 @@ Agentweaver does not replace more specific outcomes with this fallback:
 - a clean A2A stream end without `agent.turn.end` becomes the retryable
   `agent_host_turn_incomplete`.
 
-The terminal may include a bounded diagnostic for troubleshooting. Credentials are
-redacted and multiline output is flattened before it reaches the run event. See the
+Before a remote A2A failure reaches the durable event stream, Agentweaver keeps only a
+bounded allowlisted error code and retryability. It derives the one-line diagnostic
+message from those fields; it never uses remote `message`, `detail`, prompt, tool-input,
+or tool-output text. Invalid, secret-bearing, path-like, stack-like, nested, and
+unrecognized A2A fields are replaced; they are never retained for later redaction. See the
 [Operations Guide](./operations#diagnosing-agent-turn-infrastructure-failures) for
 operator guidance.
+
+### Failed-run diagnostics
+
+For a failed run, the Coordinator page shows the terminal diagnostic when one was
+persisted. API and MCP clients can read the same projection through
+`GET /api/runs/{id}/terminal-diagnostic` and `run_failure_diagnostic`.
+The project's **Observability → Traces** page shows the same diagnostic beside failed
+traces. Use **Show failed only** to focus investigation. Correlation IDs are links back
+to that trace's focused view; they are navigation handles, not raw telemetry payloads.
+
+The projection contains only a bounded error code, safe message, component,
+timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
+It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
+credentials, tokens, or keys. Project Viewers can read diagnostics for their project.
+Projectless runs remain visible only to their submitting owner. Unauthorized and
+unknown run IDs both return not found from the diagnostic endpoint.
+
+The persisted event timeline and SSE replay apply the same terminal-failure projection
+to legacy `run.failed` rows. Their sequence, event type, cursor, timestamp, and access
+rules are preserved, but the payload is limited to the safe message, allowlisted code,
+and retryability fields.
 
 ## Runs list
 

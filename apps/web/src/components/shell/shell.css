@@ -408,21 +408,7 @@
   width: 100%;
 }
 
-.aw-left-nav--collapsed .aw-rail-footer__meta {
-  flex: 0 0 auto;
-  max-width: 100%;
-}
-
-.aw-rail-footer__meta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacingHorizontalXS);
-  min-width: 0;
-  max-width: 100%;
-  align-self: flex-end;
-}
-
-.aw-rail-footer__version {
+.aw-identity-menu-footer__version {
   display: inline-flex;
   align-items: center;
   min-width: 0;
@@ -431,7 +417,7 @@
   overflow: hidden;
 }
 
-.aw-rail-footer__version-text {
+.aw-identity-menu-footer__version-text {
   display: block;
   min-width: 0;
   max-width: 100%;

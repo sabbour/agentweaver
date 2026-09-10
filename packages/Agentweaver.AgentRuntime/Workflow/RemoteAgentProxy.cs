@@ -332,16 +332,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                             var forwardedEvent = runEvent;
                             if (string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
                             {
-                                if (StructuredRunFailureTerminal.TryRead(runEvent) is null)
-                                {
-                                    forwardedEvent =
-                                        StructuredRunFailureTerminal.NormalizeUnstructuredFailure(runEvent);
-                                    _logger.LogWarning(
-                                        "RemoteAgentProxy: normalized an unstructured run.failed event for " +
-                                        "run '{RunId}' to {ErrorCode}.",
-                                        _runId,
-                                        StructuredRunFailureTerminal.InternalErrorCode);
-                                }
+                                forwardedEvent = StructuredRunFailureTerminal.NormalizeFailure(runEvent);
 
                                 lastStructuredFailure =
                                     StructuredRunFailureTerminal.TryRead(forwardedEvent);
@@ -440,6 +431,19 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         //     the coordinator's stall detector firing a 5-minute false positive.
         if (!sawTurnEnd)
         {
+            var terminal = StructuredRunFailureTerminal.CreateFailure(
+                "agent_host_turn_incomplete",
+                "Agent turn ended before the host reported completion.",
+                "The A2A stream closed without the required agent.turn.end marker.",
+                retryable: true);
+            if (_streamWriter is not null && !_streamWriter.TryWrite(terminal))
+            {
+                _logger.LogWarning(
+                    "RemoteAgentProxy: could not forward the synthesized {ErrorCode} terminal for run '{RunId}' because the run-event writer was closed.",
+                    "agent_host_turn_incomplete",
+                    _runId);
+            }
+
             throw new WorkflowAgentInfrastructureException(
                 "agent_host_turn_incomplete",
                 $"RemoteAgentProxy: the pod A2A stream for run '{_runId}' completed without the terminal " +

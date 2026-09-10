@@ -1,7 +1,10 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Webhooks;
+using Agentweaver.Domain;
 using System.Text.Json.Serialization;
 
 namespace Agentweaver.Api.Endpoints;
@@ -152,7 +155,13 @@ public static class AuthEndpoints
         {
             var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
             if (browserSession is null)
-                return Results.Unauthorized();
+            {
+                if (!McpBrowserHandoffContinuation.TryParseRepo($"mcp-repo-{transactionId}", out _))
+                    return Results.NotFound();
+                var continuation = McpBrowserHandoffContinuation.CreateRepo(transactionId);
+                return Results.Redirect(
+                    $"/auth/entra/authorize?mcp_handoff={Uri.EscapeDataString(continuation)}");
+            }
 
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var handoff = await service.TakeMcpBrowserHandoffAsync(
@@ -169,14 +178,42 @@ public static class AuthEndpoints
             string? code,
             string? state,
             string? error,
+            long? installation_id,
+            string? setup_action,
             IConfiguration configuration,
             BrowserEntraSessionService browserSessions,
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             ILogger<RepoAppUserAuthorizationService> logger,
+            IProjectStore projectStore,
+            IProjectRoleAssignmentStore roleAssignments,
+            RepoAppInstallationTokenService tokenService,
+            MemoryDbContext db,
+            ILogger<RepoAppInstallationAuthorizationService> installationLogger,
             CancellationToken ct) =>
         {
+            // Older GitHub App Setup URL registrations use this OAuth callback. Treat only the
+            // mutually exclusive installation callback shape as a compatibility alias.
+            if (RepoAppInstallationAuthorizationService.IsInstallationSetupCallback(installation_id, setup_action))
+            {
+                var installationCookie = RepoAppInstallationAuthorizationService.ReadCallbackCookie(httpContext);
+                RepoAppInstallationAuthorizationService.ClearCallbackCookie(httpContext);
+                var installationBrowserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+                var installationService = new RepoAppInstallationAuthorizationService(
+                    configuration, persistence, projectStore, roleAssignments, tokenService, db, installationLogger);
+                var installationResult = await installationService.CompleteBrowserCallbackAsync(
+                    installationBrowserSession?.Id,
+                    installationBrowserSession?.EntraObjectId,
+                    installation_id,
+                    setup_action,
+                    state,
+                    installationCookie,
+                    ct).ConfigureAwait(false);
+                return Results.Redirect(installationService.GetCallbackRedirect(
+                    installationResult.Outcome, installationResult.ProjectId));
+            }
+
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var callbackCookie = RepoAppUserAuthorizationService.ReadCallbackCookie(httpContext);
             RepoAppUserAuthorizationService.ClearCallbackCookie(httpContext);
@@ -184,6 +221,8 @@ public static class AuthEndpoints
             var result = await service.CompleteBrowserCallbackAsync(
                 browserSession?.Id, browserSession?.EntraObjectId, state,
                 string.IsNullOrWhiteSpace(error) ? code : null, callbackCookie, ct).ConfigureAwait(false);
+            if (result.IsMcpHandoff)
+                return McpBrowserHandoffCompletionPage.Result(result.Outcome);
             return Results.Redirect(service.GetCallbackRedirect(result.ReturnRouteKey, result.Outcome));
         }).ProtocolManaged();
 
@@ -203,7 +242,15 @@ public static class AuthEndpoints
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new { status = result.Status })
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
-        });
+        })
+            .WithName("BeginRepoAppAuthorizationMcpHandoff")
+            .WithTags("Authentication", "GitHub")
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description =
+                    "Begins a session-bound MCP browser handoff for Repo App authorization. The response contains only an opaque transaction ID, a browser URL, and expiry.";
+                return Task.CompletedTask;
+            });
 
         app.MapPost("/api/auth/github/repo-app/authorization/refresh", async (
             HttpContext httpContext,
@@ -240,12 +287,25 @@ public static class AuthEndpoints
         app.MapGet("/auth/entra/authorize", async (
             HttpContext httpContext,
             string? oauth_return_handle,
+            string? mcp_handoff,
             EntraOAuthRedirectService entraOauthService,
             CancellationToken ct) =>
         {
             try
             {
-                var url = await entraOauthService.BeginAuthorizationAsync(oauth_return_handle, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(oauth_return_handle) && !string.IsNullOrWhiteSpace(mcp_handoff))
+                    return Results.BadRequest(new { error = "invalid_request" });
+
+                var returnHandle = oauth_return_handle;
+                if (!string.IsNullOrWhiteSpace(mcp_handoff))
+                {
+                    if (!McpBrowserHandoffContinuation.TryParseRepo(mcp_handoff, out _) &&
+                        !McpBrowserHandoffContinuation.TryParseCopilot(mcp_handoff, out _))
+                        return Results.BadRequest(new { error = "invalid_request" });
+                    returnHandle = mcp_handoff;
+                }
+
+                var url = await entraOauthService.BeginAuthorizationAsync(returnHandle, ct).ConfigureAwait(false);
                 var state = EntraOAuthStateCookie.ExtractState(url);
                 if (state is not null)
                     EntraOAuthStateCookie.Set(httpContext, state);
@@ -337,6 +397,12 @@ public static class AuthEndpoints
                 {
                     await httpContext.RequestServices.GetRequiredService<BrowserEntraSessionService>()
                         .IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
+                    if (McpBrowserHandoffContinuation.TryParseRepo(exchange.ReturnHandle, out var transactionId))
+                        return Results.Redirect(
+                            $"/auth/github/repo-app/handoff/{Uri.EscapeDataString(transactionId)}");
+                    if (McpBrowserHandoffContinuation.TryParseCopilot(exchange.ReturnHandle, out transactionId))
+                        return Results.Redirect(
+                            $"/auth/github/copilot-app/handoff/{Uri.EscapeDataString(transactionId)}");
                     return Results.Redirect($"/oauth/resume?handle={Uri.EscapeDataString(exchange.ReturnHandle)}");
                 }
                 var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, claims.DisplayName, ct).ConfigureAwait(false);
@@ -404,6 +470,61 @@ public static class AuthEndpoints
         return redirect is null
             ? Results.BadRequest(new { error = OpenIddict.Abstractions.OpenIddictConstants.Errors.InvalidRequest })
             : Results.Redirect(redirect);
+    }
+}
+
+internal static class McpBrowserHandoffCompletionPage
+{
+    public static IResult Result(RepoAppAuthorizationOutcome outcome)
+    {
+        var (title, message) = outcome switch
+        {
+            RepoAppAuthorizationOutcome.Success => (
+                "GitHub authorization completed",
+                "GitHub repository authorization completed. Return to your MCP client; it will detect the completed authorization when it polls."),
+            RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed => (
+                "GitHub authorization already completed",
+                "This authorization attempt was already completed. Return to your MCP client and check its authorization status."),
+            _ => (
+                "GitHub authorization was not completed",
+                "GitHub repository authorization could not be completed. Return to your MCP client to check the authorization status or start a new authorization."),
+        };
+
+        return new StaticHtmlResult(
+            $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title></head><body><main><h1>{title}</h1><p>{message}</p></main></body></html>");
+    }
+
+    public static IResult Result(CopilotBindingOutcome outcome)
+    {
+        var (title, message) = outcome switch
+        {
+            CopilotBindingOutcome.Success => (
+                "GitHub authorization completed",
+                "GitHub Copilot authorization completed. Return to your MCP client; it will detect the completed authorization when it polls."),
+            CopilotBindingOutcome.AuthorizationTransactionConsumed => (
+                "GitHub authorization already completed",
+                "This authorization attempt was already completed. Return to your MCP client and check its authorization status."),
+            _ => (
+                "GitHub authorization was not completed",
+                "GitHub Copilot authorization could not be completed. Return to your MCP client to check the authorization status or start a new authorization."),
+        };
+
+        return new StaticHtmlResult(
+            $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title></head><body><main><h1>{title}</h1><p>{message}</p></main></body></html>");
+    }
+
+    private sealed class StaticHtmlResult(string html) : IResult
+    {
+        public async Task ExecuteAsync(HttpContext httpContext)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status200OK;
+            httpContext.Response.ContentType = "text/html; charset=utf-8";
+            httpContext.Response.Headers.CacheControl = "no-store";
+            httpContext.Response.Headers["Content-Security-Policy"] =
+                "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+            httpContext.Response.Headers["Referrer-Policy"] = "no-referrer";
+            await httpContext.Response.WriteAsync(html, httpContext.RequestAborted).ConfigureAwait(false);
+        }
     }
 }
 

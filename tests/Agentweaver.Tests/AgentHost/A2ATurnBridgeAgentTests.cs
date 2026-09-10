@@ -261,19 +261,20 @@ public sealed class A2ATurnBridgeAgentTests
             "the upstream structured auth failure must suppress the generic synthetic fallback");
         var payload = JsonSerializer.Serialize(runFailed[0].Payload);
         payload.Should().Contain("github_copilot_auth_required");
-        payload.Should().Contain("Authorization");
+        payload.Should().NotContain("category");
         payload.Should().NotContain("agent_turn_internal_error");
     }
 
     [Fact]
     public async Task StreamTurnAsync_TurnAbortsAfterUnstructuredFailure_NormalizesWithoutDuplicate()
     {
+        const string sasSignature = "abc%2Bdef%3D";
         var runner = new ThrowingTurnRunner
         {
             PreFailureEvent = new RunEvent(1, EventTypes.RunFailed, new
             {
                 reason = "a2a_protocol_event_unsupported",
-                message = "Only message, task, task update events are supported. Received: None",
+                message = $"Only message, task, task update events are supported. https://agentweaver.blob.core.windows.net/runs/log?sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig={sasSignature}",
             }),
             Failure = new InvalidOperationException("transport terminated"),
         };
@@ -292,8 +293,7 @@ public sealed class A2ATurnBridgeAgentTests
         runFailed.Should().ContainSingle("the existing terminal must be normalized in place, not duplicated");
         var payload = JsonSerializer.Serialize(runFailed[0].Payload);
         payload.Should().Contain("agent_turn_internal_error");
-        payload.Should().Contain("a2a_protocol_event_unsupported",
-            "the original reason remains available as bounded diagnostic detail");
+        payload.Should().NotContain(sasSignature).And.NotContain("a2a_protocol_event_unsupported");
     }
 
     [Fact]

@@ -25,7 +25,13 @@ public static class SensitiveDataRedactor
 {
     public const string RedactedPlaceholder = "***REDACTED***";
     private static readonly Regex SensitiveValuePattern = new(
-        @"(?:\bgh[uspor]_[A-Za-z0-9_-]+\b|\bgithub_pat_[A-Za-z0-9_]+\b|-----BEGIN [A-Z0-9 ]+-----|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?)",
+        @"(?:\bgh[uspor]_[A-Za-z0-9_-]+\b|\bgithub_pat_[A-Za-z0-9_]+\b|-----BEGIN [A-Z0-9 ]+-----|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?|https?://[^\s/@:]+:[^\s/@]+@|(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?=[^A-Za-z0-9+/=]|$))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex AzureSasParameterSetPattern = new(
+        @"(?=[^\s""'<>]{0,4096}(?:^|[?&;])\s*(?:sv|ss|sp|se)\s*=)(?=[^\s""'<>]{0,4096}(?:^|[?&;])\s*sig\s*=)(?:^|[?&;])\s*(?:sv|ss|sp|se|sig)\s*=",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex AzureStorageConnectionStringPattern = new(
+        @"\b(?:AccountKey|SharedAccessSignature)\s*=",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     /// <summary>
@@ -64,9 +70,19 @@ public static class SensitiveDataRedactor
         return false;
     }
 
-    /// <summary>Returns whether a value contains token, PEM, or JWT-shaped credential material.</summary>
+    /// <summary>Returns whether a value contains token, PEM, JWT, or Azure storage credential material.</summary>
     public static bool ContainsSensitiveValue(string? value) =>
-        !string.IsNullOrEmpty(value) && SensitiveValuePattern.IsMatch(value);
+        !string.IsNullOrEmpty(value) &&
+        (SensitiveValuePattern.IsMatch(value) || ContainsAzureStorageCredential(value));
+
+    /// <summary>
+    /// Returns whether a value contains a complete Azure SAS parameter set or an Azure Storage
+    /// connection-string credential. A lone query parameter is deliberately not treated as a
+    /// secret, avoiding redaction of ordinary diagnostic text such as a parameter name.
+    /// </summary>
+    public static bool ContainsAzureStorageCredential(string? value) =>
+        !string.IsNullOrEmpty(value) &&
+        (AzureSasParameterSetPattern.IsMatch(value) || AzureStorageConnectionStringPattern.IsMatch(value));
 
     /// <summary>
     /// Recursively redacts sensitive object keys within a JSON node tree. Returns a new tree; the

@@ -379,20 +379,25 @@ export function LeftNav({
         ))}
       </div>
 
-      {/* Footer: signed-in identity, status dot + version badge */}
+      {/* Footer: signed-in identity. Status and version appear in its menu footer. */}
       <div className="aw-rail-footer">
-        <GitHubIdentityBadge projectId={projectId} collapsed={collapsed} />
-        <div className="aw-rail-footer__meta">
-          <StatusDot />
-          <Badge
-            className="aw-rail-footer__version"
-            appearance="tint"
-            color="warning"
-            title={version ? `Agentweaver is alpha software under active development. Full version: v${version}` : 'Agentweaver is alpha software under active development.'}
-          >
-            <span className="aw-rail-footer__version-text">{footerVersionText}</span>
-          </Badge>
-        </div>
+        <GitHubIdentityBadge
+          projectId={projectId}
+          collapsed={collapsed}
+          footerMeta={(
+            <>
+              <StatusDot />
+              <Badge
+                className="aw-identity-menu-footer__version"
+                appearance="tint"
+                color="warning"
+                title={version ? `Agentweaver is alpha software under active development. Full version: v${version}` : 'Agentweaver is alpha software under active development.'}
+              >
+                <span className="aw-identity-menu-footer__version-text">{footerVersionText}</span>
+              </Badge>
+            </>
+          )}
+        />
       </div>
     </nav>
   );

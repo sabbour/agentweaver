@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -126,6 +127,89 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         run!.ModelSource.Should().Be(ModelSource.GitHubCopilot);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReservedByokPickup_CapturesAcceptedProviderBeforeConfigurationChangesOrRemoval(
+        bool removeProvider)
+    {
+        var projectId = await CreateProjectAsync();
+        var pid = ProjectId.Parse(projectId);
+        ByokProviderConfiguration accepted;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            accepted = await byok.AddAsync(
+                new ByokProviderConfiguration(
+                    "unused", "Accepted Azure", "azure", "https://accepted.example.test",
+                    "gpt-4.1", "accepted-key"),
+                CancellationToken.None);
+            await byok.SetActiveAsync(accepted.Id, CancellationToken.None);
+        }
+
+        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        string providerKey;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            var plan = await executionPlans.PrepareAsync(
+                operation,
+                pid,
+                new CallerContext { User = CoordinatorWebApplicationFactory.OwnerUser },
+                CancellationToken.None);
+            providerKey = executionPlans.CreateQueuedProviderKey(plan);
+        }
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.BeforeDraftAsync = async _ =>
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            if (removeProvider)
+            {
+                await byok.RemoveAsync(accepted.Id, CancellationToken.None);
+                return;
+            }
+
+            await byok.UpdateAsync(
+                accepted.Id,
+                accepted with { Model = "gpt-4.2", ApiKey = "replacement-key" },
+                CancellationToken.None);
+        };
+
+        var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(),
+            ProjectId = pid,
+            Title = "Freeze reserved BYOK pickup",
+            Description = "The accepted configuration must survive until the first model turn.",
+            State = BacklogTaskState.Ready,
+            OrderKey = "n",
+            CapturedBy = "owner-github-login",
+            CapturedByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            AiExecutionProviderKey = providerKey,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CommittedAt = DateTimeOffset.UtcNow,
+        };
+        await backlogStore.InsertAsync(task);
+
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        await _factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+
+        var drafted = await WaitForDraftAsync(drafter);
+        drafted.Should().BeTrue("the test changes or removes the configuration at the first draft boundary");
+        var claimed = await backlogStore.GetAsync(pid, task.Id);
+        var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed!.RunId!.Value);
+        var boundary = await _factory.Services.GetRequiredService<IRunModelProviderBoundaryResolver>()
+            .ResolveDurableProviderBoundaryAsync(run!, CancellationToken.None);
+
+        boundary.Provider.Should().BeOfType<EffectiveModelProviderResult.Byok>();
+        boundary.ByokProviderConfiguration.Should().Be(accepted);
+        boundary.ByokProviderFingerprint.Should().Be(accepted.ExecutionFingerprint());
+    }
+
     private async Task<string> CreateProjectAsync()
     {
         var dir = _factory.NewWorkingDirectory();
@@ -139,5 +223,13 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         SquadTestFixtureHelper.CreateMinimalSquad(dir, "Provenance Test");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
+    }
+
+    private static async Task<bool> WaitForDraftAsync(FakeCoordinatorSpecDrafter drafter)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (drafter.LastInput is null && DateTime.UtcNow < deadline)
+            await Task.Delay(50);
+        return drafter.LastInput is not null;
     }
 }

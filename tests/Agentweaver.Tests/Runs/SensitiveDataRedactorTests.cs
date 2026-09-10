@@ -147,6 +147,41 @@ public sealed class SensitiveDataRedactorTests
         redacted.Should().NotContain(secret).And.Contain(SensitiveDataRedactor.RedactedPlaceholder);
     }
 
+    [Theory]
+    [InlineData("https://operator:password@example.test/trace")]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature")]
+    public void ContainsSensitiveValue_RecognizesCredentialUrlsAndTokens(string value)
+    {
+        SensitiveDataRedactor.ContainsSensitiveValue(value).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ContainsSensitiveValue_RecognizesAzureStorageKeyShape()
+    {
+        SensitiveDataRedactor.ContainsSensitiveValue(new string('A', 86) + "==").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("https://agentweaver.blob.core.windows.net/runs/log?sv=2025-01-05&ss=b&srt=o&sp=rl&se=2030-01-01T00%3A00%3A00Z&sig=abc%2Bdef%3D")]
+    [InlineData("https://agentweaver.blob.core.windows.net/runs/log?SV=2025-01-05&SS=b&SP=rl&SE=2030-01-01T00%3A00%3A00Z&SIG=ABC%2bDEF%3d")]
+    [InlineData("BlobEndpoint=https://agentweaver.blob.core.windows.net/;SharedAccessSignature=sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D")]
+    [InlineData("DefaultEndpointsProtocol=https;AccountName=agentweaver;AccountKey=abc123;EndpointSuffix=core.windows.net")]
+    public void ContainsSensitiveValue_RecognizesAzureSasAndConnectionStringCredentials(string value)
+    {
+        SensitiveDataRedactor.ContainsSensitiveValue(value).Should().BeTrue();
+        SensitiveDataRedactor.RedactJsonStringIfApplicable(value).Should().Be(SensitiveDataRedactor.RedactedPlaceholder);
+    }
+
+    [Theory]
+    [InlineData("Storage request failed with HTTP 403.")]
+    [InlineData("The se parameter was not supplied.")]
+    [InlineData("https://agentweaver.blob.core.windows.net/runs/log?comp=list")]
+    public void ContainsSensitiveValue_LeavesNormalStorageDiagnosticsAlone(string value)
+    {
+        SensitiveDataRedactor.ContainsSensitiveValue(value).Should().BeFalse();
+        SensitiveDataRedactor.RedactJsonStringIfApplicable(value).Should().Be(value);
+    }
+
     [Fact]
     public void RedactJsonStringIfApplicable_HandlesNullAndEmpty()
     {

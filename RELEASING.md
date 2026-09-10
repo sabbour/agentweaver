@@ -214,3 +214,9 @@ uncommitted changes and has no dirty-tree override.
 
 After any deployment, use `npm run azure:verify` or inspect the cluster directly
 before considering the change shipped.
+
+For a consolidated PR, release acceptance continues after the PR is merged, the release
+is created, and that released build is deployed: run a Preview harness pass and targeted
+API-harness smoke tests against the deployed system. Record their results with the release
+evidence. Do not target production before the release exists; failures in either harness
+gate block promotion until the deployed release is corrected and revalidated.

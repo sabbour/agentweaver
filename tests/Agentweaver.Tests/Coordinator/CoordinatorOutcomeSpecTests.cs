@@ -174,13 +174,22 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         spec!.Status.Should().Be("drafting",
             "the persisted drafting row should remain diagnostic evidence rather than masquerade as a completed plan");
 
-        var eventsResponse = await _owner.GetAsync($"/api/runs/{runId}/events");
-        eventsResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        var events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        JsonElement[]? events = null;
+        var eventDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < eventDeadline)
+        {
+            var eventsResponse = await _owner.GetAsync($"/api/runs/{runId}/events");
+            eventsResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+            if (events?.Any(e => e.GetProperty("type").GetString() == EventTypes.RunFailed) == true)
+                break;
+            await Task.Delay(50);
+        }
+
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
-        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
-            .Should().Be("outcome_spec_draft_timeout");
+        failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
+            .Should().Be("agent_turn_internal_error");
     }
 
     [Fact]
@@ -245,8 +254,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "deadline cleanup must not emit a second terminal event")
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
-        payload.GetProperty("reason").GetString()
-            .Should().Be("outcome_spec_draft_timeout");
+        payload.GetProperty("errorCode").GetString()
+            .Should().Be("agent_turn_internal_error");
     }
 
     [Fact]
@@ -299,10 +308,10 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "CopilotAIAgent already emitted the provider terminal before MAF surfaced ExecutorFailedEvent")
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(durableFailure.PayloadJson);
-        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_models_unavailable");
-        payload.GetProperty("message").GetString().Should().Be("GitHub Copilot could not list available models.");
-        payload.GetProperty("category").GetString().Should().Be(
-            AgentProviderFailureKind.ProviderUnavailable.ToString());
+        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
+        payload.GetProperty("message").GetString().Should().Be(
+            "Run failed with code 'agent_turn_internal_error'. Retry is not available.");
+        payload.TryGetProperty("category", out _).Should().BeFalse();
         payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
     }
 
@@ -334,8 +343,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var events = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/events");
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
-        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
-            .Should().Be("coordinator_executor_failed:coordinator-draft");
+        failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
+            .Should().Be("agent_turn_internal_error");
     }
 
     [Fact]
@@ -483,7 +492,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
-    public async Task Confirm_FreshKeyForChangedProvider_Returns409_WithoutConsumingGate()
+    public async Task Confirm_FreshKeyForChangedProvider_UsesDurableSnapshotAndConsumesGate()
     {
         var projectId = await CreateProjectAsync();
         var runId = await StartOrchestrationAsync(projectId, "Durable provider provenance must not drift");
@@ -501,19 +510,12 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             $"/api/runs/{runId}/outcome-spec/confirm",
             content: null);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var responseBody = await response.Content.ReadAsStringAsync();
-        using var body = JsonDocument.Parse(responseBody);
-        body.RootElement.GetProperty("error").GetString().Should().Be("model_provider_changed");
-        body.RootElement.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
-        responseBody.Should().NotContain("replacement-account");
-        responseBody.Should().NotContain("coordinator-test-bot");
-
-        var spec = await GetOutcomeSpecAsync(_owner, runId);
-        spec!.Status.Should().Be("awaiting_confirmation");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var spec = await PollOutcomeSpecUntilAsync(runId, value => value.Status == "confirmed");
+        spec.Should().NotBeNull();
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        (await pendingStore.GetAsync(runId)).Should().NotBeNull(
-            "durable provider rejection must happen before the confirmation gate is consumed");
+        (await pendingStore.GetAsync(runId)).Should().BeNull(
+            "the immutable provider snapshot allows the confirmation gate to be consumed");
     }
 
     // =========================================================================

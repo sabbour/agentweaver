@@ -18,6 +18,19 @@ GitHub access is separate from sign-in. The Copilot App provides AI access. The 
 
 When your session expires, select **Sign in with Microsoft Entra ID**. Browser sign-in uses an authorization code with PKCE.
 
+After a successful sign-in, Agentweaver sets a host-only, `HttpOnly`, `Secure`,
+`SameSite=Lax` browser-session cookie. It lets additional tabs in the same browser
+profile restore the signed-in Agentweaver session without repeating Entra sign-in.
+The cookie is never shared with another host or browser profile. The tab-local bearer
+token remains a compatibility mechanism; it is not required to open a new tab.
+
+For a TLS-terminating reverse proxy, configure
+`Auth:OAuth:ForwardedHeaders:TrustedNetworks` with only the proxy network(s), and
+forward the original HTTPS scheme and public host. Agentweaver applies forwarded
+headers before authentication. Do not terminate the public browser flow over HTTP or
+broaden the trusted proxy list: a `Secure` host-only cookie will not persist over HTTP,
+and untrusted forwarded headers weaken the origin boundary.
+
 If no platform role exists, ask a Platform Admin to assign one in Microsoft Entra ID. Then reload Agentweaver.
 
 ## Complete required setup
@@ -59,6 +72,8 @@ Agentweaver GitHub App installation. Installation settings can grant all reposit
 selected repositories.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
+
+After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
 
 A project can use a project GitHub Copilot account. Otherwise, project work inherits the active
 platform GitHub Copilot account or custom-key provider. This project hierarchy applies to
@@ -123,7 +138,8 @@ operator sequence.
 
 ## Signing out and errors
 
-To sign out, open the account menu and select **Sign out**. In-flight runs continue on the server.
+To sign out, open the account menu and select **Sign out**. Its footer also shows the
+current Agentweaver version and API status. In-flight runs continue on the server.
 
 If sign-in fails, make sure that your Entra account has an Agentweaver App Role.
 

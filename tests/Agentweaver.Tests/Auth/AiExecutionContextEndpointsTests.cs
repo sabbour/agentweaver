@@ -24,7 +24,7 @@ public sealed class AiExecutionContextEndpointsTests
     [Theory]
     [InlineData("")]
     [InlineData("-coordinator-draft")]
-    public async Task AgentHost_callback_requires_run_capability_and_current_pinned_provider(string suffix)
+    public async Task AgentHost_callback_requires_run_capability_and_immutable_provider_snapshot(string suffix)
     {
         await using var factory = new AgentweaverWebApplicationFactory(bypassAuthentication: false);
         await SeedByokProviderAsync(factory);
@@ -59,10 +59,8 @@ public sealed class AiExecutionContextEndpointsTests
         (await client.PostAsJsonAsync(path, new { })).StatusCode.Should().Be(HttpStatusCode.Conflict);
         await SeedByokProviderAsync(factory);
         var changed = await client.PostAsJsonAsync(path, body);
-        changed.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await changed.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()
-            .Should().Be("model_provider_changed");
-        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
+        changed.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(3);
         (await client.PostAsJsonAsync($"/api/runs/{RunId.New()}/model-provider/validate", body))
             .StatusCode.Should().BeOneOf(HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized);
     }
@@ -82,7 +80,7 @@ public sealed class AiExecutionContextEndpointsTests
     }
 
     [Fact]
-    public async Task Run_call_guard_requires_durable_evidence_and_rejects_a_replaced_provider()
+    public async Task Run_call_guard_requires_durable_evidence_and_uses_immutable_provider_snapshot()
     {
         await using var factory = new AgentweaverWebApplicationFactory();
         await SeedByokProviderAsync(factory);
@@ -92,7 +90,7 @@ public sealed class AiExecutionContextEndpointsTests
         {
             Id = RunId.New(), RepositoryPath = ".", OriginatingBranch = "main",
             ModelSource = ModelSource.Byok, Task = "guarded turn", SubmittingUser = "operator",
-            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow, WorktreePath = "workspace",
         };
         await services.GetRequiredService<IRunStore>().InsertAsync(run);
         var guard = services.GetRequiredService<RunModelInvocationGuard>();
@@ -106,6 +104,10 @@ public sealed class AiExecutionContextEndpointsTests
         await events.AppendAsync(run.Id.ToString(), new RunEvent(
             0, EventTypes.RunModelProviderResolved,
             provider.ToProvenancePayload(run.Id.ToString(), null, EffectiveModelProviderProvenance.ScopeProject)));
+        var configuration = await services.GetRequiredService<ByokProviderConfigurationService>()
+            .GetAsync(CancellationToken.None);
+        await services.GetRequiredService<RunModelProviderSnapshotStore>()
+            .CaptureAsync(run, provider, configuration!, CancellationToken.None);
         await invoke();
         (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
 
@@ -113,9 +115,8 @@ public sealed class AiExecutionContextEndpointsTests
         (await copilotOnly.Should().ThrowAsync<AgentProviderException>())
             .Which.ErrorCode.Should().Be("model_provider_changed");
         await SeedByokProviderAsync(factory);
-        (await invoke.Should().ThrowAsync<AgentProviderException>())
-            .Which.ErrorCode.Should().Be("model_provider_changed");
-        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
+        await invoke();
+        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(3);
     }
 
     [Fact]

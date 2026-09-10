@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Workflow;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -2393,12 +2394,14 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         try
         {
             using var document = JsonDocument.Parse(payloadJson);
+            var safeFailure = StructuredRunFailureTerminal.NormalizeFailure(
+                new RunEvent(0, EventTypes.RunFailed, document.RootElement.Clone(), default));
+            var safePayload = JsonSerializer.SerializeToElement(safeFailure.Payload);
             var terminal = new ChildTerminal(
                 ChildOutcome.Failed,
-                Retryable: ReadNullableBool(document.RootElement, "retryable") == true,
-                FailureReason: ReadString(document.RootElement, "reason")
-                    ?? ReadString(document.RootElement, "errorCode"),
-                FailureMessage: ReadString(document.RootElement, "message"));
+                Retryable: ReadNullableBool(safePayload, "retryable") == true,
+                FailureReason: ReadString(safePayload, "errorCode"),
+                FailureMessage: ReadString(safePayload, "message"));
             return terminal.ToResult(subtaskId, childRunId);
         }
         catch (JsonException)

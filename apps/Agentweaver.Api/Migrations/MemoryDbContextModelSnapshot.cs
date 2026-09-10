@@ -22,6 +22,12 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1566,6 +1572,28 @@ namespace Agentweaver.Api.Migrations
                     b.HasIndex("ProjectId");
 
                     b.ToTable("run_github_identity_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunModelProviderSnapshotOwner", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<DateTimeOffset>("CapturedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("captured_at");
+
+                    b.Property<string>("SecretReference")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("secret_reference");
+
+                    b.HasKey("RunId");
+
+                    b.ToTable("run_model_provider_snapshot_owners", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>

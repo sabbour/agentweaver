@@ -66,6 +66,7 @@ public sealed class CoordinatorPickupService
         // record the provider that actually serves it (BYOK or Copilot), not a hardcoded literal.
         var modelId = project.ProviderSettings.GitHubCopilotModel;
         AiExecutionPlan? acceptedPlan = null;
+        ByokProviderConfiguration? acceptedByokConfiguration = null;
         string? blockedReason = null;
         EffectiveModelProviderResult effectiveProvider;
         if (!string.IsNullOrWhiteSpace(task.AiExecutionProviderKey))
@@ -83,6 +84,18 @@ public sealed class CoordinatorPickupService
                     task.CapturedByUserId ?? task.CapturedBy,
                     ct).ConfigureAwait(false);
                 effectiveProvider = acceptedPlan.Provider;
+                if (effectiveProvider is EffectiveModelProviderResult.Byok expectedByok)
+                {
+                    var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+                    acceptedByokConfiguration = await settings.GetAsync(ct).ConfigureAwait(false);
+                    if (acceptedByokConfiguration is null
+                        || !GenerationModelProviderExecutor.Matches(acceptedByokConfiguration, expectedByok))
+                    {
+                        effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
+                        acceptedPlan = null;
+                        blockedReason = "model_provider_changed";
+                    }
+                }
             }
             catch (AiExecutionPlanException)
             {
@@ -210,6 +223,8 @@ public sealed class CoordinatorPickupService
             using var executionScope = acceptedPlan is null
                 ? null
                 : _executionPlanAccessor.Push(acceptedPlan);
+            if (acceptedByokConfiguration is not null)
+                _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
                     run,
                     autoApproveTools: project.PickupAutoApproveTools,

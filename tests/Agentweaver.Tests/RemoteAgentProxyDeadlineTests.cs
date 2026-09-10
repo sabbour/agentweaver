@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Domain;
 using FluentAssertions;
 
 namespace Agentweaver.Tests;
@@ -168,6 +169,33 @@ public sealed class RemoteAgentProxyDeadlineTests
         json.Should().NotContain("top-secret");
         json.Should().NotContain("json-secret");
         json.Length.Should().BeLessThan(2300);
+    }
+
+    [Fact]
+    public void StructuredTerminal_NormalizesUntrustedFailureBeforeItCanBePersisted()
+    {
+        const string secret = "secret-do-not-persist-9d8f";
+        var inbound = new RunEvent(7, EventTypes.RunFailed, new
+        {
+            errorCode = $"token_{secret}",
+            message = $"System.Exception: failed at C:\\agents\\{secret}\\run.cs",
+            retryable = true,
+            authorization = $"Bearer {secret}",
+            rawA2a = new { prompt = secret, stack = secret },
+            causeChain = new[] { secret },
+        });
+
+        var normalized = StructuredRunFailureTerminal.NormalizeFailure(inbound);
+        var json = System.Text.Json.JsonSerializer.Serialize(normalized.Payload);
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+
+        document.RootElement.EnumerateObject().Select(property => property.Name)
+            .Should().BeEquivalentTo("message", "errorCode", "retryable");
+        document.RootElement.GetProperty("errorCode").GetString()
+            .Should().Be("agent_turn_internal_error");
+        document.RootElement.GetProperty("message").GetString()
+            .Should().Be("Run failed with code 'agent_turn_internal_error'. Retry is available.");
+        json.Should().NotContain(secret).And.NotContain("rawA2a").And.NotContain("authorization");
     }
 
     [Theory]

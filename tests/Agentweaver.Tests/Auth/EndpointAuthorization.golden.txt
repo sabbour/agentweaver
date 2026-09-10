@@ -96,6 +96,7 @@ GET /api/runs/{id}/graph | PlatformOrMcp
 GET /api/runs/{id}/history | PlatformOrMcp
 GET /api/runs/{id}/outcome-spec | PlatformOrMcp
 GET /api/runs/{id}/stream | PlatformOrMcp
+GET /api/runs/{id}/terminal-diagnostic | PlatformOrMcp
 GET /api/runs/{id}/token-breakdown | PlatformOrMcp
 GET /api/runs/{id}/tool-approval-policies/{toolName} | RunCapability
 GET /api/runs/{id}/workspace | PlatformOrMcp

@@ -257,6 +257,7 @@ public sealed class UnifiedCopilotCallbackEndpointsTests
         {
             Id = browserSessionId,
             EntraObjectId = adminObjectId,
+            DisplayName = "Platform Admin",
             PlatformRoles = PlatformRoles.PlatformAdmin,
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
         });

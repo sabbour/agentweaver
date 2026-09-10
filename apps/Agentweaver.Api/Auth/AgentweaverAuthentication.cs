@@ -50,7 +50,8 @@ internal static class AgentweaverAuthentication
             && IsBrokerToken(token, context.RequestServices.GetRequiredService<OAuthServerConfiguration>()))
             return AgentweaverAuthenticationSchemes.BrokerBearer;
 
-        if (authorization?.Kind == EndpointAuthorizationKind.ProtocolManaged
+        if (authorization?.Kind is (EndpointAuthorizationKind.ProtocolManaged
+                or EndpointAuthorizationKind.AuthenticatedSelf)
             && string.IsNullOrEmpty(header)
             && context.Request.Cookies.ContainsKey(BrowserEntraSessionService.CookieName))
             return AgentweaverAuthenticationSchemes.BrowserSession;
@@ -175,16 +176,26 @@ internal sealed class BrowserSessionAuthenticationHandler(
         if (session is null)
             return AuthenticateResult.Fail("The browser session is invalid or expired.");
 
+        var platformRoles = ParsePlatformRoles(session.PlatformRoles);
         var caller = new CallerContext
         {
             User = session.EntraObjectId,
             EntraObjectId = session.EntraObjectId,
+            PlatformRoles = platformRoles,
+            PrimaryPlatformRole = platformRoles.FirstOrDefault(),
+            DisplayName = session.DisplayName,
+            Email = session.Email,
         };
         var principal = CallerContextClaimsAdapter.ToPrincipal(caller, Scheme.Name);
         ((ClaimsIdentity)principal.Identity!).AddClaim(
             new Claim(AgentweaverClaimTypes.BrowserSessionId, session.Id));
         return AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name));
     }
+
+    private static IReadOnlyList<string> ParsePlatformRoles(string? roles) =>
+        string.IsNullOrWhiteSpace(roles)
+            ? []
+            : roles.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }
 
 internal sealed class BrokerBearerAuthenticationHandler(

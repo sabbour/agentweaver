@@ -155,7 +155,7 @@ Common event types:
 | `merge.failed` | `{"reason":"..."}` |
 | `merge.conflicted` | `{"conflicting_files":["..."]}` |
 | `run.completed` | `{"result":"completed"}` or `{"result":"no_changes"}` |
-| `run.failed` | `{"reason":"..."}` with optional `code` / `detail` |
+| `run.failed` | `{"message":"...","errorCode":"...","retryable":true}` — bounded normalized public failure contract; legacy `reason` / `detail` are deprecated and never serialized |
 | `run.outcome` | `{"achieved":true,"reason":"..."}` |
 | `run.degraded` | `{"toolName":"...","reason":"..."}` |
 | `run.workflow_graph` | graph descriptor payload |
@@ -416,7 +416,7 @@ Common run events:
 | `merge.conflicted` | `conflicting_files` |
 | `coordinator.workflow_selected` | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available[]` |
 | `run.completed` | `result` |
-| `run.failed` | `reason`, optional `code`, `detail` |
+| `run.failed` | `message`, `errorCode`, `retryable` — the bounded normalized public failure contract. Legacy `reason` / `detail` are deprecated and never returned. Authorized full consumers use [`GET /api/runs/{id}/terminal-diagnostic`](#get-apirunsidterminal-diagnostic) instead. |
 | `run.outcome` | `achieved`, `reason` |
 | `run.degraded` | `toolName`, `reason` |
 | `run.workflow_graph` | graph descriptor |
