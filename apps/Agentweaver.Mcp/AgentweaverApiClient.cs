@@ -50,6 +50,17 @@ public sealed class McpApiException : McpException
         var normalizedPath = string.IsNullOrWhiteSpace(path) ? null : path;
         var normalizedMessage = NormalizeMessage(message);
 
+        if (string.Equals(errorCode, "preview_registration_timeout", StringComparison.Ordinal))
+        {
+            return new McpErrorPayload(
+                statusCode == 0 ? -32001 : statusCode,
+                normalizedMessage,
+                explicitHint ?? "Call run_status to confirm the sandbox is still running, then retry start_preview.",
+                normalizedMessage,
+                normalizedPath,
+                errorCode);
+        }
+
         if (IsTimeout(statusCode, normalizedMessage))
         {
             return new McpErrorPayload(
@@ -204,6 +215,19 @@ public sealed class McpApiException : McpException
 
         if (path?.Contains("/sandbox/preview", StringComparison.OrdinalIgnoreCase) == true)
         {
+            if (message.Contains("session has exited", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("run ended", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("terminal run", StringComparison.OrdinalIgnoreCase))
+            {
+                payload = new McpErrorPayload(
+                    409,
+                    "The preview process or its run is no longer active.",
+                    "Start and verify the server in an active run, then retry start_preview with the observed port and session_id.",
+                    message,
+                    path);
+                return true;
+            }
+
             payload = new McpErrorPayload(
                 409,
                 "Sandbox pod not yet bound. The run's SandboxClaim is still pending.",

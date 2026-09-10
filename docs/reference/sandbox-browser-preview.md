@@ -17,7 +17,7 @@ exists and the caller owns it (`404`/`403`). Source:
 | Method & path | Body | Returns | Notes |
 |---|---|---|---|
 | `POST /api/runs/{runId}/sandbox/port-forward` | `{ "targetPort": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `targetPort` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
-| `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:60`](#source)). |
+| `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000>, "preview_runner_session_id": "..." }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port, session_id?)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). The optional process-session ID lets the API recheck process health before publication. Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:60`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry` | — | `202 Accepted` with fresh `request_id`, `retry_of_request_id`, and `expires_at` | Owner-only retry for the latest **expired** preview approval on a non-terminal run. Reuses the retained PreviewRunner process; it does not rerun the preview command or restart the run. |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
@@ -49,6 +49,12 @@ A running agent can expose a server it started **without a human typing a port i
 `preview_url` string back to the agent. The tool is **run-scoped**: the `runId` is captured server-side in
 the tool closure ([`AgentweaverApiTools.cs:245`](#source)), so the model supplies only the port and can
 never target another run.
+
+The external MCP surface also accepts the optional `session_id` returned by
+`observe_bound_port` and forwards it as `preview_runner_session_id`. When supplied, the API
+checks that exact supervised process before publishing. MCP transport timeouts, unreachable API
+errors, and terminal-run conflicts return specific recovery guidance instead of a generic tool
+execution failure.
 
 The platform-owned **Build & Test** step can use the same preview surface. Its canned prompt tells the agent
 to build, run all tests, start the web/service preview server after tests pass, observe the actual bound

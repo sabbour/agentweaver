@@ -59,6 +59,11 @@ Enter your task as a natural-language goal in the **Goal** field:
 
 > "Refactor the authentication module to use JWT and add integration tests."
 
+The action buttons show **Enter a goal to continue** until the required Goal field contains
+text. While provider preparation is still in progress, they show **Checking AI provider
+readiness**; this is not a provider failure. Provider setup guidance appears only when the
+resolved provider is actually unavailable.
+
 Click **Start task**. The coordinator orchestration begins and you're taken to the topology view.
 
 ![Start orchestration dialog](/guide/images/start-orchestration.png)
@@ -77,9 +82,16 @@ You can also override mid-conversation by typing `use {workflow-id}` before conf
 
 ### Preview your work
 
-Runnable outputs are most useful when reviewers can open them live. Software delivery and bug-fix workflows include a platform `build_test` gate that runs after RAI and before human review. It builds, tests, starts web/service artifacts when applicable, verifies the actual bound port, and registers a sandbox preview with `start_preview(port=PORT)`.
+Runnable outputs are most useful when reviewers can open them live. Software delivery and bug-fix workflows include a platform `build_test` gate that runs after RAI and before human review. It builds, tests, starts web/service artifacts when applicable, verifies the actual bound port,
+and registers a sandbox preview with `start_preview(port=PORT, session_id=SESSION_ID)`. The
+`session_id` is the value returned by `observe_bound_port`; it lets the API confirm that the
+healthy preview process is still alive before publication.
 
-For a custom workflow without that gate, ask the coordinator to have an agent build and start the app in its sandbox. The agent can call `start_preview(port=PORT)`. On non-Kubernetes backends, it provides local run instructions instead.
+For a custom workflow without that gate, ask the coordinator to have an agent build and start
+the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include
+the observed session ID. If registration times out, check `run_status` and retry only after
+confirming that the sandbox is still running. On non-Kubernetes backends, it provides local
+run instructions instead.
 
 The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
 

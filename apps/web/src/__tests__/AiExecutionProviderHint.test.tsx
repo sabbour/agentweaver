@@ -64,6 +64,34 @@ describe('AI execution provider hints', () => {
     expect(document.body.textContent).not.toContain('secret-provider-key');
   });
 
+  it('shows the required goal hint instead of provider-unavailable text for an empty form', () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderHint context={null} required>
+          <Button>Start AI work</Button>
+        </AiExecutionProviderHint>
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Enter a goal to continue')).toBeTruthy();
+    expect(screen.getByRole('button').getAttribute('title')).toBe('Enter a goal to continue');
+    expect(document.body.textContent).not.toContain('AI provider information unavailable');
+  });
+
+  it('shows readiness checking while the provider context is pending', () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderHint context={null} loading>
+          <Button>Start AI work</Button>
+        </AiExecutionProviderHint>
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Checking AI provider readiness')).toBeTruthy();
+    expect(screen.getByRole('button').getAttribute('title')).toBe('Checking AI provider readiness');
+    expect(document.body.textContent).not.toContain('AI provider information unavailable');
+  });
+
   it('routes an unavailable platform provider to Platform settings and allows refresh', async () => {
     const onRefresh = vi.fn();
     const unavailable: AiExecutionContext = {

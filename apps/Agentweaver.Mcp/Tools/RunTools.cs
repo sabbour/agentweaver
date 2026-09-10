@@ -293,19 +293,43 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "start_preview"), Description("Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started.")]
+    [McpServerTool(Name = "start_preview"), Description("Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). If observe_bound_port returned a session_id, pass it so the server can verify the process is still healthy. You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started.")]
     public async Task<string> StartPreviewAsync(
         [Description("Run ID whose sandbox pod hosts the server to expose")] string run_id,
         [Description("Port the server is listening on inside the sandbox pod, e.g. 3000")] int port,
-        CancellationToken ct)
+        [Description("Optional preview process session_id returned by observe_bound_port. Supplying it lets the server verify the process is still healthy before publication.")] string? session_id = null,
+        CancellationToken ct = default)
     {
+        const string pathPrefix = "/api/runs/";
         try
         {
-            var body = new { target_port = port };
+            var body = new
+            {
+                target_port = port,
+                preview_runner_session_id = string.IsNullOrWhiteSpace(session_id) ? null : session_id,
+            };
             var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/sandbox/preview", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
+        catch (OperationCanceledException)
+        {
+            throw new McpApiException(
+                -32001,
+                "Preview registration timed out while waiting for the sandbox or preview gateway.",
+                $"{pathPrefix}{Uri.EscapeDataString(run_id)}/sandbox/preview",
+                "preview_registration_timeout",
+                "Call run_status to confirm the sandbox is still running, then retry start_preview with the verified port.");
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new McpApiException(
+                0,
+                $"Preview registration could not reach Agentweaver: {ex.Message}",
+                $"{pathPrefix}{Uri.EscapeDataString(run_id)}/sandbox/preview",
+                "preview_registration_unreachable",
+                "Call diagnostics_get, then retry start_preview when the API is healthy.");
+        }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
