@@ -586,6 +586,22 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
     }
 
     [Fact]
+    public async Task GetPendingApprovals_UsesPersistedGateState_NotLaunchOrHeartbeatPolicy()
+    {
+        var projectId = await CreateBlankProjectAsync("Direct run approval policy");
+        var run = await InsertInProgressRunAsync(projectId, "Run a directly submitted tool", "Researcher");
+        var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
+        runOptions.Set(run.Id.ToString(), new RunOptions(AutoApproveTools: true));
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "direct-policy-request", "start_preview");
+
+        var pending = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
+
+        pending.GetProperty("count").GetInt32().Should().Be(1);
+        pending.GetProperty("approvals").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("request_id").GetString().Should().Be("direct-policy-request");
+    }
+
+    [Fact]
     public async Task GetNotifications_ToolApprovalCta_UsesPendingRunId_WhenConcurrentRunHasItsWorkflowId()
     {
         var projectId = await CreateBlankProjectAsync("Notif Project Concurrent Runs");

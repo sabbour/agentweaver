@@ -13,7 +13,9 @@ namespace Agentweaver.Api.Runs;
 /// Canonical read model for actionable approvals. It folds durable gate contexts, public cards,
 /// coordinator child projections, resolutions, expiry, clears, and run lifecycle into one set.
 /// Board badges, notifications, and the run review UI must consume this projection instead of
-/// independently interpreting the event stream.
+/// independently interpreting the event stream. The projection is launch-path and policy agnostic:
+/// auto-approval affects whether the gate creates a pending request, not whether an already-persisted
+/// request is actionable. It must not be inferred from backlog heartbeat pickup settings.
 /// </summary>
 public sealed class PendingToolApprovalRunsQuery
 {

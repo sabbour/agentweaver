@@ -45,6 +45,11 @@ operator on the top-level run review page. Approval authorization is unchanged, 
 Agentweaver never approves a request automatically because it disappeared from the
 pending set.
 
+The pending set is independent of how a run was launched. A per-run auto-approval
+policy controls the approval gate; it is not evidence that a run came from backlog
+heartbeat pickup. If a request is durably pending, review surfaces keep showing it
+until the gate resolves it or its owning run is no longer actionable.
+
 If approval data cannot be loaded, the review page shows an error with **Retry**. An
 empty panel is shown only after the server successfully confirms that no actionable
 approval remains.
