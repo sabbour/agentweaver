@@ -112,8 +112,16 @@ public sealed class CoordinatorPickupService
         else
         {
             effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
-            if (effectiveProvider is EffectiveModelProviderResult.Byok)
+            if (effectiveProvider is EffectiveModelProviderResult.Byok
+                && !WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
                 blockedReason = "operation_requires_github_copilot";
+        }
+        if (effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
+        {
+            blockedReason = unavailable.UnavailableReason ==
+                EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization
+                    ? "project_model_provider_reconnect_required"
+                    : "model_provider_connection_required";
         }
 
         var run = new Run

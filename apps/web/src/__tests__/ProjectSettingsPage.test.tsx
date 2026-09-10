@@ -314,9 +314,12 @@ describe('ProjectSettingsPage', () => {
   it('treats a disconnected legacy Repo App flag as not ready for a GitHub project', async () => {
     vi.mocked(apiClient.getProject).mockResolvedValue(githubProject());
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
-      status: 'not_ready',
+      status: 'unavailable',
       reason_code: 'copilot_binding_required',
       message: 'Connect a model provider.',
+      interactive_ready: false,
+      unattended_ready: false,
+      repository_ready: false,
       repo_app_installation_connected: false,
     });
 
@@ -333,19 +336,22 @@ describe('ProjectSettingsPage', () => {
 
   it('renders nested model-provider and repository readiness independently', async () => {
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
-      status: 'not_ready',
+      status: 'reauthorization_required',
       reason_code: 'project_model_provider_reconnect_required',
       message: 'Legacy combined message.',
+      interactive_ready: false,
+      unattended_ready: false,
+      repository_ready: true,
       repo_app_installation_connected: false,
       model_provider: {
-        status: 'not_ready',
+        status: 'reauthorization_required',
         source: 'project',
         reason_code: 'project_model_provider_reconnect_required',
       },
       repository: {
         required: true,
-        status: 'ready',
-        reason_code: 'ready',
+        status: 'repository_ready',
+        reason_code: 'repository_ready',
         repo_app_installation_connected: true,
       },
     });

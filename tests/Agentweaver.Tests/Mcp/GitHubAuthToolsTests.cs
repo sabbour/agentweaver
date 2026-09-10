@@ -91,9 +91,12 @@ public sealed class GitHubAuthToolsTests
             request.RequestUri!.AbsolutePath.Should().Be("/api/projects/project/github/unattended-readiness");
             return Task.FromResult(Json(new
             {
-                status = "not_ready",
+                status = "interactive_ready",
                 reason_code = "copilot_binding_required",
                 message = "Connect a project Copilot App identity.",
+                interactive_ready = true,
+                unattended_ready = false,
+                repository_ready = true,
                 repo_app_installation_connected = true,
                 installation_id = 12,
                 repository_id = 34,
@@ -103,6 +106,10 @@ public sealed class GitHubAuthToolsTests
 
         var json = await tools.ProjectGitHubCapabilityStatusAsync("project", CancellationToken.None);
 
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.GetProperty("interactive_ready").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("unattended_ready").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("repository_ready").GetBoolean().Should().BeTrue();
         json.Should().Contain("copilot_binding_required").And.NotContain("installation_id")
             .And.NotContain("repository_id").And.NotContain("permission_digest");
     }

@@ -175,6 +175,10 @@ For unattended project work, a Project Owner also completes
 and verifies `project_github_capability_status`. Handoff and polling return only opaque
 transaction identifiers and lifecycle state; credentials, OAuth state, installations,
 repositories, and permissions never appear in MCP output.
+The status response separates `interactive_ready`, `unattended_ready`, and
+`repository_ready`; its top-level status is one of those values,
+`reauthorization_required`, or `unavailable`. Do not treat interactive readiness as authority
+for a schedule, event, or heartbeat run.
 
 If the client reports `401`, reconnect the MCP server and complete the browser
 OAuth flow. Do not work around the failure by pasting a token into client

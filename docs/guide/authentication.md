@@ -57,6 +57,13 @@ The active platform provider applies to interactive and unattended work for all 
 projects. A configured custom-key provider (BYOK) is therefore a complete platform provider,
 not an interactive-only fallback.
 
+Unattended work never reuses a browser bearer token. Before schedule, event, or heartbeat
+execution, Agentweaver captures the selected durable provider authority in an activation and
+copies a purpose-bound capability snapshot to the run. Project provider bindings take
+precedence over platform providers. If an active project binding is expired or revoked,
+execution fails closed instead of falling through to a different identity. A configured BYOK
+provider follows the same activation and run-snapshot boundary.
+
 If you cannot manage this setup, Agentweaver shows **Unavailable to you**. Ask a Platform Admin to complete the setup.
 
 When the provider is ready, select **Continue to Agentweaver**.
@@ -80,6 +87,22 @@ Agentweaver GitHub App installation. Installation settings can grant all reposit
 selected repositories.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
+
+The project readiness check reports separate capability dimensions:
+
+- `unattended_ready`: a durable project or platform provider can execute the unattended purpose,
+  and required repository access is ready.
+- `interactive_ready`: the current user can run interactively, but no durable provider can run
+  unattended work.
+- `repository_ready`: required Repo App access is ready, but the unattended model provider is not.
+- `reauthorization_required`: a selected provider credential expired or was revoked and must be
+  connected again.
+- `unavailable`: neither the current interactive session nor unattended execution can use a
+  provider for the requested purpose.
+
+A repositoryless project does not require a Repo App installation. A GitHub-backed project is
+repository-ready only when the Repo App installation and its project repository grant are both
+current.
 
 After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
 

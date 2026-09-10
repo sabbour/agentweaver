@@ -654,19 +654,27 @@ export interface ProjectAccessOverview {
 }
 
 export interface UnattendedReadiness {
-  status: 'ready' | 'not_ready';
+  status: 'interactive_ready' | 'unattended_ready' | 'repository_ready' | 'reauthorization_required' | 'unavailable';
   reason_code: string;
   message: string;
+  interactive_ready: boolean;
+  unattended_ready: boolean;
+  repository_ready: boolean;
   repo_app_installation_connected: boolean;
+  interactive?: {
+    status: 'interactive_ready' | 'reauthorization_required' | 'unavailable';
+    source: 'user' | 'user_byok' | 'byok' | 'none';
+    reason_code: 'interactive_ready' | 'interactive_model_provider_connection_required' | 'user_model_provider_reconnect_required';
+  };
   model_provider?: {
-    status: 'ready' | 'not_ready';
+    status: 'unattended_ready' | 'reauthorization_required' | 'unavailable';
     source: 'project' | 'platform_default' | 'byok' | 'none';
-    reason_code: 'ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
+    reason_code: 'unattended_ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
   };
   repository?: {
     required: boolean;
-    status: 'ready' | 'not_ready' | 'not_required';
-    reason_code: 'ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
+    status: 'repository_ready' | 'not_ready' | 'not_required';
+    reason_code: 'repository_ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
     repo_app_installation_connected: boolean;
   };
 }

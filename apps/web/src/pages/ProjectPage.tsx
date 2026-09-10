@@ -449,10 +449,10 @@ function projectRepositoryReadiness(
   }
   const reasonCode = readiness.reason_code === 'repo_app_repository_grant_required'
     ? 'repo_app_repository_grant_required'
-    : 'ready';
+    : 'repository_ready';
   return {
     required: true,
-    status: reasonCode === 'ready' ? 'ready' : 'not_ready',
+    status: reasonCode === 'repository_ready' ? 'repository_ready' : 'not_ready',
     reason_code: reasonCode,
     repo_app_installation_connected: true,
   };
@@ -556,7 +556,7 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   const setupState = project && repositorySetup?.projectId === project.project_id
     ? projectSetupPromptState(project, currentUserKey, repositorySetup.repository)
     : null;
-  const repositoryStatus = setupState?.repositoryAccessStatus === 'ready'
+  const repositoryStatus = setupState?.repositoryAccessStatus === 'repository_ready'
     ? 'ready'
     : setupState?.repositoryAccessStatus === 'not_required'
       ? 'optional'

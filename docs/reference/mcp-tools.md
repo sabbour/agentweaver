@@ -92,7 +92,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `project_copilot_app_authorization_status` | Poll the initiating human's project-bound Copilot App browser authorization. Returns only pending, completed, failed, or expired. |
 | `project_copilot_app_connect` | Begin an Owner-authorized, project-bound Copilot App connection. Returns an opaque transaction ID, browser URL, and expiry. Open browser_url; if Agentweaver asks for Entra sign-in, finish it in that browser to resume this handoff. After GitHub completes, return to MCP and poll project_copilot_app_authorization_status. No credential, OAuth state, callback cookie, repository, installation, permission, or final callback data is returned. |
 | `project_copilot_app_disconnect` | Disconnect a project Copilot App binding. The backend allows this de-privileging operation only to an authorized human project Owner or platform administrator. |
-| `project_github_capability_status` | Get the server-derived, redacted unattended GitHub capability readiness for a project. No GitHub identities, credentials, installations, repositories, or permissions are returned. |
+| `project_github_capability_status` | Get redacted interactive, unattended, and repository readiness for a project. Status distinguishes unattended_ready, interactive_ready, repository_ready, reauthorization_required, and unavailable. No GitHub identities, credentials, installations, repositories, or permissions are returned. |
 
 ## Memory
 
