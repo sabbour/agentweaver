@@ -38,6 +38,7 @@
   // OAuth uses the newest usable Key Vault certificate version as active and retains
   // the previous usable version during rotation. Change the name only when migrating
   // certificate families; create a new version under the same name for routine rotation.
+  "OAUTH_ACCESS_TOKEN_LIFETIME_HOURS": "8",
   "OAUTH_SIGNING_CERTIFICATE_NAME": "agentweaver-oauth-signing",
   "OAUTH_ENCRYPTION_CERTIFICATE_NAME": "agentweaver-oauth-encryption",
   // One-shot path to exactly one unencrypted PKCS#1 `RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY`

@@ -25,6 +25,34 @@ public sealed class OAuthServerConfigurationTests
 
         result.PublicOrigin.AbsoluteUri.Should().Be("https://agentweaver.example/");
         result.Resource.AbsoluteUri.Should().Be("https://agentweaver.example/mcp");
+        result.AccessTokenLifetime.Should().Be(TimeSpan.FromHours(8));
+    }
+
+    [Fact]
+    public void Resolve_UsesConfiguredAccessTokenLifetime()
+    {
+        var result = OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:AccessTokenLifetimeHours", "12")),
+            Environment("Production"));
+
+        result.AccessTokenLifetime.Should().Be(TimeSpan.FromHours(12));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("25")]
+    public void Resolve_RejectsAccessTokenLifetimeOutsideSecureBounds(string hours)
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:AccessTokenLifetimeHours", hours)),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*between 1 and 24*");
     }
 
     [Theory]

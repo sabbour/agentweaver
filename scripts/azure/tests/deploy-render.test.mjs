@@ -61,6 +61,7 @@ const VARS = {
   ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
   ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
   OAUTH_TRUSTED_PROXY_NETWORKS: "10.244.0.0/16",
+  OAUTH_ACCESS_TOKEN_LIFETIME_HOURS: "8",
 };
 
 test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
@@ -106,6 +107,7 @@ test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault cert
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
   assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
   assert.equal(literals.OAUTH_TRUSTED_PROXY_NETWORKS, "10.244.0.0/16");
+  assert.equal(literals.OAUTH_ACCESS_TOKEN_LIFETIME_HOURS, "8");
   assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
   assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
   assert.match(literals.OAUTH_RUNTIME_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
@@ -301,6 +303,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__ForwardedHeaders__TrustedNetworks\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_TRUSTED_PROXY_NETWORKS\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__OAuth__AccessTokenLifetimeHours\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_ACCESS_TOKEN_LIFETIME_HOURS\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__Certificates__SigningName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_SIGNING_CERTIFICATE_NAME\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(
     builtYaml,
@@ -464,7 +467,7 @@ test("runtime config preserves operator-selected OAuth certificate families for 
   assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
 });
 
-test("OAuth runtime checksum changes with the managed origin, proxy CIDRs, or certificate families", () => {
+test("OAuth runtime checksum changes with the origin, proxy CIDRs, token lifetime, or certificate families", () => {
   const first = buildRuntimeConfigLiterals({
     ...VARS,
     OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
@@ -492,10 +495,17 @@ test("OAuth runtime checksum changes with the managed origin, proxy CIDRs, or ce
     OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
   });
+  const changedLifetime = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_ACCESS_TOKEN_LIFETIME_HOURS: "12",
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
   assert.equal(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, unchanged.OAUTH_RUNTIME_CONFIG_CHECKSUM);
   assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changed.OAUTH_RUNTIME_CONFIG_CHECKSUM);
   assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changedOrigin.OAUTH_RUNTIME_CONFIG_CHECKSUM);
   assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changedNetworks.OAUTH_RUNTIME_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changedLifetime.OAUTH_RUNTIME_CONFIG_CHECKSUM);
   assert.match(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
 });
 

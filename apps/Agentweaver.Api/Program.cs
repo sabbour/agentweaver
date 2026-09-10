@@ -955,6 +955,19 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessSignInContext>(
                     handler => handler.UseScopedHandler<OAuthAtomicRefreshTokenRedemptionHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.RedeemTokenEntry.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessSignInContext>(
+                    handler => handler.UseInlineHandler(context =>
+                        {
+                            if (!string.IsNullOrWhiteSpace(context.Response.AccessToken))
+                            {
+                                context.Response.ExpiresIn =
+                                    (long)oauthConfiguration.AccessTokenLifetime.TotalSeconds;
+                            }
+                            return default;
+                        })
+                        .SetOrder(
+                            OpenIddict.Server.OpenIddictServerHandlers.AttachSignInParameters
+                                .Descriptor.Order + 500));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleConfigurationRequestContext>(
                     handler => handler.UseInlineHandler(context =>
                         {
@@ -976,7 +989,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     .RegisterScopes(OAuthServerConfiguration.McpScope)
                     .RegisterResources(oauthConfiguration.Resource.AbsoluteUri)
                     .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(1))
-                    .SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
+                    .SetAccessTokenLifetime(oauthConfiguration.AccessTokenLifetime)
                     .SetRefreshTokenLifetime(OAuthServerConfiguration.RefreshTokenFamilyLifetime)
                     .DisableSlidingRefreshTokenExpiration();
 

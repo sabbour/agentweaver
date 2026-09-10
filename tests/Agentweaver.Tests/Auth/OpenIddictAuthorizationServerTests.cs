@@ -200,6 +200,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             OAuthKnownClients.ClaudeHostedRedirectUri,
             "mcp:invoke offline_access");
 
+        var initialIssuedNotBefore = DateTimeOffset.UtcNow;
         using var tokenResponse = await _client.PostAsync(
             "/oauth/token",
             new FormUrlEncodedContent(new Dictionary<string, string>
@@ -214,9 +215,13 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         tokenResponse.StatusCode.Should().Be(
             HttpStatusCode.OK, await tokenResponse.Content.ReadAsStringAsync());
         var token = await tokenResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var initialIssuedNotAfter = DateTimeOffset.UtcNow;
+        AssertEightHourAccessToken(token, initialIssuedNotBefore, initialIssuedNotAfter);
+        var accessToken = token.GetProperty("access_token").GetString();
         var refreshToken = token.GetProperty("refresh_token").GetString();
         refreshToken.Should().NotBeNullOrWhiteSpace();
 
+        var refreshIssuedNotBefore = DateTimeOffset.UtcNow;
         using var refreshResponse = await _client.PostAsync(
             "/oauth/token",
             new FormUrlEncodedContent(new Dictionary<string, string>
@@ -229,7 +234,9 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         refreshResponse.StatusCode.Should().Be(
             HttpStatusCode.OK, await refreshResponse.Content.ReadAsStringAsync());
         var refreshed = await refreshResponse.Content.ReadFromJsonAsync<JsonElement>();
-        refreshed.GetProperty("access_token").GetString().Should().NotBeNullOrWhiteSpace();
+        var refreshIssuedNotAfter = DateTimeOffset.UtcNow;
+        AssertEightHourAccessToken(refreshed, refreshIssuedNotBefore, refreshIssuedNotAfter);
+        refreshed.GetProperty("access_token").GetString().Should().NotBe(accessToken);
         refreshed.GetProperty("refresh_token").GetString().Should().NotBe(refreshToken);
     }
 
@@ -756,6 +763,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             return await response.Content.ReadFromJsonAsync<JsonElement>();
         }
 
+        var initialIssuedNotBefore = DateTimeOffset.UtcNow;
         var token = await RedeemAsync(new()
         {
             ["grant_type"] = "authorization_code",
@@ -765,6 +773,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["code_verifier"] = verifier,
             ["resource"] = "http://localhost:5000/mcp",
         });
+        var initialIssuedNotAfter = DateTimeOffset.UtcNow;
+        AssertEightHourAccessToken(token, initialIssuedNotBefore, initialIssuedNotAfter);
         var accessToken = token.GetProperty("access_token").GetString()!;
         accessToken.Count(c => c == '.').Should().Be(2);
         var unownedProjectId = ProjectId.New();
@@ -832,11 +842,14 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
                 ["resource"] = "http://localhost:5000/mcp",
             }));
 
+        var refreshIssuedNotBefore = DateTimeOffset.UtcNow;
         var concurrent = await Task.WhenAll(RefreshAsync(refreshToken), RefreshAsync(refreshToken));
+        var refreshIssuedNotAfter = DateTimeOffset.UtcNow;
         concurrent.Count(response => response.StatusCode == HttpStatusCode.OK).Should().Be(1);
         concurrent.Count(response => response.StatusCode == HttpStatusCode.BadRequest).Should().Be(1);
         var winner = concurrent.Single(response => response.StatusCode == HttpStatusCode.OK);
         var rotated = await winner.Content.ReadFromJsonAsync<JsonElement>();
+        AssertEightHourAccessToken(rotated, refreshIssuedNotBefore, refreshIssuedNotAfter);
         var rotatedRefreshToken = rotated.GetProperty("refresh_token").GetString()!;
         rotatedRefreshToken.Should().NotBe(refreshToken);
 
@@ -1211,6 +1224,27 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         var callback = approved.Headers.Location!;
         ParseQuery(callback.Query)["state"].Should().Be("client-state");
         return (ParseQuery(callback.Query)["code"], verifier);
+    }
+
+    private static void AssertEightHourAccessToken(
+        JsonElement tokenResponse,
+        DateTimeOffset issuedNotBefore,
+        DateTimeOffset issuedNotAfter)
+    {
+        const long expectedLifetimeSeconds = 28_800;
+        tokenResponse.GetProperty("expires_in").GetInt64().Should().Be(expectedLifetimeSeconds);
+
+        var accessToken = tokenResponse.GetProperty("access_token").GetString();
+        accessToken.Should().NotBeNullOrWhiteSpace();
+        var segments = accessToken!.Split('.');
+        segments.Should().HaveCount(3);
+        using var payload = JsonDocument.Parse(Base64UrlEncoder.Decode(segments[1]));
+        var issuedAt = payload.RootElement.GetProperty("iat").GetInt64();
+        var expiresAt = payload.RootElement.GetProperty("exp").GetInt64();
+        expiresAt.Should().Be(issuedAt + expectedLifetimeSeconds);
+        issuedAt.Should().BeInRange(
+            issuedNotBefore.AddSeconds(-1).ToUnixTimeSeconds(),
+            issuedNotAfter.AddSeconds(1).ToUnixTimeSeconds());
     }
 
     private static async Task AssertInvalidTargetAsync(HttpResponseMessage response)

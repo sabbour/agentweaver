@@ -193,7 +193,7 @@ Agentweaver can require membership in a configured GitHub organization, and some
 
 ### Token expires during an MCP session
 
-Agentweaver JWT access tokens are intentionally short-lived. OAuth-capable clients should use the refresh token grant to rotate the refresh token and receive a new access token. If refresh fails because the refresh token expired, was reused, was revoked, or no longer matches the client, reconnect the MCP client and repeat the OAuth consent flow.
+Agentweaver JWT access tokens last eight hours by default. OAuth-capable clients should use the refresh token grant to rotate the refresh token and receive a new access token. If refresh fails because the refresh token expired, was reused, was revoked, or no longer matches the client, reconnect the MCP client and repeat the OAuth consent flow.
 
 ### GitHub capability handoffs expire
 

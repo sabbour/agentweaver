@@ -317,12 +317,14 @@ export function buildRuntimeConfigLiterals(vars) {
     );
   }
   const oauthTrustedProxyNetworks = str(vars.OAUTH_TRUSTED_PROXY_NETWORKS);
+  const accessTokenLifetimeHours = str(vars.OAUTH_ACCESS_TOKEN_LIFETIME_HOURS) || "8";
   const signingCertificateName = str(vars.OAUTH_SIGNING_CERTIFICATE_NAME) || "agentweaver-oauth-signing";
   const encryptionCertificateName = str(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME) || "agentweaver-oauth-encryption";
   const oauthRuntimeConfigChecksum = createHash("sha256")
     .update(JSON.stringify({
       oauthOrigin,
       oauthTrustedProxyNetworks,
+      accessTokenLifetimeHours,
       signingCertificateName,
       encryptionCertificateName,
       repoAppPrivateKeySecretName: REPO_APP_PRIVATE_KEY_SECRET.logicalName,
@@ -341,6 +343,7 @@ export function buildRuntimeConfigLiterals(vars) {
     AUTH_MODE: authMode,
     OAUTH_PUBLIC_ORIGIN: oauthOrigin,
     OAUTH_TRUSTED_PROXY_NETWORKS: oauthTrustedProxyNetworks,
+    OAUTH_ACCESS_TOKEN_LIFETIME_HOURS: accessTokenLifetimeHours,
     OAUTH_SIGNING_CERTIFICATE_NAME: signingCertificateName,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: encryptionCertificateName,
     OAUTH_RUNTIME_CONFIG_CHECKSUM: oauthRuntimeConfigChecksum,

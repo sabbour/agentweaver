@@ -40,12 +40,14 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 The API hosts an OpenIddict authorization server for Copilot CLI, GitHub Copilot
 desktop, and VS Code MCP connections. Microsoft Entra remains the upstream human
-identity. The clients receive only short-lived Agentweaver access tokens for the
-`mcp:invoke` scope; Entra tokens never leave the API.
+identity. The clients receive Agentweaver access tokens for the `mcp:invoke` scope; Entra
+tokens never leave the API. Access tokens last eight hours by default. Clients use
+`offline_access` and rotating refresh tokens to renew longer sessions.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin used by both API and MCP. MCP derives the exact `<origin>/mcp` resource, discovery URL, and challenge from it. Production requires HTTPS. |
+| `Auth:OAuth:AccessTokenLifetimeHours` | `8` | Lifetime of Agentweaver-issued OAuth access tokens for MCP and interactive clients. Supported range: 1–24 hours. This does not alter authorization codes, refresh tokens, provider capabilities, or external tokens. |
 | `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate family for access-token signing; the newest two usable secret versions provide active/previous overlap |
 | `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate family for protocol artifact encryption; the newest two usable secret versions provide active/previous overlap |
 | `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
@@ -71,13 +73,14 @@ client ID `agentweaver-claude`; its callback is reserved and not configurable. A
 configured client with that reserved ID and any different callback, or a different
 client using Claude's callback, fails validation.
 
-Azure tooling exposes those names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
-`OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files and as matching
-`--oauth-*-certificate-name` provisioning flags. Routine rotation creates another
+Azure tooling exposes the token lifetime as `OAUTH_ACCESS_TOKEN_LIFETIME_HOURS` and
+the certificate names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
+`OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files. Certificate names
+also have matching `--oauth-*-certificate-name` provisioning flags. Routine rotation creates another
 certificate version under the same name; changing the name migrates to another
-certificate family. Certificate-family names are hashed into the API pod template, so
-changing either family triggers a rolling restart; unchanged names do not cause a
-certificate-config rollout. `azure:verify` checks the canonical public origin, runtime
+certificate family. The token lifetime and certificate-family names are hashed into
+the API pod template, so changing any of them triggers a rolling restart; unchanged
+values do not cause an OAuth-config rollout. `azure:verify` checks the canonical public origin, runtime
 ConfigMap names, and the newest two versions using the same enabled/time-window,
 private-key, encoding, RSA algorithm, and 2048-bit minimum rules as runtime loading,
 without logging certificate material. It also verifies discovery metadata, resource,
