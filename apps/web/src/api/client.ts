@@ -1,4 +1,9 @@
-import { getSessionToken } from '../config';
+import {
+  clearSessionAuth,
+  getSessionToken,
+  notifySessionAuthInvalid,
+  requestSessionAuthFromPeer,
+} from '../config';
 import {
   MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
   isModelProviderConnectionRequirement,
@@ -282,9 +287,11 @@ export class RetriableReviewError extends Error {
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
+  private readonly supportsSessionRecovery: boolean;
 
   constructor(baseUrl: string, sessionTokenProvider: (() => string | null) | string = getSessionToken) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.supportsSessionRecovery = sessionTokenProvider === getSessionToken;
     this.sessionTokenProvider = typeof sessionTokenProvider === 'function'
       ? sessionTokenProvider
       : () => sessionTokenProvider || null;
@@ -1528,21 +1535,38 @@ export class AgentweaverApiClient {
     signal?: AbortSignal,
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      ...this.authHeaders(),
-      ...extraHeaders,
+    const send = async () => {
+      const headers: Record<string, string> = {
+        ...this.authHeaders(),
+        ...extraHeaders,
+      };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const response = await fetch(this.apiUrl(path), {
+        method,
+        headers,
+        credentials: 'include',
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
+      });
+      const text = typeof response.text === 'function' ? await response.text() : '';
+      return { response, text };
     };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const response = await fetch(this.apiUrl(path), {
-      method,
-      headers,
-      credentials: 'include',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal,
-    });
+    let { response, text } = await send();
+    if (response.status === 401 && this.supportsSessionRecovery &&
+        !isModelProviderConnectionRequirement(this.createApiError(response.status, text).payload)) {
+      const rejectedToken = this.sessionTokenProvider();
+      clearSessionAuth();
+      const restored = await requestSessionAuthFromPeer(rejectedToken ?? undefined);
+      if (restored) {
+        ({ response, text } = await send());
+      }
+      if (!restored || response.status === 401) {
+        clearSessionAuth();
+        notifySessionAuthInvalid();
+      }
+    }
 
-    const text = typeof response.text === 'function' ? await response.text() : '';
     if (!response.ok) throw this.createApiError(response.status, text);
     if (text) return JSON.parse(text) as T;
     if (typeof response.json === 'function') {
