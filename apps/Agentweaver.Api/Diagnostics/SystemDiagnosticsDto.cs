@@ -220,6 +220,56 @@ public sealed record TopologyResourceDeepLinksDto
     [JsonPropertyName("pod_name")]      public string? PodName      { get; init; }
 }
 
+/// <summary>
+/// Bounded, read-only Kubernetes relationship graph. Runtime resources are the default layer;
+/// callers explicitly opt into broader infrastructure layers.
+/// </summary>
+public sealed record KubernetesTopologyDto
+{
+    [JsonPropertyName("generated_utc")] public required DateTimeOffset GeneratedUtc { get; init; }
+    [JsonPropertyName("namespace")] public required string Namespace { get; init; }
+    [JsonPropertyName("requested_layers")] public required IReadOnlyList<string> RequestedLayers { get; init; }
+    [JsonPropertyName("layers")] public required IReadOnlyList<KubernetesTopologyLayerDto> Layers { get; init; }
+    [JsonPropertyName("nodes")] public required IReadOnlyList<KubernetesTopologyNodeDto> Nodes { get; init; }
+    [JsonPropertyName("edges")] public required IReadOnlyList<KubernetesTopologyEdgeDto> Edges { get; init; }
+    [JsonPropertyName("truncated")] public required bool Truncated { get; init; }
+}
+
+public sealed record KubernetesTopologyLayerDto
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    /// <summary><c>available</c>, <c>partial</c>, <c>unavailable</c>, or <c>not_requested</c>.</summary>
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("resource_count")] public required int ResourceCount { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+}
+
+public sealed record KubernetesTopologyNodeDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("layer")] public required string Layer { get; init; }
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("api_version")] public required string ApiVersion { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("namespace")] public string? Namespace { get; init; }
+    /// <summary><c>healthy</c>, <c>attention</c>, <c>critical</c>, or <c>unknown</c>.</summary>
+    [JsonPropertyName("health")] public required string Health { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+    /// <summary>Small allow-listed drill-down fields; never contains manifests, Secret data, or tokens.</summary>
+    [JsonPropertyName("details")] public required IReadOnlyDictionary<string, string> Details { get; init; }
+}
+
+public sealed record KubernetesTopologyEdgeDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("source")] public required string Source { get; init; }
+    [JsonPropertyName("target")] public required string Target { get; init; }
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("inferred")] public required bool Inferred { get; init; }
+    [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
 /// <summary>Status snapshot for one SandboxWarmPool.</summary>
 public sealed record WarmPoolStatusDto
 {

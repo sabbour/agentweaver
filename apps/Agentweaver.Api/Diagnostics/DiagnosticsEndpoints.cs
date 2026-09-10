@@ -65,6 +65,17 @@ public static class DiagnosticsEndpoints
         app.MapGet("/api/diagnostics/cluster", async (DiagnosticsService service, CancellationToken ct) =>
             Results.Ok(await service.GetClusterDiagnosticsAsync(ct)));
 
+        // Bounded Kubernetes relationship discovery is separate from the 30-second diagnostics
+        // poll so broader opt-in layers do not multiply the normal polling budget.
+        app.MapGet("/api/diagnostics/cluster/topology", async (
+            HttpRequest request,
+            KubernetesTopologyService service,
+            CancellationToken ct) =>
+        {
+            var layers = request.Query["layers"].Where(value => value is not null).Select(value => value!).ToArray();
+            return Results.Ok(await service.DiscoverAsync(layers, ct));
+        });
+
         // FR-016 (project scope): workspace, scaffold directories, and active workflow/policy checks
         // for a single project. Owner-authorized (same pattern as other project endpoints).
         app.MapGet("/api/projects/{id}/diagnostics", async (

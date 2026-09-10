@@ -1422,6 +1422,52 @@ export interface ClusterDiagnosticsDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
+export type KubernetesTopologyLayer =
+  | 'runtime'
+  | 'networking'
+  | 'workloads'
+  | 'storage'
+  | 'autoscaling'
+  | 'availability';
+
+export interface KubernetesTopologyLayerDto {
+  name: KubernetesTopologyLayer;
+  status: 'available' | 'partial' | 'unavailable' | 'not_requested';
+  resource_count: number;
+  message: string;
+}
+
+export interface KubernetesTopologyNodeDto {
+  id: string;
+  layer: KubernetesTopologyLayer;
+  type: string;
+  api_version: string;
+  name: string;
+  namespace?: string | null;
+  health: 'healthy' | 'attention' | 'critical' | 'unknown';
+  summary: string;
+  details: Record<string, string>;
+}
+
+export interface KubernetesTopologyEdgeDto {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  inferred: boolean;
+  summary: string;
+}
+
+export interface KubernetesTopologyDto {
+  generated_utc: string;
+  namespace: string;
+  requested_layers: KubernetesTopologyLayer[];
+  layers: KubernetesTopologyLayerDto[];
+  nodes: KubernetesTopologyNodeDto[];
+  edges: KubernetesTopologyEdgeDto[];
+  truncated: boolean;
+}
+
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.
 export interface SystemDiagnosticsDto {
   api_version: string;

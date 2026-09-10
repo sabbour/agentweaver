@@ -1349,6 +1349,21 @@ export class AgentweaverApiClient {
     }
   }
 
+  async getClusterTopology(
+    layers: import('./types').KubernetesTopologyLayer[] = ['runtime'],
+  ): Promise<import('./types').KubernetesTopologyDto | null> {
+    try {
+      const query = new URLSearchParams({ layers: layers.join(',') });
+      return await this.request<import('./types').KubernetesTopologyDto>(
+        'GET',
+        `/diagnostics/cluster/topology?${query.toString()}`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
   // Project-scoped diagnostics (Spec 011, FR-016). Owner-authorized.
   getProjectDiagnostics(projectId: string): Promise<import('./types').ProjectDiagnosticsDto> {
     return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/projects/${encodeURIComponent(projectId)}/diagnostics`);

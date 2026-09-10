@@ -113,15 +113,27 @@ A pool in `warning` or `critical` means new run dispatches fall back to creating
 
 ## Resource topology
 
-The **Resource topology** graph now expands each warm pool to the individual warm-pool sandbox instances the API can currently see:
+The **Resource topology** starts with the runtime layer: Pods and the Agentweaver sandbox
+CRDs. Enable the **Networking**, **Workloads**, **Storage**, **Autoscaling**, and
+**Availability** checkboxes to discover related Kubernetes resources only when you need
+them.
 
-| State | Meaning |
-|---|---|
-| **Available** | An idle warm sandbox is ready to be claimed by the next run. |
-| **Claimed** | A run currently owns the instance. When the backend can resolve both run and project, the node exposes a direct link to the orchestration detail page. |
-| **Warming** | The sandbox pod exists but is not ready yet. |
+The graph uses Kubernetes relationship fields rather than name guesses:
 
-This is the quickest way to answer “which warm spares are still idle?” and “which run is holding this exact warm-pool pod?”
+- owner references connect controllers to owned resources;
+- selectors connect Services, workloads, NetworkPolicies, and PodDisruptionBudgets to
+  matching resources;
+- Gateway API `parentRefs` and `backendRefs` connect routes;
+- `serviceAccountName`, `scaleTargetRef`, PVC/PV claims, and storage class names connect
+  their corresponding resources.
+
+Solid edges are authoritative references. Dashed edges are selector-derived and therefore
+inferred. Select a resource card to open its safe drill-down summary. The drill-down does
+not expose full manifests, Secret data, tokens, internal endpoints, or container
+environment values.
+
+Layer badges show when a resource API is unavailable or only partially readable. Missing
+optional CRDs and RBAC denials do not hide the rest of the graph.
 
 The diagnostics API also provides optional, resource-specific `details` for the cluster,
 warm pools, warm instances, sandbox claims, and AgentHost pods. A topology card can use

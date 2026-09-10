@@ -531,6 +531,7 @@ builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTrig
 // decoupled from per-run branch merges. Disable via Squad:StateConsolidationEnabled=false.
 builder.Services.AddHostedService<Agentweaver.Api.Squad.SquadStateConsolidationService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
+builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.KubernetesTopologyService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();
 

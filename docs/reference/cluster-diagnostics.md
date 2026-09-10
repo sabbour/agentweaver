@@ -92,6 +92,47 @@ The details contract never includes credentials, secret values, internal IP addr
 raw Kubernetes objects, condition messages, or logs. Kubernetes reasons are normalized
 to a single line and capped at 240 characters.
 
+## Kubernetes topology graph
+
+`GET /api/diagnostics/cluster/topology` returns a separate bounded relationship graph.
+Keeping it separate prevents the normal 30-second diagnostics poll from repeatedly listing
+every opt-in Kubernetes resource.
+
+The default request is runtime-only:
+
+```text
+GET /api/diagnostics/cluster/topology
+```
+
+Request additional comma-separated layers with `layers`:
+
+```text
+GET /api/diagnostics/cluster/topology?layers=runtime,networking,workloads,storage,autoscaling,availability
+```
+
+| Layer | Resources |
+| --- | --- |
+| `runtime` | Pod, SandboxClaim, SandboxWarmPool, SandboxTemplate |
+| `networking` | Gateway, HTTPRoute, Service, NetworkPolicy |
+| `workloads` | Deployment, ReplicaSet, ServiceAccount |
+| `storage` | PersistentVolumeClaim, PersistentVolume, StorageClass |
+| `autoscaling` | HorizontalPodAutoscaler, VerticalPodAutoscaler, KEDA ScaledObject |
+| `availability` | PodDisruptionBudget |
+
+Nodes have stable IDs, explicit resource types, namespace, health, a short summary, and a
+small allow-listed `details` map. Edges record their relationship type and whether the
+relationship is inferred. Owner references, Gateway API references, identity references,
+scale targets, and volume claims are authoritative. Selector matches are marked
+`inferred: true`.
+
+Each requested layer reports `available`, `partial`, or `unavailable`. A missing CRD or an
+RBAC denial affects only that layer; it does not fail the graph. Lists are capped at 100
+objects per resource type, the response is capped at 250 nodes and 500 edges, and
+`truncated` reports when a cap was reached.
+
+The response never includes full manifests, Secret values, tokens, service cluster IPs,
+internal endpoint addresses, or container environment values.
+
 ## Status codes
 
 | Status | Condition |
@@ -107,6 +148,7 @@ to a single line and capped at 240 characters.
 | Endpoint | `apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs` |
 | Snapshot and checks | `apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs` |
 | DTOs | `apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs` |
+| Topology discovery | `apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs` |
 
 ## Related reading
 

@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   Badge,
   Button,
+  Checkbox,
   MessageBar,
   MessageBarBody,
   Switch,
@@ -24,6 +25,8 @@ import type {
   PendingCapacityRunDto,
   SandboxClaimObjectDto,
   WarmPoolStatusDto,
+  KubernetesTopologyDto,
+  KubernetesTopologyLayer,
 } from '../api/types';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import {
@@ -44,6 +47,14 @@ import {
 // the backend endpoint is deployed (404 response).
 
 const REFRESH_MS = 30_000;
+const TOPOLOGY_LAYERS: Array<{ id: KubernetesTopologyLayer; label: string }> = [
+  { id: 'runtime', label: 'Runtime' },
+  { id: 'networking', label: 'Networking' },
+  { id: 'workloads', label: 'Workloads' },
+  { id: 'storage', label: 'Storage' },
+  { id: 'autoscaling', label: 'Autoscaling' },
+  { id: 'availability', label: 'Availability' },
+];
 
 const useStyles = makeStyles({
   kpiRow: {
@@ -52,6 +63,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
   },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  layerControls: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM },
 });
 
 function formatAge(ageSeconds: number | null | undefined): string {
@@ -237,6 +249,10 @@ export function ClusterPage() {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
+  const [topology, setTopology] = useState<KubernetesTopologyDto | null>(null);
+  const [topologyLayers, setTopologyLayers] = useState<KubernetesTopologyLayer[]>(['runtime']);
+  const [topologyLoading, setTopologyLoading] = useState(false);
+  const [topologyError, setTopologyError] = useState<string | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -264,6 +280,24 @@ export function ClusterPage() {
       if (!signal.cancelled) setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    apiClient.getClusterTopology(topologyLayers)
+      .then(value => {
+        if (!signal.cancelled) {
+          setTopology(value);
+          setTopologyError(null);
+        }
+      })
+      .catch(err => {
+        if (!signal.cancelled) setTopologyError(formatError(err));
+      })
+      .finally(() => {
+        if (!signal.cancelled) setTopologyLoading(false);
+      });
+    return () => { signal.cancelled = true; };
+  }, [topologyLayers]);
 
   useEffect(() => {
     const signal = { cancelled: false };
@@ -353,9 +387,27 @@ export function ClusterPage() {
 
           <PageSection
             title="Resource topology"
-            description="Live relationships from cluster to warm pools, sandbox claims, and agent pods."
+            description="Runtime resources are shown by default. Enable layers to discover bounded, read-only Kubernetes relationships; dashed edges are selector-inferred."
           >
-            <ClusterTopologyGraph data={data} />
+            <div className={styles.layerControls} aria-label="Topology layers">
+              {TOPOLOGY_LAYERS.map(layer => (
+                <Checkbox
+                  key={layer.id}
+                  label={layer.label}
+                  checked={topologyLayers.includes(layer.id)}
+                  disabled={layer.id === 'runtime'}
+                  onChange={(_, checkbox) => {
+                    setTopologyLoading(true);
+                    setTopologyLayers(current => checkbox.checked
+                      ? [...current, layer.id]
+                      : current.filter(value => value !== layer.id));
+                  }}
+                />
+              ))}
+            </div>
+            {topologyError && <MessageBar intent="warning"><MessageBarBody>{topologyError}</MessageBarBody></MessageBar>}
+            {topologyLoading && !topology && <LoadingState label="Loading resource topology" />}
+            {topology && <ClusterTopologyGraph topology={topology} />}
           </PageSection>
 
           <PageSection title="Health checks">
