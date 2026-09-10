@@ -104,6 +104,12 @@ A repositoryless project does not require a Repo App installation. A GitHub-back
 repository-ready only when the Repo App installation and its project repository grant are both
 current.
 
+Repository status alone never makes a project unattended-ready. For GitHub Copilot, the readiness
+check verifies that the selected live binding still has the complete grant and credential tuple
+required to issue an `UnattendedCopilot` run snapshot, refreshes the credential when possible, and
+rechecks the binding after the vault read. For custom-key providers, it verifies that the exact
+selected provider configuration is still active.
+
 After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
 
 A project can use a project GitHub Copilot account. Otherwise, project work inherits the active

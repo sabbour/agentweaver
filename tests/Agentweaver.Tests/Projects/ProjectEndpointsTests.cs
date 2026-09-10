@@ -74,7 +74,9 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         await secrets.DeleteSecretAsync("byok-provider-configurations");
     }
 
-    private async Task SeedPlatformDefaultCopilotBindingAsync(string login = "platform-bot")
+    private async Task SeedPlatformDefaultCopilotBindingAsync(
+        string login = "platform-bot",
+        string grantDigest = "digest")
     {
         await ResetBackgroundAiConfigurationAsync();
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -87,7 +89,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
             EntraObjectId = "platform-admin",
             CredentialReference = "copilot-app-platform-default-version",
             CredentialVersion = "version",
-            GrantDigest = "digest",
+            GrantDigest = grantDigest,
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow,
         });
@@ -524,6 +526,27 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         body.GetProperty("unattended_ready").GetBoolean().Should().BeTrue();
         body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
         body.GetProperty("model_provider").GetProperty("source").GetString().Should().Be("platform_default");
+        body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_BlankProjectRejectsProviderThatCannotIssueUnattendedCapability()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedPlatformDefaultCopilotBindingAsync(grantDigest: string.Empty);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("reauthorization_required");
+        body.GetProperty("reason_code").GetString().Should().Be("unattended_copilot_capability_required");
+        body.GetProperty("unattended_ready").GetBoolean().Should().BeFalse();
+        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+        body.GetProperty("model_provider").GetProperty("status").GetString()
+            .Should().Be("reauthorization_required");
+        body.GetProperty("model_provider").GetProperty("source").GetString()
+            .Should().Be("platform_default");
         body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
     }
 

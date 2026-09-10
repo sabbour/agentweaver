@@ -403,6 +403,8 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     IProjectStore projectStore,
     MemoryDbContext db,
     EffectiveModelProviderResolver modelProviderResolver,
+    GitHubCapabilityBroker capabilityBroker,
+    ByokProviderConfigurationService byokProviders,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -436,9 +438,36 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
                                      installation.InstallationId == grant.InstallationId),
                 ct).ConfigureAwait(false)
         : 0;
+    var unattendedProviderPurpose = effectiveProvider switch
+    {
+        EffectiveModelProviderResult.Byok byok =>
+            await VerifyByokPurposeAsync(byokProviders, byok, ct).ConfigureAwait(false)
+                ? UnattendedProviderPurpose.Ready
+                : UnattendedProviderPurpose.Unavailable,
+        EffectiveModelProviderResult.ProjectGitHubCopilot projectCopilot =>
+            await capabilityBroker.CanSupplyUnattendedCopilotPurposeAsync(
+                projectKey,
+                projectCopilot.BindingId,
+                projectCopilot.CredentialVersion,
+                DateTimeOffset.UtcNow,
+                ct).ConfigureAwait(false)
+                ? UnattendedProviderPurpose.Ready
+                : UnattendedProviderPurpose.ReauthorizationRequired,
+        EffectiveModelProviderResult.PlatformGitHubCopilot platformCopilot =>
+            await capabilityBroker.CanSupplyUnattendedCopilotPurposeAsync(
+                projectKey,
+                platformCopilot.BindingId,
+                platformCopilot.CredentialVersion,
+                DateTimeOffset.UtcNow,
+                ct).ConfigureAwait(false)
+                ? UnattendedProviderPurpose.Ready
+                : UnattendedProviderPurpose.ReauthorizationRequired,
+        _ => UnattendedProviderPurpose.Unavailable,
+    };
     return Results.Ok(CreateUnattendedReadiness(
         effectiveProvider,
         interactiveProvider,
+        unattendedProviderPurpose,
         repositoryRequired,
         hasInstallation,
         liveRepositoryGrantCount == 1));
@@ -1591,6 +1620,7 @@ private static string? FindInvalidModelIdField(UpdateProjectProviderSettingsRequ
 private static object CreateUnattendedReadiness(
     EffectiveModelProviderResult effectiveProvider,
     EffectiveModelProviderResult interactiveProvider,
+    UnattendedProviderPurpose unattendedProviderPurpose,
     bool repositoryRequired,
     bool hasRepoAppInstallation,
     bool hasRepositoryGrant)
@@ -1602,23 +1632,38 @@ private static object CreateUnattendedReadiness(
     };
     var modelProvider = effectiveProvider switch
     {
-        EffectiveModelProviderResult.ProjectGitHubCopilot => new
+        EffectiveModelProviderResult.ProjectGitHubCopilot
+            when unattendedProviderPurpose == UnattendedProviderPurpose.Ready => new
         {
             status = "unattended_ready",
             source = "project",
             reason_code = "unattended_ready",
         },
-        EffectiveModelProviderResult.PlatformGitHubCopilot => new
+        EffectiveModelProviderResult.PlatformGitHubCopilot
+            when unattendedProviderPurpose == UnattendedProviderPurpose.Ready => new
         {
             status = "unattended_ready",
             source = "platform_default",
             reason_code = "unattended_ready",
         },
-        EffectiveModelProviderResult.Byok => new
+        EffectiveModelProviderResult.Byok
+            when unattendedProviderPurpose == UnattendedProviderPurpose.Ready => new
         {
             status = "unattended_ready",
             source = "byok",
             reason_code = "unattended_ready",
+        },
+        EffectiveModelProviderResult.ProjectGitHubCopilot => new
+        {
+            status = "reauthorization_required",
+            source = "project",
+            reason_code = "unattended_copilot_capability_required",
+        },
+        EffectiveModelProviderResult.PlatformGitHubCopilot => new
+        {
+            status = "reauthorization_required",
+            source = "platform_default",
+            reason_code = "unattended_copilot_capability_required",
         },
         EffectiveModelProviderResult.Unavailable
         {
@@ -1681,7 +1726,9 @@ private static object CreateUnattendedReadiness(
                     : "repo_app_installation_required",
                 repo_app_installation_connected = hasRepoAppInstallation,
             };
-    var unattendedReady = modelProvider.status == "unattended_ready" && repository.status != "not_ready";
+    var repositoryPurposeReady = !repositoryRequired || hasRepoAppInstallation && hasRepositoryGrant;
+    var unattendedReady =
+        unattendedProviderPurpose == UnattendedProviderPurpose.Ready && repositoryPurposeReady;
     var repositoryReady = repositoryRequired && repository.status == "repository_ready";
     var status = unattendedReady
         ? "unattended_ready"
@@ -1711,6 +1758,8 @@ private static object CreateUnattendedReadiness(
             "Connect a project model provider or configure a platform-default model provider before unattended work can run.",
         "project_model_provider_reconnect_required" =>
             "Reconnect the project's active model provider before unattended work can run.",
+        "unattended_copilot_capability_required" =>
+            "Reconnect the selected GitHub Copilot provider so it can issue a durable unattended capability.",
         "repo_app_installation_required" =>
             "Install the Repo App for this project before unattended work can run.",
         "repo_app_repository_grant_required" =>
@@ -1736,6 +1785,28 @@ private static object CreateUnattendedReadiness(
         model_provider = modelProvider,
         repository,
     };
+}
+
+private static async Task<bool> VerifyByokPurposeAsync(
+    ByokProviderConfigurationService byokProviders,
+    EffectiveModelProviderResult.Byok expected,
+    CancellationToken ct)
+{
+    var current = await byokProviders.GetAsync(ct).ConfigureAwait(false);
+    return current is not null &&
+        string.Equals(current.Id, expected.ProviderId, StringComparison.Ordinal) &&
+        string.Equals(current.Type, expected.ProviderType, StringComparison.Ordinal) &&
+        string.Equals(
+            current.ExecutionFingerprint(),
+            expected.ConfigurationFingerprint,
+            StringComparison.Ordinal);
+}
+
+internal enum UnattendedProviderPurpose
+{
+    Unavailable,
+    ReauthorizationRequired,
+    Ready,
 }
 
 private static async Task<(bool Connected, string? GitHubLogin)> GetPlatformDefaultCopilotConnectionAsync(
