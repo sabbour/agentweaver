@@ -36,7 +36,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable` — bounded normalized public contract |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
-| `run.approval_policy_selected` | When a coordinator run persists its immutable launch approval policy | `autoApproveTools`, `autopilot`, `source` (`direct`, `backlog_pickup`, or `retry`), `safeTools` |
+| `run.approval_policy_selected` | When a coordinator run persists its immutable launch approval policy | `autoApproveTools`, `autopilot`, `source` (`direct`, `backlog_pickup`, or `retry`), `capturedAt`, `settingsUpdatedAt` (heartbeat-derived policies), `inheritedFromRunId` (retries), `safeTools` |
 | `run.error` | When an operation fails but the run is reverted to a retryable state (e.g. back to AwaitingReview after a merge internal error); **non-terminal** — the stream stays open | `reason` |
 | `run.degraded` | When the sandbox blocks at least one tool call during a run; **non-terminal** — the run continues with a degraded outcome | `toolName`, `reason` |
 | `rai.verdict` | The RAI reviewer's verdict for a run; written to both the parent run stream and the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId`, `rationale` |

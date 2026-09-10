@@ -22,6 +22,18 @@ public sealed record RunApprovalPolicy(bool AutoApproveTools = false, bool Autop
 }
 
 /// <summary>
+/// Immutable provenance for the approval policy selected when a run was created.
+/// Heartbeat claims capture the project settings and their update timestamp inside the same
+/// transaction that reserves the run.
+/// </summary>
+public sealed record RunApprovalPolicySnapshot(
+    RunApprovalPolicy Policy,
+    string Source,
+    DateTimeOffset CapturedAt,
+    DateTimeOffset? SettingsUpdatedAt = null,
+    string? InheritedFromRunId = null);
+
+/// <summary>
 /// Per-run operator options that change how a run handles human-in-the-loop interactions.
 /// Both default OFF. They cascade from a coordinator run to its dispatched child runs.
 /// </summary>

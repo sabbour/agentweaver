@@ -51,6 +51,28 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task RunOptions_FallBackToAtomicRunSnapshotAcrossReplicasBeforeActivation()
+    {
+        var capturedAt = DateTimeOffset.UtcNow;
+        var settingsUpdatedAt = capturedAt.AddMinutes(-1);
+        var run = NewOwnedRun("owner").WithApprovalPolicySnapshot(
+            new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "backlog_pickup",
+                capturedAt,
+                settingsUpdatedAt));
+        await _runStore.InsertAsync(run);
+
+        var replicaA = NewOptionsStore();
+        var replicaB = NewOptionsStore();
+
+        replicaA.Get(run.Id.ToString()).Should().Be(
+            new RunOptions(AutoApproveTools: true, Autopilot: true));
+        replicaB.GetLaunchPolicy(run.Id.ToString()).Should().Be(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true));
+    }
+
+    [Fact]
     public async Task ApprovalGrant_OnAnotherReplica_ResolvesWaitingRun()
     {
         var owner = NewApprovalGate();
@@ -671,7 +693,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         owner.IsApproved("run-10", "cmd-2").Should().BeFalse();
     }
 
-    private DurableRunOptionsStore NewOptionsStore() => new(NewState());
+    private DurableRunOptionsStore NewOptionsStore() => new(NewState(), _runStore);
     private DurableToolApprovalGate NewApprovalGate() => NewApprovalGate(_runStore);
     private DurableToolApprovalGate NewApprovalGate(IRunStore runStore) =>
         new(NewState(), runStore: runStore);

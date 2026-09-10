@@ -263,6 +263,12 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.ParentRunId).HasColumnName("parent_run_id");
             e.Property(r => r.SubtaskId).HasColumnName("subtask_id");
             e.Property(r => r.Origin).HasColumnName("origin").HasDefaultValue("interactive");
+            e.Property(r => r.LaunchAutoApproveTools).HasColumnName("launch_auto_approve_tools");
+            e.Property(r => r.LaunchAutopilot).HasColumnName("launch_autopilot");
+            e.Property(r => r.ApprovalPolicySource).HasColumnName("approval_policy_source");
+            e.Property(r => r.ApprovalPolicyCapturedAt).HasColumnName("approval_policy_captured_at");
+            e.Property(r => r.ApprovalPolicySettingsUpdatedAt).HasColumnName("approval_policy_settings_updated_at");
+            e.Property(r => r.ApprovalPolicyInheritedFromRunId).HasColumnName("approval_policy_inherited_from_run_id");
             e.Property(r => r.RetriedFrom).HasColumnName("retried_from");
             e.Property(r => r.ReviewReadyAt).HasColumnName("review_ready_at");
             e.Property(r => r.ArchivedAt).HasColumnName("archived_at");

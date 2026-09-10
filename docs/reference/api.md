@@ -1519,7 +1519,9 @@ Request:
 The selected launch policy is persisted with the run and audited as
 `run.approval_policy_selected`. Retries reuse that immutable launch choice. Heartbeat-created
 runs still take their initial policy from `pickup_auto_approve_tools` and `pickup_autopilot`;
-changing those project defaults does not rewrite an existing run or its retry policy.
+the claim transaction snapshots the current persisted values onto the reserved run. Changing those
+project defaults affects the next won claim, but does not rewrite an existing run or its retry policy.
+Run status falls back to this row snapshot if activation has not yet written runtime option events.
 
 Response `201 Created` (with `Location: /api/runs/{runId}`):
 

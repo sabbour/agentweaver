@@ -30,6 +30,12 @@ public sealed class RunRecord
     public string? ParentRunId { get; set; }
     public string? SubtaskId { get; set; }
     public string Origin { get; set; } = "interactive";
+    public bool? LaunchAutoApproveTools { get; set; }
+    public bool? LaunchAutopilot { get; set; }
+    public string? ApprovalPolicySource { get; set; }
+    public DateTimeOffset? ApprovalPolicyCapturedAt { get; set; }
+    public DateTimeOffset? ApprovalPolicySettingsUpdatedAt { get; set; }
+    public string? ApprovalPolicyInheritedFromRunId { get; set; }
     public string? RetriedFrom { get; set; }
     public DateTimeOffset? ReviewReadyAt { get; set; }
     public DateTimeOffset? ArchivedAt { get; set; }

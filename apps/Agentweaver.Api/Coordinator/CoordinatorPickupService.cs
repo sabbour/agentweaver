@@ -184,11 +184,11 @@ public sealed class CoordinatorPickupService
             };
         }
 
-        var result = await _backlogStore
-            .TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, run, now, ct)
+        var claim = await _backlogStore
+            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct)
             .ConfigureAwait(false);
 
-        switch (result)
+        switch (claim.Result)
         {
             case ClaimReserveResult.Lost:
                 // Another heartbeat/instance won, or the task moved back to Backlog. Nothing persisted.
@@ -198,6 +198,11 @@ public sealed class CoordinatorPickupService
                     "Pickup: project {ProjectId} not active; task {TaskId} left Ready", project.Id, task.Id);
                 return;
         }
+
+        var approvalSnapshot = claim.ApprovalPolicySnapshot
+            ?? throw new InvalidOperationException(
+                $"Won backlog claim for run {runId} did not return its persisted approval-policy snapshot.");
+        run = run.WithApprovalPolicySnapshot(approvalSnapshot);
 
         if (blockedReason is not null)
         {
@@ -235,9 +240,7 @@ public sealed class CoordinatorPickupService
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
                     run,
-                    approvalPolicy: RunApprovalPolicy.ForBacklogPickup(
-                        project.PickupAutoApproveTools,
-                        project.PickupAutopilot),
+                    approvalSnapshot,
                     confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
                     ct: CancellationToken.None,
                     effectiveProvider: effectiveProvider)

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -62,6 +63,27 @@ public sealed class RunOptionsAndAutopilotTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var options = _factory.Services.GetRequiredService<IRunOptionsStore>();
         options.Get(runId).Autopilot.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunStatus_UsesPersistedLaunchSnapshotBeforeRuntimeOptionsExist()
+    {
+        var snapshot = new RunApprovalPolicySnapshot(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+            "backlog_pickup",
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddMinutes(-1));
+        var runId = await InsertRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            RunStatus.InProgress,
+            snapshot);
+
+        var response = await _owner.GetAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue();
+        body.GetProperty("autopilot").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -211,7 +233,10 @@ public sealed class RunOptionsAndAutopilotTests : IDisposable
     private Task<string> InsertInProgressRunAsync(string ownerUser)
         => InsertRunAsync(ownerUser, RunStatus.InProgress);
 
-    private async Task<string> InsertRunAsync(string ownerUser, RunStatus status)
+    private async Task<string> InsertRunAsync(
+        string ownerUser,
+        RunStatus status,
+        RunApprovalPolicySnapshot? approvalSnapshot = null)
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
@@ -227,6 +252,8 @@ public sealed class RunOptionsAndAutopilotTests : IDisposable
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "morpheus",
         };
+        if (approvalSnapshot is not null)
+            run = run.WithApprovalPolicySnapshot(approvalSnapshot);
         await runStore.InsertAsync(run, CancellationToken.None);
         return runId.ToString();
     }

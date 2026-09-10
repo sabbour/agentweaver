@@ -1,16 +1,24 @@
 using System.Text.Json;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
 
-public sealed class DurableRunOptionsStore(DurableRunControlState state) : IRunOptionsStore
+public sealed class DurableRunOptionsStore : IRunOptionsStore
 {
     private const string LaunchPolicySet = "run.approval_policy_selected";
     private const string OptionsSet = "run.options_set";
     private const string OptionsCleared = "run.options_cleared";
 
-    private readonly DurableRunControlState _state = state;
+    private readonly DurableRunControlState _state;
+    private readonly IRunStore? _runStore;
+
+    public DurableRunOptionsStore(DurableRunControlState state, IRunStore? runStore = null)
+    {
+        _state = state;
+        _runStore = runStore;
+    }
 
     public void Set(string runId, RunOptions options)
     {
@@ -43,6 +51,13 @@ public sealed class DurableRunOptionsStore(DurableRunControlState state) : IRunO
         if (selected is not null)
             return JsonSerializer.Deserialize<RunApprovalPolicy>(selected.PayloadJson, JsonDefaults.Options)
                 ?? new RunApprovalPolicy();
+
+        if (_runStore is not null && RunId.TryParse(runId, out var parsedRunId))
+        {
+            var run = _runStore.GetAsync(parsedRunId).GetAwaiter().GetResult();
+            if (run?.GetApprovalPolicySnapshot() is { } persisted)
+                return persisted.Policy;
+        }
 
         // Compatibility for runs launched before the immutable policy event existed.
         var firstOptions = _state.Load(runId, OptionsSet).FirstOrDefault();

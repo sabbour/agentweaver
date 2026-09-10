@@ -2104,6 +2104,30 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasDefaultValue("interactive")
                         .HasColumnName("origin");
 
+                    b.Property<DateTimeOffset?>("ApprovalPolicyCapturedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approval_policy_captured_at");
+
+                    b.Property<string>("ApprovalPolicyInheritedFromRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("approval_policy_inherited_from_run_id");
+
+                    b.Property<DateTimeOffset?>("ApprovalPolicySettingsUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approval_policy_settings_updated_at");
+
+                    b.Property<string>("ApprovalPolicySource")
+                        .HasColumnType("text")
+                        .HasColumnName("approval_policy_source");
+
+                    b.Property<bool?>("LaunchAutoApproveTools")
+                        .HasColumnType("boolean")
+                        .HasColumnName("launch_auto_approve_tools");
+
+                    b.Property<bool?>("LaunchAutopilot")
+                        .HasColumnType("boolean")
+                        .HasColumnName("launch_autopilot");
+
                     b.Property<string>("OriginatingBranch")
                         .IsRequired()
                         .HasColumnType("text")

@@ -363,6 +363,15 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
+        CancellationToken ct = default) =>
+        (await TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            projectId, id, coordinatorRun, claimedAt, ct).ConfigureAwait(false)).Result;
+
+    public async Task<ClaimReserveOutcome> TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+        ProjectId projectId,
+        BacklogTaskId id,
+        Run coordinatorRun,
+        DateTimeOffset claimedAt,
         CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -374,7 +383,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         if (dependencyStatuses.Any(s => !s.IsSatisfied))
         {
             await tx.RollbackAsync(ct);
-            return ClaimReserveResult.Lost;
+            return new ClaimReserveOutcome(ClaimReserveResult.Lost);
         }
 
         // (a) exactly-once, project-scoped claim gate.
@@ -389,18 +398,34 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         if (claimedRows != 1)
         {
             await tx.RollbackAsync(ct);
-            return ClaimReserveResult.Lost;
+            return new ClaimReserveOutcome(ClaimReserveResult.Lost);
         }
 
-        // (b) persist the coordinator run row gated on the project still being active.
-        var projectActive = await db.Projects.AsNoTracking()
-            .AnyAsync(p => p.ProjectId == pid && p.State == "active", ct);
-        if (!projectActive)
+        // (b) snapshot the persisted pickup settings from the project row inside this transaction.
+        var projectSettings = await db.Projects.AsNoTracking()
+            .Where(p => p.ProjectId == pid && p.State == "active")
+            .Select(p => new
+            {
+                p.PickupAutoApproveTools,
+                p.PickupAutopilot,
+                p.UpdatedAt,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (projectSettings is null)
         {
             await tx.RollbackAsync(ct);
-            return ClaimReserveResult.ProjectUnavailable;
+            return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
         }
 
+        var approvalSnapshot = new RunApprovalPolicySnapshot(
+            RunApprovalPolicy.ForBacklogPickup(
+                projectSettings.PickupAutoApproveTools,
+                projectSettings.PickupAutopilot),
+            Source: "backlog_pickup",
+            CapturedAt: claimedAt,
+            SettingsUpdatedAt: projectSettings.UpdatedAt);
+
+        // (c) persist the coordinator run and immutable policy snapshot atomically with the claim.
         db.Runs.Add(new Memory.RunRecord
         {
             RunId = coordinatorRun.Id.ToString(),
@@ -421,11 +446,16 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             ParentRunId = coordinatorRun.ParentRunId,
             SubtaskId = coordinatorRun.SubtaskId,
             Origin = "backlog_pickup",
+            LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
+            LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
+            ApprovalPolicySource = approvalSnapshot.Source,
+            ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
+            ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,
         });
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        return ClaimReserveResult.Won;
+        return new ClaimReserveOutcome(ClaimReserveResult.Won, approvalSnapshot);
     }
 
     /// <summary>

@@ -150,6 +150,11 @@ public sealed class CoordinatorRunService
         // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
         var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
 
+        var approvalSnapshot = new RunApprovalPolicySnapshot(
+            approvalPolicy,
+            retriedFrom is null ? "direct" : "retry",
+            now,
+            InheritedFromRunId: retriedFrom);
         var run = new Run
         {
             Id = runId,
@@ -166,7 +171,7 @@ public sealed class CoordinatorRunService
             ParentRunId = null,
             SubtaskId = null,
             RetriedFrom = retriedFrom,
-        };
+        }.WithApprovalPolicySnapshot(approvalSnapshot);
 
         var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProvider, ct).ConfigureAwait(false);
         try
@@ -190,7 +195,9 @@ public sealed class CoordinatorRunService
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
                 providerSnapshotCaptured: capturedSnapshot is not null,
-                approvalPolicySource: retriedFrom is null ? "direct" : "retry")
+                approvalPolicySource: approvalSnapshot.Source,
+                approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
+                approvalPolicyInheritedFromRunId: approvalSnapshot.InheritedFromRunId)
             .ConfigureAwait(false);
 
         // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
@@ -305,6 +312,13 @@ public sealed class CoordinatorRunService
             .ResolveDurableProviderBoundaryAsync(source, ct).ConfigureAwait(false);
         var effectiveProvider = effectiveProviderBoundary.Provider;
 
+        var sourceSnapshot = source.GetApprovalPolicySnapshot();
+        var approvalSnapshot = new RunApprovalPolicySnapshot(
+            approvalPolicy,
+            Source: "retry",
+            CapturedAt: now,
+            SettingsUpdatedAt: sourceSnapshot?.SettingsUpdatedAt,
+            InheritedFromRunId: source.Id.ToString());
         var run = new Run
         {
             Id = runId,
@@ -323,7 +337,7 @@ public sealed class CoordinatorRunService
             WorkflowRunId = null,                      // identity parity: detail page resolves by run_id
             Origin = RunOrigin.BacklogPickup,          // preserve durable pickup origin marker
             RetriedFrom = source.Id.ToString(),
-        };
+        }.WithApprovalPolicySnapshot(approvalSnapshot);
 
         var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProviderBoundary, ct)
             .ConfigureAwait(false);
@@ -346,7 +360,10 @@ public sealed class CoordinatorRunService
                 effectiveProvider: effectiveProvider,
                 effectiveProviderBoundary: effectiveProviderBoundary,
                 providerSnapshotCaptured: capturedSnapshot is not null,
-                approvalPolicySource: "retry")
+                approvalPolicySource: approvalSnapshot.Source,
+                approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
+                approvalPolicySettingsUpdatedAt: approvalSnapshot.SettingsUpdatedAt,
+                approvalPolicyInheritedFromRunId: approvalSnapshot.InheritedFromRunId)
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
@@ -367,16 +384,19 @@ public sealed class CoordinatorRunService
     /// </summary>
     public async Task StartReservedCoordinatorRunAsync(
         Run reservedRun,
-        RunApprovalPolicy approvalPolicy,
+        RunApprovalPolicySnapshot approvalSnapshot,
         string confirmedBy,
         CancellationToken ct,
         EffectiveModelProviderResult? effectiveProvider = null)
     {
+        var approvalPolicy = approvalSnapshot.Policy;
         await ActivateAsync(
                 reservedRun,
                 approvalPolicy,
                 effectiveProvider: effectiveProvider,
-                approvalPolicySource: "backlog_pickup")
+                approvalPolicySource: approvalSnapshot.Source,
+                approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
+                approvalPolicySettingsUpdatedAt: approvalSnapshot.SettingsUpdatedAt)
             .ConfigureAwait(false);
 
         // Fire-and-forget bounded loop: confirm the spec once it arms — but ONLY when Autopilot is
@@ -401,7 +421,10 @@ public sealed class CoordinatorRunService
         EffectiveModelProviderResult? effectiveProvider = null,
         ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null,
         bool providerSnapshotCaptured = false,
-        string approvalPolicySource = "direct")
+        string approvalPolicySource = "direct",
+        DateTimeOffset? approvalPolicyCapturedAt = null,
+        DateTimeOffset? approvalPolicySettingsUpdatedAt = null,
+        string? approvalPolicyInheritedFromRunId = null)
     {
         // Resolve/capture once before any capability preparation. In particular, a reserved pickup
         // may carry a provider accepted by its atomic reservation transaction; do not fence one
@@ -441,6 +464,9 @@ public sealed class CoordinatorRunService
             autoApproveTools = approvalPolicy.AutoApproveTools,
             autopilot = approvalPolicy.Autopilot,
             source = approvalPolicySource,
+            capturedAt = approvalPolicyCapturedAt,
+            settingsUpdatedAt = approvalPolicySettingsUpdatedAt,
+            inheritedFromRunId = approvalPolicyInheritedFromRunId,
             safeTools = approvalPolicy.AutoApproveTools ? new[] { "web_fetch" } : Array.Empty<string>(),
         });
 
