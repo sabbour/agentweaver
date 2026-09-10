@@ -57,11 +57,40 @@ Each check has `name`, `status`, `message`, and `latencyMs`. Status values are `
 
 ## Inventory objects
 
-`AgentPodInfoDto` has `claim_name`, optional `run_id`, optional `pod_name`, `status`, and optional `age_seconds`.
+`AgentPodInfoDto` has `claim_name`, optional `run_id`, optional `pod_name`, `status`, optional `age_seconds`, and optional `details`.
 
-`WarmPoolStatusDto` has `name`, `desired_replicas`, `ready_replicas`, `available_replicas`, `status`, `instances`, and optional `age_seconds`.
+`WarmPoolStatusDto` has `name`, `desired_replicas`, `ready_replicas`, `available_replicas`, `status`, `instances`, optional `age_seconds`, and optional `details`.
 
-`SandboxClaimObjectDto` has `name`, `phase`, `ready`, optional `run_id`, optional `bound_sandbox`, optional `warm_pool`, and optional `age_seconds`.
+`SandboxClaimObjectDto` has `name`, `phase`, `ready`, optional `run_id`, optional `bound_sandbox`, optional `warm_pool`, optional `age_seconds`, and optional `details`.
+
+Warm-pool instances also have optional `details`. The response root can include `details`
+for the cluster itself. These additions are optional so older clients can continue to
+consume the existing polling shape.
+
+### Expandable resource details
+
+Each `details` object uses the same bounded contract:
+
+| Field | Description |
+| --- | --- |
+| `resource_id` | Stable type-prefixed identity, such as `warm-pool:agentweaver-agent-host`. |
+| `resource_type` | `cluster`, `warm_pool`, `warm_instance`, `sandbox_claim`, or `agent_host_pod`. |
+| `status` / `summary` | Concise state and display text for an expanded card. |
+| `attention_required` | Whether the UI should consider expanding the resource automatically. |
+| `reason` | Optional short failure, pending, claimed, or orphaned reason. |
+| `created_utc` / `last_transition_utc` | Optional timing sources from the process or Kubernetes resource. |
+| `ownership` | Optional run, project, agent, claim, run-status, and run-timing identifiers. |
+| `capacity` | Optional desired, ready, available, claimed, used, and limit counts. |
+| `runtime` | Optional pod name, node name, container image, and runtime class. |
+| `deep_links` | Identifiers for existing project, run, claim, pool, and pod routes or filters. |
+
+`attention_required` is true for unhealthy or degraded resources, pending pods and
+claims, orphaned pods, warming instances, and claimed resources where ownership is
+useful to inspect.
+
+The details contract never includes credentials, secret values, internal IP addresses,
+raw Kubernetes objects, condition messages, or logs. Kubernetes reasons are normalized
+to a single line and capped at 240 characters.
 
 ## Status codes
 

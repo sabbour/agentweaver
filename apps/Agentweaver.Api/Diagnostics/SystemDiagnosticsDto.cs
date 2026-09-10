@@ -123,6 +123,101 @@ public sealed record ClusterDiagnosticsDto
 
     /// <summary>All SandboxClaim objects in the namespace.</summary>
     [JsonPropertyName("sandbox_claims")]     public required IReadOnlyList<SandboxClaimObjectDto> SandboxClaims      { get; init; }
+
+    /// <summary>Concise, expandable-card metadata for the cluster root resource.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")]            public TopologyResourceDetailsDto? Details           { get; init; }
+}
+
+/// <summary>
+/// Optional, bounded metadata shared by expandable cluster-topology cards. Values are identifiers
+/// and concise summaries only; Kubernetes objects, credentials, addresses, and logs are never
+/// included.
+/// </summary>
+public sealed record TopologyResourceDetailsDto
+{
+    [JsonPropertyName("resource_id")]       public required string ResourceId       { get; init; }
+    [JsonPropertyName("resource_type")]     public required string ResourceType     { get; init; }
+    [JsonPropertyName("status")]            public required string Status           { get; init; }
+    [JsonPropertyName("summary")]           public required string Summary          { get; init; }
+    [JsonPropertyName("attention_required")] public required bool AttentionRequired { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reason")]            public string? Reason                   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("created_utc")]       public DateTimeOffset? CreatedUtc        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("last_transition_utc")] public DateTimeOffset? LastTransitionUtc { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("ownership")]         public TopologyResourceOwnershipDto? Ownership { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("capacity")]          public TopologyResourceCapacityDto? Capacity   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("runtime")]           public TopologyResourceRuntimeDto? Runtime     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("deep_links")]        public TopologyResourceDeepLinksDto? DeepLinks { get; init; }
+}
+
+public sealed record TopologyResourceOwnershipDto
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_id")]       public string? RunId       { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("project_id")]   public string? ProjectId   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_status")]   public string? RunStatus   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("agent_name")]   public string? AgentName   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("claim_name")]   public string? ClaimName   { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_started_utc")] public DateTimeOffset? RunStartedUtc { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_ended_utc")] public DateTimeOffset? RunEndedUtc { get; init; }
+}
+
+public sealed record TopologyResourceCapacityDto
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("desired")]  public int? Desired  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("ready")]    public int? Ready    { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("available")] public int? Available { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("claimed")]  public int? Claimed  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("used")]     public double? Used  { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("limit")]    public double? Limit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("unit")]     public string? Unit  { get; init; }
+}
+
+public sealed record TopologyResourceRuntimeDto
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("pod_name")]      public string? PodName      { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("node_name")]     public string? NodeName     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("image")]         public string? Image        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("runtime_class")] public string? RuntimeClass { get; init; }
+}
+
+/// <summary>Identifiers the web client can use to construct existing internal routes.</summary>
+public sealed record TopologyResourceDeepLinksDto
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("project_id")]    public string? ProjectId    { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_id")]        public string? RunId        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("claim_name")]    public string? ClaimName    { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("warm_pool_name")] public string? WarmPoolName { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("pod_name")]      public string? PodName      { get; init; }
 }
 
 /// <summary>Status snapshot for one SandboxWarmPool.</summary>
@@ -137,6 +232,8 @@ public sealed record WarmPoolStatusDto
     [JsonPropertyName("instances")]       public required IReadOnlyList<WarmPoolInstanceDto> Instances { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("age_seconds")]     public double?         AgeSeconds      { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")]         public TopologyResourceDetailsDto? Details { get; init; }
 }
 
 public sealed record WarmPoolInstanceDto
@@ -152,6 +249,8 @@ public sealed record WarmPoolInstanceDto
     [JsonPropertyName("project_id")]   public string? ProjectId         { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("age_seconds")]  public double? AgeSeconds        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")]      public TopologyResourceDetailsDto? Details { get; init; }
 }
 
 /// <summary>Status snapshot for one SandboxClaim object.</summary>
@@ -169,6 +268,8 @@ public sealed record SandboxClaimObjectDto
     [JsonPropertyName("warm_pool")]        public string?         WarmPool       { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("age_seconds")]      public double?         AgeSeconds     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")]          public TopologyResourceDetailsDto? Details { get; init; }
 }
 
 /// <summary>A single agent-host pod / SandboxClaim in the cluster inventory.</summary>
@@ -183,6 +284,8 @@ public sealed record AgentPodInfoDto
     [JsonPropertyName("status")]     public required string  Status     { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("age_seconds")] public double?         AgeSeconds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("details")]     public TopologyResourceDetailsDto? Details { get; init; }
 }
 
 /// <summary>A subtask parked in PendingCapacity awaiting an agent-host pod slot.</summary>

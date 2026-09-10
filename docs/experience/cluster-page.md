@@ -123,6 +123,16 @@ The **Resource topology** graph now expands each warm pool to the individual war
 
 This is the quickest way to answer “which warm spares are still idle?” and “which run is holding this exact warm-pool pod?”
 
+The diagnostics API also provides optional, resource-specific `details` for the cluster,
+warm pools, warm instances, sandbox claims, and AgentHost pods. A topology card can use
+the stable resource identity, concise status/reason, ownership, timing, capacity,
+runtime, and deep-link identifiers when it is expanded. The contract marks resources
+that need attention so the UI can auto-expand unhealthy, pending, orphaned, warming, or
+usefully claimed resources without recomputing health rules in the browser.
+
+The expanded metadata is intentionally bounded. It does not expose credentials, secret
+values, internal IP addresses, raw Kubernetes objects, condition messages, or logs.
+
 ## Sandbox claims table
 
 Lists all SandboxClaim CRD objects in the namespace:

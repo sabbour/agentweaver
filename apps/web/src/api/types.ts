@@ -1315,6 +1315,7 @@ export interface AgentPodInfoDto {
   pod_name?: string | null;
   status: string; // 'ready' | 'pending'
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface PendingCapacityRunDto {
@@ -1334,6 +1335,7 @@ export interface WarmPoolStatusDto {
   status: string; // 'healthy' | 'warning' | 'critical'
   instances?: WarmPoolInstanceDto[];
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface WarmPoolInstanceDto {
@@ -1344,6 +1346,7 @@ export interface WarmPoolInstanceDto {
   run_id?: string | null;
   project_id?: string | null;
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface SandboxClaimObjectDto {
@@ -1354,6 +1357,57 @@ export interface SandboxClaimObjectDto {
   bound_sandbox?: string | null;
   warm_pool?: string | null;
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface TopologyResourceDetailsDto {
+  resource_id: string;
+  resource_type: 'cluster' | 'warm_pool' | 'warm_instance' | 'sandbox_claim' | 'agent_host_pod';
+  status: string;
+  summary: string;
+  attention_required: boolean;
+  reason?: string | null;
+  created_utc?: string | null;
+  last_transition_utc?: string | null;
+  ownership?: TopologyResourceOwnershipDto | null;
+  capacity?: TopologyResourceCapacityDto | null;
+  runtime?: TopologyResourceRuntimeDto | null;
+  deep_links?: TopologyResourceDeepLinksDto | null;
+}
+
+export interface TopologyResourceOwnershipDto {
+  run_id?: string | null;
+  project_id?: string | null;
+  run_status?: string | null;
+  agent_name?: string | null;
+  claim_name?: string | null;
+  run_started_utc?: string | null;
+  run_ended_utc?: string | null;
+}
+
+export interface TopologyResourceCapacityDto {
+  desired?: number | null;
+  ready?: number | null;
+  available?: number | null;
+  claimed?: number | null;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+}
+
+export interface TopologyResourceRuntimeDto {
+  pod_name?: string | null;
+  node_name?: string | null;
+  image?: string | null;
+  runtime_class?: string | null;
+}
+
+export interface TopologyResourceDeepLinksDto {
+  project_id?: string | null;
+  run_id?: string | null;
+  claim_name?: string | null;
+  warm_pool_name?: string | null;
+  pod_name?: string | null;
 }
 
 export interface ClusterDiagnosticsDto {
@@ -1365,6 +1419,7 @@ export interface ClusterDiagnosticsDto {
   pending_capacity_runs: PendingCapacityRunDto[];
   warm_pools?: WarmPoolStatusDto[];
   sandbox_claims?: SandboxClaimObjectDto[];
+  details?: TopologyResourceDetailsDto | null;
 }
 
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.
