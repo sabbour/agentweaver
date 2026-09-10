@@ -14,6 +14,8 @@ public interface IRunStore
     Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default);
     Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default);
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
+    Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
+        Task.CompletedTask;
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default);

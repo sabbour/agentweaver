@@ -480,11 +480,13 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     var inboxCount = await memoryDb.DecisionInbox.CountAsync(e => e.ProjectId == id && e.Status == "pending", ct);
     var memoryCount = await memoryDb.AgentMemory.CountAsync(m => m.ProjectId == id, ct);
 
+    MemoryLedgerExporter.ExportResult export;
     try
     {
         // Explicit sync action (spec #25): must report success OR an actionable error — never a
         // false success. ExportAsync throws on failure so it is surfaced here rather than swallowed.
-        await MemoryLedgerExporter.ExportAsync(id, project.WorkingDirectory, memoryDb, ct);
+        export = await MemoryLedgerExporter.ExportAsync(id, project.WorkingDirectory, memoryDb, ct);
+        await MemoryLedgerExporter.CommitExportAsync(project.WorkingDirectory, project.DefaultBranch, ct);
     }
     catch (OperationCanceledException)
     {
@@ -498,7 +500,14 @@ app.MapPost("/api/projects/{id}/memory/export", async (
             detail: $"The team ledger could not be written to the project workspace: {ex.Message}",
             statusCode: StatusCodes.Status500InternalServerError);
     }
-    return Results.Ok(new { exported = true, decisions = decisionCount, inbox = inboxCount, memories = memoryCount });
+    return Results.Ok(new
+    {
+        exported = true,
+        decisions = decisionCount,
+        inbox = inboxCount,
+        memories = memoryCount,
+        files = export.Files,
+    });
 });
 
 // POST /api/projects/{id}/memory/import

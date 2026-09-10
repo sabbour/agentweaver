@@ -869,6 +869,7 @@ static bool ShouldUsePersistedAssemblyDiff(Run run) =>
         or RunStatus.Merged
         or RunStatus.MergeFailed
         or RunStatus.Declined
+        or RunStatus.Failed
         or RunStatus.Completed;
 
 /// <summary>Returns the most human-readable identity for the caller: display name first,

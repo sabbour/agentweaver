@@ -234,7 +234,7 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
 
         var result = await service.ListWorkspaceAsync(projectId, Owner, "no-such-branch", CancellationToken.None);
 
-        result.Outcome.Should().Be(WorkspaceOutcome.NotFound);
+        result.Outcome.Should().Be(WorkspaceOutcome.MissingRef);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
 
         var result = await service.GetFileContentAsync(projectId, Owner, "does/not/exist.txt", @ref: null, CancellationToken.None);
 
-        result.Outcome.Should().Be(WorkspaceOutcome.NotFound);
+        result.Outcome.Should().Be(WorkspaceOutcome.MissingFile);
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
 
         var result = await service.GetFileContentAsync(projectId, Owner, "readme.md", "no-such-branch", CancellationToken.None);
 
-        result.Outcome.Should().Be(WorkspaceOutcome.NotFound);
+        result.Outcome.Should().Be(WorkspaceOutcome.MissingRef);
     }
 
     [Fact]

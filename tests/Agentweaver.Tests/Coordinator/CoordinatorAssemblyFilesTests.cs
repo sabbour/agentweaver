@@ -105,6 +105,36 @@ public sealed class CoordinatorAssemblyFilesTests : IDisposable
         files.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AssemblyFiles_FailedRun_UsesPersistedAggregateDiff()
+    {
+        var repoPath = CreateTempGitRepo();
+        var runId = RunId.New();
+        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(runId.ToString());
+
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "feature.txt", "feature contents\n", "child a");
+        var manager = _factory.Services.GetRequiredService<WorktreeManager>();
+        var build = manager.BuildIntegrationBranch(repoPath, "main", integrationBranch, ["agentweaver/child-a"]);
+        build.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        FastForwardBranch(repoPath, "main", integrationBranch);
+
+        await InsertCoordinatorRunAsync(
+            runId,
+            repoPath,
+            "main",
+            RunStatus.Failed,
+            build.TreeHash!,
+            build.Diff!,
+            "assembly_error: late gate failure");
+
+        var files = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/assembly/files");
+        files.Should().NotBeNull();
+        files!.Select(f => f.GetProperty("path").GetString()).Should().Contain("feature.txt");
+
+        var fileDiff = await _owner.GetAsync($"/api/runs/{runId}/assembly/files/feature.txt");
+        fileDiff.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     private async Task InsertCoordinatorRunAsync(
         RunId runId,
         string repoPath,

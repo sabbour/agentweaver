@@ -1034,7 +1034,9 @@ Export project memory to `.squad/` and `.agentweaver/context/` files for Squad C
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 
-**Returns**: `"exported"`.
+**Returns**: An export report with `exported`, item counts, and `files`, the repository-relative
+paths written by the operation. The report always includes the generated
+`.agentweaver/context/boundaries.md` and `.agentweaver/context/patterns.md` ledgers.
 
 ---
 

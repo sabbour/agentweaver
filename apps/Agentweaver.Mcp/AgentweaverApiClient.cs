@@ -81,6 +81,17 @@ public sealed class McpApiException : McpException
                 normalizedPath);
         }
 
+        if (statusCode == 404 && errorCode is "workspace_file_not_found" or "workspace_ref_not_found")
+        {
+            return new McpErrorPayload(
+                statusCode,
+                normalizedMessage,
+                explicitHint ?? DefaultHintForPath(normalizedPath),
+                normalizedMessage,
+                normalizedPath,
+                errorCode);
+        }
+
         if (statusCode == 404 && TryBuildNotFoundPayload(normalizedPath, normalizedMessage, out var notFound))
             return notFound;
 
@@ -581,6 +592,7 @@ public sealed class AgentweaverApiClient
         {
             var body = await response.Content.ReadAsStringAsync(ct);
             string? error = null;
+            string? errorCode = null;
             string? message = null;
             string? hint = null;
             try
@@ -588,6 +600,8 @@ public sealed class AgentweaverApiClient
                 var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.TryGetProperty("error", out var err))
                     error = err.GetString();
+                if (doc.RootElement.TryGetProperty("error_code", out var code))
+                    errorCode = code.GetString();
                 if (doc.RootElement.TryGetProperty("message", out var msg))
                     message = msg.GetString();
                 if (doc.RootElement.TryGetProperty("detail", out var detail) && string.IsNullOrWhiteSpace(message))
@@ -601,7 +615,7 @@ public sealed class AgentweaverApiClient
                 (int)response.StatusCode,
                 message ?? error ?? body,
                 path,
-                error,
+                errorCode ?? error,
                 hint);
         }
     }

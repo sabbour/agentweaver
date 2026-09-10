@@ -75,6 +75,18 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, $"update result to {statusStr}");
     }
 
+    public async Task UpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == runId.ToString())
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.TreeHash, treeHash)
+                .SetProperty(r => r.Diff, diff), ct);
+        WarnIfNoRows(rows, runId, "persist assembly artifacts");
+    }
+
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount,
         CancellationToken ct = default, DateTimeOffset? now = null)

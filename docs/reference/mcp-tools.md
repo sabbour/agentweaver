@@ -105,7 +105,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `decision_inbox_submit` | Submit a decision or learning to the agent inbox. |
 | `decision_list` | List team decisions for a project. |
 | `decision_update` | Update a decision's status, content, or rationale. |
-| `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files. |
+| `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files and report the paths written. |
 | `memory_get` | Get a single memory entry. |
 | `memory_import` | Import .squad/decisions/inbox/*.md files into the project memory DB. |
 | `memory_list` | List memory entries for a specific agent. |

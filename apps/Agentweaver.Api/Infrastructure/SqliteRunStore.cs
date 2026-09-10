@@ -130,6 +130,24 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, $"update result to {status.ToApiString()}");
     }
 
+    public async Task UpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET tree_hash = $treeHash, diff = $diff
+             WHERE run_id = $runId;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$treeHash", treeHash);
+                cmd.Parameters.AddWithValue("$diff", diff);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "persist assembly artifacts");
+    }
+
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
         DateTimeOffset? now = null)

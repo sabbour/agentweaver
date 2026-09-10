@@ -19,6 +19,8 @@ public enum WorkspaceOutcome
 {
     Ok,
     NotFound,
+    MissingRef,
+    MissingFile,
     InvalidPath,
 }
 
@@ -142,7 +144,7 @@ public sealed class ProjectWorkspaceService
 
         var resolved = await ResolveRefAsync(project, projectId, @ref, ct).ConfigureAwait(false);
         if (resolved is null)
-            return new WorkspaceListResult(WorkspaceOutcome.NotFound, null);
+            return new WorkspaceListResult(WorkspaceOutcome.MissingRef, null);
 
         var nodes = new List<WorkspaceNode>();
 
@@ -181,7 +183,7 @@ public sealed class ProjectWorkspaceService
 
         var resolved = await ResolveRefAsync(project, projectId, @ref, ct).ConfigureAwait(false);
         if (resolved is null)
-            return new WorkspaceContentResult(WorkspaceOutcome.NotFound, null);
+            return new WorkspaceContentResult(WorkspaceOutcome.MissingRef, null);
 
         if (resolved.WorktreeDirectory is { } worktreeRoot)
         {
@@ -195,7 +197,7 @@ public sealed class ProjectWorkspaceService
                 return new WorkspaceContentResult(WorkspaceOutcome.InvalidPath, null);
 
             if (!File.Exists(fullPath))
-                return new WorkspaceContentResult(WorkspaceOutcome.NotFound, null);
+                return new WorkspaceContentResult(WorkspaceOutcome.MissingFile, null);
 
             var content = await ReadWorktreeFileAsync(fullPath, normalizedPath, ct).ConfigureAwait(false);
             return new WorkspaceContentResult(WorkspaceOutcome.Ok, content);
@@ -203,7 +205,7 @@ public sealed class ProjectWorkspaceService
 
         var blobContent = TryReadBranchBlob(resolved.RepositoryPath, resolved.Branch, normalizedPath);
         return blobContent is null
-            ? new WorkspaceContentResult(WorkspaceOutcome.NotFound, null)
+            ? new WorkspaceContentResult(WorkspaceOutcome.MissingFile, null)
             : new WorkspaceContentResult(WorkspaceOutcome.Ok, blobContent);
     }
 

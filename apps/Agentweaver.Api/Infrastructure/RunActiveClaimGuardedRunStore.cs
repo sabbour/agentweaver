@@ -56,6 +56,13 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.UpdateResultAsync(runId, status, result, endedAt, ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct).ConfigureAwait(false);
+    }
+
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
     {
