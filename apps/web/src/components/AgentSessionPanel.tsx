@@ -37,7 +37,11 @@ import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineS
 import { formatModelLabel } from '../utils/agentIdentity';
 import { isTerminalRunStatus } from '../utils/runStatus';
 import { AgentAvatar } from './AgentAvatar';
-import { AiExecutionProviderStatus, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import {
+  AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
 import { aiExecutionProviderLabel } from './aiExecutionContext';
 import { AiCredits } from './AiCredits';
 import { AutomationToggle } from './AutomationToggle';
@@ -2585,13 +2589,25 @@ export function AgentSessionPanel({
                       data-testid="composer-credits"
                     />
                   ) : null}
-                  contentBelow={(
-                    <AiExecutionProviderStatus context={providerContext.context}>
-                      <span aria-hidden="true" />
-                    </AiExecutionProviderStatus>
-                  )}
+                  contentBelow={
+                    providerContext.context || providerContext.loading || providerContext.error
+                      ? (
+                        <AiExecutionProviderStatus
+                          context={providerContext.context}
+                          loading={providerContext.loading}
+                          error={providerContext.error}
+                        />
+                      )
+                      : null
+                  }
                 />
                 <AiProviderChangeAnnouncement message={providerContext.announcement} />
+                <AiExecutionProviderReadiness
+                  context={providerContext.context}
+                  error={providerContext.error}
+                  projectId={projectId}
+                  onRefresh={() => void providerContext.refresh()}
+                />
               </div>
               {automation && !isNonCoordinatorAgentScope && (
                 <div className={styles.composerUtilityRow} data-testid="composer-automation-toggles">

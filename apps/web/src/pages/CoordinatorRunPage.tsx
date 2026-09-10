@@ -35,10 +35,11 @@ import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPan
 import { AiCredits } from '../components/AiCredits';
 import {
   AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
   AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from '../components/AiExecutionProviderHint';
-import { aiExecutionContextFromEvents } from '../components/aiExecutionContext';
+import { aiExecutionContextFromEvents, aiExecutionProviderLabel, providerIdentity } from '../components/aiExecutionContext';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { SlidePanel } from '../components/SlidePanel';
@@ -1280,7 +1281,11 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    flexShrink: 0,
+    flex: '1 1 420px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    minWidth: 0,
+    maxWidth: '100%',
   },
   metaRail: {
     display: 'flex',
@@ -2371,6 +2376,11 @@ export function CoordinatorRunPage() {
         : context;
     },
     [events, isChildRun, runLevelStatus],
+  );
+  const retryProviderMatchesRun = Boolean(
+    activeProviderContext
+    && providerContext.context
+    && providerIdentity(activeProviderContext) === providerIdentity(providerContext.context),
   );
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
@@ -4638,7 +4648,7 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
+      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || providerContext.error || providerContext.context?.effective_model_provider?.state === 'unavailable' || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
           {retryStatus && (
             <MessageBar intent="info" data-testid="coordinator-retry-status">
@@ -4696,13 +4706,29 @@ export function CoordinatorRunPage() {
               <MessageBarBody>{automationError}</MessageBarBody>
             </MessageBar>
           )}
+          <AiExecutionProviderReadiness
+            context={providerContext.context}
+            error={providerContext.error}
+            projectId={projectId}
+            onRefresh={() => void providerContext.refresh()}
+          />
           {terminalDiagnostic && (
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
-                Failure in {terminalDiagnostic.component}: {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
-                {' '}Code: {terminalDiagnostic.code}.
-                {terminalDiagnostic.retryable === true ? ' This failure may be retried.' : ''}
+                Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {terminalDiagnostic.retryable === true
+                  ? ' Retry the run; open the trace if the failure repeats.'
+                  : ' Open the trace to investigate the recorded failure.'}
               </MessageBarBody>
+              <MessageBarActions>
+                <Button
+                  appearance="transparent"
+                  size="small"
+                  onClick={() => navigate(`/projects/${projectId}/observability/traces?run=${runId}`)}
+                >
+                  View trace
+                </Button>
+              </MessageBarActions>
             </MessageBar>
           )}
         </div>
@@ -4734,7 +4760,7 @@ export function CoordinatorRunPage() {
                 <span className={styles.statusChip}>{taskCountsLabel}</span>
                 <span className={styles.statusChip}>{elapsedLabel} elapsed</span>
               </div>
-              <div className={styles.compactChromeActions}>
+              <div className={styles.compactChromeActions} data-testid="run-header-actions">
                 {previewAction && (
                   <Button
                     appearance="secondary"
@@ -4774,7 +4800,7 @@ export function CoordinatorRunPage() {
                     <span aria-hidden="true" />
                   </AiExecutionProviderStatus>
                 )}
-                <AiExecutionProviderHint context={providerContext.context}>
+                {retryProviderMatchesRun ? (
                   <Button
                     appearance={isRetryable ? 'secondary' : 'subtle'}
                     size="small"
@@ -4782,10 +4808,27 @@ export function CoordinatorRunPage() {
                     disabled={!isRetryable || retrying || providerContext.loading || !providerContext.available}
                     onClick={() => void handleRetry()}
                     data-testid="coordinator-retry-button"
-                    aria-label={retryAriaLabel}
+                    aria-label={`${retryAriaLabel}. ${aiExecutionProviderLabel(providerContext.context)}`}
                     title={retryHint}
                   />
-                </AiExecutionProviderHint>
+                ) : (
+                  <AiExecutionProviderHint
+                    context={providerContext.context}
+                    loading={providerContext.loading}
+                    error={providerContext.error}
+                  >
+                    <Button
+                      appearance={isRetryable ? 'secondary' : 'subtle'}
+                      size="small"
+                      icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
+                      disabled={!isRetryable || retrying || providerContext.loading || !providerContext.available}
+                      onClick={() => void handleRetry()}
+                      data-testid="coordinator-retry-button"
+                      aria-label={retryAriaLabel}
+                      title={retryHint}
+                    />
+                  </AiExecutionProviderHint>
+                )}
                 <AiProviderChangeAnnouncement message={providerContext.announcement} />
                 <Button
                   appearance={viewState.canStop ? 'secondary' : 'subtle'}

@@ -242,7 +242,19 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       cause_chain: [],
     });
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
-    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+    const failedRunEvents = [
+      {
+        sequence: 6,
+        type: 'run.model_provider_resolved',
+        payload: {
+          state: 'resolved',
+          providerKind: 'platform_github_copilot',
+          resolutionScope: 'project',
+          providerScope: 'platform',
+          modelId: 'gpt-5',
+          providerKey: 'provider-fingerprint',
+        },
+      },
       {
         sequence: 7,
         type: 'run.failed',
@@ -252,7 +264,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
           retryable: true,
         },
       },
-    ]);
+    ];
+    mockRunStreamState.current.events = failedRunEvents;
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(failedRunEvents);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -261,7 +275,13 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
     expect((await screen.findByTestId('terminal-failure-diagnostic')).textContent).toContain(
-      "Failure in agent_host: Run failed with code 'agent_host_turn_incomplete'. Retry is available.",
+      "Failure in agent_host. Run failed with code 'agent_host_turn_incomplete'. Retry is available.",
+    );
+    expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
+    expect(screen.getByTestId('run-header').textContent).not.toContain('Expected provider: GitHub Copilot');
+    expect(getComputedStyle(screen.getByTestId('run-header-actions')).flexWrap).toBe('wrap');
+    expect(screen.getByTestId('coordinator-retry-button').getAttribute('aria-label')).toContain(
+      'Expected provider: GitHub Copilot. Model: gpt-5.',
     );
     expect(document.body.textContent).not.toContain('abc%2Bdef%3D');
     expect(document.body.textContent).not.toContain(secret);

@@ -15,6 +15,9 @@ export const useComposerStyles = makeStyles({
       border: `1.5px solid ${tokens.colorNeutralForeground3}`,
     },
   },
+  rootWithFooter: {
+    borderRadius: tokens.borderRadiusLarge,
+  },
   /** slot: banner — top banner (warnings, suggestions, etc.) */
   banner: {
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -91,7 +94,8 @@ export const useComposerStyles = makeStyles({
   /** slot: contentBelow — below composer (suggestions, etc.) */
   contentBelow: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    minWidth: 0,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   /**
    * readOnly state — replaces the full composer with a subdued notice.

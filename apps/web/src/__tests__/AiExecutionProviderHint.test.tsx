@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
 } from '../components/AiExecutionProviderHint';
 import { aiExecutionProviderLabel } from '../components/aiExecutionContext';
 import { AzureFluentProvider } from '../copilot-fluent-system';
@@ -92,6 +93,26 @@ describe('AI execution provider hints', () => {
     expect(document.body.textContent).not.toContain('AI provider information unavailable');
   });
 
+  it('does not describe missing or failed provider lookup data as an unavailable provider', () => {
+    const { rerender } = render(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderStatus context={null} error="request failed" />
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Could not check AI provider readiness')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
+
+    rerender(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderStatus context={null} />
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Provider details not recorded')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
+  });
+
   it('routes an unavailable platform provider to Platform settings and allows refresh', async () => {
     const onRefresh = vi.fn();
     const unavailable: AiExecutionContext = {
@@ -117,6 +138,7 @@ describe('AI execution provider hints', () => {
     );
 
     expect(screen.getByText('A Platform Administrator must configure a model provider before you can continue.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
     expect(screen.getByRole('link', { name: 'Open Platform settings' }).getAttribute('href')).toBe('/platform-settings');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh provider' }));
     expect(onRefresh).toHaveBeenCalledOnce();

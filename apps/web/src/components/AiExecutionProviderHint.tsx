@@ -1,4 +1,12 @@
-import { Button, MessageBar, MessageBarBody, Text, makeStyles, tokens } from '@fluentui/react-components';
+import {
+  Button,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  Text,
+  makeStyles,
+  tokens,
+} from '@fluentui/react-components';
 import { cloneElement, useId } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { aiExecutionProviderLabel, aiExecutionProviderScope } from './aiExecutionContext';
@@ -8,24 +16,32 @@ const useStyles = makeStyles({
   root: {
     display: 'inline-flex',
     flexDirection: 'column',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+    maxWidth: '100%',
   },
   label: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
     lineHeight: tokens.lineHeightBase100,
+    maxWidth: '100%',
+    overflowWrap: 'anywhere',
+    textAlign: 'left',
+    whiteSpace: 'normal',
   },
 });
 
 export function AiExecutionProviderHint({
   context,
   loading = false,
+  error,
   required = false,
   children,
 }: {
   context: AiExecutionContext | null;
   loading?: boolean;
+  error?: string | null;
   required?: boolean;
   children: ReactElement<{ 'aria-describedby'?: string; title?: string }>;
 }) {
@@ -34,7 +50,11 @@ export function AiExecutionProviderHint({
     ? 'Enter a goal to continue'
     : loading
       ? 'Checking AI provider readiness'
-      : aiExecutionProviderLabel(context);
+      : error
+        ? 'Could not check AI provider readiness'
+        : context
+          ? aiExecutionProviderLabel(context)
+          : 'Provider details not recorded';
   const scope = aiExecutionProviderScope(context);
   const descriptionId = useId();
   const describedBy = [children.props['aria-describedby'], descriptionId]
@@ -54,16 +74,26 @@ export function AiExecutionProviderHint({
 
 export function AiExecutionProviderStatus({
   context,
+  loading = false,
+  error,
   children,
 }: {
   context: AiExecutionContext | null;
-  children: ReactNode;
+  loading?: boolean;
+  error?: string | null;
+  children?: ReactNode;
 }) {
   const styles = useStyles();
-  const label = aiExecutionProviderLabel(context);
-  const scope = aiExecutionProviderScope(context);
+  const label = loading
+    ? 'Checking AI provider readiness'
+    : error
+      ? 'Could not check AI provider readiness'
+      : context
+        ? aiExecutionProviderLabel(context)
+        : 'Provider details not recorded';
+  const scope = context ? aiExecutionProviderScope(context) : null;
   return (
-    <span className={styles.root} title={label}>
+    <span className={styles.root} title={label} role="status">
       {children}
       <Text className={styles.label}>{label}</Text>
       {scope && <Text className={styles.label}>Scope: {scope}.</Text>}
@@ -132,7 +162,9 @@ export function AiExecutionProviderReadiness({
       <MessageBarBody>
         {unavailable ? nextStep.message : error}
         {' '}
-        {context && <span>{aiExecutionProviderLabel(context)} </span>}
+        {!unavailable && context && <span>{aiExecutionProviderLabel(context)} </span>}
+      </MessageBarBody>
+      <MessageBarActions>
         {nextStep.href && nextStep.action && (
           <Button appearance="secondary" size="small" as="a" href={nextStep.href}>
             {nextStep.action}
@@ -141,7 +173,7 @@ export function AiExecutionProviderReadiness({
         <Button appearance="secondary" size="small" onClick={onRefresh}>
           Refresh provider
         </Button>
-      </MessageBarBody>
+      </MessageBarActions>
     </MessageBar>
   );
 }

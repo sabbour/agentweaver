@@ -20,6 +20,18 @@ The labels include the provider kind and the model name when it is available.
 Screen readers announce changes, including replacement by another provider of the same kind.
 The UI and API do not expose credentials, account names, or provider-binding identities.
 
+A pending readiness check says **Checking AI provider readiness**. A failed readiness
+request says that the check could not complete and offers **Refresh provider**; it does
+not claim that the provider itself is unavailable. Provider setup guidance appears only
+when the API returns `effective_model_provider.state: "unavailable"`. If a completed run
+has no recorded provider event, the UI says **Provider details not recorded** or omits the
+provider footer instead of inferring which provider ran.
+
+For failed runs, the header shows the provider recorded in the run once. The retry action
+keeps its newly prepared provider in its accessible label. A second visible **Expected
+provider** label appears only when it differs from the recorded run provider, so operators
+can review the change before retrying.
+
 Agentweaver records an immutable provider and capability snapshot when a run starts. Provider
 enablement, disablement, or configuration changes apply to future runs only; they do not switch
 or cancel an in-flight run during assembly, revision, recovery, or replay. The UI continues to
@@ -264,6 +276,8 @@ persisted. API and MCP clients can read the same projection through
 The project's **Observability → Traces** page shows the same diagnostic beside failed
 traces. Use **Show failed only** to focus investigation. Correlation IDs are links back
 to that trace's focused view; they are navigation handles, not raw telemetry payloads.
+The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
+available without repeating the provider or error code in separate status fragments.
 
 The projection contains only a bounded error code, safe message, component,
 timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
