@@ -121,8 +121,31 @@ public sealed class McpToolSchemaTests
         required.Should().NotContain("workflow_id");
         required.Should().NotContain("model_id");
         required.Should().NotContain("start_mode");
+        required.Should().NotContain("auto_approve_tools");
+        required.Should().NotContain("autopilot");
         required.Should().NotContain("timeout_seconds");
         required.Should().NotContain("poll_interval_seconds");
+    }
+
+    [Fact]
+    public void CoordinatorStart_InputSchema_ExposesOptionalApprovalPolicy()
+    {
+        var method = typeof(CoordinatorTools).GetMethod(
+            nameof(CoordinatorTools.CoordinatorStartAsync),
+            BindingFlags.Public | BindingFlags.Instance)!;
+        var instance = new CoordinatorTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+        var schema = McpServerTool.Create(method, instance, options: null).ProtocolTool.InputSchema;
+        var required = schema.TryGetProperty("required", out var values)
+            ? values.EnumerateArray().Select(value => value.GetString()!).ToHashSet()
+            : new HashSet<string>();
+
+        required.Should().Contain("project_id");
+        required.Should().Contain("goal");
+        required.Should().NotContain("workflow_id");
+        required.Should().NotContain("start_mode");
+        required.Should().NotContain("auto_approve_tools");
+        required.Should().NotContain("autopilot");
     }
 
     [Fact]

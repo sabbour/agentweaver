@@ -79,6 +79,7 @@ import type {
   ServerInfo,
   StartOrchestrationMode,
   StartOrchestrationResponse,
+  RunApprovalPolicy,
   SteerCoordinatorRequest,
   SteerCoordinatorResponse,
   CreateAssistantRunRequest,
@@ -1007,10 +1008,15 @@ export class AgentweaverApiClient {
     workflowOverrideId?: string | null,
     startMode?: StartOrchestrationMode,
     providerKey?: string,
+    approvalPolicy?: RunApprovalPolicy,
   ): Promise<StartOrchestrationResponse> {
     const body: Record<string, unknown> = { goal };
     if (workflowOverrideId) body.workflow_override_id = workflowOverrideId;
     if (startMode && startMode !== 'define_outcome') body.start_mode = startMode;
+    if (approvalPolicy) {
+      body.auto_approve_tools = approvalPolicy.auto_approve_tools;
+      body.autopilot = approvalPolicy.autopilot;
+    }
     return this.request<StartOrchestrationResponse>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/orchestrations`,

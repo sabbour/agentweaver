@@ -231,7 +231,7 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         [Description("Maximum number of Ready tasks the heartbeat claims per tick (1-20)")] int max_ready_per_heartbeat,
         [Description("Auto-answer child clarifying questions during unattended coordinator runs")] bool pickup_autopilot,
-        [Description("Auto-approve allow-with-approval tools during unattended runs (default true; never bypasses the destructive-action safety floor)")] bool pickup_auto_approve_tools,
+        [Description("Auto-approve repository-defined safe tools during unattended runs (default true; never bypasses preview, destructive, privileged, secret, or other policy gates)")] bool pickup_auto_approve_tools,
         CancellationToken ct)
     {
         try

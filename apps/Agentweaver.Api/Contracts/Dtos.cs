@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Text.Json;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Contracts;
 
@@ -1048,15 +1049,24 @@ public sealed record StartOrchestrationRequest
     /// <summary>Backward-compatible alias for pre-UI clients; new clients should send start_mode.</summary>
     [JsonPropertyName("mode")] public string? Mode { get; init; }
 
-    /// <summary>When true, the coordinator run and its children auto-grant allow-with-approval tool
-    /// requests at the HITL gate (policy denies still apply). Defaults to false. (Feature 008)</summary>
-    [JsonPropertyName("autoApproveTools")] public bool AutoApproveTools { get; init; }
+    /// <summary>When true, the coordinator run and its children auto-grant only repository-defined
+    /// safe tools at the HITL gate. Preview, destructive, privileged, secret-bearing, and network
+    /// tools outside that safe list remain gated unless a separate existing policy allows them.</summary>
+    [JsonPropertyName("auto_approve_tools")] public bool? AutoApproveTools { get; init; }
+
+    /// <summary>Backward-compatible alias for clients that used the original camelCase field.</summary>
+    [JsonPropertyName("autoApproveTools")] public bool? LegacyAutoApproveTools { get; init; }
 
     /// <summary>When true, the coordinator auto-answers clarifying questions (its own and bubbled
     /// child questions) using the coordinator model. It also auto-confirms the Phase-1 outcome spec
     /// (defineOutcome mode) unattended on behalf of the submitting user. Permissions are NOT
     /// auto-granted. Cascades to children. Defaults to false. (Feature 008)</summary>
-    [JsonPropertyName("autopilot")] public bool Autopilot { get; init; }
+    [JsonPropertyName("autopilot")] public bool? Autopilot { get; init; }
+
+    [JsonIgnore]
+    public RunApprovalPolicy ApprovalPolicy => RunApprovalPolicy.ForDirectRun(
+        AutoApproveTools ?? LegacyAutoApproveTools,
+        Autopilot);
 
     /// <summary>Optional workflow id override. When set, the coordinator uses this workflow instead of auto-selecting.
     /// Must be a manual-trigger-eligible workflow id. Null means auto-select (default).</summary>

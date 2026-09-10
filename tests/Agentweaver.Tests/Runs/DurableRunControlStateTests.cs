@@ -43,7 +43,11 @@ public sealed class DurableRunControlStateTests : IDisposable
         replicaA.Get("run-1").Should().Be(new RunOptions(AutoApproveTools: true, Autopilot: true));
 
         replicaA.Clear("run-1");
-        replicaB.Get("run-1").Should().Be(new RunOptions());
+        replicaB.Get("run-1").Should().Be(new RunOptions(AutoApproveTools: true),
+            "runtime cleanup falls back to the persisted launch policy");
+        replicaB.GetLaunchPolicy("run-1").Should().Be(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: false),
+            "runtime cleanup must not erase the immutable launch policy used by retries");
     }
 
     [Fact]

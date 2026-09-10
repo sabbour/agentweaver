@@ -584,6 +584,44 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         spec.ConfirmedBy.Should().BeNull("no one has confirmed a run that is parked at the gate");
     }
 
+    [Fact]
+    public async Task Start_DirectApprovalPolicy_PersistsAndEmitsAuditEvent()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Run directly with explicit approval policy",
+            startMode: "direct",
+            autopilot: true,
+            autoApproveTools: true);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue();
+        detail.GetProperty("autopilot").GetBoolean().Should().BeTrue();
+
+        var options = _factory.Services.GetRequiredService<IRunOptionsStore>();
+        options.GetLaunchPolicy(runId).Should().Be(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true));
+
+        var audit = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(runId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunApprovalPolicySelected);
+        JsonSerializer.Serialize(audit.Payload).Should().Contain("\"source\":\"direct\"");
+        JsonSerializer.Serialize(audit.Payload).Should().Contain("\"web_fetch\"");
+    }
+
+    [Fact]
+    public async Task Start_OmittedApprovalPolicy_DefaultsBothOptionsOff()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(projectId, "Use the safe defaults");
+
+        var policy = _factory.Services.GetRequiredService<IRunOptionsStore>().GetLaunchPolicy(runId);
+        policy.Should().Be(new RunApprovalPolicy());
+    }
+
     // =========================================================================
     // Confirm (RunNotActive at HTTP layer): an existing run with no live workflow -> 409.
     // =========================================================================
@@ -969,17 +1007,21 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     private async Task<string> StartOrchestrationAsync(
-        string projectId, string goal, string? startMode = null, bool autopilot = false)
+        string projectId,
+        string goal,
+        string? startMode = null,
+        bool autopilot = false,
+        bool? autoApproveTools = null)
     {
         await _factory.PrepareAiExecutionAsync(
             _owner, "orchestration", projectId);
-        object request = (startMode, autopilot) switch
-        {
-            (null, false) => new { goal },
-            (null, true) => new { goal, autopilot },
-            (_, false) => new { goal, start_mode = startMode },
-            (_, true) => new { goal, start_mode = startMode, autopilot },
-        };
+        var request = new Dictionary<string, object?> { ["goal"] = goal };
+        if (startMode is not null)
+            request["start_mode"] = startMode;
+        if (autopilot)
+            request["autopilot"] = true;
+        if (autoApproveTools.HasValue)
+            request["auto_approve_tools"] = autoApproveTools.Value;
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
         var responseBody = await resp.Content.ReadAsStringAsync();
         resp.StatusCode.Should().Be(

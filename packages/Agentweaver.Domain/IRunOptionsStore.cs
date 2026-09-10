@@ -1,6 +1,27 @@
 namespace Agentweaver.Domain;
 
 /// <summary>
+/// Immutable approval policy selected when a run is created. Both options default OFF.
+/// Auto-approval is limited to tools explicitly classified as safe by the repository.
+/// </summary>
+public sealed record RunApprovalPolicy(bool AutoApproveTools = false, bool Autopilot = false)
+{
+    public static RunApprovalPolicy ForDirectRun(bool? autoApproveTools, bool? autopilot) =>
+        new(autoApproveTools ?? false, autopilot ?? false);
+
+    public static RunApprovalPolicy ForBacklogPickup(bool autoApproveTools, bool autopilot) =>
+        new(autoApproveTools, autopilot);
+
+    public bool AllowsAutoApproval(string toolName) =>
+        AutoApproveTools && ToolApprovalPolicySemantics.IsRunAutoApprovalEligible(toolName);
+
+    public RunOptions ToRunOptions() => new(AutoApproveTools, Autopilot);
+
+    public static RunApprovalPolicy FromOptions(RunOptions options) =>
+        new(options.AutoApproveTools, options.Autopilot);
+}
+
+/// <summary>
 /// Per-run operator options that change how a run handles human-in-the-loop interactions.
 /// Both default OFF. They cascade from a coordinator run to its dispatched child runs.
 /// </summary>
@@ -20,7 +41,8 @@ public sealed record RunOptions(bool AutoApproveTools = false, bool Autopilot = 
 /// <summary>
 /// In-memory, per-run source of truth for <see cref="RunOptions"/>. The agent runtime reads it on
 /// the hot path (per tool call) with no database round-trip; launch and live-toggle endpoints write
-/// it. Entries are cleared on run completion alongside the approval/question gates.
+/// it. Runtime overrides are cleared on completion, then reads fall back to the persisted launch
+/// policy so run details and retries retain the auditable choice.
 /// </summary>
 public interface IRunOptionsStore
 {
@@ -30,12 +52,18 @@ public interface IRunOptionsStore
     /// <summary>Returns the current options for a run, or <see cref="RunOptions"/> defaults (both OFF) if unknown.</summary>
     RunOptions Get(string runId);
 
+    /// <summary>
+    /// Returns the immutable policy selected when the run was launched. This survives runtime
+    /// cleanup so retries can preserve the original, auditable choice.
+    /// </summary>
+    RunApprovalPolicy GetLaunchPolicy(string runId);
+
     /// <summary>Toggles the auto-approve-tools flag for a run, preserving the other flag.</summary>
     void SetAutoApproveTools(string runId, bool enabled);
 
     /// <summary>Toggles the Autopilot flag for a run, preserving the other flag.</summary>
     void SetAutopilot(string runId, bool enabled);
 
-    /// <summary>Removes a run's options (called on run completion).</summary>
+    /// <summary>Clears runtime overrides while retaining the immutable launch policy.</summary>
     void Clear(string runId);
 }

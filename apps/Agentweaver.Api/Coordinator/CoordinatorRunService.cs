@@ -134,8 +134,7 @@ public sealed class CoordinatorRunService
         string repositoryPath,
         string originatingBranch,
         string? modelId,
-        bool autoApproveTools,
-        bool autopilot,
+        RunApprovalPolicy approvalPolicy,
         CancellationToken ct,
         string? workflowOverrideId = null,
         string? retriedFrom = null,
@@ -185,18 +184,19 @@ public sealed class CoordinatorRunService
         // definition gate and still enter the same dispatch/review/merge pipeline.
         await ActivateAsync(
                 run,
-                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                approvalPolicy,
                 workflowOverrideId,
                 direct: startMode == CoordinatorStartMode.Direct,
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
-                providerSnapshotCaptured: capturedSnapshot is not null)
+                providerSnapshotCaptured: capturedSnapshot is not null,
+                approvalPolicySource: retriedFrom is null ? "direct" : "retry")
             .ConfigureAwait(false);
 
         // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
         // Direct mode has no confirmation gate, so only schedule for DefineOutcome — otherwise the loop would
         // spin a wasted 5-minute timeout and log a misleading "left for a human" warning.
-        if (autopilot && startMode == CoordinatorStartMode.DefineOutcome)
+        if (approvalPolicy.Autopilot && startMode == CoordinatorStartMode.DefineOutcome)
             ScheduleUnattendedConfirm(runId.ToString(), submittingUserDisplayName ?? submittingUser);
 
         return runId;
@@ -286,7 +286,7 @@ public sealed class CoordinatorRunService
     /// behalf of the accountable human. Returns the new run id.
     /// </summary>
     public async Task<RunId> StartRetriedPickupCoordinatorRunAsync(
-        Run source, bool autoApproveTools, bool autopilot, CancellationToken ct,
+        Run source, RunApprovalPolicy approvalPolicy, CancellationToken ct,
         string? submittingUserDisplayName = null)
     {
         CoordinatorRosterGuard.EnsureDispatchableTeam(source.RepositoryPath);
@@ -341,16 +341,17 @@ public sealed class CoordinatorRunService
 
         await ActivateAsync(
                 run,
-                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                approvalPolicy,
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
                 effectiveProviderBoundary: effectiveProviderBoundary,
-                providerSnapshotCaptured: capturedSnapshot is not null)
+                providerSnapshotCaptured: capturedSnapshot is not null,
+                approvalPolicySource: "retry")
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
         // mirroring the heartbeat pickup path.
-        if (autopilot)
+        if (approvalPolicy.Autopilot)
             ScheduleUnattendedConfirm(runId.ToString(), submittingUserDisplayName ?? source.SubmittingUser);
 
         return runId;
@@ -366,16 +367,16 @@ public sealed class CoordinatorRunService
     /// </summary>
     public async Task StartReservedCoordinatorRunAsync(
         Run reservedRun,
-        bool autoApproveTools,
-        bool autopilot,
+        RunApprovalPolicy approvalPolicy,
         string confirmedBy,
         CancellationToken ct,
         EffectiveModelProviderResult? effectiveProvider = null)
     {
         await ActivateAsync(
                 reservedRun,
-                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
-                effectiveProvider: effectiveProvider)
+                approvalPolicy,
+                effectiveProvider: effectiveProvider,
+                approvalPolicySource: "backlog_pickup")
             .ConfigureAwait(false);
 
         // Fire-and-forget bounded loop: confirm the spec once it arms — but ONLY when Autopilot is
@@ -383,7 +384,7 @@ public sealed class CoordinatorRunService
         // the spec manually via the UI (the run stays at awaiting_confirmation until they do).
         // Autopilot also auto-answers child clarifying questions; the destructive/irreversible tool
         // gates and the Phase-3 assembly human-review gate remain enforced regardless.
-        if (autopilot)
+        if (approvalPolicy.Autopilot)
             ScheduleUnattendedConfirm(reservedRun.Id.ToString(), confirmedBy);
     }
 
@@ -395,11 +396,12 @@ public sealed class CoordinatorRunService
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
     private async Task ActivateAsync(
-        Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
+        Run run, RunApprovalPolicy approvalPolicy, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null,
         EffectiveModelProviderResult? effectiveProvider = null,
         ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null,
-        bool providerSnapshotCaptured = false)
+        bool providerSnapshotCaptured = false,
+        string approvalPolicySource = "direct")
     {
         // Resolve/capture once before any capability preparation. In particular, a reserved pickup
         // may carry a provider accepted by its atomic reservation transaction; do not fence one
@@ -430,10 +432,17 @@ public sealed class CoordinatorRunService
                 : null).ConfigureAwait(false);
 
         var runId = run.Id.ToString();
-        _runOptions.Set(runId, options);
+        _runOptions.Set(runId, approvalPolicy.ToRunOptions());
 
         var entry = _streamStore.Create(runId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task, mode = direct ? "direct" : "defineOutcome" });
+        entry.RecordNext(EventTypes.RunApprovalPolicySelected, new
+        {
+            autoApproveTools = approvalPolicy.AutoApproveTools,
+            autopilot = approvalPolicy.Autopilot,
+            source = approvalPolicySource,
+            safeTools = approvalPolicy.AutoApproveTools ? new[] { "web_fetch" } : Array.Empty<string>(),
+        });
 
         // Durable provenance for the provider that actually serves this run's model turns.
         entry.RecordNext(

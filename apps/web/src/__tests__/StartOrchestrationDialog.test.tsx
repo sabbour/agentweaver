@@ -76,6 +76,7 @@ describe('StartOrchestrationDialog', () => {
         null,
         'direct',
         'signed-provider-key',
+        { auto_approve_tools: false, autopilot: false },
       ),
     );
     expect(onStarted).toHaveBeenCalledWith('run-direct');
@@ -188,6 +189,7 @@ describe('StartOrchestrationDialog', () => {
         'software-delivery',
         undefined,
         'signed-provider-key',
+        { auto_approve_tools: false, autopilot: false },
       ),
     );
     expect(onStarted).toHaveBeenCalledWith('run-defined');

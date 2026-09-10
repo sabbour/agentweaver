@@ -579,7 +579,7 @@ For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response
 
 Coordinator run detail also includes `coordinator_steerable` (boolean). The backend sets it for coordinator runs whose `RunStatus` is `in_progress` or `awaiting_review`, so the UI can keep **Message coordinator** and steering controls enabled while the collective assembly review gate is parked (`apps/Agentweaver.Api/Contracts/Dtos.cs:178`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:185`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:348`).
 
-The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the current per-run option state (launch value plus any live toggle). Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
+The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the effective per-run option state. Active runs include live toggles; after runtime cleanup, the values fall back to the persisted launch policy. Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
 
 ### POST /api/runs/{id}/archive
 
@@ -919,7 +919,7 @@ Errors: `400` invalid run id / missing `answer`; `404` run not found; `409` no p
 
 ### POST /api/runs/{id}/auto-approve
 
-Toggles the per-run **auto-approve-tools** option. When enabled, an allow-with-approval tool request (e.g. `web_fetch`) is auto-granted at the human-in-the-loop gate instead of stalling for an operator. Every auto-grant is logged on the timeline as a `tool.auto_approved` event. This NEVER overrides a policy deny: dangerous tools are rejected upstream by sandbox governance before the gate is reached. Set the flag at coordinator launch with `autoApproveTools` on `POST /api/projects/{id}/orchestrations`. It cascades from a coordinator run to its dispatched children. Defaults to OFF.
+Toggles the per-run **auto-approve-tools** option. When enabled, only tools in Agentweaver's repository-defined safe list (currently `web_fetch`) are auto-granted at the human-in-the-loop gate. Every auto-grant is logged as `tool.auto_approved`. Preview, destructive, privileged, secret-bearing, and other network approvals remain gated unless an existing scoped policy explicitly permits them. Set the launch policy with `auto_approve_tools` on `POST /api/projects/{id}/orchestrations`; the legacy `autoApproveTools` spelling is also accepted. It cascades to dispatched children and defaults OFF.
 
 Request:
 
@@ -1502,7 +1502,9 @@ Request:
 {
   "goal": "Make the onboarding flow resumable across sessions",
   "modelId": null,
-  "start_mode": "define_outcome"
+  "start_mode": "define_outcome",
+  "auto_approve_tools": false,
+  "autopilot": false
 }
 ```
 
@@ -1511,8 +1513,13 @@ Request:
 | `goal` | string | Yes | The user's prompt/outcome for the coordinator. |
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
 | `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
-| `autoApproveTools` | bool | No | Launch with auto-approve-tools ON for the coordinator and its children. Defaults to `false`. |
+| `auto_approve_tools` | bool | No | Auto-approve only repository-defined safe tools for the coordinator and its children. Currently this covers `web_fetch`; it does not bypass preview, destructive, privileged, secret, or other network approvals. Defaults to `false`. The legacy `autoApproveTools` alias remains accepted. |
 | `autopilot` | bool | No | Launch with Autopilot ON: auto-answers clarifying questions **and**, in `defineOutcome` mode, auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`. Does NOT auto-grant tool approvals. Cascades to children. Defaults to `false`. |
+
+The selected launch policy is persisted with the run and audited as
+`run.approval_policy_selected`. Retries reuse that immutable launch choice. Heartbeat-created
+runs still take their initial policy from `pickup_auto_approve_tools` and `pickup_autopilot`;
+changing those project defaults does not rewrite an existing run or its retry policy.
 
 Response `201 Created` (with `Location: /api/runs/{runId}`):
 

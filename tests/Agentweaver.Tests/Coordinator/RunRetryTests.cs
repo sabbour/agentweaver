@@ -105,6 +105,7 @@ public sealed class RunRetryTests : IDisposable
         // The original run was launched with auto-approve + autopilot enabled.
         var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
         runOptions.Set(source.Id.ToString(), new RunOptions(AutoApproveTools: true, Autopilot: true));
+        runOptions.Clear(source.Id.ToString());
         await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);

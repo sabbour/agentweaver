@@ -852,6 +852,13 @@ export type StartOrchestrationMode = 'define_outcome' | 'direct';
 export interface StartOrchestrationRequest {
   goal: string;
   start_mode?: StartOrchestrationMode;
+  auto_approve_tools?: boolean;
+  autopilot?: boolean;
+}
+
+export interface RunApprovalPolicy {
+  auto_approve_tools: boolean;
+  autopilot: boolean;
 }
 
 export interface StartOrchestrationResponse {

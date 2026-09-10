@@ -122,7 +122,9 @@ public sealed class RunTools(AgentweaverApiClient api)
                     hint: "Call coordinator_start for manual control, or remove the legacy fields and use run_task.");
             }
 
-            var runId = await StartCoordinatorRunAsync(project_id, task, model_source, workflow_id: null, start_mode: "direct", ct);
+            var runId = await StartCoordinatorRunAsync(
+                project_id, task, model_source, workflow_id: null, start_mode: "direct",
+                auto_approve_tools: null, autopilot: null, ct);
             return new RunSubmitResult(runId, "submitted", "direct");
         }
         catch (McpApiException) { throw; }
@@ -136,6 +138,8 @@ public sealed class RunTools(AgentweaverApiClient api)
         [Description("Workflow id override (optional)")] string? workflow_id = null,
         [Description("Model id override (optional)")] string? model_id = null,
         [Description("Coordinator start mode: 'direct' (default) or 'defineOutcome'")] string? start_mode = null,
+        [Description("Auto-approve only repository-defined safe tools for this run and its children (optional; default false)")] bool? auto_approve_tools = null,
+        [Description("Auto-answer coordinator and child clarifying questions for this run (optional; default false)")] bool? autopilot = null,
         [Description("Maximum seconds to wait before returning partial state (default: 600)")] int? timeout_seconds = null,
         [Description("Polling interval in seconds while waiting for completion (default: 2)")] int? poll_interval_seconds = null,
         CancellationToken ct = default)
@@ -146,7 +150,9 @@ public sealed class RunTools(AgentweaverApiClient api)
             var effectivePollInterval = Math.Clamp(poll_interval_seconds ?? 2, 1, 30);
             var effectiveStartMode = string.IsNullOrWhiteSpace(start_mode) ? "direct" : start_mode;
 
-            var runId = await StartCoordinatorRunAsync(project_id, task, model_id, workflow_id, effectiveStartMode, ct);
+            var runId = await StartCoordinatorRunAsync(
+                project_id, task, model_id, workflow_id, effectiveStartMode,
+                auto_approve_tools, autopilot, ct);
             var deadline = DateTimeOffset.UtcNow.AddSeconds(effectiveTimeout);
             JsonElement latestRun;
 
@@ -402,6 +408,8 @@ public sealed class RunTools(AgentweaverApiClient api)
         string? model_id,
         string? workflow_id,
         string start_mode,
+        bool? auto_approve_tools,
+        bool? autopilot,
         CancellationToken ct)
     {
         var body = new JsonObject
@@ -414,6 +422,10 @@ public sealed class RunTools(AgentweaverApiClient api)
             body["modelId"] = model_id;
         if (!string.IsNullOrWhiteSpace(workflow_id))
             body["workflow_override_id"] = workflow_id;
+        if (auto_approve_tools.HasValue)
+            body["auto_approve_tools"] = auto_approve_tools.Value;
+        if (autopilot.HasValue)
+            body["autopilot"] = autopilot.Value;
 
         var result = await api.PostAiAsync<StartCoordinatorRunResponse>(
             $"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations",

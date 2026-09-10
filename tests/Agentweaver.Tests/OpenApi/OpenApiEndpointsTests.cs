@@ -55,6 +55,17 @@ public sealed class OpenApiEndpointsTests : IDisposable
                 parameter.GetProperty("name").GetString() == "If-Model-Provider-Key"
                 && parameter.GetProperty("in").GetString() == "header"
                 && parameter.GetProperty("required").GetBoolean());
+        var startSchema = root.GetProperty("components").GetProperty("schemas")
+            .GetProperty("StartOrchestrationRequest");
+        var startProperties = startSchema.GetProperty("properties");
+        startProperties.TryGetProperty("auto_approve_tools", out _).Should().BeTrue();
+        startProperties.TryGetProperty("autopilot", out _).Should().BeTrue();
+        if (startSchema.TryGetProperty("required", out var startRequired))
+        {
+            var requiredNames = startRequired.EnumerateArray().Select(value => value.GetString()).ToArray();
+            requiredNames.Should().NotContain("auto_approve_tools");
+            requiredNames.Should().NotContain("autopilot");
+        }
 
         var executionContext = paths.GetProperty("/api/ai/execution-context").GetProperty("post");
         executionContext.GetProperty("operationId").GetString().Should().Be("ResolveAiExecutionContext");

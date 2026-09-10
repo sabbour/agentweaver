@@ -235,8 +235,9 @@ public sealed class CoordinatorPickupService
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
                     run,
-                    autoApproveTools: project.PickupAutoApproveTools,
-                    autopilot: project.PickupAutopilot,
+                    approvalPolicy: RunApprovalPolicy.ForBacklogPickup(
+                        project.PickupAutoApproveTools,
+                        project.PickupAutopilot),
                     confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
                     ct: CancellationToken.None,
                     effectiveProvider: effectiveProvider)

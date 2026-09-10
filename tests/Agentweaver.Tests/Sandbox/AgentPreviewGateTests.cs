@@ -11,7 +11,7 @@ namespace Agentweaver.Tests.Sandbox;
 /// <summary>
 /// Unit tests for <see cref="AgentPreviewGate"/> — the human-in-the-loop approval seam behind the
 /// agent-initiated <c>start_preview</c> tool. Verifies the auto-approve sources (global config,
-/// per-run option, scoped policy) grant unattended, that an operator grant resolves the gate, and
+/// scoped policy) grant unattended, that the safe-tool run option does not bypass preview, that an operator grant resolves the gate, and
 /// that deny / timeout produce distinct final outcomes.
 /// </summary>
 [Trait("Category", "ProcessEnvironment")]
@@ -68,14 +68,22 @@ public sealed class AgentPreviewGateTests
     }
 
     [Fact]
-    public async Task RequestApproval_PerRunAutoApproveTools_GrantsImmediately()
+    public async Task RequestApproval_PerRunSafeToolPolicy_DoesNotBypassPreview()
     {
-        var gate = CreateGate(autoApproveConfigured: false, out _, out var runOptions, out _);
+        var gate = CreateGate(
+            autoApproveConfigured: false,
+            out var approvalGate,
+            out var runOptions,
+            out var streams,
+            timeout: TimeSpan.FromSeconds(5));
         runOptions.SetAutoApproveTools(RunId, true);
 
-        var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+        var pending = gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+        var requestId = await WaitForRequestIdAsync(streams);
 
-        outcome.Outcome.Should().Be(PreviewApprovalOutcome.Approved);
+        approvalGate.Deny(RunId, requestId).Should().BeTrue();
+        (await pending).Outcome.Should().Be(PreviewApprovalOutcome.Denied,
+            "safe-tool auto-approval must not bypass the separate preview approval boundary");
     }
 
     [Fact]

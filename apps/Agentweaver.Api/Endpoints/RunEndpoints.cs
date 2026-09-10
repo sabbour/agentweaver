@@ -1538,12 +1538,12 @@ app.MapPost("/api/runs/{id}/retry", async (
         if (isCoordinatorRun && run.Origin == RunOrigin.BacklogPickup)
         {
             // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
-            var project = run.ProjectId is { } ppid ? await projectStore.GetAsync(ppid, ct) : null;
-            var autoApproveTools = project?.PickupAutoApproveTools ?? true;
-            var autopilot = project?.PickupAutopilot ?? true;
+            // Preserve the policy captured by the heartbeat-created source run rather than reading
+            // mutable project pickup defaults during retry.
+            var sourcePolicy = runOptions.GetLaunchPolicy(run.Id.ToString());
             newRunId = await coordinator
                 .StartRetriedPickupCoordinatorRunAsync(
-                    run, autoApproveTools, autopilot, ct,
+                    run, sourcePolicy, ct,
                     submittingUserDisplayName: retryCallerDisplayName)
                 .ConfigureAwait(false);
         }
@@ -1552,7 +1552,7 @@ app.MapPost("/api/runs/{id}/retry", async (
             // Interactive coordinator run: reuse the normal interactive start seam. Preserve the
             // source run's launch options (#332) — auto_approve_tools / autopilot must NOT silently
             // reset to false on retry, which would be an unexpected behavior change from the original.
-            var sourceOptions = runOptions.Get(run.Id.ToString());
+            var sourcePolicy = runOptions.GetLaunchPolicy(run.Id.ToString());
             var startMode = await coordinator.GetStartModeAsync(run.Id.ToString(), ct);
             newRunId = await coordinator.StartCoordinatorRunAsync(
                 run.ProjectId!.Value,
@@ -1561,8 +1561,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                 run.RepositoryPath,
                 run.OriginatingBranch,
                 run.ModelId,
-                autoApproveTools: sourceOptions.AutoApproveTools,
-                autopilot: sourceOptions.Autopilot,
+                approvalPolicy: sourcePolicy,
                 ct,
                 retriedFrom: run.Id.ToString(),
                 startMode: startMode,

@@ -44,7 +44,6 @@ public sealed record PreviewApprovalAttempt(
 /// <para>Auto-approve sources (any true ⇒ auto-grant, prod default is human-gated):</para>
 /// <list type="number">
 ///   <item><c>Sandbox:Preview:AutoApprove</c> config / env <c>SANDBOX_PREVIEW_AUTO_APPROVE</c> (default false).</item>
-///   <item>Per-run <see cref="RunOptions.AutoApproveTools"/> (operator live toggle).</item>
 ///   <item>An existing run/always-scoped policy on the shared approval gate.</item>
 /// </list>
 /// This is the seam that lets an automated demo run grant the preview unattended while production
@@ -118,11 +117,10 @@ public sealed class AgentPreviewGate
 
     /// <summary>
     /// Returns true if the preview should be granted without an operator: the global config/env
-    /// flag, the per-run auto-approve-tools option, or an existing scoped allow policy.
+    /// flag or an existing scoped allow policy. The per-run safe-tool policy never covers preview.
     /// </summary>
     public bool IsAutoApproved(string runId) =>
         _autoApproveConfigured
-        || _runOptions.Get(runId).AutoApproveTools
         || _approvalGate.IsAutoApproved(runId, ToolName, null);
 
     /// <summary>

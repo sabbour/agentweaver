@@ -225,11 +225,11 @@ server-bound, the agent physically cannot target another run.
    via `POST /api/runs/{runId}/tool-approvals` or the project-configured approval window times out
    (30 minutes by default; project owners choose 1–1440 minutes in Sandbox policy settings). The
    deployment config remains only a fallback for legacy/non-project runs.
-4. **Auto-approve** short-circuits the wait when any of these is on
+4. **Preview-specific auto-approve** short-circuits the wait when either of these is on
    ([`AgentPreviewGate.cs:93`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
-   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)), the per-run `AutoApproveTools`
-   operator option, or an existing scoped allow policy. Production stays human-gated (default `false`); the
-   flag exists so an automated demo can run unattended.
+   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)) or an existing scoped allow
+   policy. The per-run safe-tool `auto_approve_tools` policy never covers preview. Production stays
+   human-gated (default `false`); the preview-specific flag exists so an automated demo can run unattended.
 5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
    ([`SandboxEndpoints.cs:238`](#source)) as the operator route — Gateway-direct preview when enabled,
    `kubectl` fallback otherwise — and returns `preview_url`.
@@ -254,8 +254,9 @@ an explicit parameter: `start_preview(run_id: string, port: int)`
 **same** `POST /api/runs/{runId}/sandbox/preview` endpoint, so it reuses the **same** `AgentPreviewGate` and
 `StartPreviewForRunAsync` path — no port-forward or approval logic is duplicated. Authorization is enforced by
 the MCP server forwarding the caller's bearer token to the API (`AgentweaverApiClient`), so the backend sees the
-real human identity and the owner check (`IsOwnerOrServiceCaller`) applies unchanged. The auto-approve flag still
-governs unattended runs; production stays human-gated.
+real human identity and the owner check (`IsOwnerOrServiceCaller`) applies unchanged. Only preview-specific
+configuration or an existing scoped policy can auto-approve this action; the general per-run safe-tool flag
+cannot. Production stays human-gated.
 
 > The MCP surface lives in the separate `agentweaver-mcp` deployable image, so changes to `start_preview` require
 > rebuilding **both** `agentweaver-api` and `agentweaver-mcp`.
