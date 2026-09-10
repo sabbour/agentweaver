@@ -101,6 +101,7 @@ import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
 import type {
   GraphDescriptor,
+  EffectiveModelProvider,
   PortForwardSessionDto,
   RunAgentTokenBreakdownDto,
   RunTerminalDiagnostic,
@@ -2284,6 +2285,13 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [runProviderState, setRunProviderState] = useState<{
+    runId: string;
+    provider: EffectiveModelProvider | null;
+  }>({ runId: '', provider: null });
+  const runEffectiveProvider = runProviderState.runId === (runId ?? '')
+    ? runProviderState.provider
+    : null;
   const [runTimingState, setRunTimingState] = useState<{
     runId: string;
     startedAt: number | undefined;
@@ -2371,11 +2379,21 @@ export function CoordinatorRunPage() {
         events,
         isChildRun ? 'agent_turn' : 'orchestration',
       );
-      return context && isTerminalRunStatus(runLevelStatus)
-        ? { ...context, phase: 'completed' as const }
-        : context;
+      const resolvedContext = context ?? (runEffectiveProvider
+        ? {
+            ai_required: true,
+            operation: isChildRun ? 'agent_turn' : 'orchestration',
+            phase: 'active' as const,
+            execution_key: null,
+            expires_at: null,
+            effective_model_provider: runEffectiveProvider,
+          }
+        : null);
+      return resolvedContext && isTerminalRunStatus(runLevelStatus)
+        ? { ...resolvedContext, phase: 'completed' as const }
+        : resolvedContext;
     },
-    [events, isChildRun, runLevelStatus],
+    [events, isChildRun, runEffectiveProvider, runLevelStatus],
   );
   const retryProviderMatchesRun = Boolean(
     activeProviderContext
@@ -2499,6 +2517,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setRunProviderState({ runId: runId ?? '', provider: null });
       setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
       setCoordStatusReason(undefined);
@@ -2566,6 +2585,10 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setRunProviderState({
+        runId,
+        provider: detail?.effective_model_provider ?? null,
+      });
       setRunTimingState({
         runId,
         startedAt: parseTimestamp(detail?.started_at),
