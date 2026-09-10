@@ -100,6 +100,18 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkPlan_FailedCoordinatorWithoutPlan_ReturnsNullProjection()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.Failed);
+
+        var resp = await _owner.GetAsync($"/api/runs/{runId}/work-plan");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await resp.Content.ReadAsStringAsync()).Should().Be("null");
+    }
+
+    [Fact]
     public async Task WorkPlan_ActiveCoordinatorWithoutPlan_ReturnsTypedNotReady404()
     {
         var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);

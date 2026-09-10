@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 
 namespace Agentweaver.Mcp.Tools;
@@ -95,7 +96,12 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
             var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/work-plan", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
-        catch (McpApiException) { throw; }
+        catch (McpApiException ex) when (
+            ex.StatusCode == StatusCodes.Status404NotFound
+            && ex.ApiErrorCode is "work_plan_not_ready" or "work_plan_not_found")
+        {
+            return "null";
+        }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 

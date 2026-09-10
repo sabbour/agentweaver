@@ -924,6 +924,7 @@ public sealed record HistoryDto
 
 public sealed record AddMemberRequest
 {
+    [JsonPropertyName("name")] public string? Name { get; init; }
     [JsonPropertyName("role_id")] public required string RoleId { get; init; }
     [JsonPropertyName("custom_role_title")] public string? CustomRoleTitle { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }

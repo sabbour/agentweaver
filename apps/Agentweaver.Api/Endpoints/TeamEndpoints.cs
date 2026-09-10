@@ -221,7 +221,8 @@ app.MapPost("/api/projects/{id}/team/members", async (
     {
         var auth = await AuthorizeProjectAsync(httpContext, id, projectStore, ProjectRole.Contributor, ct);
         if (auth is not null) return auth;
-        var member = await castingService.AddMemberAsync(id, request.RoleId, request.CustomRoleTitle, request.ModelId, ct);
+        var member = await castingService.AddMemberAsync(
+            id, request.RoleId, request.CustomRoleTitle, request.ModelId, request.Name, ct);
         DateTimeOffset? created = null;
         DateTimeOffset? updated = null;
         if (ProjectId.TryParse(id, out var addProjectId))

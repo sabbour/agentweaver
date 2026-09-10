@@ -40,8 +40,45 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
                 return diagnostic;
         }
 
+        var assemblyState = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId
+                && (e.EventType == EventTypes.CoordinatorAssemblyBlocked
+                    || e.EventType == EventTypes.CoordinatorAssemblyFailed))
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => new { e.EventType, e.CreatedAt })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (assemblyState is not null)
+        {
+            var code = assemblyState.EventType == EventTypes.CoordinatorAssemblyBlocked
+                ? "assembly_blocked"
+                : "assembly_failed";
+            return new RunTerminalDiagnosticResponse
+            {
+                Code = code,
+                Message = StructuredRunFailureTerminal.CreateDiagnosticMessage(code, retryable: null),
+                Component = "coordinator",
+                Timestamp = new DateTimeOffset(DateTime.SpecifyKind(assemblyState.CreatedAt, DateTimeKind.Utc)),
+                Retryable = null,
+                CorrelationIds = new Dictionary<string, string>(StringComparer.Ordinal),
+                CauseChain = [],
+            };
+        }
+
         return null;
     }
+
+    public static RunTerminalDiagnosticResponse CreateFallback(Run run) =>
+        new()
+        {
+            Code = "agent_turn_internal_error",
+            Message = "Run failed before a structured terminal diagnostic was recorded. Retry availability is unknown.",
+            Component = "coordinator",
+            Timestamp = run.EndedAt ?? run.StartedAt,
+            Retryable = null,
+            CorrelationIds = new Dictionary<string, string>(StringComparer.Ordinal),
+            CauseChain = [],
+        };
 
     internal static bool TryRead(
         string payloadJson,

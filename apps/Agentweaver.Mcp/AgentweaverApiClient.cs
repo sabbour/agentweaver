@@ -541,6 +541,17 @@ public sealed class AgentweaverApiClient
         return await ReadJsonAsync<T>(response, path, ct);
     }
 
+    public async Task PatchAsync(string path, object? body, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Patch, path.TrimStart('/'))
+        {
+            Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
+        };
+        message.Headers.Authorization = GetAuthHeader();
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, path, ct);
+    }
+
     public async Task DeleteAsync(string path, CancellationToken ct = default)
     {
         using var message = new HttpRequestMessage(HttpMethod.Delete, path.TrimStart('/'));

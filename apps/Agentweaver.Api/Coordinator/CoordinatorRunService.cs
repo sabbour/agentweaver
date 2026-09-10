@@ -646,6 +646,34 @@ public sealed class CoordinatorRunService
             .ConfigureAwait(false);
     }
 
+    public async Task<CoordinatorStartMode> GetStartModeAsync(string runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var payloadJson = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.CoordinatorStarted)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => e.PayloadJson)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(payloadJson))
+            return CoordinatorStartMode.DefineOutcome;
+
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            return document.RootElement.TryGetProperty("mode", out var mode)
+                && string.Equals(mode.GetString(), "direct", StringComparison.OrdinalIgnoreCase)
+                ? CoordinatorStartMode.Direct
+                : CoordinatorStartMode.DefineOutcome;
+        }
+        catch (JsonException)
+        {
+            return CoordinatorStartMode.DefineOutcome;
+        }
+    }
+
     // After a draft/re-draft, the spec is persisted as awaiting_confirmation and
     // coordinator.outcome_spec is emitted (so the UI enables Confirm) BEFORE the MAF runtime
     // suspends at the request port and the watch loop arms _pendingStore. A fast confirm in that
