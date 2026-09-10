@@ -21,8 +21,16 @@ When your session expires, select **Sign in with Microsoft Entra ID**. Browser s
 After a successful sign-in, Agentweaver sets a host-only, `HttpOnly`, `Secure`,
 `SameSite=Lax` browser-session cookie. It lets additional tabs in the same browser
 profile restore the signed-in Agentweaver session without repeating Entra sign-in.
-The cookie is never shared with another host or browser profile. The tab-local bearer
-token remains a compatibility mechanism; it is not required to open a new tab.
+The session has a fixed eight-hour lifetime from successful sign-in. Activity does not
+extend that deadline; signing in again replaces the current browser session with a new
+eight-hour session. Signing out revokes the server-side session immediately and expires
+the cookie. The cookie is never shared with another host or browser profile.
+
+This browser-session lifetime does not extend the Microsoft Entra access token. The
+tab-local bearer token remains a compatibility mechanism and is kept only in
+`sessionStorage`; Agentweaver does not put bearer tokens in cookies or `localStorage`.
+The opaque browser cookie restores identity for new tabs and binds OAuth handoffs, but
+does not replace bearer authorization for platform API operations.
 
 For a TLS-terminating reverse proxy, configure
 `Auth:OAuth:ForwardedHeaders:TrustedNetworks` with only the proxy network(s), and

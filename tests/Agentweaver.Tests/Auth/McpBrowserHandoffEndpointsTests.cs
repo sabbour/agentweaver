@@ -108,6 +108,12 @@ public sealed class McpBrowserHandoffEndpointsTests
             [],
             null,
             expiresAt ?? DateTimeOffset.UtcNow.AddMinutes(10)));
+        if (expiresAt is not null)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            session.ExpiresAt = expiresAt.Value;
+            await db.SaveChangesAsync();
+        }
         return session.Id;
     }
 

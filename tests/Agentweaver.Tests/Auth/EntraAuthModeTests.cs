@@ -124,7 +124,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         using var projectsResponse = await newTab.SendAsync(projectsRequest);
 
         projectsResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
-            "the browser cookie is limited to session bootstrap and must not replace bearer auth for platform APIs");
+            "the shared browser cookie remains limited to session bootstrap and OAuth handoffs and must not replace bearer auth for platform APIs");
     }
 
     [Fact]
