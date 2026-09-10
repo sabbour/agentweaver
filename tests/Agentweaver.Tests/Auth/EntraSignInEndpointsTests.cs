@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -10,7 +11,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -144,6 +147,44 @@ public sealed class EntraSignInEndpointsTests
         stateInUrl.Should().NotBeNullOrEmpty();
         setCookie!.Should().Contain($"{EntraOAuthStateCookie.Name}={stateInUrl}");
         (await factory.CountEntraOAuthStatesAsync()).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("mcp-repo-")]
+    [InlineData("mcp-copilot-")]
+    public async Task McpHandoffSignIn_PreservesOnlyTheOpaqueHandoffAfterEntraAuthentication(
+        string handoffPrefix)
+    {
+        await using var factory = new EntraSignInWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+        const string transactionId = "abcdefghijklmnopqrstuvwxyzaBcDeFgHiJkLmNoPq";
+        transactionId.Length.Should().Be(43);
+        var handoff = handoffPrefix + transactionId;
+
+        var authorize = await client.GetAsync(
+            $"/auth/entra/authorize?mcp_handoff={handoff}");
+        authorize.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var state = EntraOAuthStateCookie.ExtractState(authorize.Headers.Location!.ToString());
+        state.Should().NotBeNullOrEmpty();
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.EntraOAuthStates.SingleAsync(record => record.State == state)).ReturnHandle
+            .Should().Be(handoff);
+    }
+
+    [Fact]
+    public async Task McpHandoffSignIn_RejectsMalformedOrAmbiguousContinuation()
+    {
+        await using var factory = new EntraSignInWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        (await client.GetAsync("/auth/entra/authorize?mcp_handoff=not-a-handoff")).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest);
+        (await client.GetAsync(
+            "/auth/entra/authorize?oauth_return_handle=abc&mcp_handoff=mcp-repo-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO_123456"))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
     }
 
     // -------------------------------------------------------------------------
@@ -355,10 +396,14 @@ public sealed class EntraSignInEndpointsTests
         });
         using var authorize = await client.GetAsync("/oauth/authorize" + query);
         authorize.StatusCode.Should().Be(
-            HttpStatusCode.Redirect, await authorize.Content.ReadAsStringAsync());
-        authorize.Headers.Location!.ToString().Should().StartWith("/auth/entra/authorize?");
+            HttpStatusCode.OK, await authorize.Content.ReadAsStringAsync());
+        var unsignedAuthorization = await authorize.Content.ReadAsStringAsync();
+        var continuation = Regex.Match(
+            unsignedAuthorization,
+            "href=\"(/auth/entra/authorize\\?oauth_return_handle=[A-Za-z0-9_-]+)\"").Groups[1].Value;
+        continuation.Should().NotBeNullOrWhiteSpace();
 
-        using var broker = await client.GetAsync(authorize.Headers.Location);
+        using var broker = await client.GetAsync(continuation);
         broker.StatusCode.Should().Be(HttpStatusCode.Redirect);
         var state = EntraOAuthStateCookie.ExtractState(broker.Headers.Location!.ToString());
         state.Should().NotBeNullOrWhiteSpace();

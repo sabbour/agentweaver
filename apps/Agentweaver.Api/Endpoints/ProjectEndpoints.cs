@@ -130,7 +130,13 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
     // session before an opaque MCP transaction can mint a callback cookie.
     var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
     if (browserSession is null)
-        return Results.Unauthorized();
+    {
+        if (!McpBrowserHandoffContinuation.TryParseCopilot($"mcp-copilot-{transactionId}", out _))
+            return Results.NotFound();
+        var continuation = McpBrowserHandoffContinuation.CreateCopilot(transactionId);
+        return Results.Redirect(
+            $"/auth/entra/authorize?mcp_handoff={Uri.EscapeDataString(continuation)}");
+    }
 
     var service = new ProjectCopilotBindingService(
         configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
@@ -183,6 +189,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         : await persistence.GetUserCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
     if (projectTransaction is not null)
     {
+        var isMcpHandoff = projectTransaction.BrowserSessionId is not null;
         var projectService = new ProjectCopilotBindingService(
             configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
         var projectOutcome = await projectService.CompleteBrowserCallbackAsync(
@@ -192,6 +199,8 @@ app.MapGet("/auth/github/copilot-app/callback", async (
             resolvedCode,
             projectCookie,
             ct).ConfigureAwait(false);
+        if (isMcpHandoff)
+            return McpBrowserHandoffCompletionPage.Result(projectOutcome);
         return Results.Redirect(await projectService.GetCallbackRedirectAsync(projectOutcome, state, ct).ConfigureAwait(false));
     }
 

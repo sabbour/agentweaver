@@ -87,6 +87,40 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
     }
 
     [Fact]
+    public async Task AuthSession_UsesSharedBrowserSessionForANewBrowserTab()
+    {
+        const string sessionId = "browser-session-new-tab";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.BrowserEntraSessions.Add(new BrowserEntraSession
+            {
+                Id = sessionId,
+                EntraObjectId = "entra-user-new-tab",
+                DisplayName = "New Tab Test User",
+                Email = "new-tab-test@example.com",
+                PlatformRoles = PlatformRoles.Contributor,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var newTab = _factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/session");
+        request.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+
+        using var response = await newTab.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        json.GetProperty("authenticated").GetBoolean().Should().BeTrue();
+        json.GetProperty("display_name").GetString().Should().Be("New Tab Test User");
+        json.GetProperty("email").GetString().Should().Be("new-tab-test@example.com");
+        json.GetProperty("platform_roles").EnumerateArray().Select(role => role.GetString())
+            .Should().Contain(PlatformRoles.Contributor);
+    }
+
+    [Fact]
     public async Task AuthSession_AllowsContributorToConfigurePersonalProvider_WhenNoPlatformProviderExists()
     {
         using (var scope = _factory.Services.CreateScope())
@@ -255,6 +289,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
             {
                 Id = sessionId,
                 EntraObjectId = objectId,
+                DisplayName = "Sign-out Test User",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
             });
             await db.SaveChangesAsync();

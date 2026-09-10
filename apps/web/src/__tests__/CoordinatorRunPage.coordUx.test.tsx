@@ -43,6 +43,7 @@ vi.mock('../api/apiClient', () => ({
     reviewAssembly: vi.fn(),
     answerQuestion: vi.fn(),
     getRun: vi.fn(),
+    getRunTerminalDiagnostic: vi.fn().mockRejectedValue(new Error('not found')),
     getProject: vi.fn(),
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [{ name: 'Neo', role_title: 'Researcher' }] }),

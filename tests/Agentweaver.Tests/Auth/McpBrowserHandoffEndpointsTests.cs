@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -37,12 +38,14 @@ public sealed class McpBrowserHandoffEndpointsTests
         var expiredSession = await IssueBrowserSessionAsync(factory, "initiator", DateTimeOffset.UtcNow.AddMinutes(-1));
         using var browser = factory.CreateClient(NoRedirectNoCookies);
 
-        (await GetWithBrowserSessionAsync(browser,
-            $"/auth/github/repo-app/handoff/{transactionId}", null)).StatusCode
-            .Should().Be(HttpStatusCode.Unauthorized);
+        var signIn = await GetWithBrowserSessionAsync(
+            browser, $"/auth/github/repo-app/handoff/{transactionId}", null);
+        signIn.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        signIn.Headers.Location!.ToString().Should().Be(
+            $"/auth/entra/authorize?mcp_handoff=mcp-repo-{transactionId}");
         (await GetWithBrowserSessionAsync(
             browser, $"/auth/github/repo-app/handoff/{transactionId}", expiredSession)).StatusCode
-            .Should().Be(HttpStatusCode.Unauthorized);
+            .Should().Be(HttpStatusCode.Redirect);
 
         var attacker = await GetWithBrowserSessionAsync(
             browser, $"/auth/github/repo-app/handoff/{transactionId}", attackerSession);
@@ -59,6 +62,33 @@ public sealed class McpBrowserHandoffEndpointsTests
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.GitHubAuthorizations.SingleAsync()).BrowserSessionId.Should().Be(initiatorSession);
+    }
+
+    [Theory]
+    [InlineData(CopilotBindingOutcome.Success, "GitHub Copilot authorization completed")]
+    [InlineData(CopilotBindingOutcome.GitHubBindingUnavailable, "GitHub Copilot authorization could not be completed")]
+    public async Task CopilotMcpHandoffCompletion_ExplainsOutcomeAndMcpResume(
+        CopilotBindingOutcome outcome,
+        string expectedMessage)
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+
+        await McpBrowserHandoffCompletionPage.Result(outcome).ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Headers.CacheControl.ToString().Should().Be("no-store");
+        context.Response.Headers["Referrer-Policy"].ToString().Should().Be("no-referrer");
+        context.Response.Headers["Content-Security-Policy"].ToString()
+            .Should().Contain("default-src 'none'");
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        var html = await reader.ReadToEndAsync();
+        html.Should().Contain(expectedMessage)
+            .And.Contain("Return to your MCP client")
+            .And.NotContain("transaction_id")
+            .And.NotContain("oauth state")
+            .And.NotContain("callback cookie");
     }
 
     private static async Task<string> IssueBrowserSessionAsync(

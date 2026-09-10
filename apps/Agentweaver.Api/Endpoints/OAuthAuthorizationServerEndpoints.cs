@@ -122,7 +122,19 @@ public static class OAuthAuthorizationServerEndpoints
             var continuationPath =
                 $"/auth/entra/authorize?oauth_return_handle={Uri.EscapeDataString(handle)}";
             if (!HttpMethods.IsPost(context.Request.Method))
-                return Results.Redirect(continuationPath);
+            {
+                var unsignedStyleNonce =
+                    Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.ContentSecurityPolicy =
+                    OAuthConsentContentSecurityPolicy.CreateNoForm(unsignedStyleNonce);
+                return Results.Content(
+                    RenderUnsignedAuthorization(
+                        consentApplication.ClientName,
+                        continuationPath,
+                        unsignedStyleNonce),
+                    "text/html; charset=utf-8");
+            }
 
             var reauthenticationStyleNonce =
                 Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
@@ -176,7 +188,8 @@ public static class OAuthAuthorizationServerEndpoints
                 scope,
                 consentHandle,
                 consentApplication.ClientName,
-                browser.EntraObjectId,
+                browser.DisplayName!,
+                browser.Email ?? browser.EntraObjectId,
                 styleNonce),
             "text/html; charset=utf-8");
     }
@@ -421,7 +434,8 @@ public static class OAuthAuthorizationServerEndpoints
         string[] scopes,
         string handle,
         string clientName,
-        string signedInIdentity,
+        string signedInName,
+        string signedInIdentifier,
         string styleNonce)
     {
         static string Encode(string value) => HtmlEncoder.Default.Encode(value);
@@ -515,7 +529,7 @@ public static class OAuthAuthorizationServerEndpoints
                   </div>
                   <h2>This application will be able to:</h2>
                   <ul class="permissions">{{permissions}}</ul>
-                  <div class="identity"><span class="label">Signed in as</span><strong>{{Encode(signedInIdentity)}}</strong></div>
+                  <div class="identity"><span class="label">Signed in to Agentweaver as</span><strong>{{Encode(signedInName)}}</strong><span>{{Encode(signedInIdentifier)}}</span></div>
                 </section>
                 <form method="post" action="/oauth/authorize">
                   {{hidden}}
@@ -565,6 +579,40 @@ public static class OAuthAuthorizationServerEndpoints
                 <h1 id="reauthentication-title">Sign in again to continue</h1>
                 <p>Your Agentweaver session expired before you finished authorizing <span class="client-name">{{Encode(clientName)}}</span>.</p>
                 <a class="primary" href="{{Encode(continuationPath)}}">Sign in again</a>
+              </main>
+            </body>
+            </html>
+            """;
+    }
+
+    private static string RenderUnsignedAuthorization(
+        string clientName,
+        string continuationPath,
+        string styleNonce)
+    {
+        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
+
+        return $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Sign in to authorize | Agentweaver</title>
+              <style nonce="{{Encode(styleNonce)}}">
+                :root { color-scheme: light; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; }
+                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; }
+                main { width: min(520px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+                h1 { margin: 0; font-size: 24px; } p { margin: 12px 0 0; color: #3c3c3c; } .client { font-weight: 600; overflow-wrap: anywhere; }
+                a { display: inline-block; margin-top: 24px; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-weight: 600; text-decoration: none; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Not signed in to Agentweaver</h1>
+                <p><span class="client">{{Encode(clientName)}}</span> wants to use Agentweaver MCP tools.</p>
+                <p>Sign in with Microsoft Entra ID to review and approve this authorization request.</p>
+                <a href="{{Encode(continuationPath)}}">Sign in to Agentweaver</a>
               </main>
             </body>
             </html>

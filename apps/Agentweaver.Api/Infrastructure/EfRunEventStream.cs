@@ -6,6 +6,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
+using Agentweaver.AgentRuntime.Workflow;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -66,6 +67,7 @@ public sealed class EfRunEventStream : IRunEventStream
     /// <inheritdoc />
     public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
@@ -110,7 +112,10 @@ public sealed class EfRunEventStream : IRunEventStream
 
                 var sequence = (await db.RunEvents.Where(e => e.RunId == runId)
                     .Select(e => (int?)e.Sequence).MaxAsync(ct).ConfigureAwait(false)) ?? 0;
-                var recorded = events.Select(e => e with { Sequence = ++sequence }).ToArray();
+                var recorded = events
+                    .Select(StructuredRunFailureTerminal.NormalizeFailure)
+                    .Select(e => e with { Sequence = ++sequence })
+                    .ToArray();
                 foreach (var evt in recorded)
                     db.RunEvents.Add(new RunEventRecord
                     {
@@ -412,7 +417,8 @@ public sealed class EfRunEventStream : IRunEventStream
             // Restore the persisted append-time timestamp so a replayed run's timeline matches
             // when the event actually happened, not the moment of replay.
             var createdAtUtc = DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc);
-            yield return new RunEvent(row.Sequence, row.EventType, payload, new DateTimeOffset(createdAtUtc));
+            yield return StructuredRunFailureTerminal.NormalizeFailure(
+                new RunEvent(row.Sequence, row.EventType, payload, new DateTimeOffset(createdAtUtc)));
         }
     }
 

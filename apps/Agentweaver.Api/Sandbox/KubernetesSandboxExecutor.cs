@@ -208,6 +208,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly IGitHubCopilotCapabilityCredentialProvider? _copilotCredentials;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? _effectiveProviderResolver;
+    private readonly IRunModelProviderBoundaryResolver? _providerBoundaryResolver;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -258,7 +259,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
         IRunStore? runStore = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null)
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
+        IRunModelProviderBoundaryResolver? providerBoundaryResolver = null)
     {
         _client = client;
         _options = options;
@@ -278,6 +280,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _runStore = runStore;
         _byokProviderConfiguration = byokProviderConfiguration;
         _effectiveProviderResolver = effectiveProviderResolver;
+        _providerBoundaryResolver = providerBoundaryResolver;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -476,8 +479,23 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // must reconnect. Deriving that scope from "does the project id string parse" instead named
         // the project's App even for platform-default binding failures.
         var effectiveProvider = await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
-        await EnsureMatchesDurableProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
-        var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
+        ByokProviderConfiguration? byokProvider;
+        if (_providerBoundaryResolver is not null
+            && _runStore is not null
+            && RunId.TryParse(runId, out var parsedRunId)
+            && await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false) is { } run)
+        {
+            var boundary = await _providerBoundaryResolver
+                .ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+            effectiveProvider = boundary.Provider;
+            byokProvider = boundary.ByokProviderConfiguration
+                ?? await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await EnsureMatchesDurableProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
+            byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
+        }
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(

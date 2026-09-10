@@ -129,6 +129,7 @@ public static class OperatorToolApprovalPolicy
         // Diagnostics / health.
         "diagnostics_get",
         "heartbeat_status",
+        "run_failure_diagnostic",
 
         // Project workspace reads.
         "get_project_workspace_file",

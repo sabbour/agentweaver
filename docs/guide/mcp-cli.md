@@ -26,7 +26,9 @@ Configure only the MCP URL for normal hosted use. On connection, the client:
 1. discovers the anonymous OAuth protected-resource metadata for `/mcp`;
 2. discovers Agentweaver's same-origin authorization server;
 3. opens a browser for Agentweaver sign-in when required;
-4. asks you to approve the least-privilege `mcp:invoke` scope; and
+4. shows the signed-in Entra name and email/UPN (or an explicit **Not signed in to
+   Agentweaver** page) before asking you to approve the least-privilege `mcp:invoke`
+   scope; and
 5. completes authorization code + PKCE S256 and manages token refresh.
 
 You do not copy or paste an Entra token, broker access token, API key, or other
@@ -158,6 +160,15 @@ MCP sign-in authorizes Agentweaver tool calls. Repository and AI access are
 separate GitHub capabilities. Authorize each one only when a workflow needs it:
 
 `github_repo_app_connect → open browser_url → github_repo_app_authorization_status`
+
+The browser handoff is bound to the Entra identity that started it. If the browser does
+not have a current Agentweaver Entra session, Agentweaver first asks you to sign in, then
+resumes the same opaque handoff. This applies to Repo App and project Copilot App
+authorization. Do not open the URL in a browser signed in as another person. After GitHub
+finishes, Agentweaver identifies whether the completed action was repository or Copilot
+authorization, shows a success or error status, and tells you to return to the MCP client
+and poll the authorization status. OAuth state, callback cookies, GitHub codes, and
+credentials never appear on that page or in MCP output.
 
 For unattended project work, a Project Owner also completes
 `project_copilot_app_connect → open browser_url → project_copilot_app_authorization_status`

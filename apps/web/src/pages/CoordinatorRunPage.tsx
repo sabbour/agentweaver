@@ -102,9 +102,11 @@ import type {
   GraphDescriptor,
   PortForwardSessionDto,
   RunAgentTokenBreakdownDto,
+  RunTerminalDiagnostic,
   RunStatus,
   WorkPlanResponse,
 } from '../api/types';
+import { safeTerminalFailureMessage } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -2314,6 +2316,7 @@ export function CoordinatorRunPage() {
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
   const [graphError, setGraphError] = useState<FormattedApiError | null>(null);
   const [runLoadError, setRunLoadError] = useState<FormattedApiError | null>(null);
+  const [terminalDiagnostic, setTerminalDiagnostic] = useState<RunTerminalDiagnostic | null>(null);
   const [workPlanError, setWorkPlanError] = useState<FormattedApiError | null>(null);
 
   // Topology seed from work plan + children (for subtask status projection).
@@ -2482,6 +2485,7 @@ export function CoordinatorRunPage() {
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
     queueMicrotask(() => {
       setRunLoadError(null);
+      setTerminalDiagnostic(null);
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
@@ -2557,6 +2561,11 @@ export function CoordinatorRunPage() {
         startedAt: parseTimestamp(detail?.started_at),
         endedAt: parseTimestamp(detail?.ended_at),
       });
+      if (detail.status === 'failed') {
+        apiClient.getRunTerminalDiagnostic(runId)
+          .then((diagnostic) => { if (!cancelled) setTerminalDiagnostic(diagnostic); })
+          .catch(() => { if (!cancelled) setTerminalDiagnostic(null); });
+      }
       if (wp) consecutiveWorkPlanNotReady = 0;
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
@@ -4629,7 +4638,7 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
+      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
           {retryStatus && (
             <MessageBar intent="info" data-testid="coordinator-retry-status">
@@ -4685,6 +4694,15 @@ export function CoordinatorRunPage() {
           {automationError && (
             <MessageBar intent="error">
               <MessageBarBody>{automationError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {terminalDiagnostic && (
+            <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
+              <MessageBarBody>
+                Failure in {terminalDiagnostic.component}: {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {' '}Code: {terminalDiagnostic.code}.
+                {terminalDiagnostic.retryable === true ? ' This failure may be retried.' : ''}
+              </MessageBarBody>
             </MessageBar>
           )}
         </div>

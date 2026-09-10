@@ -33,7 +33,7 @@ Clients should order and deduplicate events by `sequence`.
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
 | `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
 | `run.outcome` | Agent self-assessment of task completion, emitted just before `run.completed` | `achieved` (bool), `reason` |
-| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `reason` |
+| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable` — bounded normalized public contract |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `run.error` | When an operation fails but the run is reverted to a retryable state (e.g. back to AwaitingReview after a merge internal error); **non-terminal** — the stream stays open | `reason` |
@@ -145,7 +145,7 @@ instead.
 
 ### `run.failed`
 
-This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. For coordinator child runs, an executor throw terminalizes as `child_executor_failed:{executor}` and is paired with a failed `workflow.step`; this makes in-place steering revision failures visible before the coordinator falls back to fresh dispatch. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
+This event marks a terminal failure. Public REST and SSE consumers receive only the bounded normalized `{ message, errorCode, retryable }` payload. The legacy `reason` and `detail` fields are deprecated and never serialized publicly. Authorized full consumers can request the separately redacted [`GET /api/runs/{id}/terminal-diagnostic`](../guide/runs.md#terminal-failure-diagnostics) projection. Content-safety, executor, infrastructure, and watch-loop causes are represented by the allowlisted `errorCode`, not untrusted failure text.
 
 ### `run.bounded`
 

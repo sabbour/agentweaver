@@ -98,7 +98,8 @@ public sealed class RepoAppUserAuthorizationServiceTests
 
         (await service.CompleteBrowserCallbackAsync(
             "initiator-session", "entra", state, "code", handoff.Value.CallbackCookie))
-            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+            .Should().Match<RepoAppAuthorizationCallbackResult>(result =>
+                result.Outcome == RepoAppAuthorizationOutcome.Success && result.IsMcpHandoff);
     }
 
     [Fact]

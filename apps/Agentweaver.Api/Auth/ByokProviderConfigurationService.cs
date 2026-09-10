@@ -117,7 +117,7 @@ public sealed class ByokProviderConfigurationService(ISecretStore secretStore)
     private Task WriteStateAsync(StoredState state, CancellationToken ct) =>
         secretStore.SetSecretAsync(SecretName, JsonSerializer.Serialize(state, JsonOptions), ct: ct);
 
-    private static void Validate(ByokProviderConfiguration configuration)
+    internal static void Validate(ByokProviderConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         if (configuration.Type is not ("openai" or "azure" or "anthropic"))

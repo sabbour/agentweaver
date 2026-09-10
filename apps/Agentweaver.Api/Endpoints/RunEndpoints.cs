@@ -229,6 +229,33 @@ app.MapGet("/api/runs/{id}", async (
     });
 });
 
+// A deliberately narrow projection of the persisted structured run.failed event. Do not expose
+// the event payload here: it can contain untrusted exception text or pre-redaction legacy data.
+app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    MemoryDbContext db,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    // This endpoint intentionally turns authorization denial into not-found so callers cannot
+    // use diagnostic availability to enumerate another project's failed runs.
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+        return Results.NotFound();
+
+    var diagnostic = await new RunTerminalDiagnosticReader(db).GetAsync(runId.ToString(), ct).ConfigureAwait(false);
+    return diagnostic is null ? Results.NotFound() : Results.Ok(diagnostic);
+})
+    .Produces<RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
+
 app.MapPost("/api/runs/{id}/archive", async (
     HttpContext httpContext,
     string id,
@@ -582,7 +609,9 @@ app.MapGet("/api/runs/{id}/events", async (
         catch { payload = new { }; }
         // Use the row's persisted CreatedAt (server append time) as the timestamp source so a
         // replayed/finished run's timeline reflects when each event actually happened, not "now".
-        var evt = new RunEvent(rec.Sequence, rec.EventType, payload, new DateTimeOffset(DateTime.SpecifyKind(rec.CreatedAt, DateTimeKind.Utc)));
+        var evt = StructuredRunFailureTerminal.NormalizeFailure(
+            new RunEvent(rec.Sequence, rec.EventType, payload,
+                new DateTimeOffset(DateTime.SpecifyKind(rec.CreatedAt, DateTimeKind.Utc))));
         return new { sequence = rec.Sequence, type = rec.EventType, payload = EndpointHelpers.StampTimestamp(evt) };
     });
 

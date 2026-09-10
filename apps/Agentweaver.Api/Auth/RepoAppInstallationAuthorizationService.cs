@@ -205,6 +205,12 @@ public sealed class RepoAppInstallationAuthorizationService(
             transaction.ProjectId);
     }
 
+    /// <summary>
+    /// Identifies GitHub's App Setup URL callback shape, which never carries an OAuth code.
+    /// </summary>
+    internal static bool IsInstallationSetupCallback(long? installationId, string? setupAction) =>
+        installationId is > 0 || !string.IsNullOrWhiteSpace(setupAction);
+
     public string GetCallbackRedirect(RepoAppInstallationAuthorizationOutcome outcome, string? projectId)
     {
         var frontend = (configuration["Auth:RepoApp:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');

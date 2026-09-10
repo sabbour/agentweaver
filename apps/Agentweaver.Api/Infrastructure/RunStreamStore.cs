@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
@@ -194,13 +195,15 @@ public sealed class RunStreamEntry
             // so direct writers and entry writers cannot race each other with local sequence guesses.
             var sequenceHint = NextSequence();
             var payload = payloadFactory(sequenceHint);
+            var candidate = StructuredRunFailureTerminal.NormalizeFailure(
+                new RunEvent(0, type, payload, timestampUtc));
             var assignedSequence = _eventStream!
-                .AppendAsync(_runId, new RunEvent(0, type, payload, timestampUtc))
+                .AppendAsync(_runId, candidate)
                 .AsTask().GetAwaiter().GetResult();
             if (assignedSequence <= 0)
                 return 0;
 
-            recorded = new RunEvent(assignedSequence, type, payload, timestampUtc);
+            recorded = candidate with { Sequence = assignedSequence };
 
             lock (_lock)
             {
@@ -215,7 +218,8 @@ public sealed class RunStreamEntry
             {
                 var sequence = NextInMemorySequenceLocked();
                 var payload = payloadFactory(sequence);
-                recorded = new RunEvent(sequence, type, payload, timestampUtc);
+                recorded = StructuredRunFailureTerminal.NormalizeFailure(
+                    new RunEvent(sequence, type, payload, timestampUtc));
                 added = TryInsertOrValidateLocked(recorded);
                 if (added)
                     previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
@@ -238,7 +242,8 @@ public sealed class RunStreamEntry
     /// </summary>
     public void Record(RunEvent evt)
     {
-        var stamped = evt with { TimestampUtc = DateTimeOffset.UtcNow };
+        var stamped = StructuredRunFailureTerminal.NormalizeFailure(
+            evt with { TimestampUtc = DateTimeOffset.UtcNow });
         RunEvent recorded;
         TaskCompletionSource? previous = null;
         var added = false;

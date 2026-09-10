@@ -39,6 +39,23 @@ public sealed class RepoAppInstallationAuthorizationServiceTests
             .Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData("72", null, true)]
+    [InlineData(null, "request", true)]
+    [InlineData(null, "update", true)]
+    [InlineData(null, null, false)]
+    [InlineData("0", "", false)]
+    public void IsInstallationSetupCallback_DistinguishesInstallationAndOAuthCallbacks(
+        string? installationId,
+        string? setupAction,
+        bool expected)
+    {
+        var parsedInstallationId = long.TryParse(installationId, out var value) ? value : (long?)null;
+
+        RepoAppInstallationAuthorizationService.IsInstallationSetupCallback(parsedInstallationId, setupAction)
+            .Should().Be(expected);
+    }
+
     [Fact]
     public async Task InstallCallbackToBind_BindsTheConnectedRepositoryEndToEnd()
     {

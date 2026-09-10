@@ -72,7 +72,8 @@ public sealed class EffectiveRunModelTurnExecutor(
         if (boundary.Provider is not EffectiveModelProviderResult.Byok)
             return null;
 
-        var configuration = await byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        var configuration = boundary.ByokProviderConfiguration
+            ?? await byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
         if (configuration is null
             || !string.Equals(
                 configuration.ExecutionFingerprint(),

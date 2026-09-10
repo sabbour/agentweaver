@@ -55,7 +55,7 @@ identity. The clients receive only short-lived Agentweaver access tokens for the
 The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
 It accepts only Agentweaver broker JWTs for `mcp:invoke`.
 | `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
-| `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. AKS deployment derives this from the cluster pod CIDRs. |
+| `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. The proxy must forward the original HTTPS scheme and public host before Agentweaver authenticates the request. AKS deployment derives this from the cluster pod CIDRs. |
 | `Auth:OAuth:Clients` | empty | Additional statically known public clients. Every client uses exact redirect matching, no secret, and S256 PKCE. Client IDs must be unique; different clients may share an exact callback except for Claude's reserved hosted callback. |
 
 The resource identifier is always the exact canonical origin plus `/mcp`; it
@@ -257,6 +257,11 @@ GitHub settings** that cannot be automated by the API:
 Without this step, GitHub will install the App but leave the browser on GitHub's own
 installation confirmation page, and the resulting installation will never be bound to the
 project that started the flow — reproducing the exact failure this feature fixes.
+
+Agentweaver also recognizes installation-shaped callbacks at the OAuth callback URL for
+backward compatibility with an older Setup URL registration. Keep the Setup URL configured
+to `/auth/github/repo-app/installation/callback`; the compatibility route is only for
+recovering existing registrations while they are corrected.
 
 #### Purpose-bound broker
 

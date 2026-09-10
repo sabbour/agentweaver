@@ -46,6 +46,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
     public DbSet<RunGitHubCapabilitySnapshotRecord> RunGitHubCapabilitySnapshots => Set<RunGitHubCapabilitySnapshotRecord>();
+    public DbSet<RunModelProviderSnapshotOwner> RunModelProviderSnapshotOwners => Set<RunModelProviderSnapshotOwner>();
     public DbSet<ProjectModelProviderCapabilityRecord> MarketplaceCopilotCapabilities => Set<ProjectModelProviderCapabilityRecord>();
     public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
@@ -113,6 +114,14 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .HasColumnName("expires_at")
             .IsRequired();
         model.Entity<RunAuthorshipCapability>().HasIndex(capability => capability.ExpiresAt);
+        model.Entity<RunModelProviderSnapshotOwner>(owner =>
+        {
+            owner.ToTable("run_model_provider_snapshot_owners");
+            owner.HasKey(x => x.RunId);
+            owner.Property(x => x.RunId).HasColumnName("run_id").HasMaxLength(128);
+            owner.Property(x => x.SecretReference).HasColumnName("secret_reference").HasMaxLength(256).IsRequired();
+            owner.Property(x => x.CapturedAt).HasColumnName("captured_at").IsRequired();
+        });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
