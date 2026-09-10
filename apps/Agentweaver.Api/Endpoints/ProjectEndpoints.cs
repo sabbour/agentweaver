@@ -760,12 +760,11 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     if (view is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
-    if (!IsAllowedModelId(request.DefaultModelGitHubCopilot) ||
-        !IsAllowedModelId(request.DefaultModelMicrosoftFoundry) ||
-        !IsAllowedModelId(request.BlueprintGenerationModel) ||
-        !IsAllowedModelId(request.WorkflowGenerationModel) ||
-        !IsAllowedModelId(request.OutcomeSpecGenerationModel))
-        return Results.BadRequest(new { error = "model_id is not allowed." });
+    if (FindInvalidModelIdField(request) is { } invalidField)
+        return Results.BadRequest(new
+        {
+            error = $"{invalidField} is not allowed. Use letters, numbers, '.', '_', '/', or '-'.",
+        });
 
     bool updated;
     try
@@ -1565,6 +1564,19 @@ private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRol
 
 private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
+
+private static string? FindInvalidModelIdField(UpdateProjectProviderSettingsRequest request)
+{
+    (string Name, string? Value)[] fields =
+    [
+        ("default_model_github_copilot", request.DefaultModelGitHubCopilot),
+        ("default_model_microsoft_foundry", request.DefaultModelMicrosoftFoundry),
+        ("blueprint_generation_model", request.BlueprintGenerationModel),
+        ("workflow_generation_model", request.WorkflowGenerationModel),
+        ("outcome_spec_generation_model", request.OutcomeSpecGenerationModel),
+    ];
+    return fields.FirstOrDefault(field => !IsAllowedModelId(field.Value)).Name;
+}
 
 private static object CreateUnattendedReadiness(
     EffectiveModelProviderResult effectiveProvider,

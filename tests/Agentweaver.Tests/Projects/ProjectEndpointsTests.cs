@@ -274,6 +274,25 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
+    public async Task PutProviderSettings_RejectsInvalidOutcomeSpecModelWithFieldSpecificError()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/provider-settings",
+            new UpdateProjectProviderSettingsRequest
+            {
+                DefaultProvider = "github-copilot",
+                OutcomeSpecGenerationModel = "not allowed!",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().StartWith(
+            "outcome_spec_generation_model is not allowed.");
+    }
+
+    [Fact]
     public async Task PutPreviewSettings_PersistsProjectScopedTimeout()
     {
         var id = await CreateBlankProjectAsync();

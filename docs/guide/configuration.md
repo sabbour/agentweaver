@@ -442,7 +442,9 @@ the Key Vault CSI `SecretProviderClass`.
 
 Project Settings can override generation models per project with `blueprint_generation_model`,
 `workflow_generation_model`, and `outcome_spec_generation_model`. Those project settings are
-individual and nullable; `null` means "inherit the global Generation fallback".
+individual and nullable; `null` means "inherit the global Generation fallback". The web UI exposes
+all three under **Project settings → General → Generation models**. MCP clients can set the same
+typed optional fields with `project_configure`.
 
 The runtime CLI path also accepts two environment-variable fallbacks, checked in order after the config key: `AGENTWEAVER_COPILOT_CLI_PATH`, then `COPILOT_CLI_PATH` (`GitHubCopilotClientFactory.cs:50`). If the configured path does not exist on disk, Agentweaver logs a warning and falls back to SDK auto-resolution rather than failing (`GitHubCopilotClientFactory.cs:117`).
 

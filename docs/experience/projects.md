@@ -311,7 +311,10 @@ MCP equivalent: `project_rename`.
 
 MCP equivalent: `project_configure`.
 
-The MCP tool can set `default_provider`, `default_model_github_copilot`, and `default_model_microsoft_foundry`. The user-facing meaning is simple: future runs inherit these defaults unless a run chooses another model.
+The MCP tool can set `default_provider`, both provider-specific default model fields, and the
+optional `blueprint_generation_model`, `workflow_generation_model`, and
+`outcome_spec_generation_model` overrides. Empty or null generation-model values inherit the
+global generation default. Invalid model IDs are rejected with the name of the invalid field.
 
 ### Sandbox policy
 

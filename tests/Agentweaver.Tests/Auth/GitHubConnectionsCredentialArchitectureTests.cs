@@ -166,6 +166,20 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
     }
 
     [Fact]
+    public void CopilotCredentialProvider_ResolvesCoordinatorSyntheticIdsToOwningRunSnapshot()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "apps",
+            "Agentweaver.Api",
+            "Sandbox",
+            "RunGitHubCapabilityCredentialProvider.cs"));
+
+        source.Should().Contain("CoordinatorSubRunIds.StripSyntheticSuffix(runId)")
+            .And.Contain("GetCapabilitySnapshotsAsync(owningRunId, ct)");
+    }
+
+    [Fact]
     public void RuntimeAndHost_HaveNoAmbientGitHubTokenDependencies()
     {
         var root = FindRepositoryRoot();

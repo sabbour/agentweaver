@@ -316,9 +316,12 @@ Update provider settings for a project.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
-| `default_provider` | string | yes | Model provider (`github_copilot` or `microsoft_foundry`) |
+| `default_provider` | string | yes | Model provider (`github-copilot` or `byok`; legacy values remain accepted) |
 | `default_model_github_copilot` | string | no | Model ID for GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | no | Model ID for the BYOK provider; the legacy field name remains supported. |
+| `blueprint_generation_model` | string or null | no | Blueprint-generation model. Empty or null inherits the global generation default. |
+| `workflow_generation_model` | string or null | no | Workflow-generation model. Empty or null inherits the global generation default. |
+| `outcome_spec_generation_model` | string or null | no | Coordinator outcome-spec drafting model. Empty or null inherits the global generation default. |
 
 **Returns**: Confirmation message.
 
