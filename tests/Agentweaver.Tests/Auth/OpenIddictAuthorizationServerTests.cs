@@ -249,6 +249,22 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         body.Should().Contain(OAuthKnownClients.ClaudeHostedClientId);
     }
 
+    [Fact]
+    public async Task DynamicRegistration_WithoutScope_AdvertisesRefreshCapableSession()
+    {
+        using var response = await _client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "Refresh-capable MCP client",
+            redirect_uris = new[] { "http://127.0.0.1:49170/callback" },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var registration = await response.Content.ReadFromJsonAsync<JsonElement>();
+        registration.GetProperty("scope").GetString()
+            .Should().Be(
+                $"{OAuthServerConfiguration.McpScope} {OAuthServerConfiguration.OfflineAccessScope}");
+    }
+
     [Theory]
     [InlineData("http://localhost:49152/callback")]
     [InlineData("https://login.microsoftonline.com/common/oauth2/nativeclient")]

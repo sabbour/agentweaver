@@ -1081,8 +1081,15 @@ public sealed class CoordinatorRunService
                 case ExecutorFailedEvent failed:
                     var isDraftTimeout = ContainsOutcomeSpecDraftTimeout(failed.Data);
                     var providerFailure = isDraftTimeout ? null : FindProviderFailure(failed.Data);
+                    // Authorization failure during drafting is not evidence that workflow selection
+                    // or execution authorization failed: those phases have not started yet.
+                    var isDraftAuthorizationFailure =
+                        failed.ExecutorId == "coordinator-draft"
+                        && providerFailure is GitHubCopilotUnauthorizedException;
                     var reason = isDraftTimeout
                         ? "outcome_spec_draft_timeout"
+                        : isDraftAuthorizationFailure
+                            ? CoordinatorFailureCodes.OutcomeSpecDraftFailed
                         : providerFailure?.ErrorCode ?? $"coordinator_executor_failed:{failed.ExecutorId}";
                     _logger.LogError(
                         failed.Data,

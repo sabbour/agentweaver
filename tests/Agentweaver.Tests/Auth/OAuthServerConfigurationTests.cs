@@ -60,7 +60,9 @@ public sealed class OAuthServerConfigurationTests
         var client = result.StaticClients.Should().ContainSingle().Subject;
         client.ClientId.Should().Be(OAuthKnownClients.ClaudeHostedClientId);
         client.RedirectUris.Should().Equal(OAuthKnownClients.ClaudeHostedRedirectUri);
-        client.Scopes.Should().Equal(OAuthServerConfiguration.McpScope);
+        client.Scopes.Should().Equal(
+            OAuthServerConfiguration.McpScope,
+            OAuthServerConfiguration.OfflineAccessScope);
     }
 
     [Theory]
