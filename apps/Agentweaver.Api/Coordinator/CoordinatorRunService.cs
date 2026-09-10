@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
@@ -552,6 +555,15 @@ public sealed class CoordinatorRunService
                 expectedCopilotBindingId: effectiveProvider.ProviderId(),
                 expectedCopilotCredentialVersion: effectiveProvider.CredentialVersion())
             .ConfigureAwait(false))
+            throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
+
+        // Redeem through the exact run-bound provider used by KubernetesSandboxExecutor. The
+        // lifecycle validates and fences the snapshot; this final check prevents a run from being
+        // accepted when the launch-time credential projection is missing or stale.
+        var credentials = scope.ServiceProvider
+            .GetService<IGitHubCopilotCapabilityCredentialProvider>();
+        if (credentials is null
+            || await credentials.GetCredentialAsync(run.Id.ToString(), ct).ConfigureAwait(false) is null)
             throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
     }
 
@@ -1103,7 +1115,7 @@ public sealed class CoordinatorRunService
                         failed.ExecutorId,
                         runId,
                         reason);
-                    await FailRunSafeAsync(runId, entry, reason, providerFailure).ConfigureAwait(false);
+                    await FailRunSafeAsync(runId, entry, reason, providerFailure, failed.Data).ConfigureAwait(false);
                     return;
 
                 case RequestInfoEvent rie:
@@ -1931,7 +1943,8 @@ public sealed class CoordinatorRunService
         string runId,
         RunStreamEntry entry,
         string reason,
-        AgentProviderException? providerFailure)
+        AgentProviderException? providerFailure,
+        Exception? failure = null)
     {
         try
         {
@@ -1949,23 +1962,42 @@ public sealed class CoordinatorRunService
                     runId);
                 return;
             }
-            if (!entry.HasEventType(EventTypes.RunFailed))
+            var correlationId = Guid.NewGuid().ToString("n");
+            if (providerFailure is null)
             {
-                if (providerFailure is null)
+                var errorCode = reason == "coordinator_executor_failed:coordinator-direct"
+                    ? "coordinator_direct_execution_failed"
+                    : "coordinator_execution_failed";
+                entry.RecordNext(EventTypes.RunFailed, new
                 {
-                    entry.RecordNext(EventTypes.RunFailed, new { reason });
-                }
-                else
+                    reason,
+                    errorCode,
+                    message = StructuredRunFailureTerminal.CreateDiagnosticMessage(errorCode, retryable: false),
+                    retryable = false,
+                    correlationId,
+                    traceId = Activity.Current?.TraceId.ToHexString(),
+                    causeChain = BuildSafeCauseChain(failure),
+                });
+                _logger.LogError(
+                    "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                    runId, errorCode, correlationId);
+            }
+            else
+            {
+                entry.RecordNext(EventTypes.RunFailed, new
                 {
-                    entry.RecordNext(EventTypes.RunFailed, new
-                    {
-                        reason = providerFailure.ErrorCode,
-                        errorCode = providerFailure.ErrorCode,
-                        message = providerFailure.UserMessage,
-                        category = providerFailure.FailureKind.ToString(),
-                        retryable = providerFailure.IsRetryable,
-                    });
-                }
+                    reason = providerFailure.ErrorCode,
+                    errorCode = providerFailure.ErrorCode,
+                    message = providerFailure.UserMessage,
+                    category = providerFailure.FailureKind.ToString(),
+                    retryable = providerFailure.IsRetryable,
+                    correlationId,
+                    traceId = Activity.Current?.TraceId.ToHexString(),
+                    causeChain = BuildSafeCauseChain(providerFailure),
+                });
+                _logger.LogError(
+                    "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                    runId, providerFailure.ErrorCode, correlationId);
             }
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
@@ -1982,6 +2014,14 @@ public sealed class CoordinatorRunService
             await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
         }
+    }
+
+    private static IReadOnlyList<string> BuildSafeCauseChain(Exception? exception)
+    {
+        var causes = new List<string>(4);
+        for (var current = exception; current is not null && causes.Count < 4; current = current.InnerException)
+            causes.Add(current.GetType().Name);
+        return causes;
     }
 
     private static AgentProviderException? FindProviderFailure(Exception? exception)

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Domain;
@@ -18,9 +19,12 @@ public static class StructuredRunFailureTerminal
         InternalErrorCode,
         "a2a_transport_failure",
         "agent_host_turn_incomplete",
+        "coordinator_execution_failed",
+        "coordinator_direct_execution_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
         "model_provider_snapshot_unavailable",
+        "model_provider_connection_required",
         "shell_execution_timeout",
     };
     private static readonly SandboxOutputRedactor DiagnosticRedactor =
@@ -148,6 +152,26 @@ public static class StructuredRunFailureTerminal
             sequence,
             timestampUtc);
 
+    internal static RunEvent CreateInternalError(
+        string message,
+        string? diagnostic,
+        Exception exception,
+        string? correlationId = null,
+        int sequence = 0,
+        DateTimeOffset timestampUtc = default) =>
+        new(
+            sequence,
+            EventTypes.RunFailed,
+            CreatePayload(
+                InternalErrorCode,
+                message,
+                diagnostic,
+                retryable: true,
+                correlationId ?? Guid.NewGuid().ToString("n"),
+                Activity.Current?.TraceId.ToHexString(),
+                BuildCauseChain(exception)),
+            timestampUtc);
+
     internal static RunEvent CreateFailure(
         string errorCode,
         string message,
@@ -183,27 +207,46 @@ public static class StructuredRunFailureTerminal
     }
 
     private static object CreatePayload(string? errorCode, string? message, string? diagnostic, bool? retryable)
+        => CreatePayload(errorCode, message, diagnostic, retryable, null, null, null);
+
+    private static object CreatePayload(
+        string? errorCode,
+        string? message,
+        string? diagnostic,
+        bool? retryable,
+        string? correlationId,
+        string? traceId,
+        IReadOnlyList<string>? causeChain)
     {
         var normalizedCode = NormalizeErrorCode(errorCode);
         var normalizedMessage = NormalizeTrustedMessage(message, normalizedCode);
-        if (diagnostic is null)
+        var payload = new Dictionary<string, object?>
         {
-            return new
-            {
-                message = normalizedMessage,
-                errorCode = normalizedCode,
-                retryable,
-            };
-        }
-
-        return new
-        {
-            message = normalizedMessage,
-            errorCode = normalizedCode,
-            diagnostic = SanitizeDiagnostic(diagnostic),
-            retryable,
+            ["message"] = normalizedMessage,
+            ["errorCode"] = normalizedCode,
+            ["retryable"] = retryable,
         };
+        if (diagnostic is not null)
+            payload["diagnostic"] = SanitizeDiagnostic(diagnostic);
+        if (IsServerGeneratedId(correlationId))
+            payload["correlationId"] = correlationId;
+        if (IsServerGeneratedId(traceId))
+            payload["traceId"] = traceId;
+        if (causeChain is { Count: > 0 })
+            payload["causeChain"] = causeChain;
+        return payload;
     }
+
+    private static IReadOnlyList<string> BuildCauseChain(Exception exception)
+    {
+        var causes = new List<string>(4);
+        for (var current = exception; current is not null && causes.Count < 4; current = current.InnerException)
+            causes.Add(current.GetType().Name);
+        return causes;
+    }
+
+    private static bool IsServerGeneratedId(string? value) =>
+        value is { Length: 32 } && value.All(Uri.IsHexDigit);
 
     private static string NormalizeTrustedMessage(string? message, string errorCode)
     {

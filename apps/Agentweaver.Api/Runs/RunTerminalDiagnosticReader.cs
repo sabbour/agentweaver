@@ -17,19 +17,27 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> SafeCauseTypes = new(StringComparer.Ordinal)
     {
+        "ArgumentException",
+        "DirectoryNotFoundException",
+        "FileNotFoundException",
         "HttpRequestException",
         "IOException",
+        "InvalidOperationException",
+        "JsonException",
+        "ModelProviderConnectionRequiredException",
         "OperationCanceledException",
+        "NotSupportedException",
         "SocketException",
         "TaskCanceledException",
         "TimeoutException",
+        "UnauthorizedAccessException",
     };
 
     public async Task<RunTerminalDiagnosticResponse?> GetAsync(string runId, CancellationToken ct)
     {
         var candidates = await db.RunEvents.AsNoTracking()
             .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
-            .OrderBy(e => e.Sequence)
+            .OrderByDescending(e => e.Sequence)
             .Select(e => new { e.PayloadJson, e.CreatedAt })
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -160,6 +168,9 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
                    c.StartsWith("agent_turn_", StringComparison.Ordinal) => "agent_host",
         "github_copilot_capability_snapshot_unavailable" or
         "model_provider_snapshot_unavailable" => "provider_snapshot",
+        var c when c.StartsWith("coordinator_", StringComparison.Ordinal) => "coordinator",
+        var c when c.StartsWith("model_provider_", StringComparison.Ordinal) ||
+                   c.StartsWith("github_copilot_", StringComparison.Ordinal) => "model_provider",
         var c when c.StartsWith("sandbox_", StringComparison.Ordinal) => "sandbox",
         var c when c.StartsWith("workflow_", StringComparison.Ordinal) => "workflow",
         _ => "run",

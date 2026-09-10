@@ -655,13 +655,17 @@ internal sealed class FakeKubeHandler : DelegatingHandler
     public List<Req> Requests { get; } = new();
 
     private const string EchoMarker = "\u0000ECHO";
-    private readonly List<(string Method, string PathOrRegex, bool IsRegex, string Body)> _routes = new();
+    private readonly List<(string Method, string PathOrRegex, bool IsRegex, HttpStatusCode Status, string Body)> _routes = new();
 
-    public void OnGet(string path, string body) => _routes.Add(("GET", path, false, body));
+    public void OnGet(string path, string body) => _routes.Add(("GET", path, false, HttpStatusCode.OK, body));
 
-    public void OnAny(string pathRegex, string body) => _routes.Add(("*", pathRegex, true, body));
+    public void OnAny(string pathRegex, string body) => _routes.Add(("*", pathRegex, true, HttpStatusCode.OK, body));
 
-    public void OnEcho(string method, string path) => _routes.Add((method, path, false, EchoMarker));
+    public void OnEcho(string method, string path) =>
+        _routes.Add((method, path, false, HttpStatusCode.OK, EchoMarker));
+
+    public void OnStatus(string method, string path, HttpStatusCode status, string body) =>
+        _routes.Add((method, path, false, status, body));
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
@@ -681,7 +685,7 @@ internal sealed class FakeKubeHandler : DelegatingHandler
             : null;
         Requests.Add(new Req(method, path, reqBody));
 
-        foreach (var (rMethod, pathOrRegex, isRegex, body) in _routes)
+        foreach (var (rMethod, pathOrRegex, isRegex, status, body) in _routes)
         {
             var methodOk = rMethod == "*" || string.Equals(rMethod, method, StringComparison.OrdinalIgnoreCase);
             if (!methodOk) continue;
@@ -694,7 +698,7 @@ internal sealed class FakeKubeHandler : DelegatingHandler
             if (body == EchoMarker)
                 return Json(HttpStatusCode.OK, await EchoAsync(request, cancellationToken));
 
-            return Json(HttpStatusCode.OK, body);
+            return Json(status, body);
         }
 
         // POST/PATCH default: echo body (a create/patch the test didn't care to stub explicitly).

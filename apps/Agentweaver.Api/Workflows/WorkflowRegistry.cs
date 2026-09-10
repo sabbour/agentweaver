@@ -105,6 +105,20 @@ public sealed class WorkflowRegistry
             ?? BuiltInWorkflows.Default;
     }
 
+    /// <summary>
+    /// Resolves a valid catalog workflow without applying a project's blueprint allowed-set filter.
+    /// This is reserved for platform-required topology fallbacks, such as restoring the mandatory
+    /// Build &amp; Test gate when every project-allowed automatic workflow is incompatible with
+    /// code-producing work. It does not make the workflow generally selectable by the project.
+    /// </summary>
+    public WorkflowDefinition? FindPlatformFallback(string id) =>
+        _catalog?.Workflows
+            .FirstOrDefault(result =>
+                result.IsValid
+                && result.Definition is not null
+                && string.Equals(result.Definition.Id, id, StringComparison.OrdinalIgnoreCase))
+            ?.Definition;
+
     private ProjectWorkflowSet Build(Project project)
     {
         var results = new List<WorkflowLoadResult>();

@@ -34,9 +34,12 @@ When you start an orchestration, Agentweaver reads your task description and run
 
 After the confirmed outcome is decomposed, Agentweaver validates that code-producing work uses a
 workflow with a **Build & Test** stage. If an automatic match such as `pm-discovery` cannot express
-that gate, the coordinator re-selects from compatible workflows. Explicit overrides remain pinned;
-when an override lacks Build & Test for code work, the work plan surfaces a warning instead of
-silently changing the user's choice.
+that gate, the coordinator re-selects from compatible workflows. If a blueprint's allowed workflow
+set contains no compatible automatic workflow, Agentweaver uses the platform `software-delivery`
+fallback for that run. This fallback keeps the required build, server health, curl, and browser
+preview checks available without changing the project's selectable workflow list. Explicit
+overrides remain pinned; when an override lacks Build & Test for code work, the work plan surfaces a
+warning instead of silently changing the user's choice.
 
 The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can
 override it at submission time.

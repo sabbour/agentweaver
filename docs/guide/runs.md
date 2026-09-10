@@ -263,6 +263,8 @@ Agentweaver does not replace more specific outcomes with this fallback:
 
 - a cancellation requested by the caller remains a cancellation;
 - an existing typed timeout or failure keeps its own error code and retryability;
+- an unavailable project or platform Copilot connection remains
+  `model_provider_connection_required` and stops before workflow fallback validation;
 - other A2A exceptions become `a2a_transport_failure`, with retryability determined by
   the transport failure;
 - a clean A2A stream end without `agent.turn.end` becomes the retryable
@@ -300,6 +302,12 @@ GitHub only when a new run reports `github_copilot_auth_required`.
 
 The projection contains only a bounded error code, safe message, component,
 timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
+AgentHost-generated internal failures and pre-launch provider failures include a
+server-generated correlation ID, the active trace ID when available, and a bounded
+exception-type chain. If an earlier
+best-effort agent operation failed but the Coordinator later terminalized for another
+reason, the projection uses the latest terminal failure instead of the earlier recovered
+failure.
 It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
 credentials, tokens, or keys. Project Viewers can read diagnostics for their project.
 Projectless runs remain visible only to their submitting owner. Unauthorized and
