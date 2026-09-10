@@ -117,6 +117,46 @@ public sealed class RunRetryTests : IDisposable
         newOptions.Autopilot.Should().BeTrue("autopilot must be preserved across a coordinator retry (#332)");
     }
 
+    [Fact]
+    public async Task DirectCoordinatorRetry_PreservesDirectStartMode()
+    {
+        var projectId = await CreateProjectAsync();
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: ProjectId.Parse(projectId));
+
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.RunEvents.Add(new Agentweaver.Api.Runs.RunEventRecord
+            {
+                RunId = source.Id.ToString(),
+                Sequence = 1,
+                EventType = EventTypes.CoordinatorStarted,
+                PayloadJson = """{"mode":"direct"}""",
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var newId = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        JsonElement? spec = null;
+        var found = await PollUntilAsync(async () =>
+        {
+            var response = await _owner.GetAsync($"/api/runs/{newId}/outcome-spec");
+            if (!response.IsSuccessStatusCode)
+                return false;
+            spec = await response.Content.ReadFromJsonAsync<JsonElement>();
+            return true;
+        });
+        found.Should().BeTrue();
+        spec!.Value.GetProperty("status").GetString().Should().Be("confirmed");
+    }
+
     // =========================================================================
     // (a3) In-place coordinator retries must fence the already-bound AgentHost
     // capability before reopening the run or dispatching another child.

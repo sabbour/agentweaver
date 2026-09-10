@@ -70,3 +70,9 @@ public sealed class CoordinatorOutcomeSpecDraftTimeoutException(
     : TimeoutException(
         $"Coordinator outcome-spec drafting for run '{runId}' exceeded {timeout.TotalSeconds:n0} seconds.",
         innerException);
+
+public static class CoordinatorFailureCodes
+{
+    /// <summary>The coordinator failed while drafting before workflow selection began.</summary>
+    public const string OutcomeSpecDraftFailed = "coordinator_outcome_spec_draft_failed";
+}

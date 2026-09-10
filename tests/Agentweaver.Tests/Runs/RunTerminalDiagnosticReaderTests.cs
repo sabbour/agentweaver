@@ -1,10 +1,46 @@
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Tests.Runs;
 
 public sealed class RunTerminalDiagnosticReaderTests
 {
+    [Theory]
+    [InlineData(EventTypes.CoordinatorAssemblyBlocked, "assembly_blocked")]
+    [InlineData(EventTypes.CoordinatorAssemblyFailed, "assembly_failed")]
+    public async Task GetAsync_ProjectsAssemblyFailureWithoutRunFailedEvent(
+        string eventType,
+        string expectedCode)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new MemoryDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = "run-1",
+            Sequence = 1,
+            EventType = eventType,
+            PayloadJson = "{}",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var diagnostic = await new RunTerminalDiagnosticReader(db)
+            .GetAsync("run-1", CancellationToken.None);
+
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be(expectedCode);
+        diagnostic.Component.Should().Be("coordinator");
+    }
+
     [Fact]
     public void TryRead_ProjectsOnlyBoundedAllowlistedFailureFields()
     {

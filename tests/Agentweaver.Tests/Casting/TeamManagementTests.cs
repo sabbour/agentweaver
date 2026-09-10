@@ -123,6 +123,25 @@ public sealed class TeamManagementTests : IClassFixture<CastingWebApplicationFac
     }
 
     [Fact]
+    public async Task AddMember_WithName_PreservesRequestedName()
+    {
+        var workingDir = _factory.NewProjectWorkingDirectory();
+
+        using var client = _factory.CreateAuthenticatedClient();
+        var (projectId, wd) = await CreateProjectAsync(client, workingDir);
+
+        SquadTestFixtureHelper.CreateMinimalSquad(wd);
+
+        using var addResp = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/team/members",
+            new { name = "Watson", role_id = "backend-engineer" });
+
+        Assert.Equal(HttpStatusCode.OK, addResp.StatusCode);
+        var added = await addResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Watson", added.GetProperty("name").GetString());
+    }
+
+    [Fact]
     public async Task RemoveMember_StatusBecomesRetiredAndCharterMovedToAlumni()
     {
         var workingDir = _factory.NewProjectWorkingDirectory();

@@ -969,6 +969,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var aggregateDiff = integration.Diff ?? string.Empty;
         var aggregateTreeHash = integration.TreeHash ?? string.Empty;
+        // Persist the assembled snapshot before any provider-bound gate or review work. A late
+        // assembly failure must not discard completed child work or its artifacts.
+        await _runStore.UpdateAssemblyArtifactsAsync(
+            RunId.Parse(context.CoordinatorRunId), aggregateTreeHash, aggregateDiff, ct).ConfigureAwait(false);
         var assemblyGates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
         var assemblyProvider = await ResolveAssemblyProviderBoundaryAsync(context.CoordinatorRunId, ct)
             .ConfigureAwait(false);

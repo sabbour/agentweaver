@@ -2,6 +2,7 @@ using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
 
@@ -218,7 +219,24 @@ public static class BlueprintEndpoints
         if (request.Blueprint is null)
             return Results.BadRequest(new { error = "blueprint is required." });
 
-        var validation = blueprints.Validate(request.Blueprint.ToModel());
+        IReadOnlySet<string>? extraKnownWorkflowIds = null;
+        if (!string.IsNullOrWhiteSpace(request.Blueprint.GeneratedWorkflowYaml))
+        {
+            var generated = WorkflowDefinitionLoader.Load(request.Blueprint.GeneratedWorkflowYaml, "generated");
+            if (!generated.IsValid || generated.Definition is null)
+            {
+                return Results.Ok(new ValidateBlueprintResponse
+                {
+                    Valid = false,
+                    Errors = [$"generated_workflow_yaml failed to parse: {generated.Error}"],
+                });
+            }
+
+            extraKnownWorkflowIds = new HashSet<string>(
+                [generated.Definition.Id], StringComparer.Ordinal);
+        }
+
+        var validation = blueprints.Validate(request.Blueprint.ToModel(), extraKnownWorkflowIds: extraKnownWorkflowIds);
         return Results.Ok(new ValidateBlueprintResponse
         {
             Valid = validation.Valid,

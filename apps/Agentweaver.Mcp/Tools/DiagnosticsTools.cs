@@ -84,6 +84,8 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
             or "agent_host_turn_incomplete"
             or "github_copilot_auth_required"
             or "shell_execution_timeout"
+            or "assembly_blocked"
+            or "assembly_failed"
             ? code
             : "agent_turn_internal_error";
         var retrySummary = retryable switch

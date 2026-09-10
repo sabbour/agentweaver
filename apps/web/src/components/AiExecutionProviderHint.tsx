@@ -20,13 +20,21 @@ const useStyles = makeStyles({
 
 export function AiExecutionProviderHint({
   context,
+  loading = false,
+  required = false,
   children,
 }: {
   context: AiExecutionContext | null;
+  loading?: boolean;
+  required?: boolean;
   children: ReactElement<{ 'aria-describedby'?: string; title?: string }>;
 }) {
   const styles = useStyles();
-  const label = aiExecutionProviderLabel(context);
+  const label = required
+    ? 'Enter a goal to continue'
+    : loading
+      ? 'Checking AI provider readiness'
+      : aiExecutionProviderLabel(context);
   const scope = aiExecutionProviderScope(context);
   const descriptionId = useId();
   const describedBy = [children.props['aria-describedby'], descriptionId]

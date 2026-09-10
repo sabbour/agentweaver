@@ -1398,7 +1398,8 @@ public sealed class CastingService
     }
 
     public async Task<CastMember> AddMemberAsync(
-        string projectId, string roleId, string? customRoleTitle, string? modelId, CancellationToken ct)
+        string projectId, string roleId, string? customRoleTitle, string? modelId,
+        string? preferredName, CancellationToken ct)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
         await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
@@ -1441,7 +1442,29 @@ public sealed class CastingService
             reservedNames.Add(m.Name);
 
         var allocator = new UniverseAllocator(policy);
-        var (name, isNamed) = allocator.AllocateOne(existingTeam.Universe, reservedNames);
+        string name;
+        bool isNamed;
+        if (!string.IsNullOrWhiteSpace(preferredName))
+        {
+            name = preferredName.Trim();
+            if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+                || name.Contains('/') || name.Contains('\\')
+                || name.Any(char.IsControl))
+                throw new ArgumentException("name contains invalid characters.", nameof(preferredName));
+
+            if (reservedNames.Contains(name))
+            {
+                throw new ArgumentException("name is already in use.", nameof(preferredName));
+            }
+            else
+            {
+                isNamed = true;
+            }
+        }
+        else
+        {
+            (name, isNamed) = allocator.AllocateOne(existingTeam.Universe, reservedNames);
+        }
 
         var compiler = new CharterCompiler(_catalog);
         string charter;

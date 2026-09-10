@@ -348,6 +348,34 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_DrafterAuthorizationFailure_IsClassifiedAsDraftFailure()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new GitHubCopilotUnauthorizedException(
+            "simulated authorization failure during outcome drafting");
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A drafting authorization failure must not look like workflow selection auth");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftFailed);
+    }
+
+    [Fact]
     public async Task Start_DefineOutcomeMode_DraftsSpecAndSuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();

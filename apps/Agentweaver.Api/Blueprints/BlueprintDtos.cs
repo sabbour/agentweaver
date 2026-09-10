@@ -27,6 +27,7 @@ public sealed record BlueprintDto
     [JsonPropertyName("skill_bindings")] public IReadOnlyList<BlueprintSkillBindingDto?>? SkillBindings { get; init; }
     /// <summary>Bespoke (non-catalog) roles minted by generation; each id also appears in <see cref="Roster"/>.</summary>
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
+    [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
 
     [JsonPropertyName("exportability")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

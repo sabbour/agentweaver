@@ -154,10 +154,13 @@ public sealed class OAuthDynamicClientRegistrationService(
             || responses[0] != ResponseTypes.Code)
             throw new OAuthRegistrationException("invalid_client_metadata", "Only public authorization-code clients are supported.");
 
-        var scopes = (ReadString(document, "scope") ?? OAuthServerConfiguration.McpScope)
+        var scopes = (ReadString(document, "scope")
+            ?? $"{OAuthServerConfiguration.McpScope} {OAuthServerConfiguration.OfflineAccessScope}")
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (scopes.Length is < 1 or > 2
-            || scopes.Any(x => x is not OAuthServerConfiguration.McpScope and not Scopes.OfflineAccess))
+            || scopes.Any(x =>
+                x is not OAuthServerConfiguration.McpScope
+                and not OAuthServerConfiguration.OfflineAccessScope))
             throw new OAuthRegistrationException("invalid_client_metadata", "Requested scope is not allowed.");
 
         var sourceHash = OAuthCertificateLoader.HashOpaque(source);

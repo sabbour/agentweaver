@@ -557,6 +557,10 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
         if (plan is null)
         {
+            if (EndpointHelpers.IsTerminal(run.Status)
+                && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
+                return Results.Content("null", "application/json");
+
             var outcomeSpec = await coordinator.GetOutcomeSpecAsync(coordinatorRunId, ct);
             var awaitingMaterialization = run.ParentRunId is null
                 && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
@@ -865,6 +869,7 @@ static bool ShouldUsePersistedAssemblyDiff(Run run) =>
         or RunStatus.Merged
         or RunStatus.MergeFailed
         or RunStatus.Declined
+        or RunStatus.Failed
         or RunStatus.Completed;
 
 /// <summary>Returns the most human-readable identity for the caller: display name first,

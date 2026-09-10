@@ -146,6 +146,40 @@ public sealed class WorktreeMemoryMirrorTests : IDisposable
             "repositories that never used the memory feature must not be polluted with an empty decisions.md");
     }
 
+    [Fact]
+    public async Task ExplicitExport_PublishesContextFilesToDefaultBranchWithoutUnrelatedChanges()
+    {
+        var projectId = ProjectId.New().ToString();
+        SeedDecision(projectId, "morpheus", "Use approved patterns", "Keep the exported context visible.");
+
+        var unrelatedPath = Path.Combine(_repoPath, "unrelated.txt");
+        File.WriteAllText(unrelatedPath, "must not be committed");
+
+        MemoryLedgerExporter.ExportResult export;
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            export = await MemoryLedgerExporter.ExportAsync(
+                projectId, _repoPath, db, CancellationToken.None);
+        }
+        await MemoryLedgerExporter.CommitExportAsync(_repoPath, "main", CancellationToken.None);
+
+        export.Files.Should().Contain(".agentweaver/context/boundaries.md");
+        export.Files.Should().Contain(".agentweaver/context/patterns.md");
+        using var repo = new Repository(_repoPath);
+        ResolveTreeEntry(repo.Branches["main"]!.Tip!.Tree, ".agentweaver/context/boundaries.md")
+            .Should().NotBeNull();
+        ResolveTreeEntry(repo.Branches["main"]!.Tip!.Tree, "unrelated.txt")
+            .Should().BeNull();
+        repo.RetrieveStatus()
+            .Where(change => change.FilePath.StartsWith(".agentweaver/", StringComparison.Ordinal)
+                || change.FilePath.StartsWith(".squad/", StringComparison.Ordinal))
+            .Should().BeEmpty("published ledger paths must leave the checked-out branch index clean");
+        repo.RetrieveStatus()
+            .Should().Contain(change => change.FilePath == "unrelated.txt"
+                && change.State.HasFlag(FileStatus.NewInWorkdir));
+    }
+
     private WorktreeManager CreateWorktreeManager()
     {
         var config = new ConfigurationBuilder()

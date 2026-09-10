@@ -226,6 +226,44 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         errors.Should().Contain(e => e!.Contains("totally-unknown-role"));
     }
 
+    [Fact]
+    public async Task ValidateBlueprint_WithGeneratedWorkflowYaml_AcceptsReferencedWorkflow()
+    {
+        const string workflowId = "generated-blueprint-workflow";
+        const string yaml = """
+            id: generated-blueprint-workflow
+            name: Generated Blueprint Workflow
+            description: A generated workflow used by a blueprint.
+            version: "1.0"
+            start: agent
+            nodes:
+              - id: agent
+                type: prompt
+                label: Agent
+                agent: lead
+            """;
+
+        var response = await _client.PostAsJsonAsync("/api/blueprints/validate", new
+        {
+            blueprint = new
+            {
+                id = "blueprint-generated-workflow",
+                name = "Generated Workflow",
+                description = "References a generated workflow.",
+                roster = new[] { "backend-engineer" },
+                workflow = workflowId,
+                review_policy = "default",
+                sandbox_profile = "default",
+                generated_workflow_yaml = yaml,
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("valid").GetBoolean().Should().BeTrue(
+            await response.Content.ReadAsStringAsync());
+    }
+
     [Theory]
     [InlineData("scribe")]
     [InlineData("work-monitor")]

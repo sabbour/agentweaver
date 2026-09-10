@@ -19,33 +19,36 @@ public sealed class SquadMemoryExporter
     private string Resolve(string relativePath)
         => SandboxPathValidator.ValidateAndResolve(relativePath, _workingDirectory);
 
-    private void WriteAllText(string relativePath, string content)
+    private void WriteAllText(string relativePath, string content, ICollection<string> outputs)
     {
         var full = Resolve(relativePath);
         var dir = Path.GetDirectoryName(full);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         File.WriteAllText(full, content, Encoding.UTF8);
+        outputs.Add(relativePath.Replace('\\', '/'));
     }
 
-    public Task ExportAsync(
+    public Task<IReadOnlyList<string>> ExportAsync(
         IReadOnlyList<DecisionExportDto> decisions,
         IReadOnlyList<InboxExportDto> inboxEntries,
         IReadOnlyList<MemoryExportDto> memories,
         SessionExportDto? currentSession,
         CancellationToken ct = default)
     {
-        ExportSquadDecisions(decisions, inboxEntries);
+        var outputs = new List<string>();
+        ExportSquadDecisions(decisions, inboxEntries, outputs);
         Directory.CreateDirectory(Resolve(".agentweaver/context"));
-        ExportAgentHistories(memories);
-        ExportNowMd(currentSession);
-        ExportBoundariesMd(decisions);
-        ExportPatternsMd(memories);
-        return Task.CompletedTask;
+        ExportAgentHistories(memories, outputs);
+        ExportNowMd(currentSession, outputs);
+        ExportBoundariesMd(decisions, outputs);
+        ExportPatternsMd(memories, outputs);
+        return Task.FromResult<IReadOnlyList<string>>(outputs);
     }
 
     private void ExportSquadDecisions(
         IReadOnlyList<DecisionExportDto> decisions,
-        IReadOnlyList<InboxExportDto> inboxEntries)
+        IReadOnlyList<InboxExportDto> inboxEntries,
+        ICollection<string> outputs)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Team Decisions");
@@ -60,7 +63,7 @@ public sealed class SquadMemoryExporter
                 sb.AppendLine($"\n> **Rationale:** {d.Rationale}");
             sb.AppendLine("\n---\n");
         }
-        WriteAllText(".squad/decisions.md", sb.ToString());
+        WriteAllText(".squad/decisions.md", sb.ToString(), outputs);
 
         var inboxDir = Resolve(".squad/decisions/inbox");
         if (Directory.Exists(inboxDir))
@@ -74,11 +77,11 @@ public sealed class SquadMemoryExporter
             var content = $"---\nagent: {e.AgentName}\nslug: {e.Slug}\ntype: {e.Type}\ntitle: {e.Title}\n---\n\n{e.Content}";
             if (!string.IsNullOrEmpty(e.Rationale))
                 content += $"\n\n**Rationale:** {e.Rationale}";
-            WriteAllText($".squad/decisions/inbox/{e.Slug}.md", content);
+            WriteAllText($".squad/decisions/inbox/{e.Slug}.md", content, outputs);
         }
     }
 
-    private void ExportAgentHistories(IReadOnlyList<MemoryExportDto> memories)
+    private void ExportAgentHistories(IReadOnlyList<MemoryExportDto> memories, ICollection<string> outputs)
     {
         foreach (var group in memories.GroupBy(m => m.AgentName))
         {
@@ -98,35 +101,30 @@ public sealed class SquadMemoryExporter
                 sb.AppendLine();
             }
             if (sb.Length > 0)
-                WriteAllText($".squad/agents/{group.Key.ToLowerInvariant()}/history.md", sb.ToString());
+                WriteAllText($".squad/agents/{group.Key.ToLowerInvariant()}/history.md", sb.ToString(), outputs);
         }
     }
 
-    private void ExportNowMd(SessionExportDto? session)
+    private void ExportNowMd(SessionExportDto? session, ICollection<string> outputs)
     {
         if (session is null) return;
         var content = $"---\nupdated_at: {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\nfocus_area: {session.FocusArea}\nactive_issues: [{session.ActiveIssues ?? ""}]\n---\n\n" +
                       $"# What We're Focused On\n\n{session.FocusArea}\n";
         if (!string.IsNullOrEmpty(session.Summary))
             content += $"\n## Summary\n\n{session.Summary}\n";
-        WriteAllText(".squad/identity/now.md", content);
+        WriteAllText(".squad/identity/now.md", content, outputs);
     }
 
-    private void ExportBoundariesMd(IReadOnlyList<DecisionExportDto> decisions)
+    private void ExportBoundariesMd(IReadOnlyList<DecisionExportDto> decisions, ICollection<string> outputs)
     {
-        var boundariesPath = Resolve(".agentweaver/context/boundaries.md");
         var architectural = decisions.Where(d => d.Type == "architectural" || d.Type == "scope").ToList();
-        if (architectural.Count == 0)
-        {
-            if (File.Exists(boundariesPath)) File.Delete(boundariesPath);
-            return;
-        }
-
         var sb = new StringBuilder();
         sb.AppendLine("# Project Boundaries");
         sb.AppendLine();
         sb.AppendLine("> These boundaries have been explicitly decided by the team. They take precedence over individual agent preferences.");
         sb.AppendLine();
+        if (architectural.Count == 0)
+            sb.AppendLine("No architectural or scope boundaries have been recorded.");
         foreach (var d in architectural)
         {
             sb.AppendLine($"## {d.Title}");
@@ -137,28 +135,23 @@ public sealed class SquadMemoryExporter
                 sb.AppendLine($"\n> **Why:** {d.Rationale}");
             sb.AppendLine("\n---\n");
         }
-        WriteAllText(".agentweaver/context/boundaries.md", sb.ToString());
+        WriteAllText(".agentweaver/context/boundaries.md", sb.ToString(), outputs);
     }
 
-    private void ExportPatternsMd(IReadOnlyList<MemoryExportDto> memories)
+    private void ExportPatternsMd(IReadOnlyList<MemoryExportDto> memories, ICollection<string> outputs)
     {
-        var patternsPath = Resolve(".agentweaver/context/patterns.md");
         var patterns = memories.Where(m => m.Type == "pattern").ToList();
-        if (patterns.Count == 0)
-        {
-            if (File.Exists(patternsPath)) File.Delete(patternsPath);
-            return;
-        }
-
         var sb = new StringBuilder();
         sb.AppendLine("# Shared Patterns");
         sb.AppendLine();
+        if (patterns.Count == 0)
+            sb.AppendLine("No reusable patterns have been recorded.");
         foreach (var p in patterns)
         {
             sb.AppendLine($"### [{p.AgentName}] {p.CreatedAt:yyyy-MM-dd}");
             sb.AppendLine(p.Content);
             sb.AppendLine();
         }
-        WriteAllText(".agentweaver/context/patterns.md", sb.ToString());
+        WriteAllText(".agentweaver/context/patterns.md", sb.ToString(), outputs);
     }
 }

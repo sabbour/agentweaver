@@ -251,6 +251,10 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
         return Results.NotFound();
 
     var diagnostic = await new RunTerminalDiagnosticReader(db).GetAsync(runId.ToString(), ct).ConfigureAwait(false);
+    if (diagnostic is null
+        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+        && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
+        diagnostic = RunTerminalDiagnosticReader.CreateFallback(run);
     return diagnostic is null ? Results.NotFound() : Results.Ok(diagnostic);
 })
     .Produces<RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
@@ -1549,6 +1553,7 @@ app.MapPost("/api/runs/{id}/retry", async (
             // source run's launch options (#332) — auto_approve_tools / autopilot must NOT silently
             // reset to false on retry, which would be an unexpected behavior change from the original.
             var sourceOptions = runOptions.Get(run.Id.ToString());
+            var startMode = await coordinator.GetStartModeAsync(run.Id.ToString(), ct);
             newRunId = await coordinator.StartCoordinatorRunAsync(
                 run.ProjectId!.Value,
                 run.Task,
@@ -1560,6 +1565,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                 autopilot: sourceOptions.Autopilot,
                 ct,
                 retriedFrom: run.Id.ToString(),
+                startMode: startMode,
                 submittingUserDisplayName: retryCallerDisplayName)
                 .ConfigureAwait(false);
         }

@@ -274,6 +274,77 @@ public sealed class McpToolSchemaTests
             .And.Contain("0f8fad5bd9cb469fa16570867728950e").And.Contain("IOException");
     }
 
+    [Fact]
+    public async Task ProjectRename_HandlesNoContentAndReturnsUpdatedProject()
+    {
+        var calls = 0;
+        var tools = new ProjectTools(CreateApiClient((request, _) =>
+        {
+            if (request.Method == HttpMethod.Patch)
+            {
+                calls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            }
+
+            request.Method.Should().Be(HttpMethod.Get);
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { project_id = "project-1", name = "New Name" }),
+            });
+        }));
+
+        var result = await tools.ProjectRenameAsync("project-1", "New Name", CancellationToken.None);
+
+        calls.Should().Be(2);
+        using var payload = JsonDocument.Parse(result);
+        payload.RootElement.GetProperty("name").GetString().Should().Be("New Name");
+    }
+
+    [Theory]
+    [InlineData("work_plan_not_ready")]
+    [InlineData("work_plan_not_found")]
+    public async Task CoordinatorWorkPlanGet_ReturnsNullWhenPlanIsAbsent(string errorCode)
+    {
+        var tools = new CoordinatorTools(CreateApiClient((request, _) =>
+        {
+            request.RequestUri!.AbsolutePath.Should().Be("/api/runs/run-1/work-plan");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = JsonContent.Create(new { error = errorCode }),
+            });
+        }));
+
+        (await tools.CoordinatorWorkPlanGetAsync("run-1", CancellationToken.None))
+            .Should().Be("null");
+    }
+
+    [Theory]
+    [InlineData("assembly_blocked")]
+    [InlineData("assembly_failed")]
+    public async Task RunFailureDiagnostic_PreservesAssemblyFailureCode(string code)
+    {
+        var tools = new DiagnosticsTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    code,
+                    message = "untrusted",
+                    component = "coordinator",
+                    timestamp = "2026-09-10T00:00:00Z",
+                    retryable = (bool?)null,
+                    correlation_ids = new Dictionary<string, string>(),
+                    cause_chain = Array.Empty<string>(),
+                }),
+            })));
+
+        var diagnostic = await tools.RunFailureDiagnosticAsync("run-1");
+
+        diagnostic.Code.Should().Be(code);
+        diagnostic.Message.Should().Be($"Run failed with code '{code}'. Retry availability is unknown.");
+    }
+
     // ---- #344: team_cast mutually-exclusive params must not both be required ----
 
     [Fact]
