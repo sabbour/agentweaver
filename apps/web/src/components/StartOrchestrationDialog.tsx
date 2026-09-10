@@ -27,6 +27,7 @@ import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -189,10 +190,16 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary" disabled={saving}>Cancel</Button>
             </DialogTrigger>
+            <AiExecutionProviderStatus
+              context={providerContext.context}
+              loading={providerContext.loading}
+              error={providerContext.error}
+            />
             <AiExecutionProviderHint
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="secondary"
@@ -206,6 +213,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="primary"

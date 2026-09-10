@@ -16,7 +16,13 @@ Supported AI actions show three provider states:
 - **Using** shows the provider for active execution.
 - **Used** shows the provider recorded for completed execution.
 
-The labels include the provider kind and the model name when it is available.
+Every execution surface uses the same compact provider indicator. It stays on one line,
+truncates before it can displace primary controls, and wraps beside its action only when
+the surrounding layout is narrow. The visible indicator contains the phase and provider
+kind. Its tooltip and accessible description contain the full model and scope details.
+Multi-action groups show one visible indicator while each AI action retains the complete
+accessible provider description.
+
 Screen readers announce changes, including replacement by another provider of the same kind.
 The UI and API do not expose credentials, account names, or provider-binding identities.
 
@@ -71,10 +77,12 @@ Enter your task as a natural-language goal in the **Goal** field:
 
 > "Refactor the authentication module to use JWT and add integration tests."
 
-The action buttons show **Enter a goal to continue** until the required Goal field contains
-text. While provider preparation is still in progress, they show **Checking AI provider
-readiness**; this is not a provider failure. Provider setup guidance appears only when the
-resolved provider is actually unavailable.
+The action buttons use the concise **Goal required** indicator until the required Goal
+field contains text; their accessible description remains **Enter a goal to continue**.
+While provider preparation is still in progress, the compact indicator says **Checking
+provider** and its accessible description says **Checking AI provider readiness**. This
+is not a provider failure. Provider setup guidance appears only when the resolved provider
+is actually unavailable.
 
 Click **Start task**. The coordinator orchestration begins and you're taken to the topology view.
 

@@ -112,8 +112,10 @@ describe('StartOrchestrationDialog', () => {
       target: { value: 'Use the platform provider' },
     });
 
-    expect((await screen.findAllByText('Expected provider: Azure BYOK. Model: gpt-5.')).length).toBe(2);
-    expect(screen.getAllByText('Scope: Platform.')).toHaveLength(2);
+    expect((await screen.findAllByText('Expected provider: Azure BYOK. Model: gpt-5.')).length).toBe(3);
+    expect(screen.getAllByText('Scope: Platform.')).toHaveLength(3);
+    expect(screen.getAllByTestId('ai-provider-indicator')).toHaveLength(1);
+    expect(screen.getByTestId('ai-provider-indicator').textContent).toBe('Expected: Azure BYOK');
     await waitFor(() =>
       expect((screen.getByRole('button', { name: 'Direct' }) as HTMLButtonElement).disabled).toBe(false),
     );

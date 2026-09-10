@@ -34,6 +34,7 @@ import { EmptyState } from './ui';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -328,10 +329,16 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
             <Button appearance="secondary" disabled={saving} onClick={() => setOpen(false)}>
               Cancel
             </Button>
+            <AiExecutionProviderStatus
+              context={providerContext.context}
+              loading={providerContext.loading}
+              error={providerContext.error}
+            />
             <AiExecutionProviderHint
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="secondary"
@@ -345,6 +352,7 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="primary"

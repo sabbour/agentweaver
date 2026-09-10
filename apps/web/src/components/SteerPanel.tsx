@@ -14,7 +14,11 @@ import { Button,
   } from '@fluentui/react-components';
 import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular, WarningRegular } from '@fluentui/react-icons';
 import { SteeringLegend } from './SteeringLegend';
-import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import {
+  AiExecutionProviderHint,
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useState } from 'react';
 import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
@@ -213,7 +217,12 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
       <SteeringLegend />
 
       <div className={styles.actionRow}>
-        <AiExecutionProviderHint context={providerContext.context}>
+        <AiExecutionProviderStatus
+          context={providerContext.context}
+          loading={providerContext.loading}
+          error={providerContext.error}
+        />
+        <AiExecutionProviderHint context={providerContext.context} showIndicator={false}>
           <Button
             appearance="primary"
             icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}
@@ -224,7 +233,7 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
             Send
           </Button>
         </AiExecutionProviderHint>
-        <AiExecutionProviderHint context={providerContext.context}>
+        <AiExecutionProviderHint context={providerContext.context} showIndicator={false}>
           <Button
             appearance="outline"
             icon={<ArrowRoutingRegular />}
@@ -235,7 +244,7 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
             Redirect
           </Button>
         </AiExecutionProviderHint>
-        <AiExecutionProviderHint context={providerContext.context}>
+        <AiExecutionProviderHint context={providerContext.context} showIndicator={false}>
           <Button
             appearance="outline"
             icon={<EditRegular />}

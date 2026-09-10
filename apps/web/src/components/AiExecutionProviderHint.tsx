@@ -5,6 +5,7 @@ import {
   MessageBarBody,
   Text,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import { cloneElement, useId } from 'react';
@@ -15,34 +16,126 @@ import type { AiExecutionContext } from '../api/types';
 const useStyles = makeStyles({
   root: {
     display: 'inline-flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
     maxWidth: '100%',
   },
-  label: {
+  indicator: {
+    display: 'inline-block',
+    boxSizing: 'border-box',
+    minWidth: 0,
+    maxWidth: 'min(100%, 12rem)',
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
     lineHeight: tokens.lineHeightBase100,
-    maxWidth: '100%',
-    overflowWrap: 'anywhere',
+    overflow: 'hidden',
     textAlign: 'left',
-    whiteSpace: 'normal',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  indicatorProblem: {
+    backgroundColor: tokens.colorPaletteYellowBackground1,
+    color: tokens.colorPaletteYellowForeground2,
+  },
+  srOnly: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    padding: 0,
+    margin: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0, 0, 0, 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
   },
 });
+
+function compactLabel({
+  context,
+  loading,
+  error,
+  required,
+}: {
+  context: AiExecutionContext | null;
+  loading: boolean;
+  error?: string | null;
+  required: boolean;
+}): string {
+  if (required) return 'Goal required';
+  if (loading) return 'Checking provider';
+  if (error) return 'Provider check failed';
+  const provider = context?.effective_model_provider;
+  if (!provider) return 'Provider not recorded';
+  if (provider.state === 'unavailable') return 'Provider unavailable';
+
+  const fullLabel = aiExecutionProviderLabel(context);
+  const providerName = fullLabel
+    .replace(/^(Expected provider:|Using|Used)\s+/, '')
+    .replace(/\.\s+Model:.*$/, '')
+    .replace(/\.$/, '');
+  const phase = context?.phase === 'active'
+    ? 'Using'
+    : context?.phase === 'completed'
+      ? 'Used'
+      : 'Expected';
+  return `${phase}: ${providerName}`;
+}
+
+export function AiExecutionProviderIndicator({
+  context,
+  loading = false,
+  error,
+  required = false,
+}: {
+  context: AiExecutionContext | null;
+  loading?: boolean;
+  error?: string | null;
+  required?: boolean;
+}) {
+  const styles = useStyles();
+  const compact = compactLabel({ context, loading, error, required });
+  const scope = aiExecutionProviderScope(context);
+  const description = required
+    ? 'Enter a goal to continue'
+    : loading
+      ? 'Checking AI provider readiness'
+      : error
+        ? error
+        : context
+          ? `${aiExecutionProviderLabel(context)}${scope ? ` Scope: ${scope}.` : ''}`
+          : 'Provider details not recorded';
+  const problem = Boolean(error)
+    || context?.effective_model_provider?.state === 'unavailable';
+  return (
+    <Text
+      className={mergeClasses(styles.indicator, problem && styles.indicatorProblem)}
+      title={description}
+      data-testid="ai-provider-indicator"
+    >
+      {compact}
+    </Text>
+  );
+}
 
 export function AiExecutionProviderHint({
   context,
   loading = false,
   error,
   required = false,
+  showIndicator = true,
   children,
 }: {
   context: AiExecutionContext | null;
   loading?: boolean;
   error?: string | null;
   required?: boolean;
+  showIndicator?: boolean;
   children: ReactElement<{ 'aria-describedby'?: string; title?: string }>;
 }) {
   const styles = useStyles();
@@ -57,7 +150,8 @@ export function AiExecutionProviderHint({
           : 'Provider details not recorded';
   const scope = aiExecutionProviderScope(context);
   const descriptionId = useId();
-  const describedBy = [children.props['aria-describedby'], descriptionId]
+  const scopeId = useId();
+  const describedBy = [children.props['aria-describedby'], descriptionId, scope ? scopeId : null]
     .filter(Boolean)
     .join(' ');
   return (
@@ -66,8 +160,16 @@ export function AiExecutionProviderHint({
         'aria-describedby': describedBy,
         title: children.props.title ?? label,
       })}
-      <Text id={descriptionId} className={styles.label}>{label}</Text>
-      {scope && <Text className={styles.label}>Scope: {scope}.</Text>}
+      {showIndicator && (
+        <AiExecutionProviderIndicator
+          context={context}
+          loading={loading}
+          error={error}
+          required={required}
+        />
+      )}
+      <span id={descriptionId} className={styles.srOnly}>{label}</span>
+      {scope && <span id={scopeId} className={styles.srOnly}>Scope: {scope}.</span>}
     </span>
   );
 }
@@ -92,11 +194,15 @@ export function AiExecutionProviderStatus({
         ? aiExecutionProviderLabel(context)
         : 'Provider details not recorded';
   const scope = context ? aiExecutionProviderScope(context) : null;
+  const announce = loading
+    || Boolean(error)
+    || context?.effective_model_provider?.state === 'unavailable';
   return (
-    <span className={styles.root} title={label} role="status">
+    <span className={styles.root} title={label} role={announce ? 'status' : undefined}>
       {children}
-      <Text className={styles.label}>{label}</Text>
-      {scope && <Text className={styles.label}>Scope: {scope}.</Text>}
+      <AiExecutionProviderIndicator context={context} loading={loading} error={error} />
+      <span className={styles.srOnly}>{label}</span>
+      {scope && <span className={styles.srOnly}>Scope: {scope}.</span>}
     </span>
   );
 }
