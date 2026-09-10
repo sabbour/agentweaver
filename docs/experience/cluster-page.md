@@ -162,6 +162,40 @@ and the selection is preserved while the page polls for a new diagnostics snapsh
 When the API supplies both a project and run relationship, the expanded card includes
 safe links to the project and orchestration detail pages.
 
+### Kubernetes resource layers
+
+The graph opens in the same runtime-only view so a normal cluster remains easy to scan.
+Use the compact layer controls to add any combination of Kubernetes infrastructure:
+
+| Layer | Resources |
+|---|---|
+| **Traffic** | Gateway, HTTPRoute, and Service |
+| **Security** | NetworkPolicy and ServiceAccount |
+| **Workloads** | Deployment and Pod |
+| **Storage** | PersistentVolumeClaim (PVC), PersistentVolume (PV), and StorageClass |
+| **Scaling** | HorizontalPodAutoscaler (HPA), PodDisruptionBudget (PDB), VerticalPodAutoscaler (VPA), and KEDA ScaledObject |
+| **Agentweaver** | Agentweaver custom resources, including sandbox templates, warm pools, claims, and sandboxes |
+
+Layer choices are independent, are remembered in the current browser, and survive
+diagnostics polling. **Reset to runtime** clears the saved choices. If discovery is not
+available, returns no objects, or cluster RBAC denies a resource type, the affected
+control shows a small inline status instead of failing the whole graph.
+
+Expanding any card can also reveal up to one hop of directly related resources. This
+card-driven subgraph is temporary and does not select or clear a global layer. Collapse
+the card to hide resources that are not otherwise visible through a selected layer.
+
+Solid arrows are relationships reported authoritatively by Kubernetes or an owning
+controller. Dashed arrows are inferred from selectors, names, labels, or another
+best-effort correlation. The graph legend communicates the distinction without relying
+on color. Resource cards use the same status, type-icon, disclosure, keyboard, and
+responsive layout conventions across runtime and infrastructure objects.
+
+To avoid turning large clusters into an unreadable canvas, the UI bounds infrastructure
+nodes, one-hop reveals, and relationships. A hidden-count message and the expanded
+card's related-resource summary indicate when more data exists. Zoom, pan, expanded
+cards, selected layers, and stable runtime positions continue to work while polling.
+
 ## Sandbox claims table
 
 Lists all SandboxClaim CRD objects in the namespace:

@@ -124,3 +124,19 @@ test('authentication loading fails closed even when shell and explicit target ar
 
   assert.equal(result.state, 'auth-loading');
 });
+
+test('cluster topology declares a stable harness readiness target and layer actions', async () => {
+  const domSnapshot = await fixture('cluster-topology-dom.json');
+  const result = classifyAppReadiness({
+    url: 'https://agentweaver.example.staging/cluster',
+    domSnapshot,
+    target: { testId: 'cluster-topology-graph' },
+  });
+
+  assert.equal(result.state, 'ready');
+  assert.deepEqual(result.target, { testId: 'cluster-topology-graph' });
+  assert(domSnapshot.some((item) =>
+    item.role === 'checkbox' && item.name === 'Show Traffic topology layer'));
+  assert(domSnapshot.some((item) =>
+    item.testId === 'cluster-topology-reset-layers' && item.role === 'button'));
+});
