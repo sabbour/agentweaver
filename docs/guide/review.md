@@ -39,6 +39,12 @@ the live stream reconnects or both a durable gate event and a display event exis
 Resolved, denied, expired, cleared, duplicate, terminal-run, and orphaned requests are
 not actionable.
 
+Approval-sensitive run settings are snapshotted before coordinator activation. The immutable
+snapshot records the launch auto-approve/autopilot flags, preview approval timeout, launch source,
+and source project update timestamp. Preview approval uses the captured launch defaults and timeout
+instead of re-reading mutable project pickup settings. Live run controls remain separate and are
+cleared at completion; the launch snapshot remains available for audit, terminal details, and retry.
+
 Coordinator approvals can originate from the coordinator itself, a coordinator phase,
 or a child run. Agentweaver maps the request to its owning scope while keeping the
 operator on the top-level run review page. Approval authorization is unchanged, and

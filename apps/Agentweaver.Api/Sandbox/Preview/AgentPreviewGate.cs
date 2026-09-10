@@ -155,10 +155,14 @@ public sealed class AgentPreviewGate
         string? treeHash = null,
         string? retryOfRequestId = null)
     {
+        var launchPolicy = _runOptions.GetLaunchPolicy(runId);
         if (IsAutoApproved(runId))
         {
             _logger.LogInformation(
-                "start_preview auto-approved (config/run-option/policy) — port={Port} runId={RunId}", port, runId);
+                "start_preview auto-approved (config/run-option/policy) — port={Port} runId={RunId} approvalPolicySnapshotId={ApprovalPolicySnapshotId}",
+                port,
+                runId,
+                launchPolicy?.SnapshotId);
             var retryRequestId = retryOfRequestId is null ? null : Guid.NewGuid().ToString("n");
             if (retryRequestId is not null)
             {
@@ -207,6 +211,7 @@ public sealed class AgentPreviewGate
             expiresAt = expiresAt.ToString("O"),
             timeoutMinutes = (int)approvalTimeout.TotalMinutes,
             retryOfRequestId,
+            approvalPolicySnapshotId = launchPolicy?.SnapshotId,
         });
         _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
         {
@@ -219,6 +224,7 @@ public sealed class AgentPreviewGate
             retry_of_request_id = retryOfRequestId,
             expires_at = expiresAt.ToString("O"),
             timeout_minutes = (int)approvalTimeout.TotalMinutes,
+            approval_policy_snapshot_id = launchPolicy?.SnapshotId,
             timestamp_utc = requestedAt.ToString("O"),
         });
         _streams.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
@@ -231,8 +237,11 @@ public sealed class AgentPreviewGate
         });
 
         _logger.LogInformation(
-            "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId}",
-            displayId, port, runId);
+            "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId} approvalPolicySnapshotId={ApprovalPolicySnapshotId}",
+            displayId,
+            port,
+            runId,
+            launchPolicy?.SnapshotId);
 
         return new PreviewApprovalAttempt(
             requestId,
@@ -325,6 +334,15 @@ public sealed class AgentPreviewGate
 
     internal async Task<TimeSpan> ResolveApprovalTimeoutForRunAsync(string runId, CancellationToken ct)
     {
+        var launchPolicy = _runOptions.GetLaunchPolicy(runId);
+        if (launchPolicy is not null)
+        {
+            return TimeSpan.FromMinutes(Math.Clamp(
+                launchPolicy.PreviewApprovalTimeoutMinutes,
+                MinimumApprovalTimeoutMinutes,
+                MaximumApprovalTimeoutMinutes));
+        }
+
         if (_runStore is null || _projectStore is null || !RunId.TryParse(runId, out var parsedRunId))
             return _fallbackApprovalTimeout;
 

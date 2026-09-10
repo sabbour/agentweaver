@@ -73,6 +73,27 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public void RunApprovalPolicySnapshot_SurvivesReplicaRestartAndOptionCleanup()
+    {
+        var replicaA = NewOptionsStore();
+        var captured = replicaA.CaptureLaunchPolicy(
+            "run-policy-1",
+            new RunOptions(AutoApproveTools: true, Autopilot: true),
+            11,
+            "backlog_pickup",
+            DateTimeOffset.Parse("2026-09-10T08:30:00Z"));
+        replicaA.Set("run-policy-1", captured.Options);
+        replicaA.Clear("run-policy-1");
+
+        var restartedReplica = NewOptionsStore();
+        var restored = restartedReplica.GetLaunchPolicy("run-policy-1");
+
+        restored.Should().Be(captured);
+        restored!.SnapshotId.Should().NotBeNullOrWhiteSpace();
+        restartedReplica.Get("run-policy-1").Should().Be(new RunOptions());
+    }
+
+    [Fact]
     public async Task ApprovalGrant_OnAnotherReplica_ResolvesWaitingRun()
     {
         var owner = NewApprovalGate();
