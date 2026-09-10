@@ -23,6 +23,7 @@ import {
   TabList,
   tokens,
 } from '@fluentui/react-components';
+import { RepoAppAuthorizationResultNotice } from './GitHubAuthorizationResultNotices';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -128,16 +129,6 @@ export function ConnectGitHubRepositoryDialog({
         setReposReloadKey((key) => key + 1);
         return;
       }
-      const messages: Record<string, string> = {
-        human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
-        authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
-        authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
-        github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
-        rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
-      };
-      setRepoAppConnectionError(
-        messages[authorizationResult] ?? 'Repository authorization could not be completed. Start a new authorization.',
-      );
     });
     return () => { cancelled = true; };
   }, [authorizationResult, open]);
@@ -444,6 +435,7 @@ export function ConnectGitHubRepositoryDialog({
                     <MessageBarBody>{error}</MessageBarBody>
                   </MessageBar>
                 )}
+                <RepoAppAuthorizationResultNotice code={authorizationResult} />
                 {repoAppConnectionError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{repoAppConnectionError}</MessageBarBody>

@@ -152,3 +152,15 @@ current Agentweaver version and API status. In-flight runs continue on the serve
 If sign-in fails, make sure that your Entra account has an Agentweaver App Role.
 
 If the redirect fails, make sure that the Entra redirect URI matches the deployed Agentweaver URL.
+
+Authentication and authorization callbacks use the same lightweight Agentweaver dialog,
+including flows that finish outside the main web app. Each dialog identifies success,
+pending approval, cancellation, expiry, or failure and tells you whether to return to
+Agentweaver, return to the MCP client, retry, or close the tab. These pages do not show
+OAuth codes, tokens, state values, callback cookies, or raw identity-provider errors.
+Unknown provider errors are replaced with safe guidance.
+
+MCP browser handoffs keep polling in the client while the completion tab shows its final
+status. Closing that tab does not cancel or repeat the authorization. If the browser
+cannot close the tab automatically, close it with the browser controls and return to the
+MCP client.

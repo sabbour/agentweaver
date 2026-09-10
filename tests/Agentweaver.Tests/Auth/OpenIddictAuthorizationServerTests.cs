@@ -165,7 +165,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         using var accepted = await _client.GetAsync("/oauth/authorize" + exactQuery);
         accepted.StatusCode.Should().Be(HttpStatusCode.OK);
         var unsignedAuthorization = await accepted.Content.ReadAsStringAsync();
-        unsignedAuthorization.Should().Contain("<h1>Not signed in to Agentweaver</h1>");
+        unsignedAuthorization.Should().Contain("<h1 id=\"dialog-title\">Sign in to review this request</h1>");
         unsignedAuthorization.Should().Contain("href=\"/auth/entra/authorize?oauth_return_handle=");
 
         foreach (var redirectUri in new[]
@@ -390,7 +390,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         html.Should().Contain("<span class=\"label\">Signed in to Agentweaver as</span>");
         html.Should().Contain("<strong>Consent Page User</strong>");
         html.Should().Contain("consent-page-user@example.test");
-        html.Should().Contain("<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"Agentweaver logo\">");
+        html.Should().Contain("<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"\">");
         html.Should().NotContain("aria-hidden=\"true\">AW</span>");
         html.Should().Contain("value=\"approve\">Allow</button>");
         html.Should().Contain("value=\"deny\">Deny</button>");
@@ -413,7 +413,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         response.Headers.GetValues("Cache-Control").Should().Contain("no-store");
         var html = await response.Content.ReadAsStringAsync();
         html.Should().Contain("<title>Sign in to authorize | Agentweaver</title>");
-        html.Should().Contain("<h1>Not signed in to Agentweaver</h1>");
+        html.Should().Contain("<h1 id=\"dialog-title\">Sign in to review this request</h1>");
         html.Should().Contain("Sign in to Agentweaver");
         html.Should().Contain("Resource validation test").And.NotContain("<form");
         html.Should().NotContain("login.microsoftonline.com");
@@ -557,7 +557,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             "base-uri 'none'; frame-ancestors 'none'");
         interstitial.Should().Contain("<title>Sign in again | Agentweaver</title>");
         interstitial.Should().Contain(
-            "<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"Agentweaver logo\">");
+            "<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"\">");
         interstitial.Should().Contain("href=\"/auth/entra/authorize?oauth_return_handle=");
         interstitial.Should().NotContain("<form");
         interstitial.Should().NotContain("login.microsoftonline.com");

@@ -30,6 +30,7 @@ import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '.
 import { GitHubIcon } from '../components/GitHubIcon';
 import { GitHubRepositoryAccessNotice } from '../components/GitHubRepositoryAccessNotice';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
+import { RepoAppAuthorizationResultNotice } from '../components/GitHubAuthorizationResultNotices';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
 import { ENTRA_AUTHORIZE_URL } from '../config';
@@ -526,19 +527,6 @@ function useGitHubData(open: boolean) {
   };
 }
 
-function repositoryAuthorizationError(result: string | null): string | null {
-  if (!result || result === 'success') return null;
-  const messages: Record<string, string> = {
-    human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
-    authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
-    authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
-    github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
-    rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
-  };
-  return messages[result] ?? 'Repository authorization could not be completed. Start a new authorization.';
-}
-
-
 function CreateFromGitHubDialog({
   onCreated,
   dataDir,
@@ -582,9 +570,7 @@ function CreateFromGitHubDialog({
   const [folderEdited, setFolderEdited] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
-  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(
-    () => repositoryAuthorizationError(authorizationResult),
-  );
+  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
   const connectRepoApp = async () => {
@@ -710,6 +696,7 @@ function CreateFromGitHubDialog({
           </MessageBarActions>
         </MessageBar>
       )}
+      <RepoAppAuthorizationResultNotice code={authorizationResult} />
       {repoAppConnectionError && (
         <MessageBar intent="error">
           <MessageBarBody>{repoAppConnectionError}</MessageBarBody>

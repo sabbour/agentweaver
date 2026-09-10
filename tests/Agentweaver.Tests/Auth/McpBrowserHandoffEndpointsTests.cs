@@ -65,11 +65,13 @@ public sealed class McpBrowserHandoffEndpointsTests
     }
 
     [Theory]
-    [InlineData(CopilotBindingOutcome.Success, "GitHub Copilot authorization completed")]
-    [InlineData(CopilotBindingOutcome.GitHubBindingUnavailable, "GitHub Copilot authorization could not be completed")]
+    [InlineData(CopilotBindingOutcome.Success, "detect the completed Copilot authorization automatically", "tone-success")]
+    [InlineData(CopilotBindingOutcome.AuthorizationTransactionConsumed, "already completed", "tone-warning")]
+    [InlineData(CopilotBindingOutcome.GitHubBindingUnavailable, "start a new authorization", "tone-error")]
     public async Task CopilotMcpHandoffCompletion_ExplainsOutcomeAndMcpResume(
         CopilotBindingOutcome outcome,
-        string expectedMessage)
+        string expectedMessage,
+        string expectedTone)
     {
         var context = new DefaultHttpContext();
         context.Response.Body = new MemoryStream();
@@ -80,15 +82,46 @@ public sealed class McpBrowserHandoffEndpointsTests
         context.Response.Headers.CacheControl.ToString().Should().Be("no-store");
         context.Response.Headers["Referrer-Policy"].ToString().Should().Be("no-referrer");
         context.Response.Headers["Content-Security-Policy"].ToString()
-            .Should().Contain("default-src 'none'");
+            .Should().Contain("default-src 'none'")
+            .And.Contain("script-src 'nonce-")
+            .And.Contain("style-src 'nonce-");
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body);
         var html = await reader.ReadToEndAsync();
         html.Should().Contain(expectedMessage)
             .And.Contain("Return to your MCP client")
+            .And.Contain(expectedTone)
+            .And.Contain("id=\"close-window\"")
+            .And.Contain("aria-labelledby=\"dialog-title\"")
+            .And.Contain("window.history.replaceState(null, '', window.location.pathname)")
             .And.NotContain("transaction_id")
             .And.NotContain("oauth state")
             .And.NotContain("callback cookie");
+    }
+
+    [Theory]
+    [InlineData(RepoAppAuthorizationOutcome.Success, "repository authorization automatically", "tone-success")]
+    [InlineData(RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed, "already completed", "tone-warning")]
+    [InlineData(RepoAppAuthorizationOutcome.RateLimited, "short wait", "tone-pending")]
+    [InlineData(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, "start a new authorization", "tone-error")]
+    public async Task RepoAppMcpHandoffCompletion_UsesTheSharedCompletionDialog(
+        RepoAppAuthorizationOutcome outcome,
+        string expectedMessage,
+        string expectedTone)
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+
+        await McpBrowserHandoffCompletionPage.Result(outcome).ExecuteAsync(context);
+
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        var html = await reader.ReadToEndAsync();
+        html.Should().Contain(expectedMessage)
+            .And.Contain(expectedTone)
+            .And.Contain("Close this tab")
+            .And.NotContain("state=")
+            .And.NotContain("code=");
     }
 
     private static async Task<string> IssueBrowserSessionAsync(

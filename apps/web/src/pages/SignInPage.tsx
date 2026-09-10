@@ -91,7 +91,19 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
   const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
-  const authError = params.get('auth') === 'error' ? (params.get('reason') ?? 'Authentication failed.') : null;
+  const authError = params.get('auth') === 'error' ? (() => {
+    switch (params.get('reason')) {
+      case 'access_denied':
+        return 'Sign-in was canceled. Select Sign in when you are ready to continue.';
+      case 'state_mismatch':
+      case 'missing_params':
+        return 'This sign-in request expired or is no longer valid. Start a new sign-in.';
+      case 'sign_in_failed':
+        return 'Microsoft Entra ID could not complete sign-in. Try again or contact your administrator.';
+      default:
+        return 'Authentication could not be completed. Start a new sign-in.';
+    }
+  })() : null;
   return (
     <div className={styles.page}>
       <div className={styles.card}>
