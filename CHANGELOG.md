@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.9
+
+### Patch Changes
+
+- 81d84c7: Keep in-flight runs on their accepted model provider when provider settings change.
+- 81d84c7: Failed runs now retain a safe terminal diagnostic that project viewers can inspect in the Coordinator, Observability traces, API, or MCP without exposing pod logs, prompts, credentials, or tool payloads.
+- 81d84c7: MCP GitHub authorization handoffs now guide you through Entra sign-in when needed, resume only for the initiating identity, and show a safe completion status before you return to MCP.
+- 81d84c7: Keep Sign out left-aligned in the account menu and show the API status and current version together in its footer.
+- 81d84c7: Recover project Repo App installation binding when GitHub sends an installation callback to the legacy OAuth callback URL.
+- 7d211c1: Account settings now provides GitHub installation management links after you connect the Repo App, so you can update repository access without leaving the connection screen.
+
 ## 0.28.8
 
 ### Patch Changes
