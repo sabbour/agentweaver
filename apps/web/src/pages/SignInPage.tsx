@@ -111,11 +111,15 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
 
         <div>
           <Text as="h1" className={styles.heading}>Sign in with Microsoft Entra ID</Text>
-          <Text as="p" className={styles.subheading}>Use your organization account to continue to Agentweaver.</Text>
+          <Text as="p" className={styles.subheading}>
+            Run governed teams of AI agents on your organization&apos;s infrastructure.
+          </Text>
         </div>
 
         <div className={styles.checklist}>
-          <Text className={styles.checklistItem}>Sign in to Agentweaver with your Entra ID account.</Text>
+          <Text className={styles.checklistItem}>
+            Describe the work, then review the proposed team, workflow, and approval gates.
+          </Text>
           <Text className={styles.note}>
             Authorize the Repo App or Copilot App when a project needs its respective GitHub capability.
           </Text>

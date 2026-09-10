@@ -50,7 +50,7 @@ const STEPS: TourStep[] = [
     title: 'Create a project',
     body: [
       'Create a local project or connect a GitHub repository.',
-      'Each project contains its team, work, and review history.',
+      'Describe the work so Agentweaver can propose its team, skills, and workflow.',
     ],
   },
   {
@@ -66,7 +66,7 @@ const STEPS: TourStep[] = [
     title: 'Start a task',
     body: [
       'Select a project first.',
-      'Then describe the result that you want Agentweaver to produce.',
+      'Then describe the outcome and review the gates before the team begins.',
     ],
   },
 ];

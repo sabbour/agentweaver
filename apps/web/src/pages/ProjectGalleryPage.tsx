@@ -460,7 +460,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       trigger={<Button appearance="primary" icon={<AddRegular />}>Create blank project</Button>}
       icon={<SparkleRegular />}
       title="Create blank project"
-      subtitle="Start from scratch and let Agentweaver design the right squad and workflow for you."
+      subtitle="Describe the work and let Agentweaver propose the team, skills, and workflow."
       left={left}
       right={right}
       saving={d.saving}
@@ -975,7 +975,7 @@ export function ProjectGalleryPage() {
       <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
-        description="Create a local project now. Add repository access when you want to publish a pull request."
+        description="Create a workspace for the team, skills, workflows, runs, and approvals for your work."
         actions={showGalleryActions ? (
           <>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
@@ -1026,7 +1026,7 @@ export function ProjectGalleryPage() {
       {!loading && !loadError && !authError && totalProjects === 0 && (
         <EmptyState
           title="No projects yet"
-          description="Create a local project for agent work. Repository access is optional until you publish a pull request."
+          description="Create a project, describe the work, and generate or choose the team and workflow. Connect a repository when the outcome belongs in Git."
           action={
             <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'center' }}>
               <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
