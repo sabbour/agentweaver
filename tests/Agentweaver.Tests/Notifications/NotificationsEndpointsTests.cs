@@ -68,7 +68,12 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         return run;
     }
 
-    private async Task<Run> InsertInProgressRunAsync(string projectId, string task, string? agentName = null, string? workflowRunId = null)
+    private async Task<Run> InsertInProgressRunAsync(
+        string projectId,
+        string task,
+        string? agentName = null,
+        string? workflowRunId = null,
+        string? parentRunId = null)
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -84,6 +89,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             ProjectId = ProjectId.Parse(projectId),
             AgentName = agentName,
             WorkflowRunId = workflowRunId,
+            ParentRunId = parentRunId,
         };
         await runStore.InsertAsync(run);
         return run;
@@ -541,6 +547,42 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         var approval = body.GetProperty("approvals").EnumerateArray().Should().ContainSingle().Subject;
         approval.GetProperty("owning_run_id").GetString().Should().Be(syntheticRunId);
         approval.GetProperty("action_run_id").GetString().Should().Be(run.Id.ToString());
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_ChildFailureWithoutResolution_ClearsRootProjection()
+    {
+        // Production correlation: project 96e489ca-4d61-4724-8d3b-a17e700dc203,
+        // root e78bd0cb-e31b-4c37-b13d-2a9e2b56f019, child 3fed0b49-4b12-463f-8017-e2aef7ff0779.
+        // The child failed before approval expiry without a terminal stream or approval-resolution event.
+        var projectId = await CreateBlankProjectAsync("Terminal child approval cleanup");
+        var root = await InsertInProgressRunAsync(projectId, "Coordinate preview implementation", "Coordinator");
+        var child = await InsertInProgressRunAsync(
+            projectId,
+            "Implement the confirmed outcome",
+            "Neo",
+            parentRunId: root.Id.ToString());
+        await InsertToolApprovalContextEventAsync(child.Id.ToString(), "stuck-preview", "start_preview");
+        await InsertToolApprovalRequiredEventAsync(child.Id.ToString(), "stuck-preview", "start_preview");
+
+        var pending = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        pending.GetProperty("count").GetInt32().Should().Be(1);
+        var approval = pending.GetProperty("approvals").EnumerateArray().Should().ContainSingle().Subject;
+        approval.GetProperty("owning_run_id").GetString().Should().Be(child.Id.ToString());
+        approval.GetProperty("action_run_id").GetString().Should().Be(child.Id.ToString());
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await runStore.UpdateStatusAsync(child.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        var afterChildFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        afterChildFailure.GetProperty("count").GetInt32().Should().Be(0);
+        var notifications = await _client.GetFromJsonAsync<JsonElement>("/api/notifications");
+        notifications.GetProperty("notifications").EnumerateArray()
+            .Should().NotContain(item => item.GetProperty("run_id").GetString() == root.Id.ToString());
+
+        await runStore.UpdateStatusAsync(root.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        var afterRootFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        afterRootFailure.GetProperty("count").GetInt32().Should().Be(0);
     }
 
     [Fact]
