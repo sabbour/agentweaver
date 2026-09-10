@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.10
+
+### Patch Changes
+
+- aba6b9b: Share AI execution-context signing material across API replicas and publish the supported operation contract to OpenAPI, MCP, and the API harness.
+- aba6b9b: Fix MCP project renames, explicit team-member names, direct-mode retries, generated-workflow blueprint validation, and diagnostics for early coordinator failures.
+- aba6b9b: Preserve assembled run artifacts when late assembly gates fail, publish explicit memory exports to the project workspace branch, and report missing workspace files accurately through MCP.
+- aba6b9b: Make MCP OAuth dynamic registrations refresh-capable by default and report
+  authorization failures during outcome-spec drafting with an accurate
+  drafting-stage error classification.
+- aba6b9b: Clarify task-start requirements while AI provider readiness is pending, and make `start_preview` forward observed process identity while returning actionable timeout and lifecycle errors.
+
 ## 0.28.9
 
 ### Patch Changes
