@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using System.Text.Json.Nodes;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using k8s;
@@ -72,6 +73,23 @@ builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer<BearerSecuritySchemeDocumentTransformer>();
     options.AddOperationTransformer<BearerSecurityRequirementOperationTransformer>();
+    options.AddSchemaTransformer((schema, context, _) =>
+    {
+        if (context.JsonTypeInfo.Type != typeof(AiExecutionContextRequest)
+            || schema.Properties is null
+            || !schema.Properties.TryGetValue("operation", out var operation))
+            return Task.CompletedTask;
+
+        if (operation is not Microsoft.OpenApi.OpenApiSchema operationSchema)
+            return Task.CompletedTask;
+
+        operationSchema.Enum = AiOperationCatalog.Names
+            .Select(name => (JsonNode)JsonValue.Create(name)!)
+            .ToList();
+        operationSchema.Description =
+            "The generative AI action to prepare. Use the action required by the guarded endpoint.";
+        return Task.CompletedTask;
+    });
 });
 
 builder.Services.AddOptions<GenerationModelOptions>()

@@ -548,6 +548,7 @@ public sealed class AiExecutionContextEndpointsTests
     }
 
     [Theory]
+    [InlineData("AiExecution:ProviderKeySigningKey")]
     [InlineData("Auth:CopilotApp:ClientSecret")]
     [InlineData("Auth:RepoApp:ClientSecret")]
     public async Task Production_can_use_an_already_provisioned_server_only_app_secret(string setting)
@@ -567,6 +568,56 @@ public sealed class AiExecutionContextEndpointsTests
         var accepted = await receiver.AcceptAsync(
             prepared.ProviderKey, operation, null, caller, CancellationToken.None);
         accepted.Provider.Should().Be(prepared.Provider);
+    }
+
+    [Fact]
+    public async Task Execution_context_retries_fail_until_all_api_replicas_share_the_same_signing_key()
+    {
+        await using var factory = new AgentweaverWebApplicationFactory();
+        await SeedByokProviderAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        var environment = new StubHostEnvironment(Environments.Production);
+        var firstReplica = new AiExecutionPlanService(
+            resolver,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AiExecution:ProviderKeySigningKey"] = "first-replica-signing-key",
+            }).Build(),
+            environment);
+        var secondReplica = new AiExecutionPlanService(
+            resolver,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AiExecution:ProviderKeySigningKey"] = "second-replica-signing-key",
+            }).Build(),
+            environment);
+        AiOperationCatalog.TryGet("assistant_turn", out var operation).Should().BeTrue();
+        var caller = new CallerContext { User = "operator" };
+
+        var initial = await firstReplica.PrepareAsync(operation, null, caller, CancellationToken.None);
+        var firstAttempt = () => secondReplica.AcceptAsync(
+            initial.ProviderKey, operation, null, caller, CancellationToken.None);
+        (await firstAttempt.Should().ThrowAsync<AiExecutionPlanException>())
+            .Which.ErrorCode.Should().Be("model_provider_changed");
+
+        var refreshed = await secondReplica.PrepareAsync(operation, null, caller, CancellationToken.None);
+        var retry = () => firstReplica.AcceptAsync(
+            refreshed.ProviderKey, operation, null, caller, CancellationToken.None);
+        (await retry.Should().ThrowAsync<AiExecutionPlanException>())
+            .Which.ErrorCode.Should().Be("model_provider_changed");
+
+        var sharedKey = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AiExecution:ProviderKeySigningKey"] = "shared-replica-signing-key",
+        }).Build();
+        var canonicalIssuer = new AiExecutionPlanService(resolver, sharedKey, environment);
+        var canonicalReceiver = new AiExecutionPlanService(resolver, sharedKey, environment);
+        var stable = await canonicalIssuer.PrepareAsync(operation, null, caller, CancellationToken.None);
+
+        (await canonicalReceiver.AcceptAsync(
+            stable.ProviderKey, operation, null, caller, CancellationToken.None))
+            .Provider.Should().Be(stable.Provider);
     }
 
     [Fact]

@@ -102,6 +102,18 @@ Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessio
 | `POST` | `/api/projects/{id}/runs` | Deprecated direct run submission; returns `410 Gone` |
 | `POST` | `/api/projects/{id}/orchestrations` | Start a coordinator orchestration |
 
+### AI execution context
+
+Before an AI-guarded action, call `POST /api/ai/execution-context` with the project or
+run scope and an `operation` from the OpenAPI request schema enum. The returned
+`execution_key` is bound to that action and must be sent in
+`If-Model-Provider-Key` to the matching guarded endpoint. For
+`POST /api/projects/{id}/orchestrations`, use the `orchestration` operation.
+
+The API rejects operation labels outside the published enum. Clients must not substitute
+another operation if the endpoint's documented operation is rejected; treat that as an
+API contract error and stop the affected flow safely.
+
 Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped. Each summary also includes `coordinator_status`: for a coordinator run (`agent_name: "Coordinator"`, no parent) this is the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`); it is `null` for normal runs. A companion `coordinator_status_reason` (the coordinator run's `result`, scoped to coordinator rows) carries the human-readable terminal/failure detail so the UI can render "Failed: &lt;reason&gt;". Children are excluded from this list. The UI should render `coordinator_status` (plus `coordinator_status_reason`) for coordinator rows so a long-running assembly does not show as a bare `in_progress` and a terminal failure does not show as an unexplained `failed`.
 The standalone project-scoped workflow-run detail endpoint (`GET /api/projects/{id}/runs/{workflowRunId}`) has been removed with the retired standalone run pages. Use owner-scoped `/api/runs/{id}` and child run endpoints for embedded coordinator panels.
 
