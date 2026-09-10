@@ -319,15 +319,15 @@ public sealed class MemoryTools(AgentweaverApiClient api)
 
     // ── Export / Import ───────────────────────────────────────────────────────
 
-    [McpServerTool(Name = "memory_export"), Description("Export project memory to .squad/ and .agentweaver/context/ files.")]
+    [McpServerTool(Name = "memory_export"), Description("Export project memory to .squad/ and .agentweaver/context/ files and report the paths written.")]
     public async Task<string> MemoryExportAsync(
         [Description("Project ID")] string project_id,
         CancellationToken ct = default)
     {
-        return await ExecuteMessageAsync(
+        return await ExecuteJsonAsync(
             "memory_export",
-            token => api.PostAsync($"api/projects/{Uri.EscapeDataString(project_id)}/memory/export", null, token),
-            "exported",
+            token => api.PostAsync<JsonElement>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/memory/export", null, token),
             ct);
     }
 

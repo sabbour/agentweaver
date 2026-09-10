@@ -2891,6 +2891,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         persisted!.Status.Should().Be(RunStatus.Failed);
         persisted.Result.Should().StartWith("assembly_error:");
+        persisted.TreeHash.Should().Be("agg-tree");
+        persisted.Diff.Should().Contain("aggregate diff");
         _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeTrue();
     }
 

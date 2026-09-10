@@ -137,13 +137,14 @@ One static `SecretProviderClass` object syncs app secrets from Key Vault into th
 | Key Vault secret | File in `/mnt/secrets-store/` | Used for |
 |-----------------|------------------------------|----------|
 | `mcp-api-key` | `mcp-api-key` | API authentication and worker loopback calls → `Auth__ApiKey` |
+| `ai-execution-provider-key-signing-key` | synced Kubernetes Secret only | Shared API-replica signing key for short-lived AI execution contexts → `AiExecution__ProviderKeySigningKey` |
 
 The MCP pod mounts no secrets; MCP auth accepts only Agentweaver-minted broker JWTs with
 the exact `/mcp` audience and `mcp:invoke` scope.
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. GitHub capability credentials are brokered per run after platform authorization; AgentHost pods do not receive an OAuth client secret mount.
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Create `ai-execution-provider-key-signing-key` once with high-entropy material and rotate it only during a coordinated API rollout: all serving API replicas must read the same value, and a rotation intentionally invalidates already prepared execution contexts. GitHub capability credentials are brokered per run after platform authorization; AgentHost pods do not receive an OAuth client secret mount.
 
 ---
 

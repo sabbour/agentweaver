@@ -189,7 +189,11 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary" disabled={saving}>Cancel</Button>
             </DialogTrigger>
-            <AiExecutionProviderHint context={providerContext.context}>
+            <AiExecutionProviderHint
+              context={providerContext.context}
+              loading={providerContext.loading}
+              required={!goal.trim()}
+            >
               <Button
                 appearance="secondary"
                 disabled={!goal.trim() || saving || providerContext.loading || !providerContext.available}
@@ -198,7 +202,11 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                 {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
               </Button>
             </AiExecutionProviderHint>
-            <AiExecutionProviderHint context={providerContext.context}>
+            <AiExecutionProviderHint
+              context={providerContext.context}
+              loading={providerContext.loading}
+              required={!goal.trim()}
+            >
               <Button
                 appearance="primary"
                 disabled={!goal.trim() || saving || providerContext.loading || !providerContext.available}

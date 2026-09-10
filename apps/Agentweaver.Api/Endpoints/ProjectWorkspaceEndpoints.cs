@@ -50,6 +50,12 @@ public static class ProjectWorkspaceEndpoints
             return result.Outcome switch
             {
                 WorkspaceOutcome.Ok => Results.Json(result.Nodes),
+                WorkspaceOutcome.MissingRef => Results.NotFound(new
+                {
+                    error = "Workspace ref not found.",
+                    error_code = "workspace_ref_not_found",
+                    hint = "Call list_project_workspace_refs first to see available refs.",
+                }),
                 _ => Results.NotFound(),
             };
         });
@@ -78,6 +84,18 @@ public static class ProjectWorkspaceEndpoints
             {
                 WorkspaceOutcome.Ok => Results.Json(result.Value),
                 WorkspaceOutcome.InvalidPath => Results.BadRequest(new { error = "Invalid file path." }),
+                WorkspaceOutcome.MissingFile => Results.NotFound(new
+                {
+                    error = $"Workspace file '{filePath}' not found in project '{id}'.",
+                    error_code = "workspace_file_not_found",
+                    hint = "Call list_project_workspace first to see available file paths.",
+                }),
+                WorkspaceOutcome.MissingRef => Results.NotFound(new
+                {
+                    error = "Workspace ref not found.",
+                    error_code = "workspace_ref_not_found",
+                    hint = "Call list_project_workspace_refs first to see available refs.",
+                }),
                 _ => Results.NotFound(),
             };
         });

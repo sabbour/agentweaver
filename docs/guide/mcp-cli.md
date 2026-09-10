@@ -200,6 +200,18 @@ If a tool returns `-32001 Request timed out`:
 3. Safe-to-retry tools are read-only calls such as `run_status`, `coordinator_work_plan_get`, `coordinator_children_get`, `run_show_artifacts`, and `run_get_file`.
 4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, `project_create`, or `project_delete` until you verify whether the first attempt already took effect.
 
+## Run and project consistency
+
+- `project_rename` returns the updated project after the rename is persisted.
+- `team_member_add` uses the requested `name` when it is valid and available.
+- `run_retry` preserves whether the original Coordinator run used `direct` or
+  `defineOutcome` start mode.
+- `coordinator_work_plan_get` returns `null` while no plan is available.
+- `run_failure_diagnostic` can report Coordinator failures that occur during
+  assembly, including blocked assembly.
+- `validate_blueprint` accepts a blueprint that references the workflow supplied
+  in its own `generated_workflow_yaml`.
+
 ## Full workflow sequence
 
 Manual end-to-end path:

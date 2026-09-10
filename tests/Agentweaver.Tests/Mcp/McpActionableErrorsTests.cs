@@ -34,6 +34,48 @@ public sealed class McpActionableErrorsTests
     }
 
     [Fact]
+    public async Task WorkspaceFile_NotFound_ReportsMissingPathRatherThanMissingProject()
+    {
+        var tools = new WorkspaceTools(CreateApiClient((request, _) =>
+        {
+            request.RequestUri!.AbsolutePath.Should().Be(
+                "/api/projects/proj-123/workspace/files/.agentweaver/context/Chewie.md/content");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = JsonContent.Create(new
+                {
+                    error = "Workspace file '.agentweaver/context/Chewie.md' not found in project 'proj-123'.",
+                    error_code = "workspace_file_not_found",
+                    hint = "Call list_project_workspace first to see available file paths.",
+                })
+            });
+        }));
+
+        var act = () => tools.GetProjectWorkspaceFileAsync(
+            "proj-123", ".agentweaver/context/Chewie.md", "main", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<McpApiException>();
+        ex.Which.Error.Should().Be(
+            "Workspace file '.agentweaver/context/Chewie.md' not found in project 'proj-123'.");
+        ex.Which.Hint.Should().Contain("list_project_workspace");
+        ex.Which.ApiErrorCode.Should().Be("workspace_file_not_found");
+    }
+
+    [Fact]
+    public async Task WorkspaceFile_ProjectNotFound_ReportsMissingProject()
+    {
+        var tools = new WorkspaceTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+
+        var act = () => tools.GetProjectWorkspaceFileAsync(
+            "missing-project", "readme.md", "main", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<McpApiException>();
+        ex.Which.Error.Should().Be("Project 'missing-project' not found.");
+        ex.Which.Hint.Should().Contain("project_list");
+    }
+
+    [Fact]
     public async Task RunReview_StateConflict_ThrowsStructuredReviewHint()
     {
         var tools = CreateRunTools((request, _) =>

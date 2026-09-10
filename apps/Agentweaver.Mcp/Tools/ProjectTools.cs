@@ -113,7 +113,9 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         try
         {
             var body = new { name };
-            var result = await api.PatchAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}", body, ct);
+            await api.PatchAsync($"/api/projects/{Uri.EscapeDataString(project_id)}", body, ct);
+            var result = await api.GetAsync<JsonElement>(
+                $"/api/projects/{Uri.EscapeDataString(project_id)}", ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

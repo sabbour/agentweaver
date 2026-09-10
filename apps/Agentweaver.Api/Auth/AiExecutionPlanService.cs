@@ -94,6 +94,8 @@ public static class AiOperationCatalog
                 SupportsByok: true),
         };
 
+    public static IReadOnlyList<string> Names { get; } = Operations.Keys.ToArray();
+
     public static bool TryGet(string? operation, out AiOperationDefinition definition) =>
         Operations.TryGetValue(operation?.Trim().ToLowerInvariant() ?? string.Empty, out definition!);
 

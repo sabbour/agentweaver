@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using LibGit2Sharp;
 using Agentweaver.Squad.Memory;
 
 namespace Agentweaver.Api.Memory;
@@ -19,12 +20,22 @@ namespace Agentweaver.Api.Memory;
 /// </summary>
 internal static class MemoryLedgerExporter
 {
+    internal sealed record ExportResult(IReadOnlyList<string> Files);
+
+    private static readonly string[] FixedExportPaths =
+    [
+        ".squad/decisions.md",
+        ".squad/identity/now.md",
+        ".agentweaver/context/boundaries.md",
+        ".agentweaver/context/patterns.md",
+    ];
+
     /// <summary>
     /// Queries the project's authoritative memory state and writes the file mirror into
     /// <paramref name="targetDirectory"/>. <b>Throws</b> on failure so explicit sync actions can
     /// surface an actionable error rather than reporting a false success.
     /// </summary>
-    public static async Task ExportAsync(
+    public static async Task<ExportResult> ExportAsync(
         string projectId,
         string targetDirectory,
         MemoryDbContext memoryDb,
@@ -60,7 +71,7 @@ internal static class MemoryLedgerExporter
             .FirstOrDefault();
 
         var exporter = new SquadMemoryExporter(targetDirectory);
-        await exporter.ExportAsync(
+        var files = await exporter.ExportAsync(
             decisions.Select(d => new DecisionExportDto(
                 d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
             inbox.Select(e => new InboxExportDto(
@@ -70,6 +81,7 @@ internal static class MemoryLedgerExporter
             session is null ? null : new SessionExportDto(
                 session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary),
             ct).ConfigureAwait(false);
+        return new ExportResult(files);
     }
 
     /// <summary>
@@ -124,5 +136,104 @@ internal static class MemoryLedgerExporter
                         && m.TrustState != MemoryTrustStates.Legacy
                         && (m.Type != "pattern" || m.TrustState == MemoryTrustStates.Approved), ct)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Publishes the generated ledger files to the project's default branch without staging or
+    /// committing unrelated working-tree changes. The explicit memory export action is therefore
+    /// visible through the project workspace browser, which reads committed branch trees.
+    /// </summary>
+    public static Task CommitExportAsync(
+        string workingDirectory,
+        string defaultBranch,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var repo = new Repository(workingDirectory);
+        var branch = repo.Branches[defaultBranch]
+            ?? throw new InvalidOperationException($"Default branch '{defaultBranch}' was not found.");
+        var parent = branch.Tip
+            ?? throw new InvalidOperationException($"Default branch '{defaultBranch}' has no commit.");
+
+        var generatedPaths = FixedExportPaths
+            .Concat(Directory.Exists(Path.Combine(workingDirectory, ".squad", "decisions", "inbox"))
+                ? Directory.GetFiles(
+                    Path.Combine(workingDirectory, ".squad", "decisions", "inbox"), "*.md")
+                    .Select(path => Path.GetRelativePath(workingDirectory, path).Replace('\\', '/'))
+                : [])
+            .Concat(Directory.Exists(Path.Combine(workingDirectory, ".squad", "agents"))
+                ? Directory.GetDirectories(Path.Combine(workingDirectory, ".squad", "agents"))
+                    .Select(path => Path.Combine(path, "history.md"))
+                    .Where(File.Exists)
+                    .Select(path => Path.GetRelativePath(workingDirectory, path).Replace('\\', '/'))
+                : [])
+            .Concat(EnumerateTreePaths(parent.Tree)
+                .Where(path => path.StartsWith(".squad/decisions/inbox/", StringComparison.Ordinal)
+                    || path.StartsWith(".squad/agents/", StringComparison.Ordinal)
+                        && path.EndsWith("/history.md", StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var tree = TreeDefinition.From(parent.Tree);
+        var indexUpdates = new List<(string Path, Blob? Blob)>();
+        foreach (var relativePath in generatedPaths)
+        {
+            ct.ThrowIfCancellationRequested();
+            var fullPath = Path.Combine(workingDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(fullPath))
+            {
+                var blob = repo.ObjectDatabase.CreateBlob(fullPath);
+                tree.Add(relativePath, blob, Mode.NonExecutableFile);
+                indexUpdates.Add((relativePath, blob));
+            }
+            else
+            {
+                tree.Remove(relativePath);
+                indexUpdates.Add((relativePath, null));
+            }
+        }
+
+        var treeId = repo.ObjectDatabase.CreateTree(tree);
+        if (string.Equals(treeId.Sha, parent.Tree.Sha, StringComparison.Ordinal))
+            return Task.CompletedTask;
+
+        var signature = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UtcNow);
+        var commit = repo.ObjectDatabase.CreateCommit(
+            signature,
+            signature,
+            "Export project memory",
+            treeId,
+            new[] { parent },
+            prettifyMessage: true);
+        repo.Refs.UpdateTarget(branch.Reference, commit.Id.Sha);
+        if (branch.IsCurrentRepositoryHead)
+        {
+            foreach (var update in indexUpdates)
+            {
+                if (update.Blob is null)
+                    repo.Index.Remove(update.Path);
+                else
+                    repo.Index.Add(update.Blob, update.Path, Mode.NonExecutableFile);
+            }
+            repo.Index.Write();
+        }
+        return Task.CompletedTask;
+    }
+
+    private static IEnumerable<string> EnumerateTreePaths(Tree tree, string prefix = "")
+    {
+        foreach (var entry in tree)
+        {
+            var path = string.IsNullOrEmpty(prefix) ? entry.Name : $"{prefix}/{entry.Name}";
+            if (entry.TargetType == TreeEntryTargetType.Tree)
+            {
+                foreach (var child in EnumerateTreePaths((Tree)entry.Target, path))
+                    yield return child;
+            }
+            else
+            {
+                yield return path;
+            }
+        }
     }
 }

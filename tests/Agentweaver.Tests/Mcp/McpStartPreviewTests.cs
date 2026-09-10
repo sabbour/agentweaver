@@ -1,5 +1,9 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Mcp;
@@ -39,7 +43,7 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
     {
         var tools = CreateTools();
 
-        var act = () => tools.StartPreviewAsync(Guid.NewGuid().ToString("N"), 3000, CancellationToken.None);
+        var act = () => tools.StartPreviewAsync(Guid.NewGuid().ToString("N"), 3000, ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 404);
@@ -50,7 +54,7 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
     {
         var tools = CreateTools();
 
-        var act = () => tools.StartPreviewAsync(Guid.NewGuid().ToString("N"), 70000, CancellationToken.None);
+        var act = () => tools.StartPreviewAsync(Guid.NewGuid().ToString("N"), 70000, ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 400);
@@ -81,9 +85,124 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
             .SetAutoApproveTools(runId.ToString(), true);
 
         var tools = CreateTools();
-        var act = () => tools.StartPreviewAsync(runId.ToString(), 3000, CancellationToken.None);
+        var act = () => tools.StartPreviewAsync(runId.ToString(), 3000, ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 409);
+    }
+
+    [Fact]
+    public async Task StartPreview_TransportTimeout_ReturnsActionableMcpError()
+    {
+        using var http = new HttpClient(new ThrowingHandler(new TaskCanceledException("preview request timed out")));
+        var api = new AgentweaverApiClient(
+            http,
+            new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey));
+        var tools = new RunTools(api);
+
+        var act = () => tools.StartPreviewAsync(
+            "run-preview-timeout",
+            8080,
+            session_id: null,
+            ct: CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<McpApiException>();
+        error.Which.StatusCode.Should().Be(-32001);
+        error.Which.Error.Should().Contain("Preview registration timed out");
+        error.Which.Hint.Should().Contain("run_status");
+    }
+
+    [Fact]
+    public async Task StartPreview_CallerDeadline_ReturnsActionableMcpError()
+    {
+        using var http = new HttpClient(new CancelledHandler());
+        var api = new AgentweaverApiClient(
+            http,
+            new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey));
+        var tools = new RunTools(api);
+        using var deadline = new CancellationTokenSource();
+        deadline.Cancel();
+
+        var act = () => tools.StartPreviewAsync(
+            "run-preview-deadline",
+            8080,
+            session_id: "preview-session",
+            ct: deadline.Token);
+
+        var error = await act.Should().ThrowAsync<McpApiException>();
+        error.Which.StatusCode.Should().Be(-32001);
+        error.Which.ApiErrorCode.Should().Be("preview_registration_timeout");
+        error.Which.Hint.Should().Contain("run_status");
+    }
+
+    [Fact]
+    public async Task StartPreview_ForwardsObservedSessionId()
+    {
+        using var handler = new CapturingHandler();
+        using var http = new HttpClient(handler);
+        var api = new AgentweaverApiClient(
+            http,
+            new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey));
+        var tools = new RunTools(api);
+
+        await tools.StartPreviewAsync(
+            "run-with-observed-process",
+            8080,
+            session_id: "preview-session-123",
+            ct: CancellationToken.None);
+
+        handler.LastPath.Should().Be("/api/runs/run-with-observed-process/sandbox/preview");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("target_port").GetInt32().Should().Be(8080);
+        body.RootElement.GetProperty("preview_runner_session_id").GetString()
+            .Should().Be("preview-session-123");
+    }
+
+    [Fact]
+    public void PreviewProcessExitedConflict_ReturnsActionableMcpError()
+    {
+        var error = new McpApiException(
+            409,
+            "Preview session has exited or is unreachable; a preview URL cannot be published.",
+            "/api/runs/run-ended/sandbox/preview");
+
+        error.Error.Should().Be("The preview process or its run is no longer active.");
+        error.Hint.Should().Contain("session_id");
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
+    }
+
+    private sealed class CancelledHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+    }
+
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        public string? LastPath { get; private set; }
+        public string? LastBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastPath = request.RequestUri?.AbsolutePath;
+            LastBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }

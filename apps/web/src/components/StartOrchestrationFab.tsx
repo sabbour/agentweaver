@@ -328,7 +328,11 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
             <Button appearance="secondary" disabled={saving} onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <AiExecutionProviderHint context={providerContext.context}>
+            <AiExecutionProviderHint
+              context={providerContext.context}
+              loading={providerContext.loading}
+              required={!goal.trim()}
+            >
               <Button
                 appearance="secondary"
                 disabled={!selectedProjectId || !goal.trim() || saving || providerContext.loading || !providerContext.available}
@@ -337,7 +341,11 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
                 {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
               </Button>
             </AiExecutionProviderHint>
-            <AiExecutionProviderHint context={providerContext.context}>
+            <AiExecutionProviderHint
+              context={providerContext.context}
+              loading={providerContext.loading}
+              required={!goal.trim()}
+            >
               <Button
                 appearance="primary"
                 disabled={!selectedProjectId || !goal.trim() || saving || providerContext.loading || !providerContext.available}

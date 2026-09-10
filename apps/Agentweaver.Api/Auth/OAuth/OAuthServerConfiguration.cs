@@ -21,6 +21,7 @@ public sealed record OAuthServerConfiguration(
     IReadOnlyList<IPNetwork> TrustedProxyNetworks)
 {
     public const string McpScope = "mcp:invoke";
+    public const string OfflineAccessScope = "offline_access";
     public static readonly TimeSpan RefreshTokenFamilyLifetime = TimeSpan.FromDays(30);
     public static readonly TimeSpan RefreshReplayRetention = RefreshTokenFamilyLifetime + TimeSpan.FromDays(7);
 
@@ -166,7 +167,8 @@ public sealed class OAuthStaticClient
     public required string ClientId { get; init; }
     public required string DisplayName { get; init; }
     public required string[] RedirectUris { get; init; }
-    public string[] Scopes { get; init; } = [OAuthServerConfiguration.McpScope];
+    public string[] Scopes { get; init; } =
+        [OAuthServerConfiguration.McpScope, OAuthServerConfiguration.OfflineAccessScope];
 
     internal void Validate()
     {
@@ -175,7 +177,9 @@ public sealed class OAuthStaticClient
             || RedirectUris is not { Length: > 0 and <= 10 }
             || RedirectUris.Any(uri => !OAuthRedirectUriValidator.IsValid(uri, allowDynamicLoopbackPort: false))
             || Scopes.Length == 0
-            || Scopes.Any(scope => scope is not OAuthServerConfiguration.McpScope and not "offline_access"))
+            || Scopes.Any(scope =>
+                scope is not OAuthServerConfiguration.McpScope
+                and not OAuthServerConfiguration.OfflineAccessScope))
         {
             throw new InvalidOperationException($"Invalid static OAuth client '{ClientId}'.");
         }

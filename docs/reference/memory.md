@@ -88,7 +88,12 @@ the server-resolved human or run identity.
 `record_memory` commits directly to the memory database and returns without rebuilding the
 filesystem snapshot. This keeps the agent tool call independent of remote workspace-volume
 latency; `export_memory` refreshes `.squad/` and `.agentweaver/context/` explicitly at the end
-of the Scribe pass.
+of the Scribe pass. An explicit export also publishes only the generated ledger files to the
+project's default branch, so they are visible through `list_project_workspace` and can be read
+with `get_project_workspace_file`. The response lists every repository-relative path written.
+The `boundaries.md` and `patterns.md` files are created even when they contain no entries, so a
+successful export always leaves a visible `.agentweaver/context/` snapshot. Unrelated
+working-tree changes are not staged or committed.
 
 | Field | Description |
 |-------|-------------|

@@ -105,7 +105,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `decision_inbox_submit` | Submit a decision or learning to the agent inbox. |
 | `decision_list` | List team decisions for a project. |
 | `decision_update` | Update a decision's status, content, or rationale. |
-| `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files. |
+| `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files and report the paths written. |
 | `memory_get` | Get a single memory entry. |
 | `memory_import` | Import .squad/decisions/inbox/*.md files into the project memory DB. |
 | `memory_list` | List memory entries for a specific agent. |
@@ -143,7 +143,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `run_submit` | Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control. |
 | `run_task` | Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action. |
 | `run_watch` | Watch a run live, streaming progress until completion. |
-| `start_preview` | Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started. |
+| `start_preview` | Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). If observe_bound_port returned a session_id, pass it so the server can verify the process is still healthy. You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started. |
 
 ## Sandbox Policy
 

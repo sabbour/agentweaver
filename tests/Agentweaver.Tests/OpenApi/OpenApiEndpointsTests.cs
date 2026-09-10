@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Agentweaver.Api.Auth;
 using FluentAssertions;
 using Agentweaver.Tests.Helpers;
 
@@ -67,6 +68,13 @@ public sealed class OpenApiEndpointsTests : IDisposable
             .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
             .Should().EndWith("/AiExecutionContextErrorResponse");
         executionContext.GetProperty("description").GetString().Should().Contain("If-Model-Provider-Key");
+        var executionContextOperation = root.GetProperty("components").GetProperty("schemas")
+            .GetProperty("AiExecutionContextRequest").GetProperty("properties").GetProperty("operation");
+        executionContextOperation.GetProperty("enum").EnumerateArray().Select(value => value.GetString())
+            .Should().BeEquivalentTo(AiOperationCatalog.Names);
+        executionContextOperation.GetProperty("description").GetString()
+            .Should().Contain("guarded endpoint");
+        AiOperationCatalog.Names.Should().Contain("orchestration");
 
         var outcomeSpec = paths.GetProperty("/api/runs/{id}/outcome-spec").GetProperty("get");
         outcomeSpec.GetProperty("operationId").GetString().Should().Be("GetCoordinatorOutcomeSpec");

@@ -31,6 +31,10 @@ any prewritten model of the product.
 Use only real returned content and state as the basis for praise, concern, steering,
 review, or revision. Poll while work is happening instead of narrating imaginary
 progress. Re-fetch the live YAML spec whenever you need to choose the next operation.
+When preparing AI execution context, select `operation` from that request schema's
+published enum and use the action required by the guarded endpoint's OpenAPI
+description. Do not invent a fallback action: if an advertised action is rejected,
+record the contract divergence and stop the affected flow safely.
 Do not call a preview "validated" until you have fetched the returned preview content
 yourself.
 Record every request and response verbatim; the driver acts as Oracle, not as the final

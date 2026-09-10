@@ -22,6 +22,22 @@ PKCE S256 and explicit consent are required. The stable least-privilege scope is
 `mcp:invoke`; requesting additional approved scopes re-opens consent. Password,
 implicit, client-credentials, and device grants are unavailable.
 
+## Client session recovery
+
+Dynamic registrations default to `mcp:invoke offline_access`, and the server
+rotates the refresh token on every successful refresh. An MCP client must persist
+both the access token and the current refresh token in its protected
+configuration, then atomically replace the stored pair after each successful
+refresh. Keeping only the access token in memory makes a dropped or restarted
+session unable to recover silently.
+
+Clients that register explicitly must request `offline_access`, use the
+`refresh_token` grant against `/oauth/token`, and preserve the replacement
+refresh token returned by the server. A refresh failure caused by an expired,
+replayed, revoked, or client-mismatched token requires a new interactive
+authorization flow. The Agentweaver server cannot repair a client
+configuration that discarded its refresh token.
+
 The consent page explicitly identifies the Agentweaver browser session before an
 authorization can be approved. It shows the validated Entra display name and email or
 UPN (falling back to the Entra object ID when no email is available). If no

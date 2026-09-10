@@ -215,6 +215,14 @@ spec:
                 secretKeyRef:
                   name: agentweaver-secrets
                   key: copilot-app-client-secret
+            # This dedicated Key Vault secret signs short-lived execution contexts. It
+            # must be identical for every API replica so a context prepared by one
+            # replica can be consumed by another.
+            - name: AiExecution__ProviderKeySigningKey
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: ai-execution-provider-key-signing-key
             - name: Auth__CopilotApp__CallbackUrl
               valueFrom:
                 configMapKeyRef:

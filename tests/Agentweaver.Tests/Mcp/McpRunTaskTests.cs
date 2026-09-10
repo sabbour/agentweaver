@@ -138,6 +138,8 @@ public sealed class McpRunTaskTests
             if (request.Method == HttpMethod.Post
                 && request.RequestUri!.AbsolutePath == "/api/ai/execution-context")
             {
+                var requestBody = request.Content!.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
+                requestBody.GetProperty("operation").GetString().Should().Be("orchestration");
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = JsonContent.Create(new

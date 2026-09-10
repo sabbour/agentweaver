@@ -50,6 +50,17 @@ public sealed class McpApiException : McpException
         var normalizedPath = string.IsNullOrWhiteSpace(path) ? null : path;
         var normalizedMessage = NormalizeMessage(message);
 
+        if (string.Equals(errorCode, "preview_registration_timeout", StringComparison.Ordinal))
+        {
+            return new McpErrorPayload(
+                statusCode == 0 ? -32001 : statusCode,
+                normalizedMessage,
+                explicitHint ?? "Call run_status to confirm the sandbox is still running, then retry start_preview.",
+                normalizedMessage,
+                normalizedPath,
+                errorCode);
+        }
+
         if (IsTimeout(statusCode, normalizedMessage))
         {
             return new McpErrorPayload(
@@ -79,6 +90,17 @@ public sealed class McpApiException : McpException
                 "Call run_task for the common flow or coordinator_start for manual control.",
                 normalizedMessage,
                 normalizedPath);
+        }
+
+        if (statusCode == 404 && errorCode is "workspace_file_not_found" or "workspace_ref_not_found")
+        {
+            return new McpErrorPayload(
+                statusCode,
+                normalizedMessage,
+                explicitHint ?? DefaultHintForPath(normalizedPath),
+                normalizedMessage,
+                normalizedPath,
+                errorCode);
         }
 
         if (statusCode == 404 && TryBuildNotFoundPayload(normalizedPath, normalizedMessage, out var notFound))
@@ -193,6 +215,19 @@ public sealed class McpApiException : McpException
 
         if (path?.Contains("/sandbox/preview", StringComparison.OrdinalIgnoreCase) == true)
         {
+            if (message.Contains("session has exited", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("run ended", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("terminal run", StringComparison.OrdinalIgnoreCase))
+            {
+                payload = new McpErrorPayload(
+                    409,
+                    "The preview process or its run is no longer active.",
+                    "Start and verify the server in an active run, then retry start_preview with the observed port and session_id.",
+                    message,
+                    path);
+                return true;
+            }
+
             payload = new McpErrorPayload(
                 409,
                 "Sandbox pod not yet bound. The run's SandboxClaim is still pending.",
@@ -541,6 +576,17 @@ public sealed class AgentweaverApiClient
         return await ReadJsonAsync<T>(response, path, ct);
     }
 
+    public async Task PatchAsync(string path, object? body, CancellationToken ct = default)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Patch, path.TrimStart('/'))
+        {
+            Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
+        };
+        message.Headers.Authorization = GetAuthHeader();
+        using var response = await _http.SendAsync(message, ct);
+        await EnsureSuccessAsync(response, path, ct);
+    }
+
     public async Task DeleteAsync(string path, CancellationToken ct = default)
     {
         using var message = new HttpRequestMessage(HttpMethod.Delete, path.TrimStart('/'));
@@ -570,6 +616,7 @@ public sealed class AgentweaverApiClient
         {
             var body = await response.Content.ReadAsStringAsync(ct);
             string? error = null;
+            string? errorCode = null;
             string? message = null;
             string? hint = null;
             try
@@ -577,6 +624,8 @@ public sealed class AgentweaverApiClient
                 var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.TryGetProperty("error", out var err))
                     error = err.GetString();
+                if (doc.RootElement.TryGetProperty("error_code", out var code))
+                    errorCode = code.GetString();
                 if (doc.RootElement.TryGetProperty("message", out var msg))
                     message = msg.GetString();
                 if (doc.RootElement.TryGetProperty("detail", out var detail) && string.IsNullOrWhiteSpace(message))
@@ -590,7 +639,7 @@ public sealed class AgentweaverApiClient
                 (int)response.StatusCode,
                 message ?? error ?? body,
                 path,
-                error,
+                errorCode ?? error,
                 hint);
         }
     }
