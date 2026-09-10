@@ -255,14 +255,7 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                 var outboundEvent = runEvent;
                 if (string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
                 {
-                    if (StructuredRunFailureTerminal.TryRead(runEvent) is null)
-                    {
-                        outboundEvent = StructuredRunFailureTerminal.NormalizeUnstructuredFailure(runEvent);
-                        _logger.LogWarning(
-                            "A2ATurnBridgeAgent: normalized an unstructured run.failed event to " +
-                            "{ErrorCode}; the original recognized diagnostic fields were retained safely.",
-                            StructuredRunFailureTerminal.InternalErrorCode);
-                    }
+                    outboundEvent = StructuredRunFailureTerminal.NormalizeUnstructuredFailure(runEvent);
 
                     sawStructuredTerminalFailure = true;
                 }
@@ -349,15 +342,12 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                         ChatRole.Assistant,
                         new List<AIContent>
                         {
-                            RunEventDataPartCodec.EncodeRunEvent(new RunEvent(
-                                0,
-                                EventTypes.RunFailed,
-                                new
-                                {
-                                    message = publicationFailure.Message,
-                                    errorCode = publicationFailure.Reason,
-                                    retryable = false,
-                                })),
+                            RunEventDataPartCodec.EncodeRunEvent(
+                                StructuredRunFailureTerminal.CreateFailure(
+                                    publicationFailure.Reason,
+                                    publicationFailure.Message,
+                                    diagnostic: null,
+                                    retryable: false)),
                         });
                     throw new InvalidOperationException(
                         "Pod-local write-back publication failed.",

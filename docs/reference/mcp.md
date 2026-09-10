@@ -177,9 +177,12 @@ The following MCP paths prepare provider context:
 | `run_retry` | `orchestration` or `agent_turn`, based on the source run |
 | `run_review` when approval resumes AI work | `orchestration` for coordinator runs, or `agent_turn` for other runs |
 
-Agentweaver revalidates provider selection immediately before each covered model call.
-If the provider changes, the API returns `409 model_provider_changed` with redacted replacement context.
-The model call does not start.
+Agentweaver records an immutable provider and capability snapshot when a run starts. MCP server
+enablement, disablement, and configuration changes apply to future runs; they do not switch or
+cancel an in-flight run during assembly, revision, recovery, or replay. The platform still
+revalidates that the accepted provider credential remains usable immediately before each covered
+model call. If it is revoked or expired, the API returns `409 model_provider_changed` with
+redacted replacement context. The model call does not start.
 The API response uses this shape:
 
 ```json

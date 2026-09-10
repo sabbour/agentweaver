@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
@@ -77,6 +78,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
@@ -129,9 +131,10 @@ public sealed class SqliteRunEventStream : IRunEventStream
             using var connection = new SqliteConnection(_connectionString);
             connection.Open();
             using var tx = connection.BeginTransaction();
-            foreach (var evt in events)
+            foreach (var rawEvent in events)
             {
                 ct.ThrowIfCancellationRequested();
+                var evt = StructuredRunFailureTerminal.NormalizeFailure(rawEvent);
                 using var cmd = connection.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = """
@@ -467,7 +470,8 @@ public sealed class SqliteRunEventStream : IRunEventStream
             // Restore the persisted append-time timestamp so a replayed run's timeline matches
             // when the event actually happened, not the moment of replay.
             var createdAt = DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc);
-            events.Add(new RunEvent(sequence, type, payload, new DateTimeOffset(createdAt)));
+            events.Add(StructuredRunFailureTerminal.NormalizeFailure(
+                new RunEvent(sequence, type, payload, new DateTimeOffset(createdAt))));
         }
 
         return events;

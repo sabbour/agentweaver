@@ -507,7 +507,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var failure = streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.RunFailed);
         var payload = System.Text.Json.JsonSerializer.SerializeToElement(failure.Payload);
-        payload.GetProperty("reason").GetString().Should().Be("a2a_transport_interrupted");
+        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 

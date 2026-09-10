@@ -186,6 +186,7 @@ describe('AppShell navigation', () => {
     const startTask = screen.getByTestId('start-task-topbar-action');
     expect(startTask.closest('main')).toBeTruthy();
     expect(getComputedStyle(startTask).position).not.toBe('fixed');
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
     await waitFor(() => expect(screen.getByLabelText('API reachable')).toBeDefined());
   });
 
@@ -480,7 +481,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
   });
 
-  it('contains realistic dev version badges inside the footer while keeping the full version in the tooltip', async () => {
+  it('puts version status in the identity menu footer while keeping the full version in the tooltip', async () => {
     vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('0.12.2-dev+a100e95');
     vi.mocked(apiClient.getAuthSession).mockResolvedValue({
       authenticated: true,
@@ -496,16 +497,21 @@ describe('AppShell navigation', () => {
 
     renderShellAt('/overview');
 
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+
     const badgeText = screen.getByText('v0.12.2-dev+a100e95');
-    const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
+    const badge = badgeText.closest('.aw-identity-menu-footer__version') as HTMLElement | null;
+    const menuFooter = screen.getByTestId('github-identity-menu-footer');
     expect(badge).toBeTruthy();
+    expect(menuFooter.contains(badge)).toBe(true);
+    expect(menuFooter.contains(screen.getByRole('button', { name: 'Sign out' }))).toBe(true);
     expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
-    expect(badge?.className).toContain('aw-rail-footer__version');
-    expect(badgeText.className).toBe('aw-rail-footer__version-text');
+    expect(badge?.className).toContain('aw-identity-menu-footer__version');
+    expect(badgeText.className).toBe('aw-identity-menu-footer__version-text');
     expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
   });
 
-  it('stacks footer identity and version metadata so the badge cannot consume username space', () => {
+  it('keeps the rail footer reserved for the identity trigger and constrains the menu version badge', () => {
     expect(shellCss).toMatch(
       /\.aw-rail-footer\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch;/s,
     );
@@ -513,10 +519,7 @@ describe('AppShell navigation', () => {
       /\.aw-rail-footer\s*>\s*\.fui-Button,[^}]*\{[^}]*width:\s*100%;[^}]*flex:\s*0 0 auto;/s,
     );
     expect(shellCss).toMatch(
-      /\.aw-rail-footer__meta\s*\{[^}]*max-width:\s*100%;[^}]*align-self:\s*flex-end;/s,
-    );
-    expect(shellCss).toMatch(
-      /\.aw-rail-footer__version\s*\{[^}]*max-width:\s*200px;[^}]*overflow:\s*hidden;/s,
+      /\.aw-identity-menu-footer__version\s*\{[^}]*max-width:\s*200px;[^}]*overflow:\s*hidden;/s,
     );
   });
 

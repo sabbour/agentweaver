@@ -299,6 +299,13 @@ export class AgentweaverApiClient {
     return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  getRunTerminalDiagnostic(runId: string): Promise<import('./types').RunTerminalDiagnostic> {
+    return this.request<import('./types').RunTerminalDiagnostic>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/terminal-diagnostic`,
+    );
+  }
+
   retryRun(runId: string, providerKey?: string): Promise<RetryRunResponse> {
     return this.request<RetryRunResponse>(
       'POST',

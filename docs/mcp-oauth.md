@@ -22,6 +22,26 @@ PKCE S256 and explicit consent are required. The stable least-privilege scope is
 `mcp:invoke`; requesting additional approved scopes re-opens consent. Password,
 implicit, client-credentials, and device grants are unavailable.
 
+The consent page explicitly identifies the Agentweaver browser session before an
+authorization can be approved. It shows the validated Entra display name and email or
+UPN (falling back to the Entra object ID when no email is available). If no
+identity-bearing Agentweaver session exists, it instead shows **Not signed in to
+Agentweaver** and a same-origin Microsoft Entra sign-in action; it never renders an
+anonymous consent decision.
+
+## GitHub capability browser handoffs
+
+MCP authorization and GitHub capabilities are separate. GitHub Repo App and project
+Copilot App handoffs start from an already authenticated MCP identity and are pinned to
+that initiating Entra subject. Opening an opaque browser URL without an Agentweaver browser
+session starts Entra sign-in, then resumes the original handoff only after the browser
+session has been issued. A session for a different Entra subject cannot redeem the handoff.
+
+After GitHub returns, Agentweaver renders a no-store completion page that reports a safe
+success, already-completed, or error result and instructs the operator to return to MCP
+polling. The page, MCP result, and Entra continuation exclude GitHub authorization state, callback
+cookies, authorization codes, tokens, and transaction details.
+
 The browser consent page keeps a strict Content Security Policy. Its form posts
 only to Agentweaver, while the policy also permits the callback source selected
 by the validated authorization request. OpenIddict validates that callback

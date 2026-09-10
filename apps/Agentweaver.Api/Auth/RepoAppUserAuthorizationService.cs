@@ -36,7 +36,8 @@ public sealed record RepoAppAuthorizationBeginResult(
 
 public sealed record RepoAppAuthorizationCallbackResult(
     RepoAppAuthorizationOutcome Outcome,
-    string ReturnRouteKey);
+    string ReturnRouteKey,
+    bool IsMcpHandoff = false);
 
 public sealed record RepoAppAuthorizationPollResult(
     RepoAppAuthorizationOutcome Outcome,
@@ -273,7 +274,7 @@ public sealed class RepoAppUserAuthorizationService(
                 "api",
                 transaction.ExternalTransactionId);
 
-        return await CompleteClaimedAsync(transaction, caller.EntraObjectId!, code, "api", ct).ConfigureAwait(false);
+        return await CompleteClaimedAsync(transaction, caller.EntraObjectId!, code, "api", false, ct).ConfigureAwait(false);
     }
 
     private async Task<RepoAppAuthorizationCallbackResult> CompleteClaimedAsync(
@@ -281,6 +282,7 @@ public sealed class RepoAppUserAuthorizationService(
         string entraObjectId,
         string? code,
         string callbackKind,
+        bool isMcpHandoff,
         CancellationToken ct)
     {
         string? credentialReference = null;
@@ -294,7 +296,8 @@ public sealed class RepoAppUserAuthorizationService(
                     RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
                     transaction.ReturnRouteKey,
                     callbackKind,
-                    transaction.ExternalTransactionId);
+                    transaction.ExternalTransactionId,
+                    isMcpHandoff);
             }
 
             var verifierResult = await secretStore.GetSecretAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
@@ -305,7 +308,8 @@ public sealed class RepoAppUserAuthorizationService(
                     RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
                     transaction.ReturnRouteKey,
                     callbackKind,
-                    transaction.ExternalTransactionId);
+                    transaction.ExternalTransactionId,
+                    isMcpHandoff);
             }
 
             var credential = await ExchangeCodeAsync(code, verifierResult.Value, transaction.ExternalTransactionId, ct).ConfigureAwait(false);
@@ -317,7 +321,8 @@ public sealed class RepoAppUserAuthorizationService(
                     RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
                     transaction.ReturnRouteKey,
                     callbackKind,
-                    transaction.ExternalTransactionId);
+                    transaction.ExternalTransactionId,
+                    isMcpHandoff);
             }
 
             var credentialVersion = CreateRandomValue();
@@ -361,7 +366,8 @@ public sealed class RepoAppUserAuthorizationService(
                 RepoAppAuthorizationOutcome.Success,
                 transaction.ReturnRouteKey,
                 callbackKind,
-                transaction.ExternalTransactionId);
+                transaction.ExternalTransactionId,
+                isMcpHandoff);
         }
         catch
         {
@@ -370,7 +376,8 @@ public sealed class RepoAppUserAuthorizationService(
                     RepoAppAuthorizationOutcome.Success,
                     transaction.ReturnRouteKey,
                     callbackKind,
-                    transaction.ExternalTransactionId);
+                    transaction.ExternalTransactionId,
+                    isMcpHandoff);
             logger.LogWarning(
                 CredentialPersistenceEvent,
                 "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}, credential present {CredentialPresent}, replaced credential present {ReplacedCredentialPresent}",
@@ -386,7 +393,8 @@ public sealed class RepoAppUserAuthorizationService(
                 RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
                 transaction.ReturnRouteKey,
                 callbackKind,
-                transaction.ExternalTransactionId);
+                transaction.ExternalTransactionId,
+                isMcpHandoff);
         }
     }
 
@@ -442,6 +450,7 @@ public sealed class RepoAppUserAuthorizationService(
             transaction.EntraObjectId,
             code,
             "browser",
+            transaction.BrowserSessionId is not null,
             ct).ConfigureAwait(false);
     }
 
@@ -648,7 +657,8 @@ public sealed class RepoAppUserAuthorizationService(
         RepoAppAuthorizationOutcome outcome,
         string returnPath,
         string callbackKind,
-        string correlationId)
+        string correlationId,
+        bool isMcpHandoff = false)
     {
         logger.LogInformation(
             AuthorizationCallbackEvent,
@@ -658,7 +668,7 @@ public sealed class RepoAppUserAuthorizationService(
             callbackKind == "browser" ? "browser_callback" : "api_callback",
             ToStateCode(outcome),
             correlationId);
-        return new(outcome, returnPath);
+        return new(outcome, returnPath, isMcpHandoff);
     }
 
     private RepoAppConnectionResult ConnectionResult(

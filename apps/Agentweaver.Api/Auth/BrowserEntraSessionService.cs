@@ -23,6 +23,8 @@ public sealed class BrowserEntraSessionService(MemoryDbContext db)
         {
             Id = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32)),
             EntraObjectId = claims.ObjectId,
+            DisplayName = claims.DisplayName,
+            Email = claims.Email,
             PlatformRoles = string.Join(',', claims.RecognizedRoles),
             ExpiresAt = claims.ExpiresAt,
         };
@@ -41,7 +43,8 @@ public sealed class BrowserEntraSessionService(MemoryDbContext db)
         var session = await db.BrowserEntraSessions.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == sessionId, ct)
             .ConfigureAwait(false);
-        if (session is null || session.ExpiresAt <= DateTimeOffset.UtcNow)
+        if (session is null || session.ExpiresAt <= DateTimeOffset.UtcNow ||
+            string.IsNullOrWhiteSpace(session.DisplayName))
             return null;
 
         return session;

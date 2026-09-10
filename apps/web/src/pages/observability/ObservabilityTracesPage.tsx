@@ -2,7 +2,7 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import type { Project, WorkflowRunDto } from '../../api/types';
+import { safeTerminalFailureMessage, type Project, type RunTerminalDiagnostic, type WorkflowRunDto } from '../../api/types';
 import {
   Badge,
   Button,
@@ -93,6 +93,81 @@ function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Reco
   );
 }
 
+function FailureDiagnosticPanel({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId: string;
+}) {
+  const [diagnostic, setDiagnostic] = useState<RunTerminalDiagnostic | null>(null);
+  const [availability, setAvailability] = useState<'loading' | 'unavailable' | 'expired' | 'unauthorized'>('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.getRunTerminalDiagnostic(runId)
+      .then((value) => {
+        if (cancelled) return;
+        setDiagnostic({
+          ...value,
+          correlation_ids: Object.fromEntries(
+            Object.entries(value.correlation_ids).filter(([, id]) => /^[a-f0-9]{32}$/.test(id)),
+          ),
+          cause_chain: value.cause_chain.filter((cause) => [
+            'HttpRequestException',
+            'IOException',
+            'OperationCanceledException',
+            'SocketException',
+            'TaskCanceledException',
+            'TimeoutException',
+          ].includes(cause)),
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setAvailability(
+          error instanceof ApiError && error.status === 401 ? 'expired'
+            : error instanceof ApiError && error.status === 403 ? 'unauthorized'
+              : 'unavailable',
+        );
+      });
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  if (diagnostic) {
+    return (
+      <MessageBar intent="error" data-testid={`trace-terminal-diagnostic-${runId}`}>
+        <MessageBarBody>
+          <strong>Terminal failure · {diagnostic.component}</strong><br />
+          {safeTerminalFailureMessage(diagnostic.message, diagnostic.code, diagnostic.retryable)} Code: {diagnostic.code}.
+          {diagnostic.retryable === true ? ' This failure may be retried.' : ''}
+          {diagnostic.cause_chain.length > 0 && <> Cause types: {diagnostic.cause_chain.join(' → ')}.</>}
+          {Object.entries(diagnostic.correlation_ids).map(([name, value]) => (
+            <span key={name}>
+              {' '}<Link to={`/projects/${projectId}/observability/traces?run=${encodeURIComponent(runId)}&correlation=${encodeURIComponent(value)}`}>
+                {name}: {value}
+              </Link>
+            </span>
+          ))}
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  if (availability === 'loading') return <Spinner size="extra-tiny" label="Loading terminal diagnostic" />;
+  return (
+    <MessageBar intent={availability === 'expired' || availability === 'unauthorized' ? 'warning' : 'info'}>
+      <MessageBarBody>
+        {availability === 'expired'
+          ? 'Your session expired before the terminal diagnostic could be read. Sign in again and refresh.'
+          : availability === 'unauthorized'
+            ? 'You do not have access to this terminal diagnostic.'
+            : 'No persisted terminal diagnostic is available for this failed run.'}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
 export function ObservabilityTracesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -100,6 +175,7 @@ export function ObservabilityTracesPage() {
   // Supports deep-linking straight to a run's trace, e.g. via a "View trace" button on the
   // run detail page (`/projects/{id}/orchestrations/{runId}?...` -> `?run={runId}`).
   const focusRunId = searchParams.get('run');
+  const focusCorrelation = searchParams.get('correlation');
   const [project, setProject] = useState<Project | null>(null);
   const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
@@ -107,6 +183,7 @@ export function ObservabilityTracesPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [failedOnly, setFailedOnly] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -158,6 +235,12 @@ export function ObservabilityTracesPage() {
       latest: latestTimestamp !== null ? new Date(latestTimestamp).toLocaleDateString() : '—',
     };
   }, [runs]);
+  const visibleRuns = useMemo(
+    () => failedOnly
+      ? runs.filter((run) => /(failed|declined|blocked)/i.test(run.coordinator_status ?? run.status))
+      : runs,
+    [failedOnly, runs],
+  );
 
   if (!projectId) return null;
 
@@ -167,7 +250,7 @@ export function ObservabilityTracesPage() {
       projectName={project?.name}
       activeTab="traces"
       title="Observability"
-      description="Coordinator traces with links back to the live run view."
+      description="Coordinator traces, terminal failure diagnostics, and links back to the live run view."
     >
       <PageSection
         title="Trace summary"
@@ -183,6 +266,13 @@ export function ObservabilityTracesPage() {
               onClick={() => setReloadKey((value) => value + 1)}
             >
               Refresh
+            </Button>
+            <Button
+              appearance={failedOnly ? 'primary' : 'secondary'}
+              onClick={() => setFailedOnly((value) => !value)}
+              data-testid="trace-failure-filter"
+            >
+              {failedOnly ? 'Show all traces' : 'Show failed only'}
             </Button>
           </div>
         }
@@ -201,7 +291,10 @@ export function ObservabilityTracesPage() {
       </PageSection>
 
       {focusRunId && !runs.some((run) => (run.workflow_run_id ?? run.execution_id) === focusRunId) && (
-        <PageSection title="Focused trace" description="Opened directly from the run detail page.">
+        <PageSection title="Focused trace" description={focusCorrelation
+          ? `Opened for correlation ${focusCorrelation}.`
+          : 'Opened directly from the run detail page.'}>
+          <FailureDiagnosticPanel key={focusRunId} projectId={projectId} runId={focusRunId} />
           <TracePreview runId={focusRunId} roleByAgent={roleByAgent} />
         </PageSection>
       )}
@@ -211,7 +304,7 @@ export function ObservabilityTracesPage() {
       ) : (
         <PageSection title="Recent coordinator runs">
           <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-            {runs.map((run) => {
+            {visibleRuns.map((run) => {
               const runId = run.workflow_run_id ?? run.execution_id;
               const status = run.coordinator_status ?? run.status;
               return (
@@ -240,15 +333,20 @@ export function ObservabilityTracesPage() {
                         {expandedRunId === runId ? 'Hide trace' : 'Preview trace'}
                       </Button>
                     </div>
+                    {/(failed|declined|blocked)/i.test(status) && (
+                      <FailureDiagnosticPanel key={runId} projectId={projectId} runId={runId} />
+                    )}
                     {expandedRunId === runId && <TracePreview runId={runId} roleByAgent={roleByAgent} />}
                   </div>
                 </AppCard>
               );
             })}
-            {!loading && runs.length === 0 && (
+            {!loading && visibleRuns.length === 0 && (
               <EmptyState
-                title="No coordinator traces yet"
-                description="Recent coordinator traces will appear after orchestrations emit telemetry."
+                title={failedOnly ? 'No failed coordinator traces' : 'No coordinator traces yet'}
+                description={failedOnly
+                  ? 'No recent failed runs match this filter.'
+                  : 'Recent coordinator traces will appear after orchestrations emit telemetry.'}
               />
             )}
           </div>

@@ -36,6 +36,7 @@ public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     public bool CancellationObserved { get; private set; }
     public Exception? ExceptionToThrow { get; set; }
     public AgentProviderException? ProviderFailureToThrow { get; set; }
+    public Func<CoordinatorDraftInput, Task>? BeforeDraftAsync { get; set; }
     public Task BlockedCancellationStarted => _blockedCancellationStarted.Task;
     public Task BlockedDraftCompleted => _blockedDraftCompleted.Task;
 
@@ -44,6 +45,8 @@ public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     public async Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
     {
+        if (BeforeDraftAsync is { } beforeDraft)
+            await beforeDraft(input).ConfigureAwait(false);
         LastInput = input;
         if (ProviderFailureToThrow is { } providerFailure)
         {

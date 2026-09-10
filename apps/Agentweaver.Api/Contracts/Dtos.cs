@@ -259,6 +259,21 @@ public sealed record RunResponse
     public DateTimeOffset? ArchivedAt { get; init; }
 }
 
+/// <summary>
+/// Safe, bounded terminal diagnostic for a failed run. This intentionally excludes raw exceptions,
+/// stack traces, prompts, tool payloads, headers, credentials, and infrastructure logs.
+/// </summary>
+public sealed record RunTerminalDiagnosticResponse
+{
+    [JsonPropertyName("code")] public required string Code { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("component")] public required string Component { get; init; }
+    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
+    [JsonPropertyName("retryable")] public bool? Retryable { get; init; }
+    [JsonPropertyName("correlation_ids")] public required IReadOnlyDictionary<string, string> CorrelationIds { get; init; }
+    [JsonPropertyName("cause_chain")] public required IReadOnlyList<string> CauseChain { get; init; }
+}
+
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
 public sealed record WorkflowRunSummary
 {

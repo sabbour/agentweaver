@@ -27,6 +27,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("text");
 
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("text");
+
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1998,6 +2004,28 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("ProjectId");
 
                     b.ToTable("run_github_identity_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunModelProviderSnapshotOwner", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("run_id");
+
+                    b.Property<DateTimeOffset>("CapturedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("captured_at");
+
+                    b.Property<string>("SecretReference")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("secret_reference");
+
+                    b.HasKey("RunId");
+
+                    b.ToTable("run_model_provider_snapshot_owners", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.RunRecord", b =>

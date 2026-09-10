@@ -123,6 +123,33 @@ export interface RunDetail {
   autopilot?: boolean;
 }
 
+export interface RunTerminalDiagnostic {
+  code: string;
+  message: string;
+  component: string;
+  timestamp: string;
+  retryable: boolean | null;
+  correlation_ids: Record<string, string>;
+  cause_chain: string[];
+}
+
+export function safeTerminalFailureMessage(_message: string, code: string, retryable: boolean | null): string {
+  const allowedCodes = new Set([
+    'agent_turn_internal_error',
+    'a2a_transport_failure',
+    'agent_host_turn_incomplete',
+    'github_copilot_auth_required',
+    'shell_execution_timeout',
+  ]);
+  const safeCode = allowedCodes.has(code) ? code : 'agent_turn_internal_error';
+  const retrySummary = retryable === true
+    ? ' Retry is available.'
+    : retryable === false
+      ? ' Retry is not available.'
+      : ' Retry availability is unknown.';
+  return `Run failed with code '${safeCode}'.${retrySummary}`;
+}
+
 // GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
 // the execution timeline for terminal/parked runs whose live SSE stream is closed.
 // Shape mirrors the SSE frame: per-run sequence, event type, and JSON payload.

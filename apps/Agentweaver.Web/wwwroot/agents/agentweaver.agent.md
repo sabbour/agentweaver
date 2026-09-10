@@ -52,13 +52,13 @@ For ad-hoc runs or workflows that produce a runnable artifact outside a `build_t
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **106 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **107 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
 - **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `list_blueprints`, `validate_blueprint`
 - **Catalog:** `catalog_list_roles`, `catalog_list_scenarios`
 - **Coordinator:** `coordinator_children_get`, `coordinator_outcome_spec_confirm`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_revise`, `coordinator_start`, `coordinator_steer`, `coordinator_work_plan_get`, `orchestration_topology`
-- **Diagnostics:** `diagnostics_get`, `heartbeat_status`
+- **Diagnostics:** `diagnostics_get`, `heartbeat_status`, `run_failure_diagnostic`
 - **GitHub Auth:** `github_repo_app_authorization_status`, `github_repo_app_connect`, `github_repo_app_disconnect`, `project_copilot_app_authorization_status`, `project_copilot_app_connect`, `project_copilot_app_disconnect`, `project_github_capability_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
 - **Project:** `github_repository_selection_issue`, `github_repository_selections_list`, `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`

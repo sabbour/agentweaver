@@ -163,8 +163,10 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     {
         var exactQuery = ClaudeAuthorizationQuery(OAuthKnownClients.ClaudeHostedRedirectUri);
         using var accepted = await _client.GetAsync("/oauth/authorize" + exactQuery);
-        accepted.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        accepted.Headers.Location!.OriginalString.Should().StartWith("/auth/entra/authorize?");
+        accepted.StatusCode.Should().Be(HttpStatusCode.OK);
+        var unsignedAuthorization = await accepted.Content.ReadAsStringAsync();
+        unsignedAuthorization.Should().Contain("<h1>Not signed in to Agentweaver</h1>");
+        unsignedAuthorization.Should().Contain("href=\"/auth/entra/authorize?oauth_return_handle=");
 
         foreach (var redirectUri in new[]
                  {
@@ -333,6 +335,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             {
                 Id = sessionId,
                 EntraObjectId = subject,
+                DisplayName = "Consent Page User",
+                Email = "consent-page-user@example.test",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
             });
             await db.SaveChangesAsync();
@@ -360,7 +364,9 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         html.Should().Contain($"Client ID: {clientId}");
         html.Should().Contain("Use Agentweaver MCP tools");
         html.Should().Contain("Stay connected");
-        html.Should().Contain($"<strong>{subject}</strong>");
+        html.Should().Contain("<span class=\"label\">Signed in to Agentweaver as</span>");
+        html.Should().Contain("<strong>Consent Page User</strong>");
+        html.Should().Contain("consent-page-user@example.test");
         html.Should().Contain("<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"Agentweaver logo\">");
         html.Should().NotContain("aria-hidden=\"true\">AW</span>");
         html.Should().Contain("value=\"approve\">Allow</button>");
@@ -370,6 +376,24 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         policy.Should().Be(
             $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; " +
             "form-action 'self' http://127.0.0.1:49161; base-uri 'none'; frame-ancestors 'none'");
+    }
+
+    [Fact]
+    public async Task Authorization_WithoutIdentityBearingBrowserSession_ShowsExplicitSignInState()
+    {
+        const string redirectUri = "http://127.0.0.1:49162/callback";
+        var clientId = await RegisterClientAsync(redirectUri);
+        using var response = await _client.GetAsync(
+            "/oauth/authorize" + AuthorizationQuery(clientId, redirectUri));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.GetValues("Cache-Control").Should().Contain("no-store");
+        var html = await response.Content.ReadAsStringAsync();
+        html.Should().Contain("<title>Sign in to authorize | Agentweaver</title>");
+        html.Should().Contain("<h1>Not signed in to Agentweaver</h1>");
+        html.Should().Contain("Sign in to Agentweaver");
+        html.Should().Contain("Resource validation test").And.NotContain("<form");
+        html.Should().NotContain("login.microsoftonline.com");
     }
 
     [Theory]
@@ -1056,6 +1080,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             {
                 Id = sessionId,
                 EntraObjectId = subject ?? $"consent-csp-{Guid.NewGuid():N}",
+                DisplayName = "Consent Test User",
+                Email = "consent-test@example.test",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
             });
             await db.SaveChangesAsync();
@@ -1124,6 +1150,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             {
                 Id = sessionId,
                 EntraObjectId = $"expiration-test-{Guid.NewGuid():N}",
+                DisplayName = "Expiration Test User",
+                Email = "expiration-test@example.test",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
             });
             await db.SaveChangesAsync();

@@ -3,8 +3,9 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { GitHubIdentityBadge } from '../components/GitHubIdentityBadge';
 import { SESSION_LOGIN_STORAGE_KEY, SESSION_TOKEN_STORAGE_KEY } from '../config';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -15,7 +16,7 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-function renderBadge(props: { projectId?: string; collapsed?: boolean } = {}) {
+function renderBadge(props: { projectId?: string; collapsed?: boolean; footerMeta?: ReactNode } = {}) {
   return render(
     <AzureFluentProvider density="compact">
       <GitHubIdentityBadge {...props} />
@@ -92,6 +93,23 @@ describe('GitHubIdentityBadge', () => {
     expect(sessionStorage.getItem(SESSION_LOGIN_STORAGE_KEY)).toBeNull();
     expect(assign).toHaveBeenCalledWith('/');
     assign.mockRestore();
+  });
+
+  it('places the left-aligned sign-out action and supplied status metadata in the menu footer', async () => {
+    renderBadge({
+      footerMeta: <span aria-label="API reachable">v0.28.7</span>,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+
+    const footer = await screen.findByTestId('github-identity-menu-footer');
+    expect(within(footer).getByRole('button', { name: 'Sign out' })).toBeDefined();
+    expect(within(footer).getByLabelText('API reachable')).toBeDefined();
+    expect(within(footer).getByText('v0.28.7')).toBeDefined();
+    expect(getComputedStyle(within(footer).getByRole('button', { name: 'Sign out' })).justifyContent)
+      .toBe('flex-start');
+    expect(getComputedStyle(within(footer).getByLabelText('API reachable').parentElement!).marginLeft)
+      .toBe('auto');
   });
 
   it('shows the backend sign-out failure detail instead of a generic message', async () => {

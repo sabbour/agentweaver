@@ -149,11 +149,9 @@ public sealed class SqliteRunStoreCasTests
         snapshot.IsCompleted.Should().BeTrue();
         snapshot.Events.Should().ContainSingle(e => e.Type == EventTypes.RunFailed,
             "run.failed must be emitted to the stream when SendResponseAsync throws");
-        snapshot.Events.First(e => e.Type == EventTypes.RunFailed)
-            .Payload.GetType().GetProperty("reason")!.GetValue(
-                snapshot.Events.First(e => e.Type == EventTypes.RunFailed).Payload)
-            !.ToString()
-            .Should().Be("send_response_failed");
+        var failurePayload = System.Text.Json.JsonSerializer.SerializeToElement(
+            snapshot.Events.Single(e => e.Type == EventTypes.RunFailed).Payload);
+        failurePayload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
     }
 
     // =========================================================================

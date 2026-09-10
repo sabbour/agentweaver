@@ -19,6 +19,7 @@ import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/rea
 import { useEffect, useState } from 'react';
 import { clearSessionAuth } from '../config';
 import type { AuthSessionResponse, ProjectAccessOverview, ProjectCopilotConnection } from '../api/types';
+import type { ReactNode } from 'react';
 
 const useStyles = makeStyles({
   trigger: {
@@ -103,6 +104,23 @@ const useStyles = makeStyles({
     alignItems: 'flex-start',
     gap: tokens.spacingVerticalS,
   },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  signOut: {
+    justifyContent: 'flex-start',
+  },
+  footerMeta: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+    marginLeft: 'auto',
+  },
 });
 
 function identityLabel(session: AuthSessionResponse | null): string {
@@ -157,9 +175,10 @@ function formatProjectCopilotStatusError(err: unknown): string {
 export interface GitHubIdentityBadgeProps {
   projectId?: string;
   collapsed?: boolean;
+  footerMeta?: ReactNode;
 }
 
-export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadgeProps) {
+export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHubIdentityBadgeProps) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
@@ -316,14 +335,18 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
           )}
 
           <Divider />
-          <Button
-            appearance="subtle"
-            icon={<SignOutRegular />}
-            disabled={signingOut}
-            onClick={() => void signOut()}
-          >
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </Button>
+          <div className={styles.footer} data-testid="github-identity-menu-footer">
+            <Button
+              appearance="subtle"
+              icon={<SignOutRegular />}
+              disabled={signingOut}
+              onClick={() => void signOut()}
+              className={styles.signOut}
+            >
+              {signingOut ? 'Signing out…' : 'Sign out'}
+            </Button>
+            {footerMeta && <div className={styles.footerMeta}>{footerMeta}</div>}
+          </div>
         </div>
       </PopoverSurface>
     </Popover>

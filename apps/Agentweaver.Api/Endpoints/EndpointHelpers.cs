@@ -460,6 +460,7 @@ internal static bool IsOwnerOrServiceCaller(HttpContext context, string? ownerUs
 
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {
+    evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
     var json = System.Text.Json.JsonSerializer.Serialize(StampTimestamp(evt),
         new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
     await response.WriteAsync($"id: {evt.Sequence}\nevent: {evt.Type}\ndata: {json}\n\n", ct);
@@ -475,6 +476,7 @@ internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent ev
 /// </summary>
 internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
 {
+    evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
     var node = evt.Type == EventTypes.RunModelProviderResolved
         ? EffectiveModelProviderProvenance.RedactPublicPayload(evt.Payload)
         : System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject

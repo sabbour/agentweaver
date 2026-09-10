@@ -58,6 +58,7 @@ public sealed class CoordinatorRunService
     private readonly IRunOptionsStore _runOptions;
     private readonly IBacklogTaskStore _backlogStore;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
+    private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
@@ -88,7 +89,8 @@ public sealed class CoordinatorRunService
         ILogger<CoordinatorRunService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        AiExecutionPlanAccessor? executionPlanAccessor = null)
+        AiExecutionPlanAccessor? executionPlanAccessor = null,
+        RunModelProviderSnapshotStore? providerSnapshots = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -103,6 +105,7 @@ public sealed class CoordinatorRunService
         _runOptions = runOptions;
         _backlogStore = backlogStore;
         _executionPlanAccessor = executionPlanAccessor;
+        _providerSnapshots = providerSnapshots;
         _logger = logger;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
@@ -163,8 +166,17 @@ public sealed class CoordinatorRunService
             RetriedFrom = retriedFrom,
         };
 
-        await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
-        await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+        try
+        {
+            await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+            await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+        }
+        catch (Exception launchFailure)
+        {
+            await ReleaseUncommittedProviderSnapshotAsync(run, capturedSnapshot, launchFailure).ConfigureAwait(false);
+            throw;
+        }
 
         // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
         // definition gate and still enter the same dispatch/review/merge pipeline.
@@ -184,6 +196,79 @@ public sealed class CoordinatorRunService
             ScheduleUnattendedConfirm(runId.ToString(), submittingUserDisplayName ?? submittingUser);
 
         return runId;
+    }
+
+    private async Task<RunModelProviderSnapshotStore.Capture?> CaptureProviderSnapshotAsync(
+        Run run,
+        EffectiveModelProviderResult provider,
+        CancellationToken ct)
+    {
+        if (_providerSnapshots is null)
+            return null;
+
+        if (provider is EffectiveModelProviderResult.Byok expected)
+        {
+            var byok = _executionPlanAccessor?.FrozenByokConfiguration;
+            if (byok is null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                byok = await scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>()
+                    .GetAsync(ct).ConfigureAwait(false);
+            }
+            if (byok is null || !GenerationModelProviderExecutor.Matches(byok, expected))
+                throw new AgentProviderException(
+                    ModelSource.Byok,
+                    AgentProviderFailureKind.Configuration,
+                    "model_provider_changed",
+                    "The effective BYOK provider changed before coordinator launch.",
+                    isRetryable: true);
+
+            return await _providerSnapshots.CaptureWithOwnershipAsync(run, provider, byok, ct).ConfigureAwait(false);
+        }
+
+        return await _providerSnapshots.CaptureWithOwnershipAsync(run, provider, null, ct).ConfigureAwait(false);
+    }
+
+    private async Task<RunModelProviderSnapshotStore.Capture?> CaptureProviderSnapshotAsync(
+        Run run,
+        ResolvedRunModelProviderBoundary boundary,
+        CancellationToken ct)
+    {
+        if (_providerSnapshots is null)
+            return null;
+
+        return await _providerSnapshots
+            .CaptureWithOwnershipAsync(run, boundary, ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task ReleaseUncommittedProviderSnapshotAsync(
+        Run run,
+        RunModelProviderSnapshotStore.Capture? capturedSnapshot,
+        Exception launchFailure)
+    {
+        if (capturedSnapshot is null || _providerSnapshots is null)
+            return;
+
+        try
+        {
+            // Insert can fail after the database committed. Never release a snapshot until the
+            // durable run lookup proves that no restartable/completed run owns it.
+            if (await _runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false) is not null)
+                return;
+
+            await _providerSnapshots.ReleaseAsync(capturedSnapshot, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception cleanupFailure)
+        {
+            _logger.LogError(
+                cleanupFailure,
+                "Failed to release uncommitted provider snapshot for coordinator run {RunId}.",
+                run.Id);
+            throw new InvalidOperationException(
+                $"Coordinator run {run.Id} failed before persistence and its provider snapshot could not be released.",
+                new AggregateException(launchFailure, cleanupFailure));
+        }
     }
 
     /// <summary>
@@ -207,7 +292,14 @@ public sealed class CoordinatorRunService
 
         if (source.ProjectId is not { } projectId)
             throw new InvalidOperationException("A coordinator retry requires a project-scoped run.");
-        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
+        // A retry is a continuation of the accepted run, not a new provider-selection event.
+        // Reusing its durable boundary prevents a later platform/provider toggle from changing
+        // the provider while the retry is being constructed.
+        using var sourceScope = _scopeFactory.CreateScope();
+        var effectiveProviderBoundary = await sourceScope.ServiceProvider
+            .GetRequiredService<IRunModelProviderBoundaryResolver>()
+            .ResolveDurableProviderBoundaryAsync(source, ct).ConfigureAwait(false);
+        var effectiveProvider = effectiveProviderBoundary.Provider;
 
         var run = new Run
         {
@@ -229,14 +321,26 @@ public sealed class CoordinatorRunService
             RetriedFrom = source.Id.ToString(),
         };
 
-        await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
-        await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProviderBoundary, ct)
+            .ConfigureAwait(false);
+        try
+        {
+            await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+            await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
+        }
+        catch (Exception launchFailure)
+        {
+            await ReleaseUncommittedProviderSnapshotAsync(run, capturedSnapshot, launchFailure)
+                .ConfigureAwait(false);
+            throw;
+        }
 
         await ActivateAsync(
                 run,
                 new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
                 submittingUserDisplayName: submittingUserDisplayName,
-                effectiveProvider: effectiveProvider)
+                effectiveProvider: effectiveProvider,
+                effectiveProviderBoundary: effectiveProviderBoundary)
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
@@ -288,14 +392,32 @@ public sealed class CoordinatorRunService
     private async Task ActivateAsync(
         Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null,
-        EffectiveModelProviderResult? effectiveProvider = null)
+        EffectiveModelProviderResult? effectiveProvider = null,
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null)
     {
+        // Resolve/capture once before any capability preparation. In particular, a reserved pickup
+        // may carry a provider accepted by its atomic reservation transaction; do not fence one
+        // binding then publish a freshly re-resolved, different binding.
+        using var providerScope = _scopeFactory.CreateScope();
+        var resolvedBoundary = effectiveProviderBoundary
+            ?? (effectiveProvider is null
+                ? await providerScope.ServiceProvider
+                .GetRequiredService<IRunModelProviderBoundaryResolver>()
+                .ResolveDurableProviderBoundaryAsync(run, _appStopping).ConfigureAwait(false)
+                : null);
+        var resolvedProvider = effectiveProvider ?? resolvedBoundary!.Provider;
+
+        if (resolvedBoundary is not null)
+            await CaptureProviderSnapshotAsync(run, resolvedBoundary, _appStopping).ConfigureAwait(false);
+        else
+            await CaptureProviderSnapshotAsync(run, resolvedProvider, _appStopping).ConfigureAwait(false);
+
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
             _appStopping,
-            effectiveProvider is EffectiveModelProviderResult.ProjectGitHubCopilot
+            resolvedProvider is EffectiveModelProviderResult.ProjectGitHubCopilot
                 or EffectiveModelProviderResult.PlatformGitHubCopilot
-                ? effectiveProvider
+                ? resolvedProvider
                 : null).ConfigureAwait(false);
 
         var runId = run.Id.ToString();
@@ -304,11 +426,7 @@ public sealed class CoordinatorRunService
         var entry = _streamStore.Create(runId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task, mode = direct ? "direct" : "defineOutcome" });
 
-        // Durable provenance for the provider that actually serves this run's model turns. The
-        // reserved-pickup path activates a row it did not resolve itself, so resolve here when the
-        // caller had no result to hand over.
-        var resolvedProvider = effectiveProvider
-            ?? await ResolveEffectiveProviderAsync(run.ProjectId, _appStopping).ConfigureAwait(false);
+        // Durable provenance for the provider that actually serves this run's model turns.
         entry.RecordNext(
             EventTypes.RunModelProviderResolved,
             resolvedProvider.ToProvenancePayload(

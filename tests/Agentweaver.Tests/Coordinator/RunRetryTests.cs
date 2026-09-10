@@ -326,6 +326,79 @@ public sealed class RunRetryTests : IDisposable
         (await backlogStore.ListByProjectAsync(pid)).Should().BeEmpty("a pickup retry must not re-claim or create a backlog task");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PickupOriginByokRetry_ReplaysSourceSnapshotAfterCurrentConfigurationChangesOrRemoval(
+        bool removeCurrentConfiguration)
+    {
+        var projectId = await CreateProjectAsync();
+        var pid = ProjectId.Parse(projectId);
+        ByokProviderConfiguration accepted;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            accepted = await settings.AddAsync(
+                new ByokProviderConfiguration(
+                    "unused", "Accepted Azure", "azure", "https://accepted.example.test",
+                    "gpt-4.1", "accepted-key"),
+                CancellationToken.None);
+            await settings.SetActiveAsync(accepted.Id, CancellationToken.None);
+        }
+
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: RunOrigin.BacklogPickup,
+            projectId: pid,
+            modelSource: ModelSource.Byok);
+        var snapshots = _factory.Services.GetRequiredService<RunModelProviderSnapshotStore>();
+        await snapshots.CaptureAsync(
+            source,
+            new EffectiveModelProviderResult.Byok(
+                accepted.Id, accepted.Type, accepted.ExecutionFingerprint()),
+            accepted,
+            CancellationToken.None);
+
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            if (removeCurrentConfiguration)
+                await settings.RemoveAsync(accepted.Id, CancellationToken.None);
+            else
+                await settings.UpdateAsync(
+                    accepted.Id,
+                    accepted with { Model = "gpt-4.2", ApiKey = "replacement-key" },
+                    CancellationToken.None);
+        }
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var response = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.Created, responseBody);
+        var retryId = JsonSerializer.Deserialize<JsonElement>(responseBody).GetProperty("run_id").GetString()!;
+        var retry = await Runs.GetAsync(RunId.Parse(retryId));
+        var boundary = await _factory.Services.GetRequiredService<IRunModelProviderBoundaryResolver>()
+            .ResolveDurableProviderBoundaryAsync(retry!, CancellationToken.None);
+
+        retry!.ModelSource.Should().Be(ModelSource.Byok);
+        boundary.Provider.Should().BeOfType<EffectiveModelProviderResult.Byok>();
+        boundary.ByokProviderConfiguration.Should().Be(accepted);
+        boundary.ByokProviderFingerprint.Should().Be(accepted.ExecutionFingerprint());
+        var providerEvent = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(retryId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunModelProviderResolved);
+        JsonSerializer.Serialize(providerEvent.Payload).Should().NotContain(accepted.ApiKey);
+        (await PollUntilAsync(() =>
+            Task.FromResult(_factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+                .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject.LastInput?.RunId == retryId)))
+            .Should().BeTrue("the retry must queue the coordinator draft with its source snapshot");
+        _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject.LastInput!
+            .ByokProviderFingerprint.Should().Be(accepted.ExecutionFingerprint());
+    }
+
     // =========================================================================
     // (c) Regular project Failed -> retry via RunOrchestrator copies the inputs.
     // =========================================================================
@@ -457,6 +530,7 @@ public sealed class RunRetryTests : IDisposable
         string? branch = null,
         string task = "do the thing",
         string? modelId = "gpt-4o",
+        ModelSource modelSource = ModelSource.GitHubCopilot,
         CoordinatorWebApplicationFactory? factory = null)
     {
         factory ??= _factory;
@@ -471,7 +545,7 @@ public sealed class RunRetryTests : IDisposable
             Id = RunId.New(),
             RepositoryPath = repoPath ?? Path.Combine(Path.GetTempPath(), "agentweaver-retry-norepo"),
             OriginatingBranch = branch ?? "main",
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = modelSource,
             ModelId = modelId,
             Task = task,
             SubmittingUser = submittingUser,

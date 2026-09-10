@@ -588,7 +588,7 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         payload["maxAttempts"]!.GetValue<int>().Should()
             .Be(CoordinatorDispatchService.MaxInfrastructureRetries);
         payload["infrastructureReason"]!.GetValue<string>().Should()
-            .Be("shell_execution_timeout");
+            .Be("agent_turn_internal_error");
     }
 
     [Theory]

@@ -364,6 +364,7 @@ builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImpo
 
 builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
 builder.Services.AddSingleton<ByokProviderConfigurationService>();
+builder.Services.AddSingleton<RunModelProviderSnapshotStore>();
 builder.Services.AddSingleton<Agentweaver.Domain.IByokProviderConfigurationProvider>(
     sp => sp.GetRequiredService<ByokProviderConfigurationService>());
 
