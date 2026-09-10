@@ -288,6 +288,7 @@ export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
   private readonly supportsSessionRecovery: boolean;
+  private sessionRecovery: Promise<boolean> | null = null;
 
   constructor(baseUrl: string, sessionTokenProvider: (() => string | null) | string = getSessionToken) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -1536,8 +1537,9 @@ export class AgentweaverApiClient {
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const send = async () => {
+      const sessionToken = this.sessionTokenProvider();
       const headers: Record<string, string> = {
-        ...this.authHeaders(),
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         ...extraHeaders,
       };
       if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -1549,20 +1551,23 @@ export class AgentweaverApiClient {
         signal,
       });
       const text = typeof response.text === 'function' ? await response.text() : '';
-      return { response, text };
+      return { response, text, sessionToken };
     };
 
-    let { response, text } = await send();
+    let { response, text, sessionToken } = await send();
     if (response.status === 401 && this.supportsSessionRecovery &&
         !isModelProviderConnectionRequirement(this.createApiError(response.status, text).payload)) {
-      const rejectedToken = this.sessionTokenProvider();
-      clearSessionAuth();
-      const restored = await requestSessionAuthFromPeer(rejectedToken ?? undefined);
+      const currentToken = this.sessionTokenProvider();
+      const restored = currentToken && currentToken !== sessionToken
+        ? true
+        : await this.recoverSessionAuth(sessionToken);
       if (restored) {
-        ({ response, text } = await send());
+        ({ response, text, sessionToken } = await send());
       }
       if (!restored || response.status === 401) {
-        clearSessionAuth();
+        if (this.sessionTokenProvider() === sessionToken) {
+          clearSessionAuth();
+        }
         notifySessionAuthInvalid();
       }
     }
@@ -1577,6 +1582,18 @@ export class AgentweaverApiClient {
       }
     }
     return null as T;
+  }
+
+  private recoverSessionAuth(rejectedToken: string | null): Promise<boolean> {
+    if (this.sessionRecovery) return this.sessionRecovery;
+    if (this.sessionTokenProvider() === rejectedToken) {
+      clearSessionAuth();
+    }
+    this.sessionRecovery = requestSessionAuthFromPeer(rejectedToken ?? undefined)
+      .finally(() => {
+        this.sessionRecovery = null;
+      });
+    return this.sessionRecovery;
   }
 
   private createApiError(status: number, body: string): ApiError {

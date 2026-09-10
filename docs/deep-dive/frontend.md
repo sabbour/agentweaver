@@ -194,6 +194,11 @@ Conceptually, sign-in works like this:
    APIs such as `/api/projects`; those calls still require the per-tab bearer token.
 7. If the backend says the user is signed in, the shell renders. Otherwise, local session state is cleared and the sign-in page renders.
 
+If multiple API calls reject the same stale bearer token at once, the client performs one
+shared peer-recovery request and lets all failed calls retry with the recovered token. This
+prevents a burst of concurrent 401 handlers from clearing a token that another call just
+restored.
+
 ![Authentication and Session Flow: User, React SPA, Agentweaver API, GitHub](../diagrams/frontend-fig6.png)
 
 <!-- Rendered from ../diagrams/src/frontend-fig6.json by docs/diagram-renderer +

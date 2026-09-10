@@ -57,6 +57,34 @@ describe('AgentweaverApiClient auth recovery', () => {
     expect(authMocks.notifySessionAuthInvalid).not.toHaveBeenCalled();
   });
 
+  it('coalesces concurrent unauthorized responses into one peer recovery', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      return authorization === 'Bearer peer-token'
+        ? new Response('{"items":[]}', { status: 200 })
+        : new Response('{"error":"unauthorized"}', { status: 401 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test');
+
+    const results = await Promise.all([
+      client.listProjects(),
+      client.listProjects(),
+      client.listProjects(),
+      client.listProjects(),
+    ]);
+
+    expect(results).toEqual([
+      { items: [] },
+      { items: [] },
+      { items: [] },
+      { items: [] },
+    ]);
+    expect(authMocks.requestSessionAuthFromPeer).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(authMocks.notifySessionAuthInvalid).not.toHaveBeenCalled();
+  });
+
   it('notifies the auth gate when no peer can recover an unauthorized session', async () => {
     authMocks.requestSessionAuthFromPeer.mockResolvedValueOnce(false);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
