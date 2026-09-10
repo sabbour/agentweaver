@@ -109,6 +109,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     protected string? _apiKey;
     protected string? _apiCapabilityToken;
     protected string? _userId;
+    private bool _preferModelIdOverByokConfiguration;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
@@ -353,7 +354,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         CancellationToken ct,
         string? userId = null,
         AgentHostPurpose purpose = AgentHostPurpose.Default,
-        string? apiCapabilityToken = null)
+        string? apiCapabilityToken = null,
+        bool preferModelIdOverByokConfiguration = false)
     {
         _acceptedModelSource = _pendingModelSource;
         _acceptedByokProviderFingerprint = _pendingByokProviderFingerprint;
@@ -371,6 +373,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _apiKey = apiKey;
         _apiCapabilityToken = apiCapabilityToken;
         _userId = string.IsNullOrWhiteSpace(userId) ? null : userId;
+        _preferModelIdOverByokConfiguration = preferModelIdOverByokConfiguration;
         _setupCt = ct;
 
         // Reset per-run emission state so a reused instance never leaks events across runs.
@@ -575,7 +578,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     ? BuildBasePrompt(_includeTeamCoordinationPrompt)
                     : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext,
             },
-            Model = _activeByokProviderConfiguration?.Model ?? _modelId,
+            Model = ResolveSessionModel(
+                _activeByokProviderConfiguration,
+                _modelId,
+                _preferModelIdOverByokConfiguration),
             Provider = BuildByokProviderConfig(),
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
@@ -779,7 +785,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     SessionId = $"agentweaver-run-{_runId}",
                     // Carry the active BYOK provider through the restore path too — a restored
                     // session that lost its provider config would fall back to Copilot inference.
-                    Model = _activeByokProviderConfiguration?.Model ?? _modelId,
+                    Model = ResolveSessionModel(
+                        _activeByokProviderConfiguration,
+                        _modelId,
+                        _preferModelIdOverByokConfiguration),
                     Provider = BuildByokProviderConfig(),
                     // Disable persistent session store (copilot-sdk#1814).
                     EnableSessionStore = false,
@@ -1312,6 +1321,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         await ResolveByokProviderConfigurationAsync(ct).ConfigureAwait(false) is null
             ? await _factory.CreateClientAsync(_runId, _modelId, ct).ConfigureAwait(false)
             : _factory.CreateByokClient();
+
+    internal static string? ResolveSessionModel(
+        ByokProviderConfiguration? byokProvider,
+        string? modelId,
+        bool preferModelIdOverByokConfiguration) =>
+        preferModelIdOverByokConfiguration && !string.IsNullOrWhiteSpace(modelId)
+            ? modelId
+            : byokProvider?.Model ?? modelId;
 
     /// <summary>
     /// Maps the active BYOK provider configuration onto the SDK's provider config, or
