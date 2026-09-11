@@ -178,6 +178,22 @@ function isElbow(points: Point[], index: number): boolean {
   return (verticalBefore && horizontalAfter) || (horizontalBefore && verticalAfter);
 }
 
+function pointOnInteriorSegment(point: Point, points: Point[]): boolean {
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    if (
+      (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
+        point.y > Math.min(from.y, to.y) + 0.5 && point.y < Math.max(from.y, to.y) - 0.5) ||
+      (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
+        point.x > Math.min(from.x, to.x) + 0.5 && point.x < Math.max(from.x, to.x) - 0.5)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function sharedElbowPoints(
   routes: Array<{ id: string; points: Point[] }>,
 ): Array<{ edgeId: string; point: Point }> {
@@ -191,11 +207,15 @@ function sharedElbowPoints(
       })) {
         continue;
       }
-      const peers = routes.filter((candidate) => candidate.points.some((candidatePoint) => samePoint(point, candidatePoint)));
+      const peers = routes.filter((candidate) =>
+        candidate.points.some((candidatePoint) => samePoint(point, candidatePoint)) ||
+        pointOnInteriorSegment(point, candidate.points));
       if (peers.length < 2) continue;
-      const edgeId = peers.map((peer) => peer.id).sort((left, right) => left.localeCompare(right))[0];
       const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
-      shared.set(key, { edgeId, point });
+      const existing = shared.get(key);
+      if (!existing || route.id.localeCompare(existing.edgeId) < 0) {
+        shared.set(key, { edgeId: route.id, point });
+      }
     }
   }
   return [...shared.values()];
@@ -222,8 +242,9 @@ function pointLiesOnRoute(point: Point, points: Point[]): boolean {
 /**
  * Marks only nonterminal routed points shared by two semantically related
  * graph edges. A merge marker belongs at a shared terminal trunk before the
- * card-entry arrowhead. A shared semantic elbow is marked, while generic
- * crossings, isolated elbows, and container boundaries are never junctions.
+ * card-entry arrowhead. A shared semantic elbow or tee is marked when related
+ * paths form degree-three topology, while generic crossings, isolated elbows,
+ * and container boundaries are never junctions.
  */
 export function findConnectorJunctions(
   routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,

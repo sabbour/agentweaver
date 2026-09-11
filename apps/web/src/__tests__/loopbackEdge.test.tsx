@@ -139,17 +139,17 @@ describe('LoopbackEdge — return arc rendering', () => {
     expect(container.querySelector('path[stroke="var(--colorNeutralBackground1)"]')).toBeNull();
   });
 
-  it('keeps one shared alignment elbow and source split as centered junction circles', () => {
+  it('marks a branch tee where its elbow meets the sibling continuation', () => {
     fixtures.nodes = [
       { id: 'origin', type: 'workflow', position: { x: 0, y: 0 }, data: {}, measured: { width: 100, height: 100 } },
-      { id: 'upper', type: 'workflow', position: { x: 200, y: -100 }, data: {}, measured: { width: 100, height: 100 } },
-      { id: 'lower', type: 'workflow', position: { x: 200, y: 100 }, data: {}, measured: { width: 100, height: 100 } },
+      { id: 'straight', type: 'workflow', position: { x: 300, y: 0 }, data: {}, measured: { width: 100, height: 100 } },
+      { id: 'branch', type: 'workflow', position: { x: 200, y: 100 }, data: {}, measured: { width: 100, height: 100 } },
     ];
     fixtures.edges = [
       {
         id: 'edge-a',
         source: 'origin',
-        target: 'upper',
+        target: 'straight',
         type: 'spine',
         sourceHandle: 'source-right',
         targetHandle: 'target-left',
@@ -158,7 +158,7 @@ describe('LoopbackEdge — return arc rendering', () => {
       {
         id: 'edge-b',
         source: 'origin',
-        target: 'lower',
+        target: 'branch',
         type: 'spine',
         sourceHandle: 'source-right',
         targetHandle: 'target-left',
@@ -166,13 +166,13 @@ describe('LoopbackEdge — return arc rendering', () => {
       },
     ];
     const props = {
-      id: 'edge-a',
+      id: 'edge-b',
       source: 'origin',
-      target: 'upper',
+      target: 'branch',
       sourceX: 100,
       sourceY: 50,
       targetX: 200,
-      targetY: -50,
+      targetY: 150,
       data: { flowDirection: 'horizontal' },
     } as unknown as EdgeProps;
 
@@ -185,15 +185,10 @@ describe('LoopbackEdge — return arc rendering', () => {
     );
 
     const junctions = container.querySelectorAll('[data-testid="workflow-connector-junction"]');
-    expect(junctions).toHaveLength(2);
-    for (const junction of junctions) {
-      expect(junction.getAttribute('r')).toBe('2.5');
-      expect(junction.getAttribute('stroke')).toBeNull();
-    }
-    expect([...junctions].map((junction) => [junction.getAttribute('cx'), junction.getAttribute('cy')]))
-      .toEqual(expect.arrayContaining([
-        ['100', '50'],
-        ['150', '50'],
-      ]));
+    expect(junctions).toHaveLength(1);
+    expect(junctions[0].getAttribute('r')).toBe('2.5');
+    expect(junctions[0].getAttribute('stroke')).toBeNull();
+    expect(junctions[0].getAttribute('cx')).toBe('150');
+    expect(junctions[0].getAttribute('cy')).toBe('50');
   });
 });

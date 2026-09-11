@@ -344,7 +344,7 @@ function serpentine(chain: GraphNode[], cols: number): GraphNode[] {
   return out;
 }
 
-function layout(spec: GraphSpec): {
+export function layout(spec: GraphSpec): {
   nodes: Node[];
   edges: Edge[];
   canvasWidth: number;

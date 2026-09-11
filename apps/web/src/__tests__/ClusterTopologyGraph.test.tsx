@@ -282,14 +282,15 @@ describe('ClusterTopologyGraph', () => {
     }
   });
 
-  it('marks only the actual Agent Execution split, not independent route elbows', () => {
+  it('marks the Agent Execution split and its true in-gutter tee, not independent route elbows', () => {
     render(<Wrapper><ClusterTopologyGraph topology={topology} /></Wrapper>);
 
     const junctions = findConnectorJunctions(flowCapture.edges as Edge[], flowCapture.nodes);
     const points = [...junctions.values()].flat();
 
-    expect(points).toHaveLength(1);
-    expect(junctions.get('agent-execution->sandbox-claim')).toHaveLength(1);
+    expect(points).toHaveLength(2);
+    expect(junctions.get('agent-execution->sandbox-claim')).toEqual([{ x: 566, y: 456 }]);
+    expect(junctions.get('agent-execution->session-artifacts')).toEqual([{ x: 616, y: 456 }]);
     expect(junctions.has('control-plane->application-state')).toBe(false);
     expect(junctions.has('control-plane->workload-pods')).toBe(false);
   });
