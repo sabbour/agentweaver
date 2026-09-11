@@ -36,11 +36,26 @@ export interface GraphEdge {
   undirected?: boolean;
 }
 
+/**
+ * Compatible structural policy emitted by the workflow graph-spec generator.
+ * It intentionally omits UI card dimensions and viewport choices, which vary
+ * between the workflow editor, run topology, and static documentation renderer.
+ */
+export interface OrchestrationLayoutContract {
+  contract: 'agentweaver.orchestration-layout.v1';
+  schemaVersion: 1;
+  ranking: 'stable-longest-path';
+  cycleHandling: 'exclude-back-edges';
+  edgeRouting: 'orthogonal';
+  serpentineMinRanks: number;
+}
+
 export interface GraphSpec {
   kind?: 'graph';
   title: string;
   alt: string;
   direction?: 'TB' | 'LR';
+  layout?: OrchestrationLayoutContract;
   groups?: GraphGroup[];
   nodes: GraphNode[];
   edges: GraphEdge[];
