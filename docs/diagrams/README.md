@@ -46,6 +46,30 @@ each label remains centred on its own connector while avoiding other labels
 and crossing lines. This is a generic pipeline fix -- every current and future
 graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
 
+## Orchestration layout compatibility
+
+Generated workflow diagrams are a third consumer of the orchestration layout policy,
+alongside the workflow editor and the run topology. The canonical, serializable policy
+is [`apps/web/src/utils/orchestration-layout.contract.json`](../../apps/web/src/utils/orchestration-layout.contract.json).
+`apps/web/src/utils/dagLayout.ts` imports it directly. The workflow graph-spec generator
+reads the same file and embeds the compatible subset in each newly generated workflow
+spec's `layout` field. `DiagramCanvas` consumes that serialized field.
+
+The renderer does **not** import the product layout implementation. It is a standalone
+Vite app with independently sized documentation cards and a different viewport, so
+sharing card dimensions or React Flow node types would create an unsafe build dependency
+and false pixel-equivalence expectations. The contract therefore carries only stable
+structural rules: longest-path ranking, excluding back edges while ranking, orthogonal
+routing, and the serpentine-fold threshold. The workflow editor's mode threshold remains
+in the contract for its own consumer, but the documentation renderer does not interpret
+it because its card geometry differs.
+
+Run `node scripts/docs/workflows-to-graphspec.mjs` whenever built-in workflow sources
+change. The script validates the contract before writing specs. Existing diagrams retain
+their recorded layout until they are regenerated and re-rendered; do not hand-add a
+`layout` field without also running `npm run docs:render-diagrams` and committing the
+matching PNG and hash.
+
 ## How it works
 
 ```

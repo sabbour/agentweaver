@@ -9,6 +9,19 @@
     "title": { "type": "string" },
     "alt": { "type": "string", "description": "Markdown image alt text used in README.md / architecture-aks.md" },
     "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },
+    "layout": {
+      "type": "object",
+      "description": "Optional compatible orchestration layout contract emitted for generated workflow diagrams. It shares structural policy with the product graph helpers without coupling card dimensions or viewport behavior.",
+      "required": ["contract", "schemaVersion", "ranking", "cycleHandling", "edgeRouting", "serpentineMinRanks"],
+      "properties": {
+        "contract": { "const": "agentweaver.orchestration-layout.v1" },
+        "schemaVersion": { "const": 1 },
+        "ranking": { "const": "stable-longest-path" },
+        "cycleHandling": { "const": "exclude-back-edges" },
+        "edgeRouting": { "const": "orthogonal" },
+        "serpentineMinRanks": { "type": "integer", "minimum": 2 }
+      }
+    },
     "groups": {
       "type": "array",
       "description": "Visual clusters (rendered as tinted rounded containers behind their member nodes), mirroring mermaid subgraphs. Tier controls nesting fill (1 = outermost).",
