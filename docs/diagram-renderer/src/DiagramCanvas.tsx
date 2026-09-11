@@ -1175,7 +1175,14 @@ function layout(spec: GraphSpec): {
     const continuationPoints = continuation
       ? (continuation.data as { points?: Point[] } | undefined)?.points
       : undefined;
-    const points = alignLoopbackToContinuation(data.points, continuationPoints);
+    const target = posById.get(edge.target);
+    const points = alignLoopbackToContinuation(
+      data.points,
+      continuationPoints,
+      target
+        ? { x: target.x, y: target.y, width: target.w, height: target.h }
+        : undefined,
+    );
     data.points = points;
     const join = points.at(-1);
     const outerJoin = points.at(-2);

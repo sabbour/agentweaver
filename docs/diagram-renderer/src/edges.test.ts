@@ -75,4 +75,23 @@ describe('diagram connector geometry', () => {
       { x: 250, y: 190 },
     ]);
   });
+
+  it('moves an unsafe left-side return join below the destination card clearance', () => {
+    const aligned = alignLoopbackToContinuation(
+      [
+        { x: 500, y: 180 },
+        { x: 20, y: 180 },
+        { x: 20, y: 80 },
+        { x: 100, y: 80 },
+      ],
+      [
+        { x: 100, y: 100 },
+        { x: 100, y: 80 },
+      ],
+      { x: 50, y: 0, width: 100, height: 100 },
+    );
+
+    expect(aligned.at(-1)).toEqual({ x: 100, y: 118 });
+    expect(aligned.at(-2)).toEqual({ x: 20, y: 118 });
+  });
 });

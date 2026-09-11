@@ -53,7 +53,8 @@ renderer use the same visual convention while keeping their native layouts:
 
 - Normal flow connectors use the neutral graph stroke.
 - Semantic revision and return connectors use a dashed marigold stroke and a dedicated
-  outer loop rail.
+  outer loop rail. Left and right return rails stay outside every card and rejoin only at
+  the destination's clear continuation junction.
 - At an unavoidable perpendicular connector crossing, the later stable connector has a
   true path interruption with a rounded overpass arc. It never draws a background mask.
 - Small solid junction dots identify shared source trunks, branch tees, merge entries, and
