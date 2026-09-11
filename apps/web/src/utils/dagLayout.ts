@@ -1,12 +1,5 @@
 import Dagre from 'dagre';
 import type { Edge, Node } from '@xyflow/react';
-import orchestrationLayoutContract from './orchestration-layout.contract.json';
-
-// This compact, serializable policy is also embedded in generated workflow
-// diagram specs. The renderer uses its compatible structural settings without
-// importing the shipped web bundle or adopting its surface-specific card sizes.
-export const ORCHESTRATION_LAYOUT_CONTRACT = orchestrationLayoutContract;
-
 export const NODE_W = 200;
 export const NODE_H = 145;
 export const DAG_NODE_SEP = 96;
@@ -57,8 +50,7 @@ export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
 export const WORKFLOW_PILL_DEFAULT_NODE_H = 80;
 export const WORKFLOW_EDITOR_ACTIONS_HEIGHT = 44;
 export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.1, maxZoom: 1.8 } as const;
-export const WORKFLOW_LONG_LINEAR_MIN_RANKS =
-  ORCHESTRATION_LAYOUT_CONTRACT.workflowDefinitionLongLinearMinRanks;
+export const WORKFLOW_LONG_LINEAR_MIN_RANKS = 5;
 
 // Back-compat export retained for consumers that used the former staircase
 // tuning constant. Banded-lane wrapping now derives its width from aspect.
@@ -284,7 +276,7 @@ interface BandedLayoutOptions {
 const BANDED_MARGIN = 24;
 const BANDED_LANE_STEP = 34;
 const BANDED_LABEL_CHAR_W = 7;
-const BANDED_SNAKE_MIN_RANKS = ORCHESTRATION_LAYOUT_CONTRACT.serpentineMinRanks;
+const BANDED_SNAKE_MIN_RANKS = 3;
 
 function edgeLabelSize(edge: Edge): NodeSizeHint {
   if (typeof edge.label !== 'string' && typeof edge.label !== 'number') {

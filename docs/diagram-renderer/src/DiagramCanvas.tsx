@@ -281,7 +281,7 @@ function layerNodes(
  * the only run long enough to qualify never appeared, because the branch in the
  * middle chopped the flow into runs of three and two.
  */
-const DEFAULT_SNAKE_MIN = 2;
+const SNAKE_MIN = 2;
 
 /**
  * Column count for a snaked run.
@@ -338,13 +338,6 @@ function serpentine(chain: GraphNode[], cols: number): GraphNode[] {
   return out;
 }
 
-function serpentineMinRanks(spec: GraphSpec): number {
-  const minimum = spec.layout?.serpentineMinRanks;
-  return Number.isInteger(minimum) && minimum >= 2 && minimum <= 12
-    ? minimum
-    : DEFAULT_SNAKE_MIN;
-}
-
 function layout(spec: GraphSpec): {
   nodes: Node[];
   edges: Edge[];
@@ -352,7 +345,6 @@ function layout(spec: GraphSpec): {
   canvasHeight: number;
 } {
   const groups = spec.groups ?? [];
-  const snakeMinRanks = serpentineMinRanks(spec);
 
   const byGroup = new Map<string, GraphNode[]>();
   const ungrouped: GraphNode[] = [];
@@ -466,7 +458,7 @@ function layout(spec: GraphSpec): {
       }
 
       const span = j - i + 1;
-      if (span >= snakeMinRanks) {
+      if (span >= SNAKE_MIN) {
         const run = layers.slice(i, j + 1).map((l) => l[0]);
         const cols = snakeColsFor(span, widthBudget);
         bands.push({
