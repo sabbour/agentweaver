@@ -973,6 +973,15 @@ export function layout(spec: GraphSpec): {
     const lane = gutterLane.get(`${idx}-${gutter}`) ?? 0;
     return top + (span * (Math.min(lane, total - 1) + 1)) / (total + 1);
   };
+  const loopbackRails = new Map<string, number>();
+  const loopbackRail = (returnJoin: string, side: 'left' | 'right') => {
+    const key = `${side}:${returnJoin}`;
+    const existing = loopbackRails.get(key);
+    if (existing !== undefined) return existing;
+    const lane = takeLane(`loopback-${side}`);
+    loopbackRails.set(key, lane);
+    return lane;
+  };
 
   const rfEdges: Edge[] = [];
   interface LabelBox {
@@ -990,6 +999,15 @@ export function layout(spec: GraphSpec): {
   // also sit on a connector crossing that run, which would read as a junction
   // label; placement below steers around them.
   const verticals: { edgeId: string; x: number; y0: number; y1: number }[] = [];
+  const loopbackLabelOwners = new Set<number>();
+  const labelledReturnFamilies = new Set<string>();
+  for (const route of routed) {
+    if (!route.e.loopback || !route.e.label) continue;
+    const key = `${route.e.returnJoin ?? route.e.to}\0${route.e.label}`;
+    if (labelledReturnFamilies.has(key)) continue;
+    labelledReturnFamilies.add(key);
+    loopbackLabelOwners.add(route.idx);
+  }
 
   for (const r of routed) {
     const { s, t, sx, tx, kind } = r;
@@ -1056,8 +1074,12 @@ export function layout(spec: GraphSpec): {
       // Semantic revision/return edges always travel on their own outer rail.
       // A backward edge can rank in the same band as its target, so it cannot
       // safely assume that an inter-band gutter exists.
-      const goRight = (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
-      const lane = takeLane(`loopback-${goRight ? 'right' : 'left'}`);
+      const returnJoin = r.e.returnJoin ?? r.e.to;
+      const joinNode = posById.get(returnJoin);
+      const goRight = joinNode
+        ? joinNode.x + joinNode.w / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2
+        : (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
+      const lane = loopbackRail(returnJoin, goRight ? 'right' : 'left');
       const sideX = goRight
         ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + lane * LANE_STEP
         : CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
@@ -1102,7 +1124,8 @@ export function layout(spec: GraphSpec): {
     const runEndX =
       kind === 'lateral' ? points[1].x : kind === 'sideDown' || kind === 'sideUp' ? points[2].x : tx;
     const labelX = (runStartX + runEndX) / 2;
-    const geom = labelGeom.get(r.idx);
+    const showLabel = !r.e.loopback || loopbackLabelOwners.has(r.idx);
+    const geom = showLabel ? labelGeom.get(r.idx) : undefined;
     const halfLabel = (geom?.w ?? 0) / 2 + 12;
     const labelPos = {
       x: Math.min(Math.max(labelX, halfLabel), canvasWidth - halfLabel),
@@ -1146,7 +1169,14 @@ export function layout(spec: GraphSpec): {
       // Pre-wrapped so the rendered box matches the size layout reserved.
       label: geom?.lines.join('\n'),
       zIndex: 2,
-      data: { points, labelPos, labelOffset: { dx: 0, dy: 0 }, loopback: isRevision },
+      data: {
+        points,
+        labelPos,
+        labelOffset: { dx: 0, dy: 0 },
+        loopback: isRevision,
+        returnJoin: r.e.returnJoin,
+        loopbackLabel: r.e.label,
+      },
       style: {
         stroke,
         strokeWidth: 1.8,
@@ -1167,15 +1197,18 @@ export function layout(spec: GraphSpec): {
   for (const edge of rfEdges) {
     const data = edge.data as {
       loopback?: boolean;
+      returnJoin?: string;
       points?: Point[];
       labelPos?: Point;
+      labelOffset?: { dx: number; dy: number };
     } | undefined;
     if (!data?.loopback || !data.points) continue;
-    const continuation = outgoingBySource.get(edge.target);
+    const returnJoin = data.returnJoin ?? edge.target;
+    const continuation = outgoingBySource.get(returnJoin);
     const continuationPoints = continuation
       ? (continuation.data as { points?: Point[] } | undefined)?.points
       : undefined;
-    const target = posById.get(edge.target);
+    const target = posById.get(returnJoin);
     const points = alignLoopbackToContinuation(
       data.points,
       continuationPoints,
@@ -1185,19 +1218,19 @@ export function layout(spec: GraphSpec): {
     );
     data.points = points;
     const join = points.at(-1);
-    const outerJoin = points.at(-2);
-    if (join && outerJoin && data.labelPos) {
+    const sourceStub = points[1];
+    if (join && sourceStub && data.labelPos) {
       data.labelPos = {
-        x: (join.x + outerJoin.x) / 2,
-        y: join.y,
+        x: (points[0].x + sourceStub.x) / 2,
+        y: points[0].y,
       };
       const labelBox = labelBoxes.find((box) => box.edgeId === edge.id);
       if (labelBox) {
         labelBox.x = data.labelPos.x;
         labelBox.ideal = data.labelPos.x;
         labelBox.y = data.labelPos.y;
-        labelBox.xmin = Math.min(outerJoin.x, join.x);
-        labelBox.xmax = Math.max(outerJoin.x, join.x);
+        labelBox.xmin = Math.min(points[0].x, sourceStub.x);
+        labelBox.xmax = Math.max(points[0].x, sourceStub.x);
       }
     }
   }
@@ -1211,6 +1244,7 @@ export function layout(spec: GraphSpec): {
     source: edge.source,
     target: edge.target,
     loopback: (edge.data as { loopback?: boolean } | undefined)?.loopback,
+    returnJoin: (edge.data as { returnJoin?: string } | undefined)?.returnJoin,
     points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
   })));
   for (const edge of rfEdges) {

@@ -54,7 +54,9 @@ renderer use the same visual convention while keeping their native layouts:
 - Normal flow connectors use the neutral graph stroke.
 - Semantic revision and return connectors use a dashed marigold stroke and a dedicated
   outer loop rail. Left and right return rails stay outside every card and rejoin only at
-  the destination's clear continuation junction.
+  the destination's clear continuation junction. Use `returnJoin` when a documentation
+  return must rejoin a different named decision continuation without changing its runtime
+  graph target; returns with the same join share one rail and one label per semantic name.
 - At an unavoidable perpendicular connector crossing, the later stable connector has a
   true path interruption with a rounded overpass arc. It never draws a background mask.
 - Small solid junction dots identify only a nonterminal routed coordinate shared by a true
@@ -69,6 +71,7 @@ web surfaces reuse the same orthogonal-routing and stable-lane ideas through the
 existing `routeGridEdges` helper. No cross-package graph model or layout-contract
 dependency is required. Set `loopback: true` on a graph-spec edge when it represents a
 semantic revision/return path; generated workflow specs mark backward edges this way.
+`returnJoin` is optional and documentation-only.
 
 ## How it works
 

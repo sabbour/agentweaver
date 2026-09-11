@@ -219,7 +219,14 @@ function pointLiesOnRoute(point: Point, points: Point[]): boolean {
  * crossings, isolated elbows, and container boundaries are never junctions.
  */
 export function findConnectorJunctions(
-  routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
+  routes: Array<{
+    id: string;
+    source: string;
+    target: string;
+    points: Point[];
+    loopback?: boolean;
+    returnJoin?: string;
+  }>,
 ): Map<string, Point[]> {
   const bySource = new Map<string, typeof routes>();
   const byTarget = new Map<string, typeof routes>();
@@ -260,7 +267,7 @@ export function findConnectorJunctions(
     const join = route.points.at(-1);
     const continuation = routes.find((candidate) =>
       !candidate.loopback &&
-      candidate.source === route.target &&
+      candidate.source === (route.returnJoin ?? route.target) &&
       join !== undefined &&
       pointLiesOnRoute(join, candidate.points));
     if (continuation) add(route.id, join);
