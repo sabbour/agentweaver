@@ -109,14 +109,10 @@ public sealed class KubernetesTopologyService
             "workloads" => new[]
             {
                 Namespaced("Deployment", "apps/v1", "deployments", async token => (object)await _k8s!.AppsV1.ListNamespacedDeploymentAsync(state.Namespace, limit: ListLimit, cancellationToken: token)),
-                Namespaced("ReplicaSet", "apps/v1", "replicasets", async token => (object)await _k8s!.AppsV1.ListNamespacedReplicaSetAsync(state.Namespace, limit: ListLimit, cancellationToken: token)),
-                NamespacedCore("ServiceAccount", "serviceaccounts", async token => (object)await _k8s!.CoreV1.ListNamespacedServiceAccountAsync(state.Namespace, limit: ListLimit, cancellationToken: token)),
             },
             "storage" => new[]
             {
                 NamespacedCore("PersistentVolumeClaim", "persistentvolumeclaims", async token => (object)await _k8s!.CoreV1.ListNamespacedPersistentVolumeClaimAsync(state.Namespace, limit: ListLimit, cancellationToken: token)),
-                ClusterCore("PersistentVolume", "persistentvolumes", async token => (object)await _k8s!.CoreV1.ListPersistentVolumeAsync(limit: ListLimit, cancellationToken: token)),
-                Cluster("StorageClass", "storage.k8s.io/v1", "storageclasses", async token => (object)await _k8s!.StorageV1.ListStorageClassAsync(limit: ListLimit, cancellationToken: token)),
             },
             "autoscaling" => new[]
             {
@@ -279,7 +275,7 @@ public sealed class KubernetesTopologyService
                 switch (node.Type)
                 {
                     case "Service": AddSelectorEdges(node, "selects", PodNodes(node.Namespace)); break;
-                    case "Deployment": AddSelectorEdges(node, "selects", ReplicaSetAndPodNodes(node.Namespace)); break;
+                    case "Deployment": AddSelectorEdges(node, "selects", PodNodes(node.Namespace)); break;
                     case "NetworkPolicy": AddNetworkPolicyEdges(node); break;
                     case "PodDisruptionBudget": AddSelectorEdges(node, "protects", PodNodes(node.Namespace)); break;
                     case "HTTPRoute": AddHttpRouteEdges(node); break;
@@ -473,9 +469,6 @@ public sealed class KubernetesTopologyService
 
         private IEnumerable<ResourceNode> PodNodes(string? ns) =>
             Nodes.Values.Where(n => n.Type == "Pod" && n.Namespace == ns);
-        private IEnumerable<ResourceNode> ReplicaSetAndPodNodes(string? ns) =>
-            Nodes.Values.Where(n => (n.Type == "ReplicaSet" || n.Type == "Pod") && n.Namespace == ns);
-
         private ResourceNode? Find(string kind, string? ns, string? name) =>
             name is null ? null : Nodes.Values.FirstOrDefault(n =>
                 n.Type.Equals(kind, StringComparison.OrdinalIgnoreCase) &&
@@ -622,10 +615,68 @@ public sealed class KubernetesTopologyService
         if (kind == "StorageClass") Add(result, "provisioner", String(item, "provisioner"));
         if (kind == "NetworkPolicy")
         {
-            Add(result, "ingressRules", ArrayCount(spec, "ingress").ToString());
-            Add(result, "egressRules", ArrayCount(spec, "egress").ToString());
+            var ingress = Property(spec, "ingress");
+            var egress = Property(spec, "egress");
+            var policyTypes = Property(spec, "policyTypes");
+            var governsIngress = ArrayContains(policyTypes, "Ingress") ||
+                (policyTypes.ValueKind != JsonValueKind.Array && ingress.ValueKind != JsonValueKind.Undefined);
+            var governsEgress = ArrayContains(policyTypes, "Egress") ||
+                (policyTypes.ValueKind != JsonValueKind.Array && egress.ValueKind != JsonValueKind.Undefined);
+            var direction = governsIngress && governsEgress ? "ingress_egress"
+                : governsIngress ? "ingress" : "egress";
+            var defaultDenyIngress = governsIngress &&
+                (ingress.ValueKind != JsonValueKind.Array || ingress.GetArrayLength() == 0);
+            var gatewayIngress = governsIngress && HasGatewayIngressRule(ingress);
+
+            Add(result, "selector", DescribeSelector(Property(spec, "podSelector")));
+            Add(result, "direction", direction);
+            Add(result, "effect", defaultDenyIngress ? "deny" : "allow");
+            Add(result, "trafficImpact", defaultDenyIngress ? "default_deny_ingress"
+                : gatewayIngress ? "gateway_ingress" : "other");
         }
         return result;
+    }
+
+    private static bool HasGatewayIngressRule(JsonElement ingress)
+    {
+        if (ingress.ValueKind != JsonValueKind.Array) return false;
+        foreach (var rule in ingress.EnumerateArray())
+        {
+            var sources = Property(rule, "from");
+            if (sources.ValueKind != JsonValueKind.Array) continue;
+            foreach (var source in sources.EnumerateArray())
+            {
+                var podLabels = ObjectStrings(Property(Property(source, "podSelector"), "matchLabels"));
+                if (podLabels.ContainsKey("gateway.networking.k8s.io/gateway-name"))
+                    return true;
+
+                var namespaceLabels = ObjectStrings(Property(Property(source, "namespaceSelector"), "matchLabels"));
+                if (namespaceLabels.TryGetValue("kubernetes.io/metadata.name", out var name) &&
+                    string.Equals(name, "aks-istio-ingress", StringComparison.Ordinal))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static string DescribeSelector(JsonElement selector)
+    {
+        var labels = ObjectStrings(Property(selector, "matchLabels"))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => $"{pair.Key}={pair.Value}");
+        var expressions = Property(selector, "matchExpressions");
+        var expressionText = expressions.ValueKind == JsonValueKind.Array
+            ? expressions.EnumerateArray().Select(expression =>
+            {
+                var values = Property(expression, "values");
+                var suffix = values.ValueKind == JsonValueKind.Array
+                    ? $" ({string.Join(", ", values.EnumerateArray().Select(value => value.GetString()))})"
+                    : string.Empty;
+                return $"{String(expression, "key")} {String(expression, "operator")}{suffix}";
+            })
+            : [];
+        var description = string.Join("; ", labels.Concat(expressionText));
+        return string.IsNullOrWhiteSpace(description) ? "All pods in scope" : description;
     }
 
     private static void Add(Dictionary<string, string> target, string key, string? value)
@@ -694,6 +745,9 @@ public sealed class KubernetesTopologyService
         Property(element, name).ValueKind == JsonValueKind.Number ? Property(element, name).GetRawText() : null;
     private static int ArrayCount(JsonElement element, string name) =>
         Property(element, name).ValueKind == JsonValueKind.Array ? Property(element, name).GetArrayLength() : 0;
+    private static bool ArrayContains(JsonElement element, string value) =>
+        element.ValueKind == JsonValueKind.Array &&
+        element.EnumerateArray().Any(item => string.Equals(item.GetString(), value, StringComparison.OrdinalIgnoreCase));
     private static int SelectorTermCount(JsonElement selector) =>
         ObjectStrings(Property(selector, "matchLabels")).Count + ArrayCount(selector, "matchExpressions");
 }

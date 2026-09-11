@@ -387,7 +387,7 @@ export function ClusterPage() {
 
           <PageSection
             title="Resource topology"
-            description="Runtime resources are shown by default. Enable layers to discover bounded, read-only Kubernetes relationships; dashed edges are selector-inferred."
+            description="Runtime functions are shown by default. Enable layers to inspect concise Agentweaver traffic, workload, persistence, scaling, and availability relationships."
           >
             <div className={styles.layerControls} aria-label="Topology layers">
               {TOPOLOGY_LAYERS.map(layer => (

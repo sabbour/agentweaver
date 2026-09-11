@@ -118,18 +118,18 @@ GET /api/diagnostics/cluster/topology?layers=runtime,networking,workloads,storag
 
 | Layer | Resources |
 | --- | --- |
-| `runtime` | Pod, SandboxClaim, SandboxWarmPool, SandboxTemplate |
-| `networking` | Gateway, HTTPRoute, Service, NetworkPolicy |
-| `workloads` | Deployment, ReplicaSet, ServiceAccount |
-| `storage` | PersistentVolumeClaim, PersistentVolume, StorageClass |
-| `autoscaling` | HorizontalPodAutoscaler, VerticalPodAutoscaler, KEDA ScaledObject |
+| `runtime` | Session and execution, SandboxTemplate, SandboxWarmPool, SandboxClaim, and Sandbox functions |
+| `networking` | Public entry/gateway, Agentweaver service targets, and relevant public-ingress NetworkPolicy guardrails |
+| `workloads` | Deployment and Pod functions only; ReplicaSets are excluded |
+| `storage` | Application persistence and the sandbox/session artifact workspace, sourced from relevant PVCs |
+| `autoscaling` | Capacity-scaling functions from HPA, VPA, and KEDA policy data |
 | `availability` | PodDisruptionBudget |
 
-Nodes have stable IDs, explicit resource types, namespace, health, a short summary, and a
-small allow-listed `details` map. Edges record their relationship type and whether the
-relationship is inferred. Owner references, Gateway API references, identity references,
-scale targets, and volume claims are authoritative. Selector matches are marked
-`inferred: true`.
+The response carries bounded, safe discovery data, which the Cluster page groups into
+function cards. It does not display raw Kubernetes resource inventory. Nodes have stable
+IDs, explicit resource types, namespace, health, a short summary, and a small allow-listed
+`details` map. NetworkPolicy details include a concise selector, direction, effect, and
+public-traffic impact; they never include policy manifests.
 
 Each requested layer reports `available`, `partial`, or `unavailable`. A missing CRD or an
 RBAC denial affects only that layer; it does not fail the graph. Lists are capped at 100
@@ -150,7 +150,7 @@ Each `nodes` entry contains:
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Stable snapshot identifier. Edges use this exact value. |
-| `kind` | string | Kubernetes kind, such as `Gateway`, `HTTPRoute`, `Service`, `NetworkPolicy`, `ServiceAccount`, `Deployment`, `Pod`, `PersistentVolumeClaim`, `PersistentVolume`, `StorageClass`, `HorizontalPodAutoscaler`, `PodDisruptionBudget`, `VerticalPodAutoscaler`, `ScaledObject`, or an Agentweaver CRD kind. |
+| `kind` | string | Source Kubernetes kind, such as `Gateway`, `Service`, `NetworkPolicy`, `Deployment`, `Pod`, `PersistentVolumeClaim`, a scaling-policy kind, or an Agentweaver sandbox CRD. ReplicaSet, PersistentVolume, and StorageClass are excluded from discovery. |
 | `name` | string | Resource metadata name. |
 | `namespace` | string or null | Namespace, or null for a cluster-scoped resource. |
 | `status` | string | Concise machine-readable state used for card status treatment. |
