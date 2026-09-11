@@ -2,6 +2,7 @@ import {
   aggregateNanoAiu,
   buildToolCallIndex,
   buildTraceTree,
+  formatSafeToolValue,
   getTraceTimeline,
   totalNanoAiu,
 } from '../components/runs/traceTree';
@@ -94,6 +95,35 @@ describe('buildToolCallIndex', () => {
     expect(detail?.arguments).toEqual({ command: 'python3 -m http.server 9090' });
     expect(detail?.content).toBe('preview_process_started: pid=594');
     expect(detail?.errorMessage).toBeUndefined();
+  });
+
+  describe('formatSafeToolValue', () => {
+    it('formats structured tool input and JSON-string output for readable display', () => {
+      expect(formatSafeToolValue({ pattern: 'trace', path: 'src' })).toEqual({
+        state: 'available',
+        text: '{\n  "pattern": "trace",\n  "path": "src"\n}',
+      });
+      expect(formatSafeToolValue('{"matches":["src/trace.ts"],"count":1}')).toEqual({
+        state: 'available',
+        text: '{\n  "matches": [\n    "src/trace.ts"\n  ],\n  "count": 1\n}',
+      });
+    });
+
+    it('makes missing tool data explicit', () => {
+      expect(formatSafeToolValue(undefined)).toEqual({ state: 'unavailable' });
+    });
+
+    it('redacts sensitive keys and values before they can reach the inspector', () => {
+      const value = formatSafeToolValue({
+        authorization: 'Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+        nested: { apiKey: 'secret-value' },
+      });
+
+      expect(value.state).toBe('redacted');
+      expect(value.text).toContain('***REDACTED***');
+      expect(value.text).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
+      expect(value.text).not.toContain('secret-value');
+    });
   });
 
   it('pairs tool.call arguments with a matching tool.error message by callId', () => {

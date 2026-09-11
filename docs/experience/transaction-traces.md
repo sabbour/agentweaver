@@ -44,12 +44,13 @@ being synthesized at read time. Historical `agent.system_prompt` and `agent.task
 also withheld while their event sequence/type/time remain visible. Expand a payload only when its
 recorded fields are needed.
 
-For an **Execute Tool** span, the detail panel also shows the tool's **arguments** and **output**.
-These come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the
-span by `callId`), not from Application Insights, so they are available even when the AppInsights
-span itself only carries the tool name and status. A failed tool call shows its error message in
-place of the output, with distinct error styling. If no matching event is found (for example, an
-older run recorded before this correlation existed), the panel shows a placeholder message instead.
+For an **Execute Tool** span, the detail panel also shows the tool's **Input** and **Output**. These
+come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the span
+by `callId`), not from Application Insights. Objects and JSON-string output are formatted as
+readable JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane
+says **No input** or **No output**; if a value is redacted, it is explicitly marked **Redacted**.
+The UI applies a second, bounded redaction pass before displaying legacy event data, so credentials
+and oversized or deeply nested payloads cannot leak through the inspector.
 
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call

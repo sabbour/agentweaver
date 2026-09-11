@@ -155,4 +155,86 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Duration 500 ms');
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Pending');
   });
+
+  it('renders populated tool input and structured output from persisted events', async () => {
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-7', toolName: 'grep', arguments: { pattern: 'trace', path: 'src' } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.result',
+        payload: { callId: 'call-7', content: '{"matches":["src/trace.ts"],"count":1}' },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    fireEvent.click(toolSpan!);
+
+    expect(screen.getByText('Input')).toBeTruthy();
+    expect(screen.getByText(/"pattern": "trace"/)).toBeTruthy();
+    expect(screen.getByText(/"matches": \[/)).toBeTruthy();
+    expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
+  });
+
+  it('labels an absent persisted tool output with correctly spaced text', async () => {
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-7', toolName: 'grep', arguments: { pattern: 'trace' } },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    fireEvent.click(toolSpan!);
+
+    expect(screen.getByText('No output')).toBeTruthy();
+  });
+
+  it('redacts sensitive input and output again before rendering legacy event data', async () => {
+    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-7', toolName: 'grep', arguments: { authorization: `Bearer ${secret}` } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.result',
+        payload: { callId: 'call-7', content: secret },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    fireEvent.click(toolSpan!);
+
+    expect(screen.queryByText(secret)).toBeNull();
+    expect(screen.getAllByText('Redacted')).toHaveLength(2);
+    expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/)).toHaveLength(2);
+  });
 });

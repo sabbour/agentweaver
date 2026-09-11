@@ -33,6 +33,7 @@ import {
   buildTraceTree,
   collectExpandableKeys,
   findNode,
+  formatSafeToolValue,
   getTraceTimeline,
   normalizeType,
   totalNanoAiu,
@@ -303,6 +304,16 @@ const useStyles = makeStyles({
     color: tokens.colorStatusDangerForeground1,
     border: `1px solid ${tokens.colorStatusDangerBorder1}`,
   },
+  toolValueHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalXS,
+  },
+  toolValueState: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
   attributes: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr)',
@@ -495,6 +506,41 @@ function SpanStatus({ span, styles }: { span: RunTraceSpanDto; styles: ReturnTyp
   );
 }
 
+function ToolValue({
+  title,
+  value,
+  emptyLabel,
+  error,
+  styles,
+}: {
+  title: string;
+  value: unknown;
+  emptyLabel: string;
+  error?: boolean;
+  styles: ReturnType<typeof useStyles>;
+}) {
+  const formatted = formatSafeToolValue(value);
+  if (formatted.state === 'unavailable') {
+    return (
+      <div>
+        <Text className={styles.sectionTitle}>{title}</Text>
+        <Text className={styles.toolValueState}>{formatted.text ?? emptyLabel}</Text>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className={styles.toolValueHeader}>
+        <Text className={styles.sectionTitle}>{title}</Text>
+        {formatted.state === 'redacted' && <Badge appearance="tint" color="warning" size="small">Redacted</Badge>}
+      </div>
+      {formatted.text
+        ? <pre className={mergeClasses(styles.codeBlock, error && styles.codeBlockError)}>{formatted.text}</pre>
+        : <Text className={styles.toolValueState}>Recorded empty {title.toLowerCase()}</Text>}
+    </div>
+  );
+}
+
 function TraceRow({
   node,
   depth,
@@ -677,24 +723,19 @@ function TraceInspector({
       </div>
       {type === 'tool' && (
         <>
-          <div>
-            <Text className={styles.sectionTitle}>Arguments</Text>
-            {toolDetail?.arguments ? (
-              <pre className={styles.codeBlock}>{JSON.stringify(toolDetail.arguments, null, 2)}</pre>
-            ) : (
-              <Text className={styles.detailValue}>No arguments recorded for this call.</Text>
-            )}
-          </div>
-          <div>
-            <Text className={styles.sectionTitle}>Output</Text>
-            {toolDetail?.errorMessage ? (
-              <pre className={mergeClasses(styles.codeBlock, styles.codeBlockError)}>{toolDetail.errorMessage}</pre>
-            ) : toolDetail?.content ? (
-              <pre className={styles.codeBlock}>{toolDetail.content}</pre>
-            ) : (
-              <Text className={styles.detailValue}>No output recorded for this call.</Text>
-            )}
-          </div>
+          <ToolValue
+            title="Input"
+            value={toolDetail?.arguments}
+            emptyLabel="No input"
+            styles={styles}
+          />
+          <ToolValue
+            title="Output"
+            value={toolDetail?.errorMessage ?? toolDetail?.content}
+            emptyLabel="No output"
+            error={toolDetail?.errorMessage !== undefined}
+            styles={styles}
+          />
         </>
       )}
     </aside>

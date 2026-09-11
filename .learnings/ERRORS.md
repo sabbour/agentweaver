@@ -693,3 +693,53 @@ Expected gen_ai.tool.call.arguments to be null, but found {"query":"hello world"
 - Related Files: packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs
 
 ---
+
+## [ERR-20260911-010] tool-value-component-placement
+
+**Logged**: 2026-09-11T18:43:05Z
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The tool-value render helper was initially inserted inside span-status JSX, producing a TypeScript parse error.
+
+### Error
+```
+[PARSE_ERROR] Unexpected token in TransactionTracePanel.tsx
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:43:05Z
+- **Notes**: Moved the helper to module scope after the span-status component.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/components/runs/TransactionTracePanel.tsx
+
+---
+
+## [ERR-20260911-011] redaction-text-test-matcher
+
+**Logged**: 2026-09-11T18:44:52Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The redaction UI test used an exact text matcher that did not match the marker nested inside formatted JSON.
+
+### Error
+```
+Expected 2 ***REDACTED*** elements, but received 1
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:44:52Z
+- **Notes**: Use a regex matcher so both plain and JSON-formatted redaction markers are asserted.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/__tests__/TransactionTraceDetail.test.tsx
+
+---
