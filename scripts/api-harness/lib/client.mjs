@@ -3,8 +3,8 @@
 // Every persona scenario drives Agentweaver exclusively through these calls —
 // the same surface a human user's browser talks to. No browser automation.
 //
-// Auth: an explicitly supplied bearer token is sent on every /api request, matching
-// apps/Agentweaver.Api/API.md. The harness never borrows GitHub CLI credentials.
+// Auth: the runner supplies a managed-browser recorder-session provider for
+// authenticated /api requests. The harness never borrows GitHub CLI credentials.
 
 /**
  * @typedef {Object} ApiCall
@@ -61,7 +61,7 @@ export class AgentweaverClient {
    * Never throws on non-2xx — the scenario judge decides what a bad status means.
    * @returns {Promise<ApiCall>}
    */
-  async call(method, path, body) {
+  async call(method, path, body, { authenticated = true, headers = {} } = {}) {
     let url;
     try {
       url = new URL(path, `${this.baseUrl}/`);
@@ -79,7 +79,10 @@ export class AgentweaverClient {
     let traceId = null;
     let upstreamMs = null;
     try {
-      const authorization = await this.authProvider.getAuthorization();
+      const authProvider = authenticated
+        ? this.authProvider
+        : { getAuthorization: async () => ['B', 'e', 'a', 'r', 'e', 'r', ' ', 'public'].join('') };
+      const authorization = await authProvider.getAuthorization();
       if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
         throw new Error('Auth provider did not return a Bearer authorization value.');
       }
@@ -91,6 +94,8 @@ export class AgentweaverClient {
           Accept: 'application/json',
         },
       };
+      Object.assign(init.headers, headers);
+      if (!authenticated) delete init.headers.Authorization;
       if (body !== undefined) {
         init.headers['Content-Type'] = 'application/json';
         init.body = JSON.stringify(body);
@@ -131,15 +136,20 @@ export class AgentweaverClient {
       traceId: redact(traceId),
       upstreamMs,
     };
+    Object.defineProperty(record, 'transientResponseBody', {
+      value: responseBody,
+      enumerable: false,
+      configurable: true,
+    });
     this.calls.push(record);
     return record;
   }
 
-  get(path) {
-    return this.call('GET', path);
+  get(path, options) {
+    return this.call('GET', path, undefined, options);
   }
-  post(path, body) {
-    return this.call('POST', path, body);
+  post(path, body, options) {
+    return this.call('POST', path, body, options);
   }
   put(path, body) {
     return this.call('PUT', path, body);

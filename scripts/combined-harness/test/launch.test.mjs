@@ -15,25 +15,35 @@ test('buildCommands replaces shared batch and scenario tokens', () => {
   ]);
 });
 
-test('combined remote API and MCP flows require explicit Agentweaver authentication', async () => {
-  for (const [surface, target] of [
-    ['api', 'https://example.test'],
-    ['mcp', 'https://example.test/mcp'],
-  ]) {
-    await assert.rejects(
-      runCombined({
-        'scenario-id': 'case-1',
-        surfaces: surface,
-        [`${surface}-command`]: JSON.stringify(['node', 'runner.mjs', '--target', target]),
-      }, {
-        env: {},
-        mkdir: async () => {},
-        runCommand: async () => ({ code: 0 }),
-        readVerdicts: () => [],
-      }),
-      /requires AGENTWEAVER_TOKEN in the transient launcher environment/,
-    );
-  }
+test('combined API uses the recorder-session flow while MCP requires explicit authentication', async () => {
+  const writes = [];
+  const report = await runCombined({
+    'scenario-id': 'case-1',
+    surfaces: 'api',
+    'api-command': JSON.stringify(['node', 'runner.mjs', '--target', 'https://example.test']),
+  }, {
+    env: {},
+    mkdir: async () => {},
+    writeFile: async (_file, content) => writes.push(content),
+    runCommand: async () => ({ code: 0 }),
+    readVerdicts: () => [],
+  });
+  assert.equal(report.preflight[0].authSource, 'provider:recorder-session');
+  assert.equal(writes.length, 1);
+
+  await assert.rejects(
+    runCombined({
+      'scenario-id': 'case-1',
+      surfaces: 'mcp',
+      'mcp-command': JSON.stringify(['node', 'runner.mjs', '--target', 'https://example.test/mcp']),
+    }, {
+      env: {},
+      mkdir: async () => {},
+      runCommand: async () => ({ code: 0 }),
+      readVerdicts: () => [],
+    }),
+    /mcp remote flow requires AGENTWEAVER_TOKEN in the transient launcher environment/,
+  );
 });
 
 test('runs all children independently and aggregates successful sibling verdicts after a failure', async () => {

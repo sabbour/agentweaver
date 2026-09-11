@@ -52,7 +52,7 @@ function rejectArgvSecrets(command, surface) {
     || /\bAuthorization\s*:/i.test(part)
     || /^\s*Bearer\s+/i.test(part));
   if (containsCredential) {
-    throw new Error(`--${surface}-command must not carry authentication in argv; use AGENTWEAVER_TOKEN in the transient launcher environment`);
+    throw new Error(`--${surface}-command must not carry authentication in argv; use the surface's configured authentication flow`);
   }
 }
 
@@ -118,7 +118,9 @@ function commandPreflight(surface, command, environment) {
     evidence = target
       ? networkTargetEvidence(target, {
         surface,
-        authSource: environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
+        authSource: surface === 'api'
+          ? 'provider:recorder-session'
+          : environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
         exactPath: surface === 'mcp' && target !== 'stdio' ? '/mcp' : undefined,
       })
       : {
@@ -141,18 +143,13 @@ function commandPreflight(surface, command, environment) {
   };
 }
 
-function requireExplicitRemoteAuth(commands, environment) {
+function requireRemoteMcpAuth(commands, environment) {
   for (const { surface, command } of commands) {
-    if (surface !== 'api' && surface !== 'mcp') continue;
+    if (surface !== 'mcp') continue;
     const explicitTarget = option(command, ['--target', '--base-url']);
     const target = explicitTarget ?? environment.AGENTWEAVER_BASE_URL ?? null;
-    const remote = surface === 'api' ? Boolean(target) : Boolean(target && target !== 'stdio');
-    const provider = surface === 'api' && option(command, ['--auth-provider']);
-    if (remote && !provider && !environment.AGENTWEAVER_TOKEN) {
-      throw new Error(
-        `${surface} remote flow requires AGENTWEAVER_TOKEN in the transient launcher environment` +
-        (surface === 'api' ? ' (or an explicitly selected secure auth provider)' : ''),
-      );
+    if (target && target !== 'stdio' && !environment.AGENTWEAVER_TOKEN) {
+      throw new Error('mcp remote flow requires AGENTWEAVER_TOKEN in the transient launcher environment');
     }
   }
 }
@@ -193,7 +190,7 @@ export async function runCombined(args, dependencies = {}) {
     AGENTWEAVER_SCENARIO_ID: scenarioId,
     AGENTWEAVER_VERDICT_DIR: verdictDir,
   };
-  requireExplicitRemoteAuth(commands, childEnvironment);
+  requireRemoteMcpAuth(commands, childEnvironment);
   const results = await Promise.all(commands.map(async ({ surface, command }) => {
     const outcome = await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
     return {
