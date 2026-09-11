@@ -566,3 +566,130 @@ Stabilize the delayed-dialog interactions in the SkillsPage tests, then rerun la
 - **Notes**: The affected file passed all 35 tests when run independently. The layer failure was timing-related under concurrent validation, not caused by the trace-detail change.
 
 ---
+
+## [ERR-20260911-005] trace-attribute-absence-test
+
+**Logged**: 2026-09-11T18:22:34Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The trace-detail test expected only one explicit absent-value marker, while the typed schema correctly renders one for every unavailable dimension.
+
+### Error
+```
+TestingLibraryElementError: Found multiple elements with the text: Not recorded
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:22:34Z
+- **Notes**: Assert that at least one explicit absence is rendered rather than assuming a single field is absent.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/__tests__/TransactionTraceDetail.test.tsx
+
+---
+
+## [ERR-20260911-006] run-trace-context-accessibility
+
+**Logged**: 2026-09-11T18:23:59Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The new trace-context type was less visible than the public metrics service method that accepts it.
+
+### Error
+```
+CS0051: parameter type RunTraceContext is less accessible than GetRunTracesAsync
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:23:59Z
+- **Notes**: Made the server-side context type public while keeping it out of the serialized trace response contract.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/Agentweaver.Api/Metrics/MetricsDtos.cs
+
+---
+
+## [ERR-20260911-007] trace-projection-build-types
+
+**Logged**: 2026-09-11T18:24:34Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first typed event projection used an implicit nullable conditional and omitted the API run-status extension import.
+
+### Error
+```
+CS0173: no implicit conversion between null and DateTimeOffset
+CS1929: RunStatus does not contain ToApiString
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:24:34Z
+- **Notes**: Made the timestamp local explicitly nullable and imported the existing API status contract extension.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/Agentweaver.Api/Endpoints/RunEndpoints.cs
+
+---
+
+## [ERR-20260911-008] telemetry-test-compile
+
+**Logged**: 2026-09-11T18:25:21Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The new telemetry tests missed the domain namespace import and used unsupported pattern matching in a FluentAssertions expression.
+
+### Error
+```
+CS0103: TraceTelemetry does not exist in the current context
+CS8122: expression tree may not contain an is pattern
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:25:21Z
+- **Notes**: Added the domain import and used the nullable timestamp's HasValue property.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Tests/Observability/TraceInstrumentationTests.cs
+
+---
+
+## [ERR-20260911-009] raw-tool-argument-span-tag
+
+**Logged**: 2026-09-11T18:27:07Z
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first trace-contract hardening removed raw tool results but left the existing tool-argument span tag in place.
+
+### Error
+```
+Expected gen_ai.tool.call.arguments to be null, but found {"query":"hello world"}.
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:27:07Z
+- **Notes**: Removed the Application Insights argument tag. Redacted arguments remain available only through the owner-authorized persisted event stream.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs
+
+---

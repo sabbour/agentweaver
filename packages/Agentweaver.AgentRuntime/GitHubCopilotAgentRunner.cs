@@ -263,7 +263,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
             EmitToolCallOnce(callId, "unknown", null); // defensive call-before-error
             if (emittedTerminals.TryAdd(callId, 0))
-                Emit("tool.error", new { callId, errorMessage });
+                Emit("tool.error", new { callId, errorMessage = SensitiveDataRedactor.RedactJsonStringIfApplicable(errorMessage) });
         }
 
         void EmitDelta(string text, string? messageId)
@@ -317,10 +317,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Emit configuration snapshot for debuggability.
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = AgentBasePrompt.Base, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext), skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(systemPromptContext) });
-        Emit("agent.task", new { task });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "run_command (sandboxed)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
+        // Persist bounded operational context, never prompt/task text or arbitrary tool names.
+        Emit(EventTypes.AgentRuntimeContext, new
+        {
+            provider = "copilot",
+            memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext),
+            skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(systemPromptContext),
+            registeredToolCount = 9,
+        });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });

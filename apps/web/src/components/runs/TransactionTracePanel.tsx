@@ -464,6 +464,12 @@ function traceAgent(spans: RunTraceSpanDto[]): string | null {
     .find((span) => normalizeType(span) === 'invoke-agent' && span.agentName?.trim())?.agentName ?? null;
 }
 
+function traceSessionId(spans: RunTraceSpanDto[]): string | null {
+  return [...spans]
+    .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
+    .find((span) => span.attributes?.sessionId?.trim())?.attributes?.sessionId ?? null;
+}
+
 function traceSucceeded(spans: RunTraceSpanDto[]): boolean {
   return spans.every((span) => span.success);
 }
@@ -638,7 +644,10 @@ function TraceInspector({
           <DetailRow label="Event time" value={formatDateTime(span.timestamp)} styles={styles} />
           <DetailRow label="Duration" value={formatDurationMs(span.durationMs)} styles={styles} />
           <DetailRow label="Status" value={<SpanStatus span={span} styles={styles} />} styles={styles} />
+          <DetailRow label="Session" value={span.attributes?.sessionId ?? 'Not recorded'} styles={styles} />
+          <DetailRow label="Run" value={span.attributes?.runId ?? 'Not recorded'} styles={styles} />
           {span.resultCode && <DetailRow label="Result code" value={span.resultCode} styles={styles} />}
+          {span.attributes?.errorType && <DetailRow label="Error type" value={span.attributes.errorType} styles={styles} />}
           {span.operationName && <DetailRow label="Operation" value={span.operationName} styles={styles} />}
           <DetailRow label={costLabel} value={nodeCost > 0 ? `${formatAic(nodeCost)} AIC` : '—'} styles={styles} />
         </div>
@@ -722,34 +731,60 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
   }
 
   const { span, type } = node;
-  const traceValues: Array<[string, ReactNode]> = [
+  const attributes = span.attributes;
+  const recorded = (value: ReactNode | null | undefined) => value ?? 'Not recorded';
+  const boolean = (value: boolean | null | undefined) => value == null ? 'Not recorded' : String(value);
+  const identityValues: Array<[string, ReactNode]> = [
+    ['session.id', recorded(attributes?.sessionId)],
+    ['run.id', recorded(attributes?.runId)],
+    ['parent.run.id', recorded(attributes?.parentRunId)],
+    ['project.id', recorded(attributes?.projectId)],
+    ['agent.name', recorded(attributes?.agentName)],
+    ['workflow.run.id', recorded(attributes?.workflowRunId)],
+  ];
+  const operationValues: Array<[string, ReactNode]> = [
     ['span.id', <code key="id">{span.id}</code>],
-    ['parent.id', span.parentId ? <code key="parent">{span.parentId}</code> : 'Root span'],
+    ['parent.span.id', span.parentId ? <code key="parent">{span.parentId}</code> : 'Root span'],
     ['span.type', type],
+    ['operation.name', recorded(attributes?.operationName ?? span.operationName)],
+    ['model.id', recorded(attributes?.modelId ?? formatModelLabel(span.model))],
+    ['provider.source', recorded(attributes?.providerSource)],
+    ['provider.kind', recorded(attributes?.providerKind)],
+    ['provider.type', recorded(attributes?.providerType)],
+    ['provider.scope', recorded(attributes?.providerScope)],
+    ['routing.decision', recorded(attributes?.routingDecision)],
+  ];
+  const toolPolicyValues: Array<[string, ReactNode]> = [
+    ['tool.name', recorded(attributes?.toolName ?? span.toolName)],
+    ['tool.call.id', recorded(attributes?.toolCallId ?? span.toolCallId)],
+    ['tool.success', boolean(attributes?.toolSuccess ?? span.success)],
+    ['policy.decision', recorded(attributes?.policyDecision)],
+    ['authorization.decision', recorded(attributes?.authorizationDecision)],
+    ['policy.shell.enabled', boolean(attributes?.policyShellEnabled)],
+    ['policy.network.enabled', boolean(attributes?.policyNetworkEnabled)],
+    ['policy.auto_approve_tools', boolean(attributes?.policyAutoApproveTools)],
+  ];
+  const runtimeValues: Array<[string, ReactNode]> = [
+    ['sandbox.backend', recorded(attributes?.sandboxBackend)],
+    ['sandbox.isolated', boolean(attributes?.sandboxIsolated)],
+    ['runtime.purpose', recorded(attributes?.runtimePurpose)],
+    ['run.status', recorded(attributes?.runStatus)],
+    ['usage.input_tokens', recorded(attributes?.inputTokens != null ? formatNumber(attributes.inputTokens) : null)],
+    ['usage.output_tokens', recorded(attributes?.outputTokens != null ? formatNumber(attributes.outputTokens) : null)],
+    ['usage.total_tokens', recorded(attributes?.totalTokens != null ? formatNumber(attributes.totalTokens) : null)],
+    ['agentweaver.aiu.nano', recorded(attributes?.totalNanoAiu != null ? formatNumber(attributes.totalNanoAiu) : null)],
+    ['status', recorded(attributes?.status ?? (span.success ? 'success' : 'error'))],
+    ['error.type', recorded(attributes?.errorType ?? span.resultCode)],
     ['timestamp', formatDateTime(span.timestamp)],
     ['duration', formatDurationMs(span.durationMs)],
-    ['status', <SpanStatus key="status" span={span} styles={styles} />],
   ];
-  if (span.resultCode) traceValues.push(['result.code', span.resultCode]);
-  if (span.operationName) traceValues.push(['operation.name', span.operationName]);
-
-  const semanticValues: Array<[string, ReactNode]> = [];
-  if (span.agentName) semanticValues.push(['agent.name', span.agentName]);
-  if (span.toolName) semanticValues.push(['tool.name', span.toolName]);
-  if (span.toolCallId) semanticValues.push(['tool.call.id', <code key="call">{span.toolCallId}</code>]);
-  if (span.model) semanticValues.push(['model', formatModelLabel(span.model)]);
-  if (span.inputTokens != null) semanticValues.push(['usage.input_tokens', formatNumber(span.inputTokens)]);
-  if (span.outputTokens != null) semanticValues.push(['usage.output_tokens', formatNumber(span.outputTokens)]);
-  if (span.totalNanoAiu != null) semanticValues.push(['agentweaver.aiu.nano', formatNumber(span.totalNanoAiu)]);
 
   return (
     <div className={styles.attributes}>
-      <AttributeGroup title="Trace attributes" values={traceValues} styles={styles} />
-      <AttributeGroup
-        title="Generative AI attributes"
-        values={semanticValues.length > 0 ? semanticValues : [['availability', 'No additional semantic attributes were recorded.']]}
-        styles={styles}
-      />
+      <AttributeGroup title="Identity" values={identityValues} styles={styles} />
+      <AttributeGroup title="Operation and model" values={operationValues} styles={styles} />
+      <AttributeGroup title="Tool and authorization" values={toolPolicyValues} styles={styles} />
+      <AttributeGroup title="Runtime, usage, and status" values={runtimeValues} styles={styles} />
     </div>
   );
 }
@@ -763,16 +798,24 @@ function eventContext(event: PersistedRunEvent): string {
   const callId = getEventString(event.payload, 'callId');
   const toolName = getEventString(event.payload, 'toolName');
   const parts = [`Sequence ${event.sequence}`];
-  const timestamp = getEventString(event.payload, 'timestamp_utc')
+  const timestamp = event.timestamp_utc
+    ?? getEventString(event.payload, 'timestamp_utc')
     ?? getEventString(event.payload, 'timestampUtc')
     ?? getEventString(event.payload, 'timestamp');
   if (timestamp) parts.push(formatDateTime(timestamp));
+  if (event.duration_ms != null) parts.push(`Duration ${formatDurationMs(event.duration_ms)}`);
   if (toolName) parts.push(`Tool ${toolName}`);
   if (callId) parts.push(`Call ${callId}`);
   return parts.join(' · ');
 }
 
-function eventBadge(eventType: string): { label: string; color: BadgeColor } {
+function eventBadge(event: PersistedRunEvent): { label: string; color: BadgeColor } {
+  if (event.status === 'error') return { label: 'Error', color: 'danger' };
+  if (event.status === 'success') return { label: 'Success', color: 'success' };
+  if (event.status === 'pending') return { label: 'Pending', color: 'warning' };
+  if (event.status === 'approved') return { label: 'Approved', color: 'success' };
+  if (event.status === 'degraded') return { label: 'Degraded', color: 'warning' };
+  const eventType = event.type;
   if (/error|fail/i.test(eventType)) return { label: 'Error', color: 'danger' };
   if (/tool\.call/i.test(eventType)) return { label: 'Call', color: 'warning' };
   if (/tool\.result/i.test(eventType)) return { label: 'Result', color: 'success' };
@@ -805,7 +848,7 @@ function TraceEvents({
   return (
     <div className={styles.events} aria-label="Persisted trace events">
       {events.map((event) => {
-        const badge = eventBadge(event.type);
+        const badge = eventBadge(event);
         const payloadKeys = Object.keys(event.payload);
         return (
           <article className={styles.event} key={`${event.sequence}-${event.type}`}>
@@ -900,6 +943,7 @@ export function TransactionTracePanel({
   const runTotalNanoAiu = useMemo(() => totalNanoAiu(tree), [tree]);
   const tokens = useMemo(() => rawTokenTotals(trace.spans), [trace.spans]);
   const agent = useMemo(() => traceAgent(trace.spans), [trace.spans]);
+  const sessionId = useMemo(() => traceSessionId(trace.spans), [trace.spans]);
 
   const selectedNode = findNode(tree, selectedKey);
 
@@ -953,6 +997,12 @@ export function TransactionTracePanel({
               <dt className={styles.summaryLabel}>Run ID</dt>
               <dd className={mergeClasses(styles.summaryValue, styles.mono)} title={runId}>{runId}</dd>
             </div>
+            {sessionId && (
+              <div className={styles.summaryItem}>
+                <dt className={styles.summaryLabel}>Session</dt>
+                <dd className={mergeClasses(styles.summaryValue, styles.mono)} title={sessionId}>{sessionId}</dd>
+              </div>
+            )}
             <div className={styles.summaryItem}>
               <dt className={styles.summaryLabel}>Trace duration</dt>
               <dd className={styles.summaryValue}>{timeline ? formatDurationMs(timeline.durationMs) : '—'}</dd>

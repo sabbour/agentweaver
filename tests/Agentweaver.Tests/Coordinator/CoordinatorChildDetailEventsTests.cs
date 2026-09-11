@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
@@ -101,7 +102,9 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
 
         var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
         entry.RecordNext(EventTypes.RunStarted, new { runId = childRunId });
+        entry.RecordNext("agent.task", new { task = "legacy prompt text must not replay" });
         entry.RecordNext(EventTypes.AgentMessage, new { messageId = "m1", content = "child agent did the subtask" });
+        entry.RecordNext(EventTypes.ToolResult, new { callId = "tool-1", durationMs = 12.5 });
         entry.RecordNext(EventTypes.RunAssembleReady, new { runId = childRunId, parentRunId, subtaskId = "3" });
         streamStore.Complete(childRunId);
 
@@ -114,8 +117,16 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
         events.Should().NotBeNull();
         events!.Should().NotBeEmpty("a finished child's execution log must be non-empty after stream eviction");
         events.Should().BeInAscendingOrder(e => e.Sequence, "events must be ordered by sequence");
+        events.Should().OnlyContain(e => e.TimestampUtc.HasValue,
+            "every newly persisted event is stamped with its UTC append time");
         events.Select(e => e.Type).Should().Contain(EventTypes.AgentMessage,
             "the persisted log must include the child's agent events");
+        var toolResult = events.Single(e => e.Type == EventTypes.ToolResult);
+        toolResult.DurationMs.Should().Be(12.5);
+        toolResult.Status.Should().Be("success");
+        var legacyTask = events.Single(e => e.Type == "agent.task");
+        legacyTask.Payload.TryGetProperty("task", out _).Should().BeFalse(
+            "historical prompt/task payloads remain compatible as events but are redacted at the API boundary");
         events.Select(e => e.Type).Should().NotContain(EventTypes.RaiVerdict,
             "child runs no longer launch a per-child RAI sub-stream");
         events.Select(e => e.Type).Should().Contain(EventTypes.RunAssembleReady,
@@ -178,5 +189,11 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
         return runId.ToString();
     }
 
-    private sealed record EventDto(int Sequence, string Type, JsonElement Payload);
+    private sealed record EventDto(
+        int Sequence,
+        string Type,
+        [property: JsonPropertyName("timestamp_utc")] DateTimeOffset? TimestampUtc,
+        [property: JsonPropertyName("duration_ms")] double? DurationMs,
+        string? Status,
+        JsonElement Payload);
 }

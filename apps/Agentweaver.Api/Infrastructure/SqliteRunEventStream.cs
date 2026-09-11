@@ -78,7 +78,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
-        evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
@@ -135,6 +135,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             {
                 ct.ThrowIfCancellationRequested();
                 var evt = StructuredRunFailureTerminal.NormalizeFailure(rawEvent);
+                evt = StampTimestamp(evt);
                 using var cmd = connection.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = """
@@ -382,6 +383,11 @@ public sealed class SqliteRunEventStream : IRunEventStream
             return Convert.ToInt32(result, CultureInfo.InvariantCulture);
         }
     }
+
+    private static RunEvent StampTimestamp(RunEvent evt) =>
+        evt.TimestampUtc == default
+            ? evt with { TimestampUtc = DateTimeOffset.UtcNow }
+            : evt with { TimestampUtc = evt.TimestampUtc.ToUniversalTime() };
 
     private static (string EventType, string PayloadJson)? LoadExistingExplicitEvent(
         SqliteConnection connection,
