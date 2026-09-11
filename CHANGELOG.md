@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.29.0
+
+### Minor Changes
+
+- 59536e2: Add opt-in Kubernetes topology layers with typed relationships, safe resource drill-down, and per-layer availability status while keeping the runtime view as the default.
+- 59536e2: Add optional Kubernetes topology layers and bounded card-driven related-resource drilldowns so operators can inspect traffic, security, workload, storage, scaling, and Agentweaver infrastructure without cluttering the default runtime graph.
+- 59536e2: Make every cluster topology resource independently expandable so operators can inspect health, ownership, capacity, age, and safe navigation details without leaving the graph.
+- 59536e2: Add safe resource-specific details to cluster topology data so expandable cards can show ownership, timing, capacity, health reasons, runtime metadata, and internal deep-link identifiers.
+- 59536e2: Let API, MCP, and web users choose safe-tool auto-approval and autopilot when starting a run directly, without routing work through heartbeat pickup. Heartbeat claims now atomically snapshot the latest persisted pickup settings onto each reserved run so stale replicas, updates between claims, activation gaps, and retries cannot reset the selected policy. Explicit safe-tool auto-approval now includes `start_preview`: it skips only the human wait, emits a sanitized policy-snapshot audit decision, and preserves all preview validation and unsafe-tool boundaries.
+- 59536e2: Extend Agentweaver-issued OAuth access tokens to eight hours while retaining rotating refresh-token renewal and replay protection.
+
+### Patch Changes
+
+- 59536e2: Keep tool-approval cards, counts, board badges, and notifications synchronized from one canonical pending set, including preview approvals and coordinator child runs. Bound `start_preview` approval and registration waits so API, MCP, and sandbox callers receive explicit retryable timeout failures instead of hanging indefinitely. Capture each run's approval-sensitive launch policy before activation so project setting changes, service restarts, and terminal cleanup cannot silently change auto-approval or preview timeout behavior.
+- 59536e2: Validate the run-bound Copilot credential before AgentHost launch, preserve actionable provider failures instead of masking them with workflow validation, make missing-claim cleanup idempotent, retain the Build & Test fallback for provider-ready direct code runs, and add correlated sanitized failure diagnostics.
+- 59536e2: Standardize compact provider indicators across AI actions and run surfaces, clarify provider readiness and snapshot failures, prevent duplicate provider claims and snapshot captures, and keep controls readable at narrow widths.
+- 59536e2: Carry an active browser sign-in into newly opened Agentweaver tabs without persisting the session token outside per-tab session storage.
+- 59536e2: Refresh product messaging across the documentation and web interface to explain generated agent teams, governed workflows, deployment control, and MCP access.
+- 59536e2: Make background automation use its captured project or platform model-provider authority during outcome drafting, and report separate interactive, unattended, and repository readiness instead of a generic ready state. Readiness now verifies the exact durable credential purpose that launch must snapshot instead of trusting provider and repository status labels.
+- 59536e2: Give sign-in, GitHub App, Copilot, and MCP OAuth completion flows consistent Agentweaver-branded status dialogs with clear next steps and redacted provider errors.
+- 59536e2: Make provider snapshot capture idempotent across repeated or concurrent coordinator activation, preserve the accepted BYOK configuration during outcome-spec drafting, allow Copilot drafting turns to redeem the coordinator run capability, and expose project generation-model overrides through `project_configure`.
+- 59536e2: Keep Agentweaver browser sessions active for a fixed eight hours while preserving secure cookie, server-side logout, and OAuth identity-binding protections.
+
 ## 0.28.10
 
 ### Patch Changes
