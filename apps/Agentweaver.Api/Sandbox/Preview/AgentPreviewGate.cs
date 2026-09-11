@@ -226,7 +226,7 @@ public sealed class AgentPreviewGate
             expiresAt = expiresAt.ToString("O"),
             timeoutMinutes = (int)approvalTimeout.TotalMinutes,
             retryOfRequestId,
-            approvalPolicySnapshotId = launchPolicy?.SnapshotId,
+            approvalPolicySnapshotId = snapshot?.SnapshotId,
         });
         _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
         {
@@ -239,7 +239,7 @@ public sealed class AgentPreviewGate
             retry_of_request_id = retryOfRequestId,
             expires_at = expiresAt.ToString("O"),
             timeout_minutes = (int)approvalTimeout.TotalMinutes,
-            approval_policy_snapshot_id = launchPolicy?.SnapshotId,
+            approval_policy_snapshot_id = snapshot?.SnapshotId,
             timestamp_utc = requestedAt.ToString("O"),
         });
         _streams.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
@@ -256,7 +256,7 @@ public sealed class AgentPreviewGate
             displayId,
             port,
             runId,
-            launchPolicy?.SnapshotId);
+            snapshot?.SnapshotId);
 
         return new PreviewApprovalAttempt(
             requestId,
@@ -370,15 +370,6 @@ public sealed class AgentPreviewGate
 
     internal async Task<TimeSpan> ResolveApprovalTimeoutForRunAsync(string runId, CancellationToken ct)
     {
-        var launchPolicy = _runOptions.GetLaunchPolicy(runId);
-        if (launchPolicy is not null)
-        {
-            return TimeSpan.FromMinutes(Math.Clamp(
-                launchPolicy.PreviewApprovalTimeoutMinutes,
-                MinimumApprovalTimeoutMinutes,
-                MaximumApprovalTimeoutMinutes));
-        }
-
         if (_runStore is null || _projectStore is null || !RunId.TryParse(runId, out var parsedRunId))
             return _fallbackApprovalTimeout;
 

@@ -121,21 +121,6 @@ public sealed class AgentPreviewGateTests
     }
 
     [Fact]
-    public async Task ResolveApprovalTimeout_UsesImmutableLaunchSnapshot()
-    {
-        var gate = CreateGate(autoApproveConfigured: false, out _, out var runOptions, out _);
-        runOptions.CaptureLaunchPolicy(
-            RunId,
-            new RunOptions(),
-            7,
-            "interactive");
-
-        var timeout = await gate.ResolveApprovalTimeoutForRunAsync(RunId, CancellationToken.None);
-
-        timeout.Should().Be(TimeSpan.FromMinutes(7));
-    }
-
-    [Fact]
     public async Task RequestApproval_OperatorGrant_Resolves()
     {
         var gate = CreateGate(autoApproveConfigured: false, out var approvalGate, out _, out var streams,

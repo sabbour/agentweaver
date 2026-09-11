@@ -3,8 +3,13 @@ import {
   Card,
   CardHeader,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
+import {
+  ChevronDownRegular,
+  ChevronRightRegular,
+} from '@fluentui/react-icons';
 import '@xyflow/react/dist/style.css';
 import {
   Handle,
@@ -12,7 +17,7 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 import type {
   KubernetesTopologyDto,
@@ -21,6 +26,7 @@ import type {
 
 const NODE_WIDTH = 250;
 const NODE_HEIGHT = 90;
+const NODE_EXPANDED_HEIGHT = 250;
 const COLUMN_GAP = 90;
 const ROW_GAP = 24;
 
@@ -44,7 +50,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
-    cursor: 'pointer',
+    overflow: 'hidden',
   },
   healthy: {
     borderTopColor: tokens.colorPaletteGreenBorder2,
@@ -80,6 +86,42 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  toggle: {
+    appearance: 'none',
+    border: 0,
+    padding: 0,
+    backgroundColor: 'transparent',
+    color: 'inherit',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: tokens.spacingHorizontalS,
+    textAlign: 'left',
+    cursor: 'pointer',
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '2px',
+    },
+  },
+  summary: {
+    minWidth: 0,
+    display: 'grid',
+    gap: tokens.spacingVerticalXS,
+  },
+  inlineDetails: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(84px, auto) minmax(0, 1fr)',
+    gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    margin: `${tokens.spacingVerticalS} 0 0`,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    fontSize: tokens.fontSizeBase200,
+  },
+  inlineValue: {
+    margin: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   drilldown: { maxWidth: '720px' },
   details: {
     display: 'grid',
@@ -93,25 +135,51 @@ const useStyles = makeStyles({
 
 interface GraphNodeData extends Record<string, unknown> {
   resource: KubernetesTopologyNodeDto;
+  expanded: boolean;
+  onToggle: (id: string) => void;
 }
 
-function ResourceNode({ data }: NodeProps) {
+function ResourceNode({ id, data }: NodeProps) {
   const styles = useStyles();
-  const resource = (data as GraphNodeData).resource;
+  const node = data as GraphNodeData;
+  const { resource } = node;
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
   return (
-    <div
-      className={`${styles.node} ${styles[resource.health]}`}
+    <article
+      className={mergeClasses(styles.node, styles[resource.health])}
       aria-label={`${resource.name}: ${resource.summary}`}
       title={`${resource.type} ${resource.namespace ? `${resource.namespace}/` : ''}${resource.name}`}
-      data-testid="cluster-topology-node"
+      data-testid={`cluster-topology-node-${id}`}
     >
       <Handle type="target" position={Position.Left} style={handleStyle} />
-      <span className={styles.title}>{resource.name}</span>
-      <span className={styles.detail}>{resource.summary}</span>
-      <span className={styles.detail}>{resource.type} · {resource.layer}</span>
+      <button
+        type="button"
+        className={styles.toggle}
+        aria-expanded={node.expanded}
+        aria-label={`${node.expanded ? 'Collapse' : 'Expand'} ${resource.name}: ${resource.summary}`}
+        onClick={() => node.onToggle(id)}
+      >
+        <span className={styles.summary}>
+          <span className={styles.title}>{resource.name}</span>
+          <span className={styles.detail}>{resource.summary}</span>
+          <span className={styles.detail}>{resource.type} · {resource.layer}</span>
+        </span>
+        {node.expanded ? <ChevronDownRegular aria-hidden="true" /> : <ChevronRightRegular aria-hidden="true" />}
+      </button>
+      {node.expanded && (
+        <dl className={styles.inlineDetails} data-testid={`cluster-topology-details-${id}`}>
+          <dt className={styles.detailKey}>API version</dt>
+          <dd className={styles.inlineValue}>{resource.api_version}</dd>
+          {Object.entries(resource.details).slice(0, 5).map(([key, value]) => (
+            <span key={key} style={{ display: 'contents' }}>
+              <dt className={styles.detailKey}>{key}</dt>
+              <dd className={styles.inlineValue} title={String(value)}>{String(value)}</dd>
+            </span>
+          ))}
+        </dl>
+      )}
       <Handle type="source" position={Position.Right} style={handleStyle} />
-    </div>
+    </article>
   );
 }
 
@@ -120,22 +188,40 @@ const nodeTypes = { resource: ResourceNode };
 export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopologyDto }) {
   const styles = useStyles();
   const [selected, setSelected] = useState<KubernetesTopologyNodeDto | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(
+    () => new Set(topology.nodes
+      .filter(node => node.health === 'attention' || node.health === 'critical')
+      .map(node => node.id)),
+  );
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   const { nodes, edges } = useMemo(() => {
     const types = [...new Set(topology.nodes.map(node => node.type))].sort();
     const typeColumns = new Map(types.map((type, index) => [type, index]));
-    const rows = new Map<number, number>();
+    const columnOffsets = new Map<number, number>();
     const nodes: Node[] = topology.nodes.map(resource => {
       const column = typeColumns.get(resource.type) ?? 0;
-      const row = rows.get(column) ?? 0;
-      rows.set(column, row + 1);
+      const y = columnOffsets.get(column) ?? 0;
+      const expanded = expandedIds.has(resource.id);
+      columnOffsets.set(
+        column,
+        y + (expanded ? NODE_EXPANDED_HEIGHT : NODE_HEIGHT) + ROW_GAP,
+      );
       return {
         id: resource.id,
         type: 'resource',
-        data: { resource },
+        data: { resource, expanded, onToggle: toggleExpanded },
         position: {
           x: column * (NODE_WIDTH + COLUMN_GAP),
-          y: row * (NODE_HEIGHT + ROW_GAP),
+          y,
         },
+        style: { height: expanded ? NODE_EXPANDED_HEIGHT : NODE_HEIGHT },
       };
     });
     const edges: Edge[] = topology.edges.map(edge => {
@@ -158,7 +244,7 @@ export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopolog
       };
     });
     return { nodes, edges };
-  }, [topology]);
+  }, [expandedIds, toggleExpanded, topology]);
 
   return (
     <div className={styles.container} data-testid="cluster-topology-graph">

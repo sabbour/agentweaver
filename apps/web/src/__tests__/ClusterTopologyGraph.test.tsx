@@ -24,16 +24,16 @@ vi.mock('@xyflow/react', async (importActual) => {
       onNodeClick,
     }: {
       nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>;
-      nodeTypes: Record<string, ComponentType<{ data: Record<string, unknown> }>>;
+      nodeTypes: Record<string, ComponentType<{ id: string; data: Record<string, unknown> }>>;
       onNodeClick?: (event: unknown, node: { data: Record<string, unknown> }) => void;
     }) => (
       <div data-testid="mock-reactflow">
         {nodes.map((node) => {
           const NodeComponent = nodeTypes[node.type ?? ''];
           return (
-            <button key={node.id} onClick={() => onNodeClick?.({}, node)}>
-              <NodeComponent data={node.data} />
-            </button>
+            <div key={node.id} onClick={() => onNodeClick?.({}, node)}>
+              <NodeComponent id={node.id} data={node.data} />
+            </div>
           );
         })}
       </div>
@@ -118,5 +118,18 @@ describe('ClusterTopologyGraph', () => {
     expect(within(card).getByText('serviceAccount')).toBeTruthy();
     expect(within(card).getByText('web')).toBeTruthy();
     expect(screen.queryByText(/manifest/i)).toBeNull();
+  });
+
+  it('expands resource cards independently while retaining the drill-down', () => {
+    render(<Wrapper><ClusterTopologyGraph topology={topology} /></Wrapper>);
+
+    const pod = screen.getByRole('button', { name: 'Expand web-1: Pod · Running' });
+    fireEvent.click(pod);
+
+    expect(pod.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('cluster-topology-details-v1:Pod:agentweaver:web-1')).toBeTruthy();
+    expect(screen.getByLabelText('web-1 resource details')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Expand web: Service · ClusterIP · 1 ports' })
+      .getAttribute('aria-expanded')).toBe('false');
   });
 });

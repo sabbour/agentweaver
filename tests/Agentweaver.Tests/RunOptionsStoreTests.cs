@@ -89,41 +89,4 @@ public sealed class RunOptionsStoreTests
         opts.Autopilot.Should().BeTrue();
     }
 
-    [Fact]
-    public void LaunchPolicy_IsImmutableAndSurvivesLiveOptionCleanup()
-    {
-        var store = new InMemoryRunOptionsStore();
-        var sourceUpdatedAt = DateTimeOffset.Parse("2026-09-10T08:30:00Z");
-        var captured = store.CaptureLaunchPolicy(
-            "r1",
-            new RunOptions(AutoApproveTools: true, Autopilot: true),
-            17,
-            "backlog_pickup",
-            sourceUpdatedAt);
-
-        store.Set("r1", captured.Options);
-        store.SetAutoApproveTools("r1", false);
-        store.Clear("r1");
-        var replay = store.CaptureLaunchPolicy(
-            "r1",
-            captured.Options,
-            17,
-            "backlog_pickup",
-            sourceUpdatedAt);
-
-        replay.Should().Be(captured);
-        store.GetLaunchPolicy("r1").Should().Be(captured);
-    }
-
-    [Fact]
-    public void LaunchPolicy_RejectsConflictingRecapture()
-    {
-        var store = new InMemoryRunOptionsStore();
-        store.CaptureLaunchPolicy("r1", new RunOptions(AutoApproveTools: true), 30, "backlog_pickup");
-
-        var act = () => store.CaptureLaunchPolicy("r1", new RunOptions(), 30, "interactive");
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*run_policy_snapshot_conflict*");
-    }
 }

@@ -72,6 +72,8 @@ export const FILE_RESOURCES = Object.freeze({
   "rbac-api.yaml": [
     { kind: "Role", name: "agentweaver-api-sandbox" },
     { kind: "RoleBinding", name: "agentweaver-api-sandbox" },
+    { kind: "ClusterRole", name: "agentweaver-api-topology-storage" },
+    { kind: "ClusterRoleBinding", name: "agentweaver-api-topology-storage" },
     { kind: "Role", name: "agentweaver-worker-sandbox" },
     { kind: "RoleBinding", name: "agentweaver-worker-sandbox" },
   ],

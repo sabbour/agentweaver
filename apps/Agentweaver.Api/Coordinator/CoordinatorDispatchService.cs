@@ -2278,18 +2278,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     internal void CascadeOptionsToChild(string coordinatorRunId, string childRunId)
     {
         if (_runOptions is null) return;
-        var options = _runOptions.Get(coordinatorRunId);
-        var parentPolicy = _runOptions.GetLaunchPolicy(coordinatorRunId);
-        if (parentPolicy is not null)
-        {
-            _runOptions.CaptureLaunchPolicy(
-                childRunId,
-                options,
-                parentPolicy.PreviewApprovalTimeoutMinutes,
-                "coordinator_child",
-                parentPolicy.SourceSettingsUpdatedAt);
-        }
-        _runOptions.Set(childRunId, options);
+        _runOptions.Set(childRunId, _runOptions.Get(coordinatorRunId));
     }
 
     private async Task<List<(int, int)>> SerializeDeclaredOutputConflictsAsync(

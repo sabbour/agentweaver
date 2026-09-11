@@ -430,7 +430,12 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   // falls back to whatever namespace the current context defaults to
   // (typically "default"), silently breaking every configMapKeyRef that
   // expects this ConfigMap to live in the agentweaver namespace.
-  const CLUSTER_SCOPED_KINDS = new Set(["Namespace", "StorageClass"]);
+  const CLUSTER_SCOPED_KINDS = new Set([
+    "Namespace",
+    "StorageClass",
+    "ClusterRole",
+    "ClusterRoleBinding",
+  ]);
   for (const doc of docs) {
     if (CLUSTER_SCOPED_KINDS.has(doc.kind) || !doc.kind) continue;
     assert.match(
