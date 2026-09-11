@@ -22,6 +22,8 @@ import type {
   KubernetesTopologyLayer,
   KubernetesTopologyNodeDto,
 } from '../api/types';
+import { routeGridEdges } from '../utils/dagLayout';
+import { workflowEdgeTypes } from './WorkflowGraphPanel';
 import agentIcon from '../copilot-fluent-system/assets/icons/azure/assets/ai-plus-machine-learning--foundry-agent-service--708ac6493c69.svg';
 import controlPlaneIcon from '../copilot-fluent-system/assets/icons/azure/assets/ai-plus-machine-learning--foundry-control-plane--6608ba6d5016.svg';
 import kubernetesIcon from '../copilot-fluent-system/assets/icons/azure/assets/compute--kubernetes-services--e49c42fb6915.svg';
@@ -504,6 +506,7 @@ function topologyEdge(source: string, target: string, tone: EdgeTone = 'default'
     id: `${source}->${target}`,
     source,
     target,
+    type: 'spine',
     style: { stroke, strokeWidth: tone === 'allowed' ? 2 : 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 12, height: 12 },
   };
@@ -529,7 +532,10 @@ function ResourceNode({ data }: NodeProps) {
         }
       }}
     >
-      <Handle type="target" position={Position.Left} style={handleStyle} />
+      <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
+      <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
+      <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
+      <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
       <div className={styles.nodeHeading}>
         <img
           className={styles.nodeIcon}
@@ -554,7 +560,10 @@ function ResourceNode({ data }: NodeProps) {
           ))}
         </div>
       ) : null}
-      <Handle type="source" position={Position.Right} style={handleStyle} />
+      <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
+      <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
+      <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
+      <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
     </article>
   );
 }
@@ -641,17 +650,16 @@ export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopolog
       { source: 'sandbox-claim', target: 'sandbox' },
     ];
 
-    return {
-      nodes: components.map((component) => ({
+    const nodes = components.map((component) => ({
         id: component.id,
         type: 'resource',
         data: { component, onSelect: setSelectedId },
         position: positions[component.id] ?? { x: 0, y: 0 },
-      }) satisfies Node),
-      edges: relationships
-        .filter(({ source, target }) => visibleIds.has(source) && visibleIds.has(target))
-        .map(({ source, target, tone }) => topologyEdge(source, target, tone)),
-    };
+      }) satisfies Node);
+    const edges = relationships
+      .filter(({ source, target }) => visibleIds.has(source) && visibleIds.has(target))
+      .map(({ source, target, tone }) => topologyEdge(source, target, tone));
+    return { nodes, edges: routeGridEdges(edges, nodes) };
   }, [components]);
 
   return (
@@ -675,6 +683,7 @@ export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopolog
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={workflowEdgeTypes}
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
           minZoom={0.15}

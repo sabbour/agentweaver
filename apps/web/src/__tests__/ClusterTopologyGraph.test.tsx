@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentType, ReactNode } from 'react';
 import type { KubernetesTopologyDto } from '../api/types';
 
+const flowCapture = vi.hoisted(() => ({
+  edges: [] as Array<{ type?: string; sourceHandle?: string; targetHandle?: string }>,
+  edgeTypes: {} as Record<string, unknown>,
+}));
+
 class ResizeObserverStub {
   observe() {}
   unobserve() {}
@@ -22,22 +27,28 @@ vi.mock('@xyflow/react', async (importActual) => {
       nodes,
       edges,
       nodeTypes,
+      edgeTypes = {},
     }: {
       nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>;
-      edges: Array<{ id: string; style?: { stroke?: string } }>;
+      edges: Array<{ id: string; type?: string; sourceHandle?: string; targetHandle?: string; style?: { stroke?: string } }>;
       nodeTypes: Record<string, ComponentType<{ data: Record<string, unknown> }>>;
-    }) => (
-      <div data-testid="mock-reactflow">
-        <output data-testid="topology-edges">{edges.map((edge) => edge.id).join('|')}</output>
-        <output data-testid="topology-edge-styles">
-          {edges.map((edge) => `${edge.id}:${edge.style?.stroke ?? ''}`).join('|')}
-        </output>
-        {nodes.map((node) => {
-          const NodeComponent = nodeTypes[node.type ?? ''];
-          return <NodeComponent key={node.id} data={node.data} />;
-        })}
-      </div>
-    ),
+      edgeTypes?: Record<string, unknown>;
+    }) => {
+      flowCapture.edges = edges;
+      flowCapture.edgeTypes = edgeTypes;
+      return (
+        <div data-testid="mock-reactflow">
+          <output data-testid="topology-edges">{edges.map((edge) => edge.id).join('|')}</output>
+          <output data-testid="topology-edge-styles">
+            {edges.map((edge) => `${edge.id}:${edge.style?.stroke ?? ''}`).join('|')}
+          </output>
+          {nodes.map((node) => {
+            const NodeComponent = nodeTypes[node.type ?? ''];
+            return <NodeComponent key={node.id} data={node.data} />;
+          })}
+        </div>
+      );
+    },
   };
 });
 
@@ -242,6 +253,10 @@ describe('ClusterTopologyGraph', () => {
     expect(screen.queryByText('ReplicaSet')).toBeNull();
     expect(screen.queryByText('agent-abc123')).toBeNull();
     expect(screen.queryByText('agentweaver-api')).toBeNull();
+    expect(flowCapture.edges).not.toHaveLength(0);
+    expect(flowCapture.edges.every((edge) => edge.type === 'spine')).toBe(true);
+    expect(flowCapture.edges.every((edge) => edge.sourceHandle && edge.targetHandle)).toBe(true);
+    expect(flowCapture.edgeTypes.spine).toBeTypeOf('function');
 
     for (const id of [
       'agent-execution',
