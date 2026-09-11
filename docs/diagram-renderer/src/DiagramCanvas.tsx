@@ -7,7 +7,14 @@ import {
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { CardNode, GroupNode, GroupLabelNode, CARD_WIDTH, CARD_HEIGHT_2, CARD_HEIGHT_3 } from './nodes';
+import {
+  CardNode,
+  GroupNode,
+  GroupLabelNode,
+  CARD_WIDTH,
+  CARD_HEIGHT_2,
+  cardHeightFor,
+} from './nodes';
 import {
   alignLoopbackToContinuation,
   findConnectorBridges,
@@ -28,7 +35,6 @@ import type { GraphEdge, GraphSpec, GraphNode } from './types';
 // guarantee.
 
 const CARD_H_2 = CARD_HEIGHT_2;
-const CARD_H_3 = CARD_HEIGHT_3;
 const COL_GAP = 56;
 // Gaps are floors, not fixed sizes: the real height of a gutter comes from the
 // lanes and labels it carries (see gapFor / rowGaps below). These floors only
@@ -121,7 +127,7 @@ function wrapLabel(text: string, maxW: number): string[] {
 }
 
 function cardHeight(n: GraphNode): number {
-  return n.meta ? CARD_H_3 : CARD_H_2;
+  return cardHeightFor(n);
 }
 
 interface Placed {
@@ -1503,6 +1509,33 @@ export function layout(spec: GraphSpec): {
     );
   }
 
+  const brandHeight = spec.brand ? 96 : 0;
+  if (brandHeight > 0) {
+    for (const p of placed) {
+      p.y += brandHeight;
+      p.rowTop += brandHeight;
+      p.rowBottom += brandHeight;
+    }
+    for (const box of groupBoxes.values()) {
+      box.y += brandHeight;
+    }
+    for (const edge of rfEdges) {
+      const data = edge.data as {
+        points?: Point[];
+        labelPos?: { x: number; y: number };
+        bridges?: Array<{ x: number; y: number }>;
+        junctions?: Point[];
+      };
+      data.points = data.points?.map((point) => ({ x: point.x, y: point.y + brandHeight }));
+      data.bridges = data.bridges?.map((bridge) => ({ ...bridge, y: bridge.y + brandHeight }));
+      data.junctions = data.junctions?.map((junction) => ({ x: junction.x, y: junction.y + brandHeight }));
+      if (data.labelPos) {
+        data.labelPos = { x: data.labelPos.x, y: data.labelPos.y + brandHeight };
+      }
+    }
+    canvasHeight += brandHeight;
+  }
+
   const rfNodes: Node[] = [];
   [...groups].sort((a, b) => a.tier - b.tier).forEach((group) => {
     const box = groupBoxes.get(group.id);
@@ -1571,6 +1604,7 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
       id="diagram-root"
       data-diagram-ready={ready ? 'true' : 'false'}
       style={{
+        position: 'relative',
         width: canvasWidth,
         height: canvasHeight,
         backgroundColor: neutral.background3,
@@ -1578,6 +1612,27 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
         borderRadius: radius.card,
       }}
     >
+      {spec.brand && (
+        <div style={{
+          position: 'absolute',
+          top: 20,
+          left: 32,
+          zIndex: 5,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          fontFamily: '"Segoe UI", ui-sans-serif, system-ui, sans-serif',
+          color: neutral.foreground1,
+        }}>
+          {spec.brand.logo && <img src={spec.brand.logo} alt="" style={{ width: 42, height: 42, objectFit: 'contain' }} />}
+          <div>
+            <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1 }}>{spec.brand.name}</div>
+            {spec.brand.subtitle && (
+              <div style={{ fontSize: 14, color: neutral.foreground3, marginTop: 3 }}>{spec.brand.subtitle}</div>
+            )}
+          </div>
+        </div>
+      )}
       <ReactFlow
         nodes={nodes}
         edges={edges}

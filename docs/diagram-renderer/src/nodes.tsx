@@ -14,8 +14,20 @@ export const CARD_WIDTH = 340;
 export const CARD_HEIGHT_2 = 104;
 export const CARD_HEIGHT_3 = 132;
 
-export function cardHeightFor(node: { meta?: string }): number {
-  return node.meta ? CARD_HEIGHT_3 : CARD_HEIGHT_2;
+const TITLE_CHARS_PER_LINE = 24;
+const SUBTITLE_CHARS_PER_LINE = 32;
+
+function wrappedLines(text: string | undefined, charsPerLine: number): number {
+  if (!text) return 0;
+  return Math.min(2, Math.max(1, Math.ceil(text.length / charsPerLine)));
+}
+
+export function cardHeightFor(node: Pick<GraphNode, 'label' | 'subLabel' | 'meta'>): number {
+  const titleHeight = wrappedLines(node.label, TITLE_CHARS_PER_LINE) * 23;
+  const subtitleHeight = wrappedLines(node.subLabel, SUBTITLE_CHARS_PER_LINE) * 18;
+  const metaHeight = node.meta ? 15 : 0;
+  const contentHeight = titleHeight + subtitleHeight + metaHeight + (node.subLabel ? 2 : 0) + (node.meta ? 2 : 0);
+  return Math.max(CARD_HEIGHT_2, Math.ceil(contentHeight + 36));
 }
 
 // Mirrors apps/web/src/components/CoordinatorTopologyGraph.tsx's `.card` /
@@ -72,11 +84,13 @@ export function CardNode({ data }: NodeProps) {
             <span
               style={{
                 fontSize: 15,
+                lineHeight: 1.2,
                 color: neutral.foreground3,
                 marginTop: 2,
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 2,
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
               }}
             >
               {node.subLabel}

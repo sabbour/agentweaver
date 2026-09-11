@@ -19,7 +19,9 @@ const specsDir = path.join(repoRoot, 'docs', 'diagrams', 'src');
 const outDir = path.join(repoRoot, 'docs', 'diagrams');
 const rendererDir = path.join(repoRoot, 'docs', 'diagram-renderer');
 const rendererPublicSpecsDir = path.join(rendererDir, 'public', 'specs');
+const rendererPublicLogoPath = path.join(rendererDir, 'public', 'agentweaver.png');
 const rendererDistDir = path.join(rendererDir, 'dist');
+const websiteLogoPath = path.join(repoRoot, 'apps', 'web', 'public', 'agentweaver.png');
 
 const DPR = 2; // export at 2x for crisp embeds on high-DPI displays
 const SCREENSHOT_WRITE_ATTEMPTS = 4;
@@ -73,11 +75,21 @@ async function buildRendererApp(specNames) {
   for (const name of specNames) {
     await cp(path.join(specsDir, `${name}.json`), path.join(rendererPublicSpecsDir, `${name}.json`));
   }
-
-  if (!existsSync(path.join(rendererDir, 'node_modules'))) {
-    execFileSync(npmBin(), ['install'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
+  const hasWebsiteLogo = existsSync(websiteLogoPath);
+  if (hasWebsiteLogo) {
+    await cp(websiteLogoPath, rendererPublicLogoPath);
   }
-  execFileSync(npmBin(), ['run', 'build'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
+
+  try {
+    if (!existsSync(path.join(rendererDir, 'node_modules'))) {
+      execFileSync(npmBin(), ['install'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
+    }
+    execFileSync(npmBin(), ['run', 'build'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
+  } finally {
+    if (hasWebsiteLogo) {
+      await rm(rendererPublicLogoPath, { force: true });
+    }
+  }
 }
 
 const MIME = {
