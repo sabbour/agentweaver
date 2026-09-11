@@ -56,6 +56,31 @@ export interface TraceNode {
   children: TraceNode[];
 }
 
+export interface TraceTimeline {
+  startedAtMs: number;
+  endedAtMs: number;
+  durationMs: number;
+}
+
+/**
+ * Calculates the actual trace window from normalized span timestamps and durations.
+ * Invalid timestamps are ignored so a malformed record cannot make every bar disappear.
+ */
+export function getTraceTimeline(spans: RunTraceSpanDto[]): TraceTimeline | null {
+  const timedSpans = spans
+    .map((span) => ({
+      startedAtMs: new Date(span.timestamp).getTime(),
+      durationMs: Math.max(0, span.durationMs),
+    }))
+    .filter((span) => Number.isFinite(span.startedAtMs));
+
+  if (timedSpans.length === 0) return null;
+
+  const startedAtMs = Math.min(...timedSpans.map((span) => span.startedAtMs));
+  const endedAtMs = Math.max(...timedSpans.map((span) => span.startedAtMs + span.durationMs));
+  return { startedAtMs, endedAtMs, durationMs: Math.max(0, endedAtMs - startedAtMs) };
+}
+
 export function normalizeType(span: RunTraceSpanDto): SpanType {
   const raw = (span.spanType ?? '').toLowerCase();
   if (raw === 'tool' || span.toolName) return 'tool';

@@ -174,10 +174,17 @@ export function safeTerminalFailureMessage(_message: string, code: string, retry
 // GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
 // the execution timeline for terminal/parked runs whose live SSE stream is closed.
 // Shape mirrors the SSE frame: per-run sequence, event type, and JSON payload.
+export interface PersistedRunEventPayload extends Record<string, unknown> {
+  /** Server-stamped event time, when the persisted event did not carry its own time. */
+  timestamp_utc?: string;
+  timestampUtc?: string;
+  timestamp?: string;
+}
+
 export interface PersistedRunEvent {
   sequence: number;
   type: string;
-  payload: Record<string, unknown>;
+  payload: PersistedRunEventPayload;
 }
 
 export interface ReviewRequest {
@@ -1772,6 +1779,8 @@ export interface RunTraceSpanDto {
 export interface RunTraceDto {
   runId: string;
   spans: RunTraceSpanDto[];
+  /** Present when Application Insights could not complete the trace query. */
+  queryError?: string | null;
 }
 
 // Global overview "at a glance" counters.

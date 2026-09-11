@@ -190,6 +190,15 @@ shows how to rerun one step.
 
 Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry Distro** (Application Insights) and **AKS Managed Prometheus**.
 
+### Inspecting a transaction trace
+
+Open a project, select **Observability** → **Traces**, then choose **Preview trace** for a
+coordinator run. The trace detail includes a timeline, span attributes, and persisted run events.
+It shows only trace data returned by Application Insights and the persisted run-event API. In
+particular, it uses the run ID because a trace session ID is not currently exposed, and it does not
+invent event timestamps when a persisted event has no recorded time. See
+[Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
+
 ### Provisioning monitoring resources
 
 Monitoring is provisioned as part of `npm run azure:provision-infra`. To rerun only
