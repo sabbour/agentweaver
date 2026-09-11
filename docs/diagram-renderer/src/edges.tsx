@@ -269,6 +269,26 @@ export function buildBridgedPath(
 }
 
 /**
+ * Joins a return rail to the first outward segment of its destination's
+ * ordinary flow. This keeps the semantic loop outside the card face and makes
+ * its last horizontal segment terminate at the real continuation junction.
+ */
+export function alignLoopbackToContinuation(
+  points: Point[],
+  continuation: Point[] | undefined,
+): Point[] {
+  if (points.length < 4 || !continuation?.length) return points;
+  const join = continuation[1] ?? continuation[0];
+  const sideX = points[1].x;
+  return [
+    points[0],
+    { x: sideX, y: points[0].y },
+    { x: sideX, y: join.y },
+    join,
+  ];
+}
+
+/**
  * An edge that draws the exact orthogonal poly-line the layout router computed
  * for it (see `layout()` in DiagramCanvas.tsx) instead of a handle-to-handle
  * smoothstep path. The router gives every horizontal run its own lane inside

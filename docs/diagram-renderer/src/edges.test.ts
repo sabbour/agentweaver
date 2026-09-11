@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alignLoopbackToContinuation,
   buildBridgedPath,
   findConnectorBridges,
   findConnectorJunctions,
@@ -49,6 +50,29 @@ describe('diagram connector geometry', () => {
     expect(junctions.get('revision')).toEqual([
       { x: 20, y: 40 },
       { x: 100, y: 40 },
+    ]);
+  });
+
+  it('ends a return rail at its target continuation junction, not on the card edge', () => {
+    const aligned = alignLoopbackToContinuation(
+      [
+        { x: 500, y: 80 },
+        { x: 40, y: 80 },
+        { x: 40, y: 260 },
+        { x: 250, y: 260 },
+      ],
+      [
+        { x: 250, y: 140 },
+        { x: 250, y: 190 },
+        { x: 380, y: 190 },
+      ],
+    );
+
+    expect(aligned).toEqual([
+      { x: 500, y: 80 },
+      { x: 40, y: 80 },
+      { x: 40, y: 190 },
+      { x: 250, y: 190 },
     ]);
   });
 });

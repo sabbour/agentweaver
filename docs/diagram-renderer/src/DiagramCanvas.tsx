@@ -9,6 +9,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, GroupLabelNode, CARD_WIDTH, CARD_HEIGHT_2, CARD_HEIGHT_3 } from './nodes';
 import {
+  alignLoopbackToContinuation,
   findConnectorBridges,
   findConnectorJunctions,
   RoutedEdge,
@@ -1055,8 +1056,11 @@ function layout(spec: GraphSpec): {
       // Semantic revision/return edges always travel on their own outer rail.
       // A backward edge can rank in the same band as its target, so it cannot
       // safely assume that an inter-band gutter exists.
-      const lane = takeLane('loopback-left');
-      const sideX = CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
+      const goRight = (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
+      const lane = takeLane(`loopback-${goRight ? 'right' : 'left'}`);
+      const sideX = goRight
+        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + lane * LANE_STEP
+        : CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
       runY = sy;
       points = [
         { x: sx, y: sy },
@@ -1152,6 +1156,43 @@ function layout(spec: GraphSpec): {
         ? undefined
         : { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     });
+  }
+
+  const outgoingBySource = new Map<string, Edge>();
+  for (const edge of rfEdges) {
+    const data = edge.data as { loopback?: boolean } | undefined;
+    if (data?.loopback || outgoingBySource.has(edge.source)) continue;
+    outgoingBySource.set(edge.source, edge);
+  }
+  for (const edge of rfEdges) {
+    const data = edge.data as {
+      loopback?: boolean;
+      points?: Point[];
+      labelPos?: Point;
+    } | undefined;
+    if (!data?.loopback || !data.points) continue;
+    const continuation = outgoingBySource.get(edge.target);
+    const continuationPoints = continuation
+      ? (continuation.data as { points?: Point[] } | undefined)?.points
+      : undefined;
+    const points = alignLoopbackToContinuation(data.points, continuationPoints);
+    data.points = points;
+    const join = points.at(-1);
+    const outerJoin = points.at(-2);
+    if (join && outerJoin && data.labelPos) {
+      data.labelPos = {
+        x: (join.x + outerJoin.x) / 2,
+        y: join.y,
+      };
+      const labelBox = labelBoxes.find((box) => box.edgeId === edge.id);
+      if (labelBox) {
+        labelBox.x = data.labelPos.x;
+        labelBox.ideal = data.labelPos.x;
+        labelBox.y = data.labelPos.y;
+        labelBox.xmin = Math.min(outerJoin.x, join.x);
+        labelBox.xmax = Math.max(outerJoin.x, join.x);
+      }
+    }
   }
 
   const bridgesByEdge = findConnectorBridges(rfEdges.map((edge) => ({
