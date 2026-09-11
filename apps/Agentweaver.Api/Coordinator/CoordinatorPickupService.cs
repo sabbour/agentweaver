@@ -159,8 +159,7 @@ public sealed class CoordinatorPickupService
 
         try
         {
-            if (blockedReason is null)
-                CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
+            CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
         }
         catch (NoTeamException)
         {

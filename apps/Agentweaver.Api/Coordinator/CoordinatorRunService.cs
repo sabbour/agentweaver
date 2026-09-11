@@ -2003,7 +2003,13 @@ public sealed class CoordinatorRunService
                 return;
             }
             var correlationId = Guid.NewGuid().ToString("n");
-            if (providerFailure is null)
+            if (entry.HasEventType(EventTypes.RunFailed))
+            {
+                _logger.LogInformation(
+                    "Coordinator run {RunId} already has a terminal failure event; skipping duplicate emission",
+                    runId);
+            }
+            else if (providerFailure is null)
             {
                 var errorCode = reason == "coordinator_executor_failed:coordinator-direct"
                     ? "coordinator_direct_execution_failed"

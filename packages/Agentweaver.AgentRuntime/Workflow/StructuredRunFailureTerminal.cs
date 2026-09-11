@@ -23,8 +23,18 @@ public static class StructuredRunFailureTerminal
         "coordinator_direct_execution_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
+        "github_copilot_model_unavailable",
+        "github_copilot_models_unavailable",
+        "github_copilot_provider_unavailable",
+        "github_copilot_rate_limited",
+        "github_copilot_runtime_not_configured",
+        "github_copilot_turn_stalled",
+        "github_copilot_turn_timeout",
+        "model_provider_changed",
         "model_provider_snapshot_unavailable",
         "model_provider_connection_required",
+        "model_provider_unavailable",
+        "model_provider_validation_unavailable",
         "shell_execution_timeout",
     };
     private static readonly SandboxOutputRedactor DiagnosticRedactor =

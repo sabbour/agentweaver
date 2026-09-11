@@ -189,7 +189,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
         payload.GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
@@ -308,9 +308,9 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "CopilotAIAgent already emitted the provider terminal before MAF surfaced ExecutorFailedEvent")
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(durableFailure.PayloadJson);
-        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
+        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_models_unavailable");
         payload.GetProperty("message").GetString().Should().Be(
-            "Run failed with code 'agent_turn_internal_error'. Retry is not available.");
+            "Run failed with code 'github_copilot_models_unavailable'. Retry is not available.");
         payload.TryGetProperty("category", out _).Should().BeFalse();
         payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
     }
@@ -344,7 +344,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
