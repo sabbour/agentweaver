@@ -114,15 +114,48 @@ export function findConnectorBridges(
   return bridges;
 }
 
-function turnsBetween(previous: Point, current: Point, next: Point): boolean {
-  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
-  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
-  return verticalBefore !== verticalAfter;
+function samePoint(left: Point, right: Point): boolean {
+  return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
+}
+
+function sharedEndpoint(
+  routes: Array<{ points: Point[] }>,
+  endpoint: 'start' | 'end',
+): Point | undefined {
+  const candidate = endpoint === 'start'
+    ? routes[0]?.points[0]
+    : routes[0]?.points.at(-1);
+  if (!candidate) return undefined;
+  return routes.every((route) => {
+    const point = endpoint === 'start' ? route.points[0] : route.points.at(-1);
+    return point !== undefined && samePoint(candidate, point);
+  })
+    ? candidate
+    : undefined;
+}
+
+function pointLiesOnRoute(point: Point, points: Point[]): boolean {
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const vertical = Math.abs(from.x - to.x) < 0.5;
+    const horizontal = Math.abs(from.y - to.y) < 0.5;
+    if (
+      (vertical && Math.abs(point.x - from.x) < 0.5 &&
+        point.y >= Math.min(from.y, to.y) - 0.5 && point.y <= Math.max(from.y, to.y) + 0.5) ||
+      (horizontal && Math.abs(point.y - from.y) < 0.5 &&
+        point.x >= Math.min(from.x, to.x) - 0.5 && point.x <= Math.max(from.x, to.x) + 0.5)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
- * Marks semantic split and merge locations only. Generic geometric crossings
- * are represented by bridge paths, never by junction circles.
+ * Marks only routed points shared by two semantically related graph edges.
+ * Generic geometric crossings, elbows, and container boundaries are never
+ * junctions.
  */
 export function findConnectorJunctions(
   routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
@@ -152,24 +185,22 @@ export function findConnectorJunctions(
 
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
-    group.sort((left, right) => left.id.localeCompare(right.id));
-    add(group[0].id, group[0].points[0]);
-    for (const route of group) {
-      for (let index = 1; index < route.points.length - 1; index += 1) {
-        if (turnsBetween(route.points[index - 1], route.points[index], route.points[index + 1])) {
-          add(route.id, route.points[index]);
-        }
-      }
-    }
+    const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
+    add(ordered[0].id, sharedEndpoint(ordered, 'start'));
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
-    group.sort((left, right) => left.id.localeCompare(right.id));
-    add(group[0].id, group[0].points.at(-1));
+    const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
+    add(ordered[0].id, sharedEndpoint(ordered, 'end'));
   }
   for (const route of routes.filter((route) => route.loopback)) {
-    add(route.id, route.points.at(-2));
-    add(route.id, route.points.at(-1));
+    const join = route.points.at(-1);
+    const continuation = routes.find((candidate) =>
+      !candidate.loopback &&
+      candidate.source === route.target &&
+      join !== undefined &&
+      pointLiesOnRoute(join, candidate.points));
+    if (continuation) add(route.id, join);
   }
   return junctions;
 }

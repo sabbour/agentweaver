@@ -21,7 +21,7 @@ describe('diagram connector geometry', () => {
     );
   });
 
-  it('emits one explicit junction for connectors with the same origin', () => {
+  it('emits one explicit junction only for an exact shared split origin', () => {
     const junctions = findConnectorJunctions([
       { id: 'edge-b', source: 'origin', target: 'right', points: [{ x: 10, y: 20 }, { x: 100, y: 20 }] },
       { id: 'edge-a', source: 'origin', target: 'down', points: [{ x: 10, y: 20 }, { x: 20, y: 100 }] },
@@ -31,7 +31,18 @@ describe('diagram connector geometry', () => {
     expect(junctions.has('edge-b')).toBe(false);
   });
 
-  it('marks both the outer return and central join of a semantic loopback', () => {
+  it('does not mark container-border-style crossings or differently routed edges from one source', () => {
+    const junctions = findConnectorJunctions([
+      { id: 'edge-a', source: 'first', target: 'right', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },
+      { id: 'edge-b', source: 'second', target: 'down', points: [{ x: 100, y: 0 }, { x: 100, y: 200 }] },
+      { id: 'edge-c', source: 'split', target: 'one', points: [{ x: 10, y: 10 }, { x: 10, y: 60 }] },
+      { id: 'edge-d', source: 'split', target: 'two', points: [{ x: 20, y: 10 }, { x: 20, y: 60 }] },
+    ]);
+
+    expect(junctions).toEqual(new Map());
+  });
+
+  it('marks only the return point shared with the target continuation', () => {
     const junctions = findConnectorJunctions([
       {
         id: 'revision',
@@ -45,12 +56,21 @@ describe('diagram connector geometry', () => {
           { x: 100, y: 40 },
         ],
       },
+      {
+        id: 'continue',
+        source: 'implement',
+        target: 'verify',
+        points: [
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+        ],
+      },
     ]);
 
     expect(junctions.get('revision')).toEqual([
-      { x: 20, y: 40 },
       { x: 100, y: 40 },
     ]);
+    expect(junctions.has('continue')).toBe(false);
   });
 
   it('ends a return rail at its target continuation junction, not on the card edge', () => {

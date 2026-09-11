@@ -19,9 +19,19 @@ const fixtures = vi.hoisted(() => ({
   nodes: [
     { id: 'coordinator', type: 'workflow', position: { x: 0, y: 0 }, data: {}, measured: { width: 250, height: 58 } },
     { id: 'rai', type: 'workflow', position: { x: 360, y: 0 }, data: {}, measured: { width: 250, height: 58 } },
+    { id: 'outcome', type: 'workflow', position: { x: 0, y: 140 }, data: {}, measured: { width: 250, height: 58 } },
   ] as Node[],
   edges: [
     { id: 'rai->coordinator', source: 'rai', target: 'coordinator', type: 'loopback', label: 'RAI flags' },
+    {
+      id: 'coordinator->outcome',
+      source: 'coordinator',
+      target: 'outcome',
+      type: 'spine',
+      sourceHandle: 'source-bottom',
+      targetHandle: 'target-top',
+      data: { flowDirection: 'vertical' },
+    },
   ] as Edge[],
 }));
 
@@ -58,19 +68,22 @@ describe('LoopbackEdge — return arc rendering', () => {
       </AzureFluentProvider>,
     );
 
-    // The dashed return path starts and ends on its supplied anchors, then
-    // uses the outer rail rather than a detached horizontal span.
+    // The dashed return path rejoins the target's actual outgoing route at a
+    // clear continuation point, rather than manufacturing markers at its
+    // outer rail corner or target-card anchor.
     const loopbackPath = container.querySelector(`path[stroke="${REVISION_EDGE_STROKE}"][stroke-dasharray]`);
     expect(loopbackPath).toBeTruthy();
     expect(loopbackPath?.getAttribute('d')).toContain('M 610,29');
-    expect(loopbackPath?.getAttribute('d')).toContain('L 0,29');
+    expect(loopbackPath?.getAttribute('d')).toContain('L 125,76');
     const loopbackJunctions = container.querySelectorAll('[data-testid="workflow-loopback-junction"]');
-    expect(loopbackJunctions).toHaveLength(2);
+    expect(loopbackJunctions).toHaveLength(1);
     for (const junction of loopbackJunctions) {
       expect(junction.getAttribute('r')).toBe('2.5');
       expect(junction.getAttribute('fill')).toBe(REVISION_EDGE_STROKE);
       expect(junction.getAttribute('stroke')).toBeNull();
     }
+    expect(loopbackJunctions[0].getAttribute('cx')).toBe('125');
+    expect(loopbackJunctions[0].getAttribute('cy')).toBe('76');
     // ...and its revision label is rendered as SVG text.
     expect(container.textContent).toContain('RAI flags');
   });
@@ -175,5 +188,7 @@ describe('LoopbackEdge — return arc rendering', () => {
     expect(junction).toBeTruthy();
     expect(junction?.getAttribute('r')).toBe('2.5');
     expect(junction?.getAttribute('stroke')).toBeNull();
+    expect(junction?.getAttribute('cx')).toBe('100');
+    expect(junction?.getAttribute('cy')).toBe('50');
   });
 });

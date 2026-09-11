@@ -1,12 +1,15 @@
 import { ClusterTopologyGraph } from '../components/ClusterTopologyGraph';
 import { AzureFluentProvider } from '../copilot-fluent-system';
+import { findConnectorJunctions } from '../utils/dagLayout';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentType, ReactNode } from 'react';
+import type { Edge, Node } from '@xyflow/react';
 import type { KubernetesTopologyDto } from '../api/types';
 
 const flowCapture = vi.hoisted(() => ({
   edges: [] as Array<{ type?: string; sourceHandle?: string; targetHandle?: string }>,
+  nodes: [] as Node[],
   edgeTypes: {} as Record<string, unknown>,
 }));
 
@@ -29,12 +32,13 @@ vi.mock('@xyflow/react', async (importActual) => {
       nodeTypes,
       edgeTypes = {},
     }: {
-      nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>;
+      nodes: Node[];
       edges: Array<{ id: string; type?: string; sourceHandle?: string; targetHandle?: string; style?: { stroke?: string } }>;
       nodeTypes: Record<string, ComponentType<{ data: Record<string, unknown> }>>;
       edgeTypes?: Record<string, unknown>;
     }) => {
       flowCapture.edges = edges;
+      flowCapture.nodes = nodes;
       flowCapture.edgeTypes = edgeTypes;
       return (
         <div data-testid="mock-reactflow">
@@ -276,6 +280,18 @@ describe('ClusterTopologyGraph', () => {
       expect(icon.getAttribute('data-icon-source')).toBe('iconcloud');
       expect(icon.getAttribute('src')).toMatch(/^(?:data:image\/svg\+xml,|.*\.svg$)/);
     }
+  });
+
+  it('marks only the actual Agent Execution split, not independent route elbows', () => {
+    render(<Wrapper><ClusterTopologyGraph topology={topology} /></Wrapper>);
+
+    const junctions = findConnectorJunctions(flowCapture.edges as Edge[], flowCapture.nodes);
+    const points = [...junctions.values()].flat();
+
+    expect(points).toHaveLength(1);
+    expect(junctions.get('agent-execution->sandbox-claim')).toHaveLength(1);
+    expect(junctions.has('control-plane->application-state')).toBe(false);
+    expect(junctions.has('control-plane->workload-pods')).toBe(false);
   });
 
   it('keeps traffic concise while showing NetworkPolicy allow and deny impact', () => {

@@ -24,6 +24,7 @@ import {
   COMPACT_CARD_H,
   findConnectorBridges,
   findConnectorJunctions,
+  findLoopbackContinuationJoin,
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
@@ -1237,6 +1238,7 @@ function markerId(prefix: string, id: string): string {
 
 export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allNodes = useNodes();
+  const allEdges = useEdges();
   const activeEdgeId = useContext(ActiveEdgeContext);
 
   const loopbackData = data as {
@@ -1244,6 +1246,22 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
     returnLaneOffset?: number;
   } | undefined;
 
+  const edge = allEdges.find((candidate) => candidate.id === id);
+  const continuationJoin = edge
+    ? findLoopbackContinuationJoin(edge, allEdges, allNodes)
+    : undefined;
+  const preferredSide = loopbackData?.returnSide ?? 'top';
+  const side = continuationJoin
+    ? (continuationJoin.direction === 'top' || continuationJoin.direction === 'bottom'
+      ? (preferredSide === 'left' || preferredSide === 'right'
+        ? preferredSide
+        : sourceX <= targetX ? 'left' : 'right')
+      : (preferredSide === 'top' || preferredSide === 'bottom'
+        ? preferredSide
+        : sourceY <= targetY ? 'top' : 'bottom'))
+    : preferredSide;
+  const joinX = continuationJoin?.point.x ?? targetX;
+  const joinY = continuationJoin?.point.y ?? targetY;
   const nodeBounds = allNodes.reduce(
     (bounds, node) => {
       const { width, height } = graphNodeSize(node);
@@ -1255,13 +1273,12 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
       };
     },
     {
-      minX: Math.min(sourceX, targetX),
-      maxX: Math.max(sourceX, targetX),
-      minY: Math.min(sourceY, targetY),
-      maxY: Math.max(sourceY, targetY),
+      minX: Math.min(sourceX, joinX),
+      maxX: Math.max(sourceX, joinX),
+      minY: Math.min(sourceY, joinY),
+      maxY: Math.max(sourceY, joinY),
     },
   );
-  const side = loopbackData?.returnSide ?? 'top';
   const laneOffset = loopbackData?.returnLaneOffset ?? 0;
   const horizontalRail = side === 'top' || side === 'bottom';
   const rail = side === 'top'
@@ -1275,19 +1292,19 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
     ? [
         { x: sourceX, y: sourceY },
         { x: sourceX, y: rail },
-        { x: targetX, y: rail },
-        { x: targetX, y: targetY },
+        { x: joinX, y: rail },
+        { x: joinX, y: joinY },
       ]
     : [
         { x: sourceX, y: sourceY },
         { x: rail, y: sourceY },
-        { x: rail, y: targetY },
-        { x: targetX, y: targetY },
+        { x: rail, y: joinY },
+        { x: joinX, y: joinY },
       ];
   const route = roundedOrthogonalPath(routePoints, 10);
-  const returnJunctions = [routePoints[routePoints.length - 2], routePoints[routePoints.length - 1]];
-  const labelX = horizontalRail ? (sourceX + targetX) / 2 : rail;
-  const labelY = horizontalRail ? rail : (sourceY + targetY) / 2;
+  const returnJunctions = continuationJoin ? [continuationJoin.point] : [];
+  const labelX = horizontalRail ? (sourceX + joinX) / 2 : rail;
+  const labelY = horizontalRail ? rail : (sourceY + joinY) / 2;
   const isActive = id === activeEdgeId;
   const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
 
