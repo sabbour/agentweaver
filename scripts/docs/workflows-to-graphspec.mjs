@@ -63,7 +63,8 @@ function describe(node) {
   return base;
 }
 
-function toSpec(wf) {
+export function toSpec(wf) {
+  const nodeOrder = new Map((wf.nodes ?? []).map((node, index) => [node.id, index]));
   const nodes = (wf.nodes ?? []).map((n) => {
     const { icon, badge } = describe(n);
     const subLabel = [n.agent, n.role && n.role !== 'plumbing' ? n.role : null]
@@ -82,6 +83,7 @@ function toSpec(wf) {
     from: e.from,
     to: e.to,
     ...(e.when ? { label: e.when } : {}),
+    ...((nodeOrder.get(e.to) ?? 0) <= (nodeOrder.get(e.from) ?? 0) ? { loopback: true } : {}),
   }));
 
   const title = `${wf.name} workflow`;
@@ -109,7 +111,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

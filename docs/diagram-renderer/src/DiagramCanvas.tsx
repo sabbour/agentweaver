@@ -8,8 +8,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, GroupLabelNode, CARD_WIDTH, CARD_HEIGHT_2, CARD_HEIGHT_3 } from './nodes';
-import { RoutedEdge, type Point } from './edges';
-import { neutral, radius } from './theme';
+import { findConnectorBridges, RoutedEdge, type Point } from './edges';
+import { badgeTones, neutral, radius } from './theme';
 import type { GraphSpec, GraphNode } from './types';
 
 // Banded-lane layout, mirroring the deterministic column placement in
@@ -853,7 +853,8 @@ function layout(spec: GraphSpec): {
     if (!s || !t) return;
 
     let kind: Kind;
-    if (s.band === t.band) kind = lateral.has(idx) ? 'lateral' : 'same';
+    if (e.loopback) kind = 'sideUp';
+    else if (s.band === t.band) kind = lateral.has(idx) ? 'lateral' : 'same';
     else if (Math.abs(t.band - s.band) > 1) kind = t.band > s.band ? 'sideDown' : 'sideUp';
     else kind = t.band > s.band ? 'down' : 'up';
 
@@ -1113,7 +1114,8 @@ function layout(spec: GraphSpec): {
       });
     }
 
-    const stroke = neutral.foreground4;
+    const isRevision = r.e.loopback === true;
+    const stroke = isRevision ? badgeTones.marigold.fg : neutral.foreground4;
     rfEdges.push({
       id: `e${r.idx}`,
       source: r.e.from,
@@ -1126,12 +1128,23 @@ function layout(spec: GraphSpec): {
       style: {
         stroke,
         strokeWidth: 1.8,
-        strokeDasharray: r.e.dashed ? '6 5' : undefined,
+        strokeDasharray: r.e.dashed || isRevision ? '6 5' : undefined,
       },
       markerEnd: r.e.undirected
         ? undefined
         : { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     });
+  }
+
+  const bridgesByEdge = findConnectorBridges(rfEdges.map((edge) => ({
+    id: edge.id,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
+  for (const edge of rfEdges) {
+    const bridges = bridgesByEdge.get(edge.id);
+    if (!bridges) continue;
+    const data = edge.data as { bridges?: unknown };
+    data.bridges = bridges;
   }
 
   // A label is always drawn centred on its edge's run -- that is what makes it

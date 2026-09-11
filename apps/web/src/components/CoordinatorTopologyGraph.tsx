@@ -23,7 +23,8 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { DAG_NODE_SEP,
   layoutDagColumns,
   NODE_W,
-  RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
+  RENDERED_TOPOLOGY_NODE_H,
+  routeGridEdges } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
 import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
 import { PodIndicator } from './PodIndicator';
@@ -64,6 +65,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
+import { workflowEdgeTypes } from './WorkflowGraphPanel';
 
 // ---------------------------------------------------------------------------
 // Steering context — lets a custom node trigger a steering action without
@@ -295,8 +297,14 @@ function TopologyNodeCard({ data }: NodeProps) {
         data-node-kind={node.kind}
         data-node-status={node.status}
       >
-        <Handle type="target" position={Position.Left} style={handleStyle} />
-        <Handle type="source" position={Position.Right} style={handleStyle} />
+        <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
+        <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
+        <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
+        <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
+        <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
+        <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
+        <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
+        <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
 
       <div className={styles.cardHeader}>
         {node.status === 'pending_capacity' ? (
@@ -391,7 +399,7 @@ function topoEdge(source: string, target: string): Edge {
     id: `${source}->${target}`,
     source,
     target,
-    type: 'default',
+    type: 'spine',
     style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },
   };
@@ -622,6 +630,10 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
     );
     return layoutDagColumns(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
   }, [nodes, rfEdges]);
+  const routedEdges = useMemo(
+    () => routeGridEdges(rfEdges, rfNodes),
+    [rfEdges, rfNodes],
+  );
 
   // Pipeline order: left-to-right by layout x-position.
   const orderedNodeIds = useMemo(
@@ -640,8 +652,9 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
         <div className={styles.container} data-testid="coordinator-topology-graph">
           <ReactFlow
             nodes={rfNodes}
-            edges={rfEdges}
+            edges={routedEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={workflowEdgeTypes}
             fitView
             fitViewOptions={FIT_VIEW_OPTIONS}
             minZoom={MIN_ZOOM}

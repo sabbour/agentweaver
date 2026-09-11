@@ -167,6 +167,118 @@ function dedupePoints(points: ConnectorPoint[]): ConnectorPoint[] {
   });
 }
 
+export interface ConnectorBridge {
+  x: number;
+  y: number;
+  orientation: 'horizontal' | 'vertical';
+}
+
+interface OrthogonalSegment {
+  orientation: 'horizontal' | 'vertical';
+  constant: number;
+  start: number;
+  end: number;
+}
+
+function handlePoint(node: Node, handle: string | null | undefined): ConnectorPoint {
+  const { width, height } = graphNodeSize(node);
+  const side = handle?.split('-').at(-1);
+  if (side === 'left') return { x: node.position.x, y: node.position.y + height / 2 };
+  if (side === 'right') return { x: node.position.x + width, y: node.position.y + height / 2 };
+  if (side === 'top') return { x: node.position.x + width / 2, y: node.position.y };
+  if (side === 'bottom') return { x: node.position.x + width / 2, y: node.position.y + height };
+  return { x: node.position.x + width / 2, y: node.position.y + height / 2 };
+}
+
+function spineRoutePoints(edge: Edge, nodes: Map<string, Node>): ConnectorPoint[] | null {
+  const source = nodes.get(edge.source);
+  const target = nodes.get(edge.target);
+  if (!source || !target || edge.type !== 'spine') return null;
+  const data = edge.data as {
+    flowDirection?: 'horizontal' | 'vertical';
+    gutterLaneOffset?: number;
+  } | undefined;
+  const from = handlePoint(source, edge.sourceHandle);
+  const to = handlePoint(target, edge.targetHandle);
+  return buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: data?.flowDirection,
+    laneOffset: data?.gutterLaneOffset,
+  }).points;
+}
+
+function orthogonalSegments(points: ConnectorPoint[]): OrthogonalSegment[] {
+  const segments: OrthogonalSegment[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+      segments.push({
+        orientation: 'vertical',
+        constant: from.x,
+        start: Math.min(from.y, to.y),
+        end: Math.max(from.y, to.y),
+      });
+    } else if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+      segments.push({
+        orientation: 'horizontal',
+        constant: from.y,
+        start: Math.min(from.x, to.x),
+        end: Math.max(from.x, to.x),
+      });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Finds right-angle connector crossings after `routeGridEdges` has assigned
+ * lanes and handles. The later stable edge receives a visible bridge at an
+ * interior crossing rather than visually merging with the lower connector.
+ */
+export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, ConnectorBridge[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ edge, segments: orthogonalSegments(points) }] : [];
+    });
+  const bridges = new Map<string, ConnectorBridge[]>();
+
+  for (let current = 1; current < routes.length; current += 1) {
+    for (let prior = 0; prior < current; prior += 1) {
+      for (const currentSegment of routes[current].segments) {
+        for (const priorSegment of routes[prior].segments) {
+          if (currentSegment.orientation === priorSegment.orientation) continue;
+          const horizontal = currentSegment.orientation === 'horizontal' ? currentSegment : priorSegment;
+          const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
+          const x = vertical.constant;
+          const y = horizontal.constant;
+          const inset = 8;
+          if (
+            x <= horizontal.start + inset || x >= horizontal.end - inset ||
+            y <= vertical.start + inset || y >= vertical.end - inset
+          ) {
+            continue;
+          }
+          const edgeBridges = bridges.get(routes[current].edge.id) ?? [];
+          if (!edgeBridges.some((bridge) => Math.abs(bridge.x - x) < 0.5 && Math.abs(bridge.y - y) < 0.5)) {
+            edgeBridges.push({ x, y, orientation: currentSegment.orientation });
+            bridges.set(routes[current].edge.id, edgeBridges);
+          }
+        }
+      }
+    }
+  }
+
+  return bridges;
+}
+
 export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): string {
   const clean = dedupePoints(points);
   if (clean.length === 0) return '';
@@ -1239,6 +1351,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
     });
   }
+
   for (const group of loopbackGroups.values()) {
     group.sort((a, b) => a.span - b.span || a.edge.id.localeCompare(b.edge.id));
     group.forEach(({ edge }, index) => {
