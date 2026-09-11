@@ -16,7 +16,7 @@ import {
   type Point,
 } from './edges';
 import { badgeTones, neutral, radius } from './theme';
-import type { GraphSpec, GraphNode } from './types';
+import type { GraphEdge, GraphSpec, GraphNode } from './types';
 
 // Banded-lane layout, mirroring the deterministic column placement in
 // apps/web/src/components/ClusterTopologyGraph.tsx rather than dagre's
@@ -342,6 +342,37 @@ function serpentine(chain: GraphNode[], cols: number): GraphNode[] {
     out.push(...(r % 2 === 1 ? row.reverse() : row));
   }
   return out;
+}
+
+/**
+ * Follows a semantic return's normal forward path to the first decision or
+ * convergence. Linear paths keep their original return target, while returns
+ * through a workflow decision share that decision's downstream continuation.
+ */
+export function findLoopbackReturnJoinNode(loopback: GraphEdge, edges: GraphEdge[]): string {
+  const forwardEdges = edges.filter((edge) => !edge.loopback);
+  const outgoing = new Map<string, GraphEdge[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of forwardEdges) {
+    const next = outgoing.get(edge.from) ?? [];
+    next.push(edge);
+    outgoing.set(edge.from, next);
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+  }
+
+  const fallback = loopback.to;
+  const visited = new Set<string>();
+  let current = fallback;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const next = outgoing.get(current) ?? [];
+    if (next.length > 1 || (current !== fallback && (incoming.get(current) ?? 0) > 1)) {
+      return current;
+    }
+    if (next.length !== 1) return fallback;
+    current = next[0].to;
+  }
+  return fallback;
 }
 
 export function layout(spec: GraphSpec): {
@@ -1074,7 +1105,7 @@ export function layout(spec: GraphSpec): {
       // Semantic revision/return edges always travel on their own outer rail.
       // A backward edge can rank in the same band as its target, so it cannot
       // safely assume that an inter-band gutter exists.
-      const returnJoin = r.e.returnJoin ?? r.e.to;
+      const returnJoin = findLoopbackReturnJoinNode(r.e, spec.edges);
       const joinNode = posById.get(returnJoin);
       const goRight = joinNode
         ? joinNode.x + joinNode.w / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2
@@ -1174,7 +1205,7 @@ export function layout(spec: GraphSpec): {
         labelPos,
         labelOffset: { dx: 0, dy: 0 },
         loopback: isRevision,
-        returnJoin: r.e.returnJoin,
+        returnJoin: isRevision ? findLoopbackReturnJoinNode(r.e, spec.edges) : undefined,
         loopbackLabel: r.e.label,
       },
       style: {

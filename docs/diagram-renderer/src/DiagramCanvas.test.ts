@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Edge } from '@xyflow/react';
 import memoryDecisionsFixture from '../../diagrams/src/memory-decisions-fig2.json';
 import softwareDeliveryFixture from '../../diagrams/src/workflow-software-delivery.json';
-import { layout } from './DiagramCanvas';
-import type { GraphSpec } from './types';
+import { findLoopbackReturnJoinNode, layout } from './DiagramCanvas';
+import type { GraphEdge, GraphSpec } from './types';
 
 interface RouteData {
   points: Array<{ x: number; y: number }>;
@@ -91,7 +91,8 @@ describe('memory decisions tee fixture', () => {
 });
 
 describe('software delivery return lane fixture', () => {
-  it('rejoins review-driven returns below RAI Check on one labeled external lane', () => {
+  it('derives review-driven returns below RAI Check on one labeled external lane', () => {
+    expect(softwareDeliveryFixture.edges.every((edge) => !('returnJoin' in edge))).toBe(true);
     const { edges } = layout(softwareDeliveryFixture as GraphSpec);
     const returns = edges.filter((edge) => {
       const data = routeData(edge);
@@ -112,5 +113,66 @@ describe('software delivery return lane fixture', () => {
     expect(markers).toEqual([join]);
     expect(returns.filter((edge) => edge.label != null).map((edge) => edge.label).sort())
       .toEqual(['request-changes', 'revise']);
+  });
+});
+
+describe('semantic return join discovery', () => {
+  const fixtures: Array<{
+    name: string;
+    loopback: GraphEdge;
+    edges: GraphEdge[];
+    expected: string;
+  }> = [
+    {
+      name: 'linear revision',
+      loopback: { from: 'review', to: 'implement', loopback: true },
+      edges: [
+        { from: 'implement', to: 'test' },
+        { from: 'test', to: 'done' },
+        { from: 'review', to: 'implement', loopback: true },
+      ],
+      expected: 'implement',
+    },
+    {
+      name: 'branching review',
+      loopback: { from: 'review', to: 'implement', loopback: true },
+      edges: [
+        { from: 'implement', to: 'test' },
+        { from: 'test', to: 'review-gate' },
+        { from: 'review-gate', to: 'approve' },
+        { from: 'review-gate', to: 'decline' },
+        { from: 'review', to: 'implement', loopback: true },
+      ],
+      expected: 'review-gate',
+    },
+    {
+      name: 'converging review',
+      loopback: { from: 'retry', to: 'implement', loopback: true },
+      edges: [
+        { from: 'implement', to: 'left' },
+        { from: 'left', to: 'join' },
+        { from: 'right', to: 'join' },
+        { from: 'join', to: 'done' },
+        { from: 'retry', to: 'implement', loopback: true },
+      ],
+      expected: 'join',
+    },
+    {
+      name: 'multiple returns',
+      loopback: { from: 'human-review', to: 'implement', loopback: true },
+      edges: [
+        { from: 'implement', to: 'test' },
+        { from: 'test', to: 'review-gate' },
+        { from: 'review-gate', to: 'approved' },
+        { from: 'review-gate', to: 'declined' },
+        { from: 'qa-review', to: 'implement', loopback: true },
+        { from: 'human-review', to: 'implement', loopback: true },
+      ],
+      expected: 'review-gate',
+    },
+  ];
+
+  it.each(fixtures)('finds the $name join without workflow-specific metadata', ({ loopback, edges, expected }) => {
+    expect(findLoopbackReturnJoinNode(loopback, edges)).toBe(expected);
   });
 });

@@ -296,6 +296,37 @@ export interface ConnectorContinuationJoin {
   direction: 'left' | 'right' | 'top' | 'bottom';
 }
 
+/**
+ * Follows a return edge's normal forward path to the first decision or
+ * convergence. Linear paths retain the original return target; returns that
+ * reach a decision rejoin that decision's downstream continuation.
+ */
+export function findLoopbackReturnJoinNode(loopback: Edge, edges: Edge[]): string {
+  const forwardEdges = edges.filter((edge) => edge.type === 'spine');
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of forwardEdges) {
+    const next = outgoing.get(edge.source) ?? [];
+    next.push(edge);
+    outgoing.set(edge.source, next);
+    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1);
+  }
+
+  const fallback = loopback.target;
+  const visited = new Set<string>();
+  let current = fallback;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const next = outgoing.get(current) ?? [];
+    if (next.length > 1 || (current !== fallback && (incoming.get(current) ?? 0) > 1)) {
+      return current;
+    }
+    if (next.length !== 1) return fallback;
+    current = next[0].target;
+  }
+  return fallback;
+}
+
 function samePoint(left: ConnectorPoint, right: ConnectorPoint): boolean {
   return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
 }
@@ -387,8 +418,9 @@ export function findLoopbackContinuationJoin(
   clearance = 18,
 ): ConnectorContinuationJoin | undefined {
   const byId = new Map(nodes.map((node) => [node.id, node]));
+  const returnJoin = findLoopbackReturnJoinNode(loopback, edges);
   const continuation = edges
-    .filter((edge) => edge.type === 'spine' && edge.source === loopback.target)
+    .filter((edge) => edge.type === 'spine' && edge.source === returnJoin)
     .sort((left, right) => left.id.localeCompare(right.id))
     .at(0);
   if (!continuation) return undefined;
@@ -1538,7 +1570,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
   const laneOffsets = new Map<string, number>();
   const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
   const loopbackSides = new Map<string, 'left' | 'right' | 'top' | 'bottom'>();
-  const loopbackGroups = new Map<string, Array<{ edge: Edge; span: number }>>();
+  const loopbackGroups = new Map<string, Edge[]>();
   for (const edge of edges) {
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
@@ -1546,23 +1578,21 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const sourceCenter = center(source);
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
-      const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
-        >= Math.abs(targetCenter.y - sourceCenter.y);
+      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
+      const joinNode = byId.get(returnJoin);
+      const joinCenter = joinNode ? center(joinNode) : targetCenter;
+      const horizontal = Math.abs(joinCenter.x - sourceCenter.x)
+        >= Math.abs(joinCenter.y - sourceCenter.y);
       let side: 'left' | 'right' | 'top' | 'bottom';
       if (horizontal) {
-        side = targetCenter.x <= sourceCenter.x ? 'left' : 'right';
+        side = joinCenter.x <= sourceCenter.x ? 'left' : 'right';
       } else {
-        side = targetCenter.y <= sourceCenter.y ? 'top' : 'bottom';
+        side = joinCenter.y <= sourceCenter.y ? 'top' : 'bottom';
       }
       loopbackSides.set(edge.id, side);
-      const key = `loopback:${side}`;
+      const key = `loopback:${side}:${returnJoin}`;
       if (!loopbackGroups.has(key)) loopbackGroups.set(key, []);
-      loopbackGroups.get(key)!.push({
-        edge,
-        span: horizontal
-          ? Math.abs(targetCenter.x - sourceCenter.x)
-          : Math.abs(targetCenter.y - sourceCenter.y),
-      });
+      loopbackGroups.get(key)!.push(edge);
       continue;
     }
     if (edge.type !== 'spine') continue;
@@ -1585,10 +1615,13 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     });
   }
 
+  const loopbackLanes = new Map<'left' | 'right' | 'top' | 'bottom', number>();
   for (const group of loopbackGroups.values()) {
-    group.sort((a, b) => a.span - b.span || a.edge.id.localeCompare(b.edge.id));
-    group.forEach(({ edge }, index) => {
-      laneOffsets.set(edge.id, index * BANDED_LANE_STEP);
+    const side = loopbackSides.get(group[0].id)!;
+    const lane = loopbackLanes.get(side) ?? 0;
+    loopbackLanes.set(side, lane + 1);
+    group.forEach((edge) => {
+      laneOffsets.set(edge.id, lane * BANDED_LANE_STEP);
     });
   }
 
@@ -1600,6 +1633,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
       const side = loopbackSides.get(edge.id) ?? 'top';
+      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
       return {
         ...edge,
         sourceHandle: `source-${side}`,
@@ -1608,6 +1642,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
           ...(edge.data ?? {}),
           returnSide: side,
           returnLaneOffset: laneOffsets.get(edge.id) ?? 0,
+          returnJoin,
         },
       };
     }

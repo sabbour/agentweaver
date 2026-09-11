@@ -5,6 +5,7 @@ import {
   SUBTASK_NODE_W,
   analyzeWorkflowLayout,
   findConnectorJunctions,
+  findLoopbackReturnJoinNode,
   findRoutedConnectorJunctions,
   layoutDagBalancedGrid,
   layoutDagColumns,
@@ -538,9 +539,61 @@ describe('layoutDagStaircase', () => {
 
     expect(routed.every((edge) => edge.sourceHandle === 'source-left')).toBe(true);
     expect(routed.every((edge) => edge.targetHandle === 'target-left')).toBe(true);
-    expect(new Set(offsets).size).toBe(edges.length);
+    expect(offsets.filter((offset) => offset === 0)).toHaveLength(2);
+    expect(new Set(offsets).size).toBe(2);
     expect(Math.min(...offsets)).toBe(0);
-    expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);
+    expect(Math.max(...offsets)).toBeGreaterThanOrEqual(34);
+  });
+
+  it.each([
+    ['top', { x: 0, y: 300 }, { x: 0, y: 100 }],
+    ['right', { x: -300, y: 0 }, { x: 100, y: 0 }],
+    ['bottom', { x: 0, y: -300 }, { x: 0, y: 100 }],
+    ['left', { x: 300, y: 0 }, { x: 100, y: 0 }],
+  ] as const)('routes a $0 semantic return through the downstream decision join', (side, sourcePosition, gatePosition) => {
+    const nodes: Node[] = [
+      { ...makeNode('implement'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('review-gate'), position: gatePosition, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('approved'), position: { x: gatePosition.x + 180, y: gatePosition.y + 180 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('declined'), position: { x: gatePosition.x - 180, y: gatePosition.y + 180 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('rework'), position: sourcePosition, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges: Edge[] = [
+      { id: 'implement-review', source: 'implement', target: 'review-gate', type: 'spine' },
+      { id: 'review-approved', source: 'review-gate', target: 'approved', type: 'spine' },
+      { id: 'review-declined', source: 'review-gate', target: 'declined', type: 'spine' },
+      { id: 'return', source: 'rework', target: 'implement', type: 'loopback' },
+    ];
+
+    expect(findLoopbackReturnJoinNode(edges[3], edges)).toBe('review-gate');
+    const routedReturn = routeGridEdges(edges, nodes).find((edge) => edge.id === 'return')!;
+    expect((routedReturn.data as { returnJoin: string; returnSide: string }).returnJoin).toBe('review-gate');
+    expect((routedReturn.data as { returnSide: string }).returnSide).toBe(side);
+  });
+
+  it('groups multiple returns to one downstream decision on one external lane', () => {
+    const nodes: Node[] = [
+      { ...makeNode('implement'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('review-gate'), position: { x: 200, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('approved'), position: { x: 400, y: 100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('declined'), position: { x: 400, y: -100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('qa-review'), position: { x: 600, y: -100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('human-review'), position: { x: 600, y: 100 }, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges: Edge[] = [
+      { id: 'implement-review', source: 'implement', target: 'review-gate', type: 'spine' },
+      { id: 'review-approved', source: 'review-gate', target: 'approved', type: 'spine' },
+      { id: 'review-declined', source: 'review-gate', target: 'declined', type: 'spine' },
+      { id: 'qa-return', source: 'qa-review', target: 'implement', type: 'loopback' },
+      { id: 'human-return', source: 'human-review', target: 'implement', type: 'loopback' },
+    ];
+
+    const returns = routeGridEdges(edges, nodes).filter((edge) => edge.type === 'loopback');
+    expect(returns.map((edge) => (edge.data as { returnJoin: string }).returnJoin)).toEqual([
+      'review-gate',
+      'review-gate',
+    ]);
+    expect(new Set(returns.map((edge) => (edge.data as { returnLaneOffset: number }).returnLaneOffset)).size).toBe(1);
   });
 
   it('marks exact source splits, shared tees, and merge trunks, not terminal arrowheads, plain elbows, or crossings', () => {
