@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "id": "agentweaver.orchestration-layout.v1",
-  "ranking": "stable-longest-path",
-  "cycleHandling": "exclude-back-edges",
-  "edgeRouting": "orthogonal",
-  "serpentineMinRanks": 3,
-  "workflowDefinitionLongLinearMinRanks": 5
-}

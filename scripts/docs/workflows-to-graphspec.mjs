@@ -12,10 +12,6 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import {
-  loadOrchestrationLayoutContract,
-  toDiagramLayoutContract,
-} from './orchestration-layout-contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -67,7 +63,7 @@ function describe(node) {
   return base;
 }
 
-export function toWorkflowGraphSpec(wf, layout) {
+function toSpec(wf) {
   const nodes = (wf.nodes ?? []).map((n) => {
     const { icon, badge } = describe(n);
     const subLabel = [n.agent, n.role && n.role !== 'plumbing' ? n.role : null]
@@ -94,14 +90,12 @@ export function toWorkflowGraphSpec(wf, layout) {
     title,
     alt: `${title}: ${nodes.map((n) => n.label).join(', ')}.`,
     direction: 'TB',
-    layout,
     nodes,
     edges,
   };
 }
 
 async function main() {
-  const layout = toDiagramLayoutContract(await loadOrchestrationLayoutContract());
   const files = (await readdir(workflowsDir)).filter((f) => f.endsWith('.yaml')).sort();
   for (const file of files) {
     const wf = parse(await readFile(path.join(workflowsDir, file), 'utf8'));
@@ -110,14 +104,12 @@ async function main() {
       continue;
     }
     const out = path.join(specsDir, `workflow-${wf.id}.json`);
-    await writeFile(out, `${JSON.stringify(toWorkflowGraphSpec(wf, layout), null, 2)}\n`);
+    await writeFile(out, `${JSON.stringify(toSpec(wf), null, 2)}\n`);
     console.log(`Wrote ${path.basename(out)} (${wf.nodes.length} nodes, ${wf.edges?.length ?? 0} edges)`);
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
-    console.error(err);
-    process.exitCode = 1;
-  });
-}
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

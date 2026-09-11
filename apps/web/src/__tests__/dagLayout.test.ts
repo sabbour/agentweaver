@@ -11,12 +11,10 @@ import {
   layoutWorkflowDefinitionNodes,
   NODE_H,
   NODE_W,
-  ORCHESTRATION_LAYOUT_CONTRACT,
   routeGridEdges,
   WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_LONG_LINEAR_MIN_RANKS,
 } from '../utils/dagLayout';
-import serializedLayoutContract from '../utils/orchestration-layout.contract.json';
 import { describe, expect, it } from 'vitest';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node } from '@xyflow/react';
@@ -27,22 +25,6 @@ function makeNode(id: string): Node {
 function centerX(node: Node, width = NODE_W): number {
   return node.position.x + width / 2;
 }
-
-describe('orchestration layout contract', () => {
-  it('keeps the workflow editor and run topology policy serializable for generated diagrams', () => {
-    expect(ORCHESTRATION_LAYOUT_CONTRACT).toEqual(serializedLayoutContract);
-    expect(WORKFLOW_LONG_LINEAR_MIN_RANKS)
-      .toBe(serializedLayoutContract.workflowDefinitionLongLinearMinRanks);
-    expect(serializedLayoutContract).toMatchObject({
-      schemaVersion: 1,
-      id: 'agentweaver.orchestration-layout.v1',
-      ranking: 'stable-longest-path',
-      cycleHandling: 'exclude-back-edges',
-      edgeRouting: 'orthogonal',
-      serpentineMinRanks: 3,
-    });
-  });
-});
 
 describe('layoutDagColumns TB centering', () => {
   it('centres a single-node spine rank over a multi-node fan-out rank on a shared axis', () => {
