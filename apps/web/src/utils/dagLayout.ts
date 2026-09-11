@@ -341,6 +341,41 @@ function sharedMergePoint(
   return candidates[0];
 }
 
+function isElbow(points: ConnectorPoint[], index: number): boolean {
+  const previous = points[index - 1];
+  const current = points[index];
+  const next = points[index + 1];
+  if (!previous || !current || !next) return false;
+  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
+  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
+  const horizontalBefore = Math.abs(previous.y - current.y) < 0.5;
+  const horizontalAfter = Math.abs(current.y - next.y) < 0.5;
+  return (verticalBefore && horizontalAfter) || (horizontalBefore && verticalAfter);
+}
+
+function sharedElbowPoints(
+  routes: Array<{ edge: Edge; points: ConnectorPoint[] }>,
+): Array<{ edgeId: string; point: ConnectorPoint }> {
+  const shared = new Map<string, { edgeId: string; point: ConnectorPoint }>();
+  for (const route of routes) {
+    for (let index = 1; index < route.points.length - 1; index += 1) {
+      const point = route.points[index];
+      if (!isElbow(route.points, index) || routes.some((candidate) => {
+        const terminal = candidate.points.at(-1);
+        return terminal !== undefined && samePoint(point, terminal);
+      })) {
+        continue;
+      }
+      const peers = routes.filter((candidate) => candidate.points.some((candidatePoint) => samePoint(point, candidatePoint)));
+      if (peers.length < 2) continue;
+      const edgeId = peers.map((peer) => peer.edge.id).sort((left, right) => left.localeCompare(right))[0];
+      const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+      shared.set(key, { edgeId, point });
+    }
+  }
+  return [...shared.values()];
+}
+
 /**
  * Finds the point where a semantic return can safely join the target's actual
  * continuation route. A marker is valid only when the two graph edges share
@@ -384,8 +419,9 @@ export function findLoopbackContinuationJoin(
 /**
  * Marks only nonterminal shared split and merge points. The endpoints must be
  * identical in the routed geometry as well as related by the graph. A merge must share
- * an incoming terminal trunk before its card entry; card-entry targets,
- * elbows, layer bounds, and incidental path crossings never create a marker.
+ * an incoming terminal trunk before its card entry. A shared semantic elbow
+ * is marked, while card-entry targets, isolated elbows, layer bounds, and
+ * incidental path crossings never create a marker.
  */
 export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -422,11 +458,13 @@ export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
     add(group[0].edge.id, sharedSourcePoint(group));
+    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
     const merge = sharedMergePoint(group);
     if (merge) add(merge.edgeId, merge.point);
+    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
   }
   return junctions;
 }

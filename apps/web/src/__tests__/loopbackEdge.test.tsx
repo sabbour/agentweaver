@@ -139,7 +139,7 @@ describe('LoopbackEdge — return arc rendering', () => {
     expect(container.querySelector('path[stroke="var(--colorNeutralBackground1)"]')).toBeNull();
   });
 
-  it('marks a shared connector origin with an explicit junction circle', () => {
+  it('keeps one shared alignment elbow and source split as centered junction circles', () => {
     fixtures.nodes = [
       { id: 'origin', type: 'workflow', position: { x: 0, y: 0 }, data: {}, measured: { width: 100, height: 100 } },
       { id: 'upper', type: 'workflow', position: { x: 200, y: -100 }, data: {}, measured: { width: 100, height: 100 } },
@@ -184,11 +184,16 @@ describe('LoopbackEdge — return arc rendering', () => {
       </AzureFluentProvider>,
     );
 
-    const junction = container.querySelector('[data-testid="workflow-connector-junction"]');
-    expect(junction).toBeTruthy();
-    expect(junction?.getAttribute('r')).toBe('2.5');
-    expect(junction?.getAttribute('stroke')).toBeNull();
-    expect(junction?.getAttribute('cx')).toBe('100');
-    expect(junction?.getAttribute('cy')).toBe('50');
+    const junctions = container.querySelectorAll('[data-testid="workflow-connector-junction"]');
+    expect(junctions).toHaveLength(2);
+    for (const junction of junctions) {
+      expect(junction.getAttribute('r')).toBe('2.5');
+      expect(junction.getAttribute('stroke')).toBeNull();
+    }
+    expect([...junctions].map((junction) => [junction.getAttribute('cx'), junction.getAttribute('cy')]))
+      .toEqual(expect.arrayContaining([
+        ['100', '50'],
+        ['150', '50'],
+      ]));
   });
 });

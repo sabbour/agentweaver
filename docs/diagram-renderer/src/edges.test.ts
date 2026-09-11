@@ -71,6 +71,36 @@ describe('diagram connector geometry', () => {
     expect(junctions).toEqual(new Map());
   });
 
+  it('keeps a plain alignment elbow unmarked and marks one shared-edge elbow', () => {
+    const junctions = findConnectorJunctions([
+      {
+        id: 'plain',
+        source: 'plain-source',
+        target: 'plain-target',
+        points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 80 }],
+      },
+      {
+        id: 'split-a',
+        source: 'split',
+        target: 'upper',
+        points: [{ x: 0, y: 100 }, { x: 80, y: 100 }, { x: 80, y: 160 }, { x: 160, y: 160 }],
+      },
+      {
+        id: 'split-b',
+        source: 'split',
+        target: 'lower',
+        points: [{ x: 0, y: 100 }, { x: 80, y: 100 }, { x: 80, y: 220 }],
+      },
+    ]);
+
+    expect(junctions.has('plain')).toBe(false);
+    expect(junctions.get('split-a')).toEqual([
+      { x: 0, y: 100 },
+      { x: 80, y: 100 },
+    ]);
+    expect([...junctions.values()].flat().filter((point) => point.x === 80 && point.y === 100)).toHaveLength(1);
+  });
+
   it('marks only the return point shared with the target continuation', () => {
     const junctions = findConnectorJunctions([
       {

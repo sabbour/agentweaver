@@ -59,8 +59,9 @@ renderer use the same visual convention while keeping their native layouts:
   true path interruption with a rounded overpass arc. It never draws a background mask.
 - Small solid junction dots identify only a nonterminal routed coordinate shared by a true
   source split, incoming merge trunk, or loopback return/join. Ordinary arrowheads and
-  card-entry targets, elbows, container borders, anchors with one edge, and geometric crossings
-  never create a junction dot.
+  card-entry targets, isolated elbows, container borders, anchors with one edge, and geometric
+  crossings never create a junction dot. Orthogonal elbows remain part of every route; a shared
+  semantic elbow receives one centered dot.
 
 The diagram renderer keeps its independent band/gutter router and card geometry. The
 web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
