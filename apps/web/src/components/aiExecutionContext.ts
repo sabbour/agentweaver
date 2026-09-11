@@ -50,7 +50,7 @@ export function aiExecutionProviderScope(context: AiExecutionContext | null): st
 
 export function aiExecutionProviderLabel(context: AiExecutionContext | null): string {
   const provider = context?.effective_model_provider;
-  if (!provider) return 'AI provider information unavailable';
+  if (!provider) return 'Provider details not recorded';
   if (provider.state === 'unavailable') {
     const reason = unavailableReason(provider.unavailable_reason);
     return reason ? `AI provider unavailable. ${reason}` : 'AI provider unavailable';

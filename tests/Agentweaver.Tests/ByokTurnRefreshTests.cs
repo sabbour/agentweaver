@@ -116,8 +116,9 @@ public sealed class ByokTurnRefreshTests
 
         var act = async () => await agent.CreateProviderClientAsync(CancellationToken.None);
 
-        await act.Should().ThrowAsync<GitHubCopilotUnauthorizedException>()
-            .Where(ex => ex.ErrorCode == GitHubCopilotUnauthorizedException.AuthRequiredErrorCode);
+        await act.Should().ThrowAsync<GitHubCopilotCapabilitySnapshotUnavailableException>()
+            .Where(ex => ex.ErrorCode ==
+                GitHubCopilotCapabilitySnapshotUnavailableException.CapabilitySnapshotUnavailableErrorCode);
     }
 
     [Fact]

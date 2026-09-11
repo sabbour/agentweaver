@@ -1,7 +1,7 @@
 ---
 layout: page
 title: Agentweaver
-description: Plan, run, and review AI agent work with Agentweaver.
+description: Run governed teams of AI agents on infrastructure you control.
 pageClass: agentweaver-home
 ---
 
@@ -12,12 +12,12 @@ import { withBase } from 'vitepress'
 <div class="aw-home">
   <section class="aw-hero" aria-labelledby="hero-heading">
     <div class="aw-hero-copy">
-      <p class="aw-hero-kicker">Open-source agent orchestration</p>
-      <h1 id="hero-heading">Plan and review AI agent work.</h1>
+      <p class="aw-hero-kicker">AI agent teams on your infrastructure</p>
+      <h1 id="hero-heading">Describe the work. Run the team.</h1>
       <p class="aw-hero-lede">
-        Agentweaver coordinates multi-agent runs for Git repositories. Set up a project,
-        choose or define an agent team, and start a run. Review its plan, follow its
-        progress, and decide on the assembled result.
+        Agentweaver generates roles, skills, and workflows for the work you describe,
+        then runs the team through the gates and approvals you set. Drive it here or
+        through MCP from your assistant, editor, or CLI.
       </p>
       <div class="aw-hero-actions">
         <a class="aw-button aw-button-primary" href="#see-it-run">See it run</a>
@@ -63,11 +63,11 @@ npm run azure:provision-infra</code></pre>
 
   <section class="aw-control-sequence" aria-labelledby="control-title">
     <div class="aw-section-heading">
-      <h2 id="control-title">Review the run plan before work begins.</h2>
+      <h2 id="control-title">Set the outcome and the gates.</h2>
       <p>
-        The coordinator drafts an OutcomeSpec for each coordinator run. The plan records
-        the outcome, scope, constraints, and review criteria. Confirm the plan to create
-        its work plan, or request a revision.
+        The coordinator turns your request into an OutcomeSpec with the outcome, scope,
+        constraints, and review criteria. Confirm or revise it before work begins, then
+        review the assembled result at the workflow's approval gate.
       </p>
     </div>
     <figure class="aw-proof-frame aw-proof-frame-outcome">
@@ -102,11 +102,11 @@ npm run azure:provision-infra</code></pre>
 
   <section class="aw-team-story" aria-labelledby="team-title">
     <div class="aw-team-copy">
-      <h2 id="team-title">Set up a project and its team.</h2>
+      <h2 id="team-title">Generate a team for the work.</h2>
       <p>
-        Start from a blueprint or define a team for a project. Agent definitions can include
-        a role, model, charter, and project skills. The coordinator creates a work plan with
-        subtasks and dependencies for coordinator runs.
+        Describe what the project needs or start from a reusable blueprint. Agentweaver can
+        propose the roles, charters, skills, and workflows, while you review the team before
+        saving it. The coordinator then plans subtasks and dependencies for each run.
       </p>
       <a class="aw-text-link" href="./experience/team-casting-memory">Explore team casting <span aria-hidden="true">→</span></a>
     </div>
@@ -132,11 +132,11 @@ npm run azure:provision-infra</code></pre>
 
   <section class="aw-mcp-showcase" aria-labelledby="mcp-title">
     <div class="aw-section-heading">
-      <h2 id="mcp-title">Connect an MCP client.</h2>
+      <h2 id="mcp-title">Use the interface or bring your own client.</h2>
       <p>
-        Agentweaver includes an MCP server for clients that support MCP. The server exposes
-        tools for projects, teams, workflows, runs, memory, and workspace operations.
-        You can use protected HTTP or local stdio transport.
+        The web interface and MCP clients operate the same projects, teams, workflows,
+        runs, memory, and approvals. Connect a supported assistant, editor, or CLI over
+        protected HTTP or local stdio transport.
       </p>
     </div>
     <div class="aw-mcp-panels">

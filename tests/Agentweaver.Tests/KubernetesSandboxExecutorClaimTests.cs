@@ -67,8 +67,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null) =>
-        new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
+        ILogger<KubernetesSandboxExecutor>? logger = null) =>
+        new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: null,
             submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
@@ -497,8 +498,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 BaseUrl: "https://models.example.com",
                 Model: "gpt-5",
                 ApiKey: "platform-key"));
+        var executorHandler = new FakeKubeHandler();
         var executor = NewExecutor(
-            new FakeKubeHandler(),
+            executorHandler,
             new StubSubmittingUserResolver("sabbour", projectId.ToString()),
             copilotCredentials: new NullGitHubCopilotCapabilityCredentialProvider(),
             byokProviderConfiguration: byokProvider,
@@ -511,6 +513,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         var exception = await act.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
         exception.Which.Requirement.Action.ProjectId.Should().Be(projectId.ToString());
+        executorHandler.Requests.Should().NotContain(request =>
+            request.Method == "POST" && request.Path.EndsWith("/sandboxclaims"),
+            "provider readiness must fail before any claim or pod is created");
     }
 
     [Fact]
@@ -669,8 +674,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
     public async Task LaunchAgentHostPod_surfaces_connection_required_when_configured_credential_provider_cannot_redeem()
     {
         var projectId = ProjectId.New();
+        var executorHandler = new FakeKubeHandler();
         var executor = NewExecutor(
-            new FakeKubeHandler(),
+            executorHandler,
             new StubSubmittingUserResolver("sabbour", projectId.ToString()),
             copilotCredentials: new NullGitHubCopilotCapabilityCredentialProvider());
 
@@ -678,6 +684,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         var exception = await act.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
         exception.Which.Requirement.Action.ProjectId.Should().Be(projectId.ToString());
+        executorHandler.Requests.Should().NotContain(request =>
+            request.Method == "POST" && request.Path.EndsWith("/sandboxclaims"),
+            "provider readiness must fail before any claim or pod is created");
     }
 
     private sealed class NullGitHubCopilotCapabilityCredentialProvider : IGitHubCopilotCapabilityCredentialProvider
@@ -1230,6 +1239,49 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().Contain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "non-preview deployments (null preview service) must keep the original unconditional release");
+    }
+
+    [Fact]
+    public async Task ReleaseAgentHostPod_treats_missing_claim_as_idempotent_cleanup()
+    {
+        const string runId = "run-prelaunch-provider-failure";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}" +
+            $"/namespaces/agentweaver/{SandboxClaimConventions.ClaimPlural}/{claimName}";
+        var handler = new FakeKubeHandler();
+        handler.OnStatus(
+            "DELETE",
+            path,
+            HttpStatusCode.NotFound,
+            """{"kind":"Status","status":"Failure","reason":"NotFound","code":404}""");
+        var logger = new RecordingLogger<KubernetesSandboxExecutor>();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            logger: logger);
+
+        var act = () => executor.ReleaseAgentHostPodAsync(runId);
+
+        await act.Should().NotThrowAsync();
+        logger.Entries.Should().NotContain(entry => entry.Level >= LogLevel.Warning,
+            "a claim that was never created is already cleaned up and must not produce warning telemetry");
+        logger.Entries.Should().Contain(entry =>
+            entry.Level == LogLevel.Information && entry.Message.Contains("already absent"));
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     private static string ClaimJsonWithHolder(string claimName, string? holderToken)

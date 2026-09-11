@@ -38,6 +38,48 @@ public sealed class ProjectToolsTests
     }
 
     [Fact]
+    public void ProjectConfigure_InputSchema_ExposesOptionalGenerationModels()
+    {
+        var schema = BuildTool(nameof(ProjectTools.ProjectConfigureAsync)).ProtocolTool.InputSchema;
+        var properties = schema.GetProperty("properties");
+
+        properties.TryGetProperty("blueprint_generation_model", out _).Should().BeTrue();
+        properties.TryGetProperty("workflow_generation_model", out _).Should().BeTrue();
+        properties.TryGetProperty("outcome_spec_generation_model", out var outcomeModel).Should().BeTrue();
+        outcomeModel.GetProperty("type").EnumerateArray()
+            .Select(value => value.GetString()).Should().Contain(["string", "null"]);
+
+        if (schema.TryGetProperty("required", out var required))
+        {
+            required.EnumerateArray().Select(e => e.GetString()!)
+                .Should().NotContain("outcome_spec_generation_model");
+        }
+    }
+
+    [Fact]
+    public async Task ProjectConfigure_ForwardsGenerationModels()
+    {
+        JsonElement capturedBody = default;
+        var tools = new ProjectTools(CreateApiClient((request, _) =>
+        {
+            request.Method.Should().Be(HttpMethod.Put);
+            request.RequestUri!.AbsolutePath.Should().Be("/api/projects/project-1/provider-settings");
+            capturedBody = request.Content!.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+        }));
+
+        await tools.ProjectConfigureAsync(
+            "project-1",
+            "github-copilot",
+            outcome_spec_generation_model: "claude-opus-4.8");
+
+        capturedBody.GetProperty("outcome_spec_generation_model").GetString()
+            .Should().Be("claude-opus-4.8");
+        capturedBody.TryGetProperty("blueprint_generation_model", out _).Should().BeFalse();
+        capturedBody.TryGetProperty("workflow_generation_model", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GitHubRepositorySelectionTools_ForwardOnlyTheSelectedFullName()
     {
         var calls = new List<(HttpMethod Method, string Path, JsonElement? Body)>();

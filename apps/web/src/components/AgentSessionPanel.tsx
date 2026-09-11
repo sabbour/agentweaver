@@ -25,7 +25,7 @@ import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
 import type { EventType, RunStreamEvent } from '../api/sse';
-import type { RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
+import type { PendingApprovalDto, RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -37,7 +37,11 @@ import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineS
 import { formatModelLabel } from '../utils/agentIdentity';
 import { isTerminalRunStatus } from '../utils/runStatus';
 import { AgentAvatar } from './AgentAvatar';
-import { AiExecutionProviderStatus, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import {
+  AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
 import { aiExecutionProviderLabel } from './aiExecutionContext';
 import { AiCredits } from './AiCredits';
 import { AutomationToggle } from './AutomationToggle';
@@ -807,6 +811,11 @@ export interface AgentSessionPanelProps {
     totalNanoAiu?: number | null;
     detail?: ReactNode;
   };
+  /** Canonical server-projected actionable approvals for this coordinator tree. */
+  pendingApprovals?: PendingApprovalDto[];
+  pendingApprovalsLoading?: boolean;
+  pendingApprovalsError?: string | null;
+  onRetryPendingApprovals?: () => void;
 }
 
 interface ConversationRow {
@@ -1874,6 +1883,10 @@ export function AgentSessionPanel({
   runChips,
   credits,
   workPlanTopologyThumbnail,
+  pendingApprovals,
+  pendingApprovalsLoading = false,
+  pendingApprovalsError = null,
+  onRetryPendingApprovals,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const providerContext = useAiExecutionContext(
@@ -2066,10 +2079,32 @@ export function AgentSessionPanel({
     },
     [displayEvents, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns, isRunTimelineInactive],
   );
-  const timelineApprovals = useMemo(
-    () => turns.flatMap((turn) => turn.approvals),
-    [turns],
-  );
+  const timelineApprovals = useMemo(() => {
+    if (pendingApprovals === undefined)
+      return turns.flatMap((turn) => turn.approvals);
+
+    const selected = selectedItem?.isCoordinator
+      ? pendingApprovals
+      : selectedItem?.childRunId
+        ? pendingApprovals.filter((approval) => approval.action_run_id === selectedItem.childRunId)
+        : [];
+    return selected.map((approval, index) => ({
+      event: {
+        sequence: index + 1,
+        type: (approval.is_shell ? 'shell.approval_required' : 'tool.approval_required') as EventType,
+        payload: {
+          requestId: approval.request_id,
+          commandHash: approval.is_shell ? approval.request_id : undefined,
+          toolName: approval.tool_name,
+          url: approval.url,
+          message: approval.message,
+          actionRunId: approval.action_run_id,
+        },
+      },
+      isResolved: false,
+      resolvedScope: null,
+    }));
+  }, [pendingApprovals, selectedItem, turns]);
   const selectedIdentity = useMemo(() => participantIdentityForNode(selectedItem), [selectedItem]);
 
   useEffect(() => {
@@ -2278,10 +2313,7 @@ export function AgentSessionPanel({
 
   if (!selectedItem || !isVisible) return null;
 
-  const pendingApprovalCount = turns.reduce(
-    (sum, turn) => sum + turn.approvals.filter((approval) => !approval.isResolved).length,
-    0,
-  );
+  const pendingApprovalCount = timelineApprovals.filter((approval) => !approval.isResolved).length;
   const pendingQuestionCount = displayEvents.filter((evt) =>
     evt.type === 'agent.question_asked' || evt.type === 'coordinator.child_question'
   ).length;
@@ -2512,6 +2544,22 @@ export function AgentSessionPanel({
                         ))}
                       </div>
                     )}
+                    {pendingApprovalsLoading && pendingApprovals !== undefined && (
+                      <div className={styles.loadingWrap}>
+                        <Spinner size="tiny" />
+                        <Text>Loading approvals...</Text>
+                      </div>
+                    )}
+                    {pendingApprovalsError && pendingApprovals !== undefined && (
+                      <MessageBar intent="error" data-testid="session-approval-error">
+                        <MessageBarBody>Approvals could not be loaded: {pendingApprovalsError}</MessageBarBody>
+                        {onRetryPendingApprovals && (
+                          <MessageBarActions>
+                            <Button appearance="transparent" size="small" onClick={onRetryPendingApprovals}>Retry</Button>
+                          </MessageBarActions>
+                        )}
+                      </MessageBar>
+                    )}
                   </>
                 )}
                 <div ref={messagesEndRef} data-testid="session-message-end" />
@@ -2585,13 +2633,25 @@ export function AgentSessionPanel({
                       data-testid="composer-credits"
                     />
                   ) : null}
-                  contentBelow={(
-                    <AiExecutionProviderStatus context={providerContext.context}>
-                      <span aria-hidden="true" />
-                    </AiExecutionProviderStatus>
-                  )}
+                  contentBelow={
+                    providerContext.context || providerContext.loading || providerContext.error
+                      ? (
+                        <AiExecutionProviderStatus
+                          context={providerContext.context}
+                          loading={providerContext.loading}
+                          error={providerContext.error}
+                        />
+                      )
+                      : null
+                  }
                 />
                 <AiProviderChangeAnnouncement message={providerContext.announcement} />
+                <AiExecutionProviderReadiness
+                  context={providerContext.context}
+                  error={providerContext.error}
+                  projectId={projectId}
+                  onRefresh={() => void providerContext.refresh()}
+                />
               </div>
               {automation && !isNonCoordinatorAgentScope && (
                 <div className={styles.composerUtilityRow} data-testid="composer-automation-toggles">
@@ -2681,7 +2741,7 @@ function InThreadApprovalGate({
   const command = readString(event.payload, ['command']);
   const intention = readString(event.payload, ['intention', 'message']) ?? null;
   // Bubbled child approvals must target the child subtask run, never the coordinator run.
-  const targetRunId = readString(event.payload, ['childRunId', 'child_run_id']) ?? runId;
+  const targetRunId = readString(event.payload, ['actionRunId', 'action_run_id', 'childRunId', 'child_run_id']) ?? runId;
 
   const settle = async (fn: () => Promise<void>, outcome: string) => {
     if (!targetRunId || resolution !== null || busy) return;

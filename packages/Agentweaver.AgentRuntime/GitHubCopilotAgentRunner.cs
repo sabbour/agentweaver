@@ -633,7 +633,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 // an allow-with-approval tool. Policy-DENIED tools are rejected in the custom/native
                 // governance branches below and never reach this gate, so auto-approve can never
                 // override a deny. Every auto-grant is logged on the timeline for audit.
-                if (_runOptions?.Get(runId).AutoApproveTools == true)
+                if (_runOptions is not null
+                    && RunApprovalPolicy.FromOptions(_runOptions.Get(runId)).AllowsAutoApproval("web_fetch"))
                 {
                     emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
                     _logger.LogInformation(

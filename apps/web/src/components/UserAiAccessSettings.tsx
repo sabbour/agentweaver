@@ -15,6 +15,7 @@ import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import type { ByokProviderRequest, ByokProviderType, UserAiAccessStatus } from '../api/types';
 import { AppCard, Body, Label, TitleText } from './ui';
+import { UserCopilotAuthorizationResultNotice } from './GitHubAuthorizationResultNotices';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -41,7 +42,7 @@ export function UserAiAccessSettings() {
   const [busy, setBusy] = useState(false);
   const [editingByok, setEditingByok] = useState(false);
   const [form, setForm] = useState<ByokProviderRequest>(blankProvider);
-  const [authorizationResult] = useState(() => searchParams.get('user_copilot_auth'));
+  const [authorizationResult, setAuthorizationResult] = useState(() => searchParams.get('user_copilot_auth'));
 
   const load = useCallback(async () => {
     try {
@@ -57,12 +58,12 @@ export function UserAiAccessSettings() {
     return () => window.clearTimeout(timeoutId);
   }, [load]);
 
-  useEffect(() => {
-    if (!authorizationResult) return;
+  const dismissAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('user_copilot_auth');
     setSearchParams(next, { replace: true });
-  }, [authorizationResult, searchParams, setSearchParams]);
+    setAuthorizationResult(null);
+  };
 
   const connectCopilot = async () => {
     setBusy(true);
@@ -154,24 +155,19 @@ export function UserAiAccessSettings() {
   };
 
   if (!status && !error) return <Spinner label="Loading AI access" />;
-  const authorizationError = authorizationResult && authorizationResult !== 'success'
-    ? 'The GitHub Copilot connection could not be completed. Start a new connection from Account settings.'
-    : null;
-
   return (
     <div className={styles.root}>
       <Body tone="muted">
         These settings control your personal session chat. Project background work uses the
         Copilot connection selected in that project.
       </Body>
-      {(error || authorizationError) && (
-        <MessageBar intent="error"><MessageBarBody>{error ?? authorizationError}</MessageBarBody></MessageBar>
+      {error && (
+        <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
       )}
-      {authorizationResult === 'success' && (
-        <MessageBar intent="success">
-          <MessageBarBody>GitHub Copilot is connected for your session chat.</MessageBarBody>
-        </MessageBar>
-      )}
+      <UserCopilotAuthorizationResultNotice
+        code={authorizationResult}
+        onDismiss={dismissAuthorizationResult}
+      />
       {status?.platform_byok && (
         <MessageBar intent="success">
           <MessageBarBody>

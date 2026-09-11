@@ -1,6 +1,7 @@
 import App from '../App';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { getSessionToken, requestSessionAuthFromPeer } from '../config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,10 @@ vi.mock('../api/apiClient', () => ({
 vi.mock('../config', () => ({
   captureSessionAuthFromUrl: vi.fn().mockResolvedValue(undefined),
   clearSessionAuth: vi.fn(),
+  getSessionToken: vi.fn(),
+  requestSessionAuthFromPeer: vi.fn(),
+  SESSION_AUTH_AVAILABLE_EVENT: 'agentweaver:session-auth-available',
+  SESSION_AUTH_INVALID_EVENT: 'agentweaver:session-auth-invalid',
 }));
 
 vi.mock('../components/shell/AppShell', () => ({
@@ -92,6 +97,8 @@ describe('App auth gate', () => {
     vi.mocked(apiClient.getServerInfo).mockResolvedValue({
       data_directory: 'C:\\data',
     });
+    vi.mocked(getSessionToken).mockReturnValue('session-token');
+    vi.mocked(requestSessionAuthFromPeer).mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -106,6 +113,52 @@ describe('App auth gate', () => {
 
     expect(await screen.findByText('Sign in')).toBeDefined();
     expect(screen.queryByText(/Model provider setup required/)).toBeNull();
+  });
+
+  it('requests auth from an authenticated peer before checking a new tab session', async () => {
+    vi.mocked(getSessionToken)
+      .mockReturnValueOnce(null)
+      .mockReturnValue('peer-session-token');
+    vi.mocked(requestSessionAuthFromPeer).mockResolvedValue(true);
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Member',
+      email: 'member@example.com',
+      login: 'member',
+      avatar_url: null,
+      entra_object_id: 'entra-member',
+      platform_roles: ['Contributor'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(requestSessionAuthFromPeer).toHaveBeenCalledTimes(1);
+    expect(apiClient.getAuthSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an open shell to sign-in when API auth recovery is exhausted', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Member',
+      email: 'member@example.com',
+      login: 'member',
+      avatar_url: null,
+      entra_object_id: 'entra-member',
+      platform_roles: ['Contributor'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+
+    window.dispatchEvent(new Event('agentweaver:session-auth-invalid'));
+
+    expect(await screen.findByText('Sign in')).toBeDefined();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
   });
 
   it('redirects platform admins to platform settings when AI is not configured', async () => {

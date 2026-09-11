@@ -1,4 +1,9 @@
-import { getSessionToken } from '../config';
+import {
+  clearSessionAuth,
+  getSessionToken,
+  notifySessionAuthInvalid,
+  requestSessionAuthFromPeer,
+} from '../config';
 import {
   MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
   isModelProviderConnectionRequirement,
@@ -74,6 +79,7 @@ import type {
   ServerInfo,
   StartOrchestrationMode,
   StartOrchestrationResponse,
+  RunApprovalPolicy,
   SteerCoordinatorRequest,
   SteerCoordinatorResponse,
   CreateAssistantRunRequest,
@@ -282,9 +288,12 @@ export class RetriableReviewError extends Error {
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
+  private readonly supportsSessionRecovery: boolean;
+  private sessionRecovery: Promise<boolean> | null = null;
 
   constructor(baseUrl: string, sessionTokenProvider: (() => string | null) | string = getSessionToken) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.supportsSessionRecovery = sessionTokenProvider === getSessionToken;
     this.sessionTokenProvider = typeof sessionTokenProvider === 'function'
       ? sessionTokenProvider
       : () => sessionTokenProvider || null;
@@ -321,6 +330,13 @@ export class AgentweaverApiClient {
   // backend persists and replays the events here; 404 until the log exists.
   getRunEvents(runId: string): Promise<PersistedRunEvent[]> {
     return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
+  }
+
+  getPendingApprovals(runId: string): Promise<import('./types').PendingApprovalsResponse> {
+    return this.request<import('./types').PendingApprovalsResponse>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/pending-approvals`,
+    );
   }
 
   getRunTokenBreakdown(runId: string): Promise<import('./types').RunAgentTokenBreakdownDto> {
@@ -999,10 +1015,15 @@ export class AgentweaverApiClient {
     workflowOverrideId?: string | null,
     startMode?: StartOrchestrationMode,
     providerKey?: string,
+    approvalPolicy?: RunApprovalPolicy,
   ): Promise<StartOrchestrationResponse> {
     const body: Record<string, unknown> = { goal };
     if (workflowOverrideId) body.workflow_override_id = workflowOverrideId;
     if (startMode && startMode !== 'define_outcome') body.start_mode = startMode;
+    if (approvalPolicy) {
+      body.auto_approve_tools = approvalPolicy.auto_approve_tools;
+      body.autopilot = approvalPolicy.autopilot;
+    }
     return this.request<StartOrchestrationResponse>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/orchestrations`,
@@ -1341,6 +1362,21 @@ export class AgentweaverApiClient {
     }
   }
 
+  async getClusterTopology(
+    layers: import('./types').KubernetesTopologyLayer[] = ['runtime'],
+  ): Promise<import('./types').KubernetesTopologyDto | null> {
+    try {
+      const query = new URLSearchParams({ layers: layers.join(',') });
+      return await this.request<import('./types').KubernetesTopologyDto>(
+        'GET',
+        `/diagnostics/cluster/topology?${query.toString()}`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
   // Project-scoped diagnostics (Spec 011, FR-016). Owner-authorized.
   getProjectDiagnostics(projectId: string): Promise<import('./types').ProjectDiagnosticsDto> {
     return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/projects/${encodeURIComponent(projectId)}/diagnostics`);
@@ -1528,21 +1564,42 @@ export class AgentweaverApiClient {
     signal?: AbortSignal,
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      ...this.authHeaders(),
-      ...extraHeaders,
+    const send = async () => {
+      const sessionToken = this.sessionTokenProvider();
+      const headers: Record<string, string> = {
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        ...extraHeaders,
+      };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const response = await fetch(this.apiUrl(path), {
+        method,
+        headers,
+        credentials: 'include',
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
+      });
+      const text = typeof response.text === 'function' ? await response.text() : '';
+      return { response, text, sessionToken };
     };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const response = await fetch(this.apiUrl(path), {
-      method,
-      headers,
-      credentials: 'include',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal,
-    });
+    let { response, text, sessionToken } = await send();
+    if (response.status === 401 && this.supportsSessionRecovery &&
+        !isModelProviderConnectionRequirement(this.createApiError(response.status, text).payload)) {
+      const currentToken = this.sessionTokenProvider();
+      const restored = currentToken && currentToken !== sessionToken
+        ? true
+        : await this.recoverSessionAuth(sessionToken);
+      if (restored) {
+        ({ response, text, sessionToken } = await send());
+      }
+      if (!restored || response.status === 401) {
+        if (this.sessionTokenProvider() === sessionToken) {
+          clearSessionAuth();
+        }
+        notifySessionAuthInvalid();
+      }
+    }
 
-    const text = typeof response.text === 'function' ? await response.text() : '';
     if (!response.ok) throw this.createApiError(response.status, text);
     if (text) return JSON.parse(text) as T;
     if (typeof response.json === 'function') {
@@ -1553,6 +1610,18 @@ export class AgentweaverApiClient {
       }
     }
     return null as T;
+  }
+
+  private recoverSessionAuth(rejectedToken: string | null): Promise<boolean> {
+    if (this.sessionRecovery) return this.sessionRecovery;
+    if (this.sessionTokenProvider() === rejectedToken) {
+      clearSessionAuth();
+    }
+    this.sessionRecovery = requestSessionAuthFromPeer(rejectedToken ?? undefined)
+      .finally(() => {
+        this.sessionRecovery = null;
+      });
+    return this.sessionRecovery;
   }
 
   private createApiError(status: number, body: string): ApiError {

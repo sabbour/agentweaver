@@ -29,6 +29,7 @@ GET /api/casting/templates | PlatformOrMcp
 GET /api/catalog/roles | PlatformOrMcp
 GET /api/diagnostics | PlatformOrMcp
 GET /api/diagnostics/cluster | PlatformOrMcp
+GET /api/diagnostics/cluster/topology | PlatformOrMcp
 GET /api/diagnostics/heartbeat | PlatformOrMcp
 GET /api/github/repository-selections | PlatformOrMcp
 GET /api/health | OperationalAnonymous
@@ -95,6 +96,7 @@ GET /api/runs/{id}/files/{**path} | PlatformOrMcp
 GET /api/runs/{id}/graph | PlatformOrMcp
 GET /api/runs/{id}/history | PlatformOrMcp
 GET /api/runs/{id}/outcome-spec | PlatformOrMcp
+GET /api/runs/{id}/pending-approvals | PlatformOrMcp
 GET /api/runs/{id}/stream | PlatformOrMcp
 GET /api/runs/{id}/terminal-diagnostic | PlatformOrMcp
 GET /api/runs/{id}/token-breakdown | PlatformOrMcp

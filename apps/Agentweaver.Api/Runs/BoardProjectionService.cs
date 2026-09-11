@@ -38,7 +38,7 @@ public sealed class BoardProjectionService
         WorkflowRegistry workflowRegistry,
         BacklogTaskReadModelFactory taskReadModels)
         : this(backlogStore, runStore, stageProjector, scopeFactory, projectStore, workflowRegistry, taskReadModels,
-              new PendingToolApprovalRunsQuery(scopeFactory))
+              new PendingToolApprovalRunsQuery(scopeFactory, runStore))
     {
     }
 

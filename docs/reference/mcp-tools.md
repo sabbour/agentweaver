@@ -69,7 +69,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `coordinator_outcome_spec_confirm` | Confirm the drafted outcome spec for a Coordinator run, resuming the suspended run past the confirmation gate. |
 | `coordinator_outcome_spec_get` | Get the current persisted outcome spec for a Coordinator run. |
 | `coordinator_outcome_spec_revise` | Request a revision of the drafted outcome spec for a Coordinator run. The coordinator re-drafts using the feedback and re-suspends at the confirmation gate. |
-| `coordinator_start` | Start a Coordinator orchestration for a project from a plain-language goal. The coordinator drafts a confirmable outcome spec and suspends at the confirmation gate; no work is dispatched until the spec is confirmed. |
+| `coordinator_start` | Start a Coordinator orchestration for a project from a plain-language goal. Optional per-run approval policy can auto-approve repository-defined safe tools and enable autopilot; destructive, privileged, preview, secret, and other network approvals remain gated. |
 | `coordinator_steer` | Steer a Coordinator run. Use 'stop' to cancel active subagents immediately; 'redirect' or 'amend' to inject guidance at the targeted subagent's next turn boundary; or a recovery verb (e.g. 'recover') to reset blocked/failed/parked subtasks and auto-resume the dispatch loop. Omit target_child_run_id to broadcast to every active child. instruction is required for redirect/amend and optional for stop/recovery verbs. Pause is not supported. |
 | `coordinator_work_plan_get` | Get the work plan for a Coordinator run: the decomposed subtasks with their assigned agent, selected model, status, child run id, and the dependency edges between subtasks. Returns null when no work plan has been drafted yet. |
 | `orchestration_topology` | Get a one-shot topology snapshot for a Coordinator run by combining the work plan and child runs into a current view of subtasks, dependency edges, and dispatched children. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events. |
@@ -92,7 +92,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `project_copilot_app_authorization_status` | Poll the initiating human's project-bound Copilot App browser authorization. Returns only pending, completed, failed, or expired. |
 | `project_copilot_app_connect` | Begin an Owner-authorized, project-bound Copilot App connection. Returns an opaque transaction ID, browser URL, and expiry. Open browser_url; if Agentweaver asks for Entra sign-in, finish it in that browser to resume this handoff. After GitHub completes, return to MCP and poll project_copilot_app_authorization_status. No credential, OAuth state, callback cookie, repository, installation, permission, or final callback data is returned. |
 | `project_copilot_app_disconnect` | Disconnect a project Copilot App binding. The backend allows this de-privileging operation only to an authorized human project Owner or platform administrator. |
-| `project_github_capability_status` | Get the server-derived, redacted unattended GitHub capability readiness for a project. No GitHub identities, credentials, installations, repositories, or permissions are returned. |
+| `project_github_capability_status` | Get redacted interactive, unattended, and repository readiness for a project. Status distinguishes unattended_ready, interactive_ready, repository_ready, reauthorization_required, and unavailable. No GitHub identities, credentials, installations, repositories, or permissions are returned. |
 
 ## Memory
 
@@ -122,7 +122,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | --- | --- |
 | `github_repository_selection_issue` | Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier. |
 | `github_repository_selections_list` | List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'. |
-| `project_configure` | Configure the AI model provider settings for a project. |
+| `project_configure` | Configure the AI model provider and generation-model settings for a project. |
 | `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |

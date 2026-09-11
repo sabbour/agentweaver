@@ -301,6 +301,21 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     {
         throw;
     }
+    catch (GitHubCopilotCapabilitySnapshotUnavailableException ex)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogWarning(
+            ex,
+            "AgentHost /configure: the run-bound GitHub Copilot capability snapshot is unavailable for run {RunId}.",
+            configuration.RunId);
+        return Results.Json(
+            new
+            {
+                error = ex.ErrorCode,
+                message = ex.UserMessage,
+            },
+            statusCode: StatusCodes.Status409Conflict);
+    }
     catch (GitHubCopilotUnauthorizedException ex)
     {
         var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();

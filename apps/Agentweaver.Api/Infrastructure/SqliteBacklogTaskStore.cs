@@ -540,6 +540,15 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
+        CancellationToken ct = default) =>
+        (await TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            projectId, id, coordinatorRun, claimedAt, ct).ConfigureAwait(false)).Result;
+
+    public async Task<ClaimReserveOutcome> TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+        ProjectId projectId,
+        BacklogTaskId id,
+        Run coordinatorRun,
+        DateTimeOffset claimedAt,
         CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
@@ -577,11 +586,39 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             if (claimedRows != 1)
             {
                 await tx.RollbackAsync(ct).ConfigureAwait(false);
-                return ClaimReserveResult.Lost;
+                return new ClaimReserveOutcome(ClaimReserveResult.Lost);
             }
         }
 
-        // (b) persist the coordinator run row gated on the project still being active. Stamps the
+        RunApprovalPolicySnapshot approvalSnapshot;
+        await using (var settings = connection.CreateCommand())
+        {
+            settings.Transaction = tx;
+            settings.CommandText =
+                """
+                SELECT pickup_auto_approve_tools, pickup_autopilot, updated_at
+                  FROM projects
+                 WHERE project_id = $projectId AND state = 'active';
+                """;
+            settings.Parameters.AddWithValue("$projectId", projectId.ToString());
+            await using var reader = await settings.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                await tx.RollbackAsync(ct).ConfigureAwait(false);
+                return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
+            }
+
+            approvalSnapshot = new RunApprovalPolicySnapshot(
+                RunApprovalPolicy.ForBacklogPickup(
+                    reader.GetInt32(0) != 0,
+                    reader.GetInt32(1) != 0),
+                Source: "backlog_pickup",
+                CapturedAt: claimedAt,
+                SettingsUpdatedAt: DateTimeOffset.Parse(
+                    reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+        }
+
+        // (b) persist the coordinator run row and immutable policy snapshot atomically. Stamps the
         //     durable run-origin marker origin='backlog_pickup'. The run is identity-shaped EXACTLY
         //     like an interactive coordinator run: workflow_run_id IS NULL (coordinatorRun.WorkflowRunId
         //     is null) and NO workflow_runs envelope is written, so the board navigates by run_id and
@@ -595,11 +632,17 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
                                   submitting_user, status, started_at, ended_at, result,
                                   worktree_path, worktree_branch, project_id, model_id,
-                                  agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin)
+                                  agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin,
+                                  launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                                  approval_policy_source,
+                                  approval_policy_captured_at, approval_policy_settings_updated_at)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
                        $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
-                       $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup'
+                       $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup',
+                       $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
+                       $approvalPolicySource,
+                       $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt
                 WHERE EXISTS (
                     SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
                 );
@@ -621,16 +664,22 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$workflowRunId", (object?)coordinatorRun.WorkflowRunId ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$parentRunId", (object?)coordinatorRun.ParentRunId ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$subtaskId", (object?)coordinatorRun.SubtaskId ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$launchAutoApproveTools", approvalSnapshot.Policy.AutoApproveTools ? 1 : 0);
+            insertRun.Parameters.AddWithValue("$launchAutopilot", approvalSnapshot.Policy.Autopilot ? 1 : 0);
+            insertRun.Parameters.AddWithValue("$approvalPolicySnapshotId", approvalSnapshot.SnapshotId);
+            insertRun.Parameters.AddWithValue("$approvalPolicySource", approvalSnapshot.Source);
+            insertRun.Parameters.AddWithValue("$approvalPolicyCapturedAt", Ts(approvalSnapshot.CapturedAt));
+            insertRun.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", Ts(approvalSnapshot.SettingsUpdatedAt!.Value));
             var runRows = await insertRun.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (runRows != 1)
             {
                 await tx.RollbackAsync(ct).ConfigureAwait(false);
-                return ClaimReserveResult.ProjectUnavailable;
+                return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
             }
         }
 
         await tx.CommitAsync(ct).ConfigureAwait(false);
-        return ClaimReserveResult.Won;
+        return new ClaimReserveOutcome(ClaimReserveResult.Won, approvalSnapshot);
     }
 
     /// <summary>

@@ -316,9 +316,12 @@ Update provider settings for a project.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
-| `default_provider` | string | yes | Model provider (`github_copilot` or `microsoft_foundry`) |
+| `default_provider` | string | yes | Model provider (`github-copilot` or `byok`; legacy values remain accepted) |
 | `default_model_github_copilot` | string | no | Model ID for GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | no | Model ID for the BYOK provider; the legacy field name remains supported. |
+| `blueprint_generation_model` | string or null | no | Blueprint-generation model. Empty or null inherits the global generation default. |
+| `workflow_generation_model` | string or null | no | Workflow-generation model. Empty or null inherits the global generation default. |
+| `outcome_spec_generation_model` | string or null | no | Coordinator outcome-spec drafting model. Empty or null inherits the global generation default. |
 
 **Returns**: Confirmation message.
 
@@ -353,6 +356,8 @@ Run the common coordinator workflow in one call: start the run, poll until it re
 | `workflow_id` | string | no | Workflow override. Must already be in the project's `allowed_workflow_ids`. |
 | `model_id` | string | no | Coordinator model override |
 | `start_mode` | string | no | `direct` (default) or `defineOutcome` |
+| `auto_approve_tools` | boolean | no | Auto-approve only repository-defined safe tools for this run and its children. Defaults to `false`. |
+| `autopilot` | boolean | no | Auto-answer coordinator and child clarifying questions. Defaults to `false`. |
 | `timeout_seconds` | integer | no | Maximum wait before returning partial state (default `600`) |
 | `poll_interval_seconds` | integer | no | Poll cadence while waiting (default `2`) |
 
@@ -487,8 +492,17 @@ Start a coordinator orchestration for a project from a plain-language goal. Prox
 | `project_id` | string | yes | Project ID |
 | `goal` | string | yes | The outcome the coordinator should draft a spec for |
 | `model_id` | string | no | Model id override; falls back to the project default, then the role default |
+| `workflow_id` | string | no | Workflow override |
+| `start_mode` | string | no | `defineOutcome` (default) or `direct` |
+| `auto_approve_tools` | boolean | no | Auto-approve only repository-defined safe tools for this run and its children. Defaults to `false`. |
+| `autopilot` | boolean | no | Auto-answer coordinator and child clarifying questions. Defaults to `false`. |
 
 **Returns**: `{ runId }` for the new coordinator run.
+
+For both start tools, safe-tool auto-approval currently covers `web_fetch` only. It does
+not bypass preview, destructive, privileged, secret-bearing, or other network approvals.
+The selected policy is persisted and reused by retries and child runs. Heartbeat pickup
+settings remain defaults only for runs created by heartbeat.
 
 ---
 
@@ -1237,7 +1251,7 @@ Set the per-project backlog pickup settings.
 | `project_id` | string | yes | Project ID |
 | `max_ready_per_heartbeat` | integer | yes | Maximum Ready tasks claimed per heartbeat tick (1–20) |
 | `pickup_autopilot` | boolean | yes | Auto-answer clarifying questions during unattended coordinator runs |
-| `pickup_auto_approve_tools` | boolean | yes | Auto-approve allow-with-approval tools during unattended runs |
+| `pickup_auto_approve_tools` | boolean | yes | Auto-approve repository-defined safe tools during unattended runs; other approval boundaries remain enforced |
 
 **Returns**: Updated settings object.
 

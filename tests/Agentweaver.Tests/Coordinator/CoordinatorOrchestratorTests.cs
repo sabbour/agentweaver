@@ -7,6 +7,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Auth;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -166,6 +168,41 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_StaticSiteServerCurlPreview_WithRestrictedWorkflows_UsesPlatformBuildTestFallback()
+    {
+        var projectId = await CreateProjectAsync();
+        var projectStore = _factory.Services.GetRequiredService<IProjectStore>();
+        await projectStore.UpdateAllowedWorkflowIdsAsync(
+            ProjectId.Parse(projectId),
+            ["issue-insights-to-prds"],
+            DateTimeOffset.UtcNow);
+        _factory.AssemblyGateCodeClassifier.Override = _ => true;
+
+        const string goal =
+            "Create site/index.html, serve it on port 3000, curl it, and register browser preview.";
+        var runId = await StartOrchestrationAsync(projectId, goal, startMode: "direct");
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+
+        workPlan.Should().NotBeNull(
+            "a direct code-producing run must not fail merely because its blueprint allowed-set lacks Build & Test");
+        workPlan!.WorkflowId.Should().Be("software-delivery",
+            "the platform-owned fallback preserves build, server health, curl, and preview validation");
+    }
+
+    [Fact]
+    public void ProviderConnectionFailure_CannotFallBackToDeterministicDecomposition()
+    {
+        var exception = new ModelProviderConnectionRequiredException(ProjectId.New());
+
+        CoordinatorOrchestratorExecutor.CanUseModelFallback(exception).Should().BeFalse(
+            "an AgentHost pre-launch provider failure must remain the terminal actionable cause");
+        CoordinatorOrchestratorExecutor.CanUseModelFallback(new HttpRequestException()).Should().BeTrue(
+            "ordinary model availability failures may still use deterministic decomposition");
+    }
+
+    [Fact]
     public async Task Confirm_AutoSelectedPmDiscovery_NonCodeDecomposition_KeepsPmDiscovery()
     {
         var projectId = await CreateProjectAsync();
@@ -278,13 +315,17 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         string projectId,
         string goal,
         string? modelId = null,
-        string? workflowOverrideId = null)
+        string? workflowOverrideId = null,
+        string? startMode = null)
     {
         await _factory.PrepareAiExecutionAsync(
             _owner, "orchestration", projectId);
+        object request = startMode is null
+            ? new { goal, modelId, workflow_override_id = workflowOverrideId }
+            : new { goal, modelId, workflow_override_id = workflowOverrideId, start_mode = startMode };
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations",
-            new { goal, modelId, workflow_override_id = workflowOverrideId });
+            request);
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("runId").GetString()!;

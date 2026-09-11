@@ -2,7 +2,7 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 
 export default withMermaid({
   title: 'Agentweaver',
-  description: 'Plan, run, and review AI agent work with Agentweaver.',
+  description: 'Run governed teams of AI agents on infrastructure you control.',
   base: '/agentweaver/',
   ignoreDeadLinks: true,
   vite: {

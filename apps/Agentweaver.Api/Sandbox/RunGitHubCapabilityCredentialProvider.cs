@@ -83,9 +83,10 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         if (string.IsNullOrWhiteSpace(runId))
             return null;
 
+        var owningRunId = CoordinatorSubRunIds.StripSyntheticSuffix(runId);
         using var scope = scopeFactory.CreateScope();
         var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
-        var snapshot = (await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false))
+        var snapshot = (await persistence.GetCapabilitySnapshotsAsync(owningRunId, ct).ConfigureAwait(false))
             .SingleOrDefault(candidate => candidate.Purpose == purpose);
         if (snapshot is null)
             return null;

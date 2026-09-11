@@ -35,10 +35,11 @@ import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPan
 import { AiCredits } from '../components/AiCredits';
 import {
   AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
   AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from '../components/AiExecutionProviderHint';
-import { aiExecutionContextFromEvents } from '../components/aiExecutionContext';
+import { aiExecutionContextFromEvents, aiExecutionProviderLabel, providerIdentity } from '../components/aiExecutionContext';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { SlidePanel } from '../components/SlidePanel';
@@ -60,6 +61,7 @@ import {
   workflowNodeTypes,
 } from '../components/WorkflowGraphPanel';
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
+import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
@@ -100,8 +102,10 @@ import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
 import type {
   GraphDescriptor,
+  EffectiveModelProvider,
   PortForwardSessionDto,
   RunAgentTokenBreakdownDto,
+  PendingApprovalDto,
   RunTerminalDiagnostic,
   RunStatus,
   WorkPlanResponse,
@@ -122,22 +126,12 @@ const CoordPanelContext = createContext<((nodeId: string, opts?: { closeTopology
 // Topology status helpers
 // ---------------------------------------------------------------------------
 
-function pendingApprovalsByRun(events: RunStreamEvent[], coordinatorRunId: string): Map<string, number> {
-  const pending = new Map<string, string>();
-  for (const event of events) {
-    const requestId = String(event.payload.requestId ?? event.payload.request_id ?? event.payload.commandHash ?? event.payload.command_hash ?? '');
-    if (!requestId) continue;
-    const childRunId = String(event.payload.childRunId ?? event.payload.child_run_id ?? '');
-    const targetRunId = childRunId || coordinatorRunId;
-    const key = `${targetRunId}:${requestId}`;
-    if (event.type === 'tool.approval_required' || event.type === 'tool.approval_context' || event.type === 'shell.approval_required' || event.type === 'coordinator.child_approval_required') {
-      pending.set(key, targetRunId);
-    } else if (event.type === 'tool.approval_resolved' || event.type === 'coordinator.child_approval_resolved') {
-      pending.delete(key);
-    }
-  }
+function pendingApprovalsByRun(approvals: PendingApprovalDto[]): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const targetRunId of pending.values()) counts.set(targetRunId, (counts.get(targetRunId) ?? 0) + 1);
+  for (const approval of approvals) {
+    const targetRunId = approval.action_run_id;
+    counts.set(targetRunId, (counts.get(targetRunId) ?? 0) + 1);
+  }
   return counts;
 }
 
@@ -1280,7 +1274,11 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    flexShrink: 0,
+    flex: '1 1 420px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    minWidth: 0,
+    maxWidth: '100%',
   },
   metaRail: {
     display: 'flex',
@@ -2279,6 +2277,13 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [runProviderState, setRunProviderState] = useState<{
+    runId: string;
+    provider: EffectiveModelProvider | null;
+  }>({ runId: '', provider: null });
+  const runEffectiveProvider = runProviderState.runId === (runId ?? '')
+    ? runProviderState.provider
+    : null;
   const [runTimingState, setRunTimingState] = useState<{
     runId: string;
     startedAt: number | undefined;
@@ -2297,6 +2302,19 @@ export function CoordinatorRunPage() {
     reconnect: reconnectStream,
     refresh: refreshStreamEvents,
   } = useSeededRunStream(runId ?? '');
+  const approvalRefreshKey = useMemo(
+    () => `${streamStatus}:` + events
+      .filter((event) => event.type.includes('approval') || event.type === 'tool.result' || event.type === 'tool.error')
+      .map((event) => `${event.sequence}:${event.type}`)
+      .join('|'),
+    [events, streamStatus],
+  );
+  const {
+    approvals: pendingApprovals,
+    loading: pendingApprovalsLoading,
+    error: pendingApprovalsError,
+    refresh: refreshPendingApprovals,
+  } = usePendingApprovals(runId ?? '', approvalRefreshKey);
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
@@ -2366,11 +2384,26 @@ export function CoordinatorRunPage() {
         events,
         isChildRun ? 'agent_turn' : 'orchestration',
       );
-      return context && isTerminalRunStatus(runLevelStatus)
-        ? { ...context, phase: 'completed' as const }
-        : context;
+      const resolvedContext = context ?? (runEffectiveProvider
+        ? {
+            ai_required: true,
+            operation: isChildRun ? 'agent_turn' : 'orchestration',
+            phase: 'active' as const,
+            execution_key: null,
+            expires_at: null,
+            effective_model_provider: runEffectiveProvider,
+          }
+        : null);
+      return resolvedContext && isTerminalRunStatus(runLevelStatus)
+        ? { ...resolvedContext, phase: 'completed' as const }
+        : resolvedContext;
     },
-    [events, isChildRun, runLevelStatus],
+    [events, isChildRun, runEffectiveProvider, runLevelStatus],
+  );
+  const retryProviderMatchesRun = Boolean(
+    activeProviderContext
+    && providerContext.context
+    && providerIdentity(activeProviderContext) === providerIdentity(providerContext.context),
   );
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
@@ -2489,6 +2522,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setRunProviderState({ runId: runId ?? '', provider: null });
       setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
       setCoordStatusReason(undefined);
@@ -2556,6 +2590,10 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setRunProviderState({
+        runId,
+        provider: detail?.effective_model_provider ?? null,
+      });
       setRunTimingState({
         runId,
         startedAt: parseTimestamp(detail?.started_at),
@@ -3256,7 +3294,10 @@ export function CoordinatorRunPage() {
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
   const [outcomePlanClarificationReconcileEpoch, setOutcomePlanClarificationReconcileEpoch] = useState(0);
-  const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
+  const pendingApprovalCounts = useMemo(
+    () => pendingApprovalsByRun(pendingApprovals),
+    [pendingApprovals],
+  );
   const outcomePlanClarificationBaseSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -4598,6 +4639,13 @@ export function CoordinatorRunPage() {
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
+  const terminalDiagnosticAction = terminalDiagnostic?.code === 'model_provider_snapshot_unavailable'
+    ? 'Agentweaver could not load the provider snapshot saved for this run. Retry creates a new snapshot; this does not mean the configured provider changed or became unavailable.'
+    : terminalDiagnostic?.code === 'github_copilot_capability_snapshot_unavailable'
+      ? 'The run-bound GitHub Copilot capability snapshot was missing, expired, or could not be redeemed. Retry creates a new run snapshot; reconnect GitHub only if the new run reports an authorization failure.'
+      : terminalDiagnostic?.retryable === true
+        ? 'Retry the run; open the trace if the failure repeats.'
+        : 'Open the trace to investigate the recorded failure.';
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -4638,7 +4686,7 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
+      {(terminalDiagnostic || retryError || retryStatus || stopError || automationError || providerContext.error || providerContext.context?.effective_model_provider?.state === 'unavailable' || workPlanError || pendingApprovalsError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
           {retryStatus && (
             <MessageBar intent="info" data-testid="coordinator-retry-status">
@@ -4658,6 +4706,14 @@ export function CoordinatorRunPage() {
               <MessageBarBody>Work plan refresh failed: {workPlanError.message}{workPlanError.detail ? ` ${workPlanError.detail}` : ''}</MessageBarBody>
               <MessageBarActions>
                 <Button appearance="transparent" size="small" onClick={reconnectStream}>Refresh</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {pendingApprovalsError && (
+            <MessageBar intent="error" data-testid="approval-review-error">
+              <MessageBarBody>Approval review data could not be loaded: {pendingApprovalsError}</MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" size="small" onClick={() => void refreshPendingApprovals()}>Retry</Button>
               </MessageBarActions>
             </MessageBar>
           )}
@@ -4696,13 +4752,27 @@ export function CoordinatorRunPage() {
               <MessageBarBody>{automationError}</MessageBarBody>
             </MessageBar>
           )}
+          <AiExecutionProviderReadiness
+            context={providerContext.context}
+            error={providerContext.error}
+            projectId={projectId}
+            onRefresh={() => void providerContext.refresh()}
+          />
           {terminalDiagnostic && (
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
-                Failure in {terminalDiagnostic.component}: {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
-                {' '}Code: {terminalDiagnostic.code}.
-                {terminalDiagnostic.retryable === true ? ' This failure may be retried.' : ''}
+                Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {' '}{terminalDiagnosticAction}
               </MessageBarBody>
+              <MessageBarActions>
+                <Button
+                  appearance="transparent"
+                  size="small"
+                  onClick={() => navigate(`/projects/${projectId}/observability/traces?run=${runId}`)}
+                >
+                  View trace
+                </Button>
+              </MessageBarActions>
             </MessageBar>
           )}
         </div>
@@ -4734,7 +4804,7 @@ export function CoordinatorRunPage() {
                 <span className={styles.statusChip}>{taskCountsLabel}</span>
                 <span className={styles.statusChip}>{elapsedLabel} elapsed</span>
               </div>
-              <div className={styles.compactChromeActions}>
+              <div className={styles.compactChromeActions} data-testid="run-header-actions">
                 {previewAction && (
                   <Button
                     appearance="secondary"
@@ -4774,7 +4844,7 @@ export function CoordinatorRunPage() {
                     <span aria-hidden="true" />
                   </AiExecutionProviderStatus>
                 )}
-                <AiExecutionProviderHint context={providerContext.context}>
+                {retryProviderMatchesRun ? (
                   <Button
                     appearance={isRetryable ? 'secondary' : 'subtle'}
                     size="small"
@@ -4782,10 +4852,27 @@ export function CoordinatorRunPage() {
                     disabled={!isRetryable || retrying || providerContext.loading || !providerContext.available}
                     onClick={() => void handleRetry()}
                     data-testid="coordinator-retry-button"
-                    aria-label={retryAriaLabel}
+                    aria-label={`${retryAriaLabel}. ${aiExecutionProviderLabel(providerContext.context)}`}
                     title={retryHint}
                   />
-                </AiExecutionProviderHint>
+                ) : (
+                  <AiExecutionProviderHint
+                    context={providerContext.context}
+                    loading={providerContext.loading}
+                    error={providerContext.error}
+                  >
+                    <Button
+                      appearance={isRetryable ? 'secondary' : 'subtle'}
+                      size="small"
+                      icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
+                      disabled={!isRetryable || retrying || providerContext.loading || !providerContext.available}
+                      onClick={() => void handleRetry()}
+                      data-testid="coordinator-retry-button"
+                      aria-label={retryAriaLabel}
+                      title={retryHint}
+                    />
+                  </AiExecutionProviderHint>
+                )}
                 <AiProviderChangeAnnouncement message={providerContext.announcement} />
                 <Button
                   appearance={viewState.canStop ? 'secondary' : 'subtle'}
@@ -4952,6 +5039,10 @@ export function CoordinatorRunPage() {
                     onToggleAutopilot: () => toggleAutopilot(!autopilot),
                     onToggleAutoApprove: () => toggleAutoApprove(!autoApprove),
                   }}
+                  pendingApprovals={pendingApprovals}
+                  pendingApprovalsLoading={pendingApprovalsLoading}
+                  pendingApprovalsError={pendingApprovalsError}
+                  onRetryPendingApprovals={() => void refreshPendingApprovals()}
                 />
               </div>
             </div>

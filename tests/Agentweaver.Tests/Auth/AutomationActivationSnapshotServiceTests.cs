@@ -120,6 +120,32 @@ public sealed class AutomationActivationSnapshotServiceTests
     }
 
     [Fact]
+    public async Task Activate_DeniesExpiredUnrefreshableCopilotCredential()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db, blankOrigin: true);
+        db.ProjectCopilotBindings.Add(Binding(project, "expired-binding", "copilot-digest"));
+        await db.SaveChangesAsync();
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var secrets = new InMemorySecretStore();
+        await secrets.SetSecretAsync(
+            "copilot-app-project-expired-binding-version",
+            """{"status":"signed-in","accessToken":"expired","expiresAt":"2020-01-01T00:00:00Z"}""");
+        var byok = new ByokProviderConfigurationService(secrets);
+        var persistence = new GitHubConnectionsPersistenceStore(db, byokSettings: byok);
+        var service = new AutomationActivationSnapshotService(
+            persistence,
+            roles,
+            new EffectiveModelProviderResolver(persistence, byok, secrets));
+
+        var result = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+
+        result.Outcome.Should().Be(AutomationActivationOutcome.CopilotBindingUnavailable);
+        result.Activation.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Activation_IsInsertOnlyAndConcurrentReplacementIsDenied()
     {
         await using var db = await OpenDatabaseAsync();

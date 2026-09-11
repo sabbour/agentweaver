@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -387,7 +388,7 @@ public sealed class CoordinatorOrchestratorExecutor
             await PersistSelectionReasonAsync(runStore, input.RunId, result.Rationale, ct).ConfigureAwait(false);
             return new WorkflowSelection(result.Selected, IsExplicit: false, available, customWorkflowIds);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (CanUseModelFallback(ex))
         {
             // Explicit fallback (option a): log a warning and plan against the project default
             // workflow instead of silently dropping the selection result.
@@ -445,8 +446,28 @@ public sealed class CoordinatorOrchestratorExecutor
             .ThenBy(w => w.Id, StringComparer.Ordinal)
             .ToList();
         if (compatible.Count == 0)
-            throw new InvalidOperationException(
-                $"Code-producing decomposition for run '{input.RunId}' has no available workflow with a Build & Test stage.");
+        {
+            var registry = scope.ServiceProvider.GetRequiredService<WorkflowRegistry>();
+            var platformFallback = registry.FindPlatformFallback("software-delivery")
+                ?? registry.FindPlatformFallback("bug-fix");
+            if (platformFallback is null || !HasBuildTestStage(platformFallback))
+                throw new InvalidOperationException(
+                    $"Code-producing decomposition for run '{input.RunId}' has no valid platform workflow with a Build & Test stage.");
+
+            var fallbackRationale =
+                $"Selected platform fallback '{platformFallback.Name}' after decomposition identified " +
+                $"code-producing work and none of the project's allowed automatic workflows included " +
+                "the mandatory Build & Test stage.";
+            warnings.Add(fallbackRationale);
+            EmitWorkflowSelectedEvent(
+                input.RunId, platformFallback, fallbackRationale, wasAutoSelected: true, selection.Available);
+            var fallbackRunStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+            await PersistSelectionReasonAsync(fallbackRunStore, input.RunId, fallbackRationale, ct).ConfigureAwait(false);
+            _logger.LogWarning(
+                "Coordinator workflow compatibility fallback for run {RunId}: using platform workflow '{WorkflowId}' because the project-allowed automatic workflows have no Build & Test stage.",
+                input.RunId, platformFallback.Id);
+            return selection with { Definition = platformFallback };
+        }
 
         var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
         var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
@@ -707,7 +728,7 @@ public sealed class CoordinatorOrchestratorExecutor
             }
             return parsed;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (CanUseModelFallback(ex))
         {
             _logger.LogWarning(ex,
                 "Coordinator decomposition model turn failed for run {RunId} — using deterministic fallback",
@@ -862,6 +883,9 @@ public sealed class CoordinatorOrchestratorExecutor
 
     private static string RepairJsonArray(string json) =>
         Regex.Replace(json, @",\s*(\]|\})", "$1");
+
+    internal static bool CanUseModelFallback(Exception exception) =>
+        exception is not ModelProviderConnectionRequiredException;
 
     /// <summary>
     /// Deterministic, never-failing decomposition used when the model is unavailable or returns

@@ -189,7 +189,11 @@ public sealed class A2ATurnBridgeAgentTests
 
         var runFailed = DecodeRunFailedEvents(updates);
         runFailed.Should().ContainSingle("a synthetic structured terminal must be emitted");
-        JsonSerializer.Serialize(runFailed[0].Payload).Should().Contain("agent_turn_internal_error");
+        var payload = JsonSerializer.SerializeToElement(runFailed[0].Payload);
+        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
+        payload.GetProperty("correlationId").GetString().Should().MatchRegex("^[a-f0-9]{32}$");
+        payload.GetProperty("causeChain").EnumerateArray().Select(item => item.GetString())
+            .Should().Equal("InvalidOperationException");
     }
 
     [Fact]

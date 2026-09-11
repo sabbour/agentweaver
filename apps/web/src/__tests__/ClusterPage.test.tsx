@@ -26,6 +26,7 @@ class ResizeObserverStub {
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getClusterDiagnostics: vi.fn(),
+    getClusterTopology: vi.fn(),
   },
 }));
 
@@ -47,6 +48,34 @@ function renderPage(projectId = 'proj-001') {
 }
 
 const getClusterMock = () => vi.mocked(apiClient.getClusterDiagnostics);
+const getTopologyMock = () => vi.mocked(apiClient.getClusterTopology);
+
+const sampleTopology = {
+  generated_utc: new Date().toISOString(),
+  namespace: 'agentweaver',
+  requested_layers: ['runtime'] as const,
+  layers: [
+    { name: 'runtime' as const, status: 'available' as const, resource_count: 1, message: 'available' },
+    { name: 'networking' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
+    { name: 'workloads' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
+    { name: 'storage' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
+    { name: 'autoscaling' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
+    { name: 'availability' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
+  ],
+  nodes: [{
+    id: 'v1:Pod:agentweaver:agent-abc123',
+    layer: 'runtime' as const,
+    type: 'Pod',
+    api_version: 'v1',
+    name: 'agent-abc123',
+    namespace: 'agentweaver',
+    health: 'healthy' as const,
+    summary: 'Pod · Running',
+    details: { phase: 'Running' },
+  }],
+  edges: [],
+  truncated: false,
+};
 
 const sampleData: ClusterDiagnosticsDto = {
   generated_utc: new Date().toISOString(),
@@ -106,6 +135,7 @@ const sampleData: ClusterDiagnosticsDto = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getTopologyMock().mockResolvedValue(sampleTopology);
 });
 
 afterEach(() => {
@@ -151,12 +181,9 @@ describe('ClusterPage', () => {
     expect(screen.getByText('Resource topology')).toBeDefined();
     expect(screen.getByTestId('cluster-topology-graph')).toBeDefined();
     expect(screen.getByTestId('cluster-topology-viewport')).toBeDefined();
-    expect(screen.getByLabelText('Cluster: 3 / 3 checks healthy')).toBeDefined();
-    expect(screen.getByLabelText('default-pool: Warm pool · 2 / 2 ready')).toBeDefined();
-    expect(screen.getAllByLabelText('agentweaver-sandbox-unclaimed: Warm instance · available').length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: 'run-001' })).toBeDefined();
-    expect(screen.getByLabelText('claim-abc123: Sandbox claim · bound')).toBeDefined();
-    expect(screen.getByLabelText('agent-abc123: Agent pod · ready')).toBeDefined();
+    expect(screen.getByLabelText('agent-abc123: Pod · Running')).toBeDefined();
+    expect((screen.getByRole('checkbox', { name: 'Runtime' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Networking' }) as HTMLInputElement).checked).toBe(false);
 
     // Health check rows
     expect(screen.getByText('K8s API')).toBeDefined();
@@ -217,16 +244,16 @@ describe('ClusterPage', () => {
     });
   });
 
-  it('navigates from a claimed warm-pool instance to the owning run', async () => {
+  it('loads an opt-in topology layer without changing the default', async () => {
     const user = userEvent.setup();
     getClusterMock().mockResolvedValue(sampleData);
 
     renderPage();
 
-    await user.click(await screen.findByRole('link', { name: 'run-001' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Networking' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Run detail')).toBeDefined();
+      expect(getTopologyMock()).toHaveBeenLastCalledWith(['runtime', 'networking']);
     });
   });
 });

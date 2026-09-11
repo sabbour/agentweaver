@@ -218,13 +218,26 @@ public sealed class McpCoordinatorErrorsTests
             request.RequestUri!.AbsolutePath.Should().Be("/api/projects/proj-1/orchestrations");
             request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
                 .Which.Should().Be("azure-byok-execution-key");
+            var body = request.Content!.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
+            body.GetProperty("workflow_override_id").GetString().Should().Be("wf-review");
+            body.GetProperty("start_mode").GetString().Should().Be("direct");
+            body.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue();
+            body.GetProperty("autopilot").GetBoolean().Should().BeTrue();
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted)
             {
                 Content = JsonContent.Create(new { run_id = "run-1" }),
             });
         }, bypassPreflight: true));
 
-        var result = await tools.CoordinatorStartAsync("proj-1", "Ship it", model_id: null, ct: CancellationToken.None);
+        var result = await tools.CoordinatorStartAsync(
+            "proj-1",
+            "Ship it",
+            model_id: null,
+            workflow_id: "wf-review",
+            start_mode: "direct",
+            auto_approve_tools: true,
+            autopilot: true,
+            ct: CancellationToken.None);
 
         result.Should().Contain("run-1");
     }

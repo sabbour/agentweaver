@@ -50,6 +50,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly ILoggerFactory _loggerFactory;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly IModelInvocationGuard? _modelInvocationGuard;
+    private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _outcomeSpecModel;
@@ -66,7 +67,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null)
+        IModelInvocationGuard? modelInvocationGuard = null,
+        RunModelProviderSnapshotStore? providerSnapshots = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -78,6 +80,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _loggerFactory = loggerFactory;
         _byokProviderConfiguration = byokProviderConfiguration;
         _modelInvocationGuard = modelInvocationGuard;
+        _providerSnapshots = providerSnapshots;
         _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
@@ -110,6 +113,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 
             var task = BuildDraftingTask(
                 input.Goal, feedbackBlock, BuildCapabilitySummary(input.RepositoryPath));
+            var acceptedModelSource = ResolveAcceptedModelSource(input);
+            var draftByokProvider = await ResolveDraftByokProviderAsync(
+                input, acceptedModelSource, ct).ConfigureAwait(false);
 
             agent = new CopilotAIAgent(
                 _copilotClientFactory,
@@ -118,10 +124,10 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 _approvalStore,
                 _toolApprovalGate,
                 _loggerFactory.CreateLogger<CopilotAIAgent>(),
-                byokProviderConfiguration: _byokProviderConfiguration,
+                byokProviderConfiguration: draftByokProvider,
                 modelInvocationGuard: _modelInvocationGuard);
             agent.ConfigureProviderBoundary(
-                ResolveAcceptedModelSource(input),
+                acceptedModelSource,
                 input.ByokProviderFingerprint);
 
             // Stream the drafting turn onto the COORDINATOR run stream so the reused run timeline
@@ -144,7 +150,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 apiBaseUrl: _apiBaseUrl,
                 apiKey: _apiKey,
                 ct,
-                userId: input.SubmittingUser).ConfigureAwait(false);
+                userId: input.SubmittingUser,
+                preferModelIdOverByokConfiguration: true).ConfigureAwait(false);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
@@ -164,6 +171,45 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private string ResolveOutcomeSpecModel(string? projectModel) =>
         string.IsNullOrWhiteSpace(projectModel) ? _outcomeSpecModel : projectModel.Trim();
 
+    private async Task<IByokProviderConfigurationProvider?> ResolveDraftByokProviderAsync(
+        CoordinatorDraftInput input,
+        ModelSource modelSource,
+        CancellationToken ct)
+    {
+        if (modelSource != ModelSource.Byok)
+            return _byokProviderConfiguration;
+        if (_providerSnapshots is null)
+            throw ByokSnapshotUnavailable();
+
+        var boundary = await _providerSnapshots
+            .TryGetAsync(RunId.Parse(input.RunId), ct)
+            .ConfigureAwait(false);
+        return new FrozenByokProviderConfigurationProvider(
+            ResolveDraftByokConfiguration(input, boundary));
+    }
+
+    internal static ByokProviderConfiguration ResolveDraftByokConfiguration(
+        CoordinatorDraftInput input,
+        ResolvedRunModelProviderBoundary? boundary)
+    {
+        if (boundary?.Provider is not EffectiveModelProviderResult.Byok expected
+            || boundary.ByokProviderConfiguration is not { } configuration
+            || string.IsNullOrWhiteSpace(input.ByokProviderFingerprint)
+            || !string.Equals(
+                expected.ConfigurationFingerprint,
+                input.ByokProviderFingerprint,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                configuration.ExecutionFingerprint(),
+                input.ByokProviderFingerprint,
+                StringComparison.Ordinal))
+        {
+            throw ByokSnapshotUnavailable();
+        }
+
+        return configuration;
+    }
+
     private static ModelSource ResolveAcceptedModelSource(CoordinatorDraftInput input)
     {
         var modelSource = ModelSourceExtensions.FromApiString(input.ModelSource);
@@ -178,6 +224,20 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         }
 
         return modelSource;
+    }
+
+    private static AgentProviderException ByokSnapshotUnavailable() => new(
+        ModelSource.Byok,
+        AgentProviderFailureKind.Configuration,
+        "model_provider_changed",
+        "The accepted BYOK provider snapshot is unavailable for outcome-spec drafting.",
+        isRetryable: true);
+
+    private sealed record FrozenByokProviderConfigurationProvider(
+        ByokProviderConfiguration Configuration) : IByokProviderConfigurationProvider
+    {
+        public Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct) =>
+            Task.FromResult<ByokProviderConfiguration?>(Configuration);
     }
 
     /// <summary>

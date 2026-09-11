@@ -58,8 +58,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         var credential = await _credentialProvider.GetCredentialAsync(runId, ct).ConfigureAwait(false);
         if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
             credential.ExpiresAt <= DateTimeOffset.UtcNow)
-            throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live run-bound capability snapshot.");
+            throw new GitHubCopilotCapabilitySnapshotUnavailableException();
         options.GitHubToken = credential.AccessToken;
         return new CopilotClient(options);
     }
@@ -234,6 +233,27 @@ public sealed class GitHubCopilotUnauthorizedException : AgentProviderException
             AuthRequiredErrorCode,
             message,
             isRetryable: false)
+    {
+    }
+}
+
+/// <summary>
+/// Thrown when a run's purpose-bound Copilot capability snapshot is absent, expired, or cannot be
+/// redeemed. This is run-state corruption or expiry, not evidence that the user's provider is
+/// mismatched, unavailable, or unauthorized.
+/// </summary>
+public sealed class GitHubCopilotCapabilitySnapshotUnavailableException : AgentProviderException
+{
+    public const string CapabilitySnapshotUnavailableErrorCode =
+        "github_copilot_capability_snapshot_unavailable";
+
+    public GitHubCopilotCapabilitySnapshotUnavailableException()
+        : base(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.Configuration,
+            CapabilitySnapshotUnavailableErrorCode,
+            "The run's GitHub Copilot capability snapshot is unavailable. Retry the run to create a new snapshot.",
+            isRetryable: true)
     {
     }
 }

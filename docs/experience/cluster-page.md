@@ -113,15 +113,88 @@ A pool in `warning` or `critical` means new run dispatches fall back to creating
 
 ## Resource topology
 
-The **Resource topology** graph now expands each warm pool to the individual warm-pool sandbox instances the API can currently see:
+The **Resource topology** starts with the runtime layer: Pods and the Agentweaver sandbox
+CRDs. Enable the **Networking**, **Workloads**, **Storage**, **Autoscaling**, and
+**Availability** checkboxes to discover related Kubernetes resources only when you need
+them.
 
-| State | Meaning |
+The graph uses Kubernetes relationship fields rather than name guesses:
+
+- owner references connect controllers to owned resources;
+- selectors connect Services, workloads, NetworkPolicies, and PodDisruptionBudgets to
+  matching resources;
+- Gateway API `parentRefs` and `backendRefs` connect routes;
+- `serviceAccountName`, `scaleTargetRef`, PVC/PV claims, and storage class names connect
+  their corresponding resources.
+
+Solid edges are authoritative references. Dashed edges are selector-derived and therefore
+inferred. Select a resource card to open its safe drill-down summary. The drill-down does
+not expose full manifests, Secret data, tokens, internal endpoints, or container
+environment values.
+
+Layer badges show when a resource API is unavailable or only partially readable. Missing
+optional CRDs and RBAC denials do not hide the rest of the graph.
+
+The diagnostics API also provides optional, resource-specific `details` for the cluster,
+warm pools, warm instances, sandbox claims, and AgentHost pods. A topology card can use
+the stable resource identity, concise status/reason, ownership, timing, capacity,
+runtime, and deep-link identifiers when it is expanded. The contract marks resources
+that need attention so the UI can auto-expand unhealthy, pending, orphaned, warming, or
+usefully claimed resources without recomputing health rules in the browser.
+
+The expanded metadata is intentionally bounded. It does not expose credentials, secret
+values, internal IP addresses, raw Kubernetes objects, condition messages, or logs.
+
+Every resource card can expand independently. Select a card with the mouse, or focus it
+and press <kbd>Enter</kbd> or <kbd>Space</kbd>. Expanded cards show the details that are
+most useful for that resource:
+
+- cluster cards show snapshot timing and unhealthy check reasons;
+- warm pools show ready, available, and allocated capacity;
+- warm instances show their pool, claim, run, project, state, and age;
+- claims show their phase, readiness, bound sandbox, pool, run, and age;
+- agent pods show their claim/run relationship, state, and age.
+
+Resources that need attention expand on first load. Claimed warm instances and bound
+claims also start expanded so their ownership chain is visible immediately. Healthy
+resources stay compact. Expanding or collapsing one card does not change the other cards,
+and the selection is preserved while the page polls for a new diagnostics snapshot.
+When the API supplies both a project and run relationship, the expanded card includes
+safe links to the project and orchestration detail pages.
+
+### Kubernetes resource layers
+
+The graph opens in the same runtime-only view so a normal cluster remains easy to scan.
+Use the compact layer controls to add any combination of Kubernetes infrastructure:
+
+| Layer | Resources |
 |---|---|
-| **Available** | An idle warm sandbox is ready to be claimed by the next run. |
-| **Claimed** | A run currently owns the instance. When the backend can resolve both run and project, the node exposes a direct link to the orchestration detail page. |
-| **Warming** | The sandbox pod exists but is not ready yet. |
+| **Traffic** | Gateway, HTTPRoute, and Service |
+| **Security** | NetworkPolicy and ServiceAccount |
+| **Workloads** | Deployment and Pod |
+| **Storage** | PersistentVolumeClaim (PVC), PersistentVolume (PV), and StorageClass |
+| **Scaling** | HorizontalPodAutoscaler (HPA), PodDisruptionBudget (PDB), VerticalPodAutoscaler (VPA), and KEDA ScaledObject |
+| **Agentweaver** | Agentweaver custom resources, including sandbox templates, warm pools, claims, and sandboxes |
 
-This is the quickest way to answer “which warm spares are still idle?” and “which run is holding this exact warm-pool pod?”
+Layer choices are independent, are remembered in the current browser, and survive
+diagnostics polling. **Reset to runtime** clears the saved choices. If discovery is not
+available, returns no objects, or cluster RBAC denies a resource type, the affected
+control shows a small inline status instead of failing the whole graph.
+
+Expanding any card can also reveal up to one hop of directly related resources. This
+card-driven subgraph is temporary and does not select or clear a global layer. Collapse
+the card to hide resources that are not otherwise visible through a selected layer.
+
+Solid arrows are relationships reported authoritatively by Kubernetes or an owning
+controller. Dashed arrows are inferred from selectors, names, labels, or another
+best-effort correlation. The graph legend communicates the distinction without relying
+on color. Resource cards use the same status, type-icon, disclosure, keyboard, and
+responsive layout conventions across runtime and infrastructure objects.
+
+To avoid turning large clusters into an unreadable canvas, the UI bounds infrastructure
+nodes, one-hop reveals, and relationships. A hidden-count message and the expanded
+card's related-resource summary indicate when more data exists. Zoom, pan, expanded
+cards, selected layers, and stable runtime positions continue to work while polling.
 
 ## Sandbox claims table
 

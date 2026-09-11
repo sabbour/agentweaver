@@ -2,7 +2,7 @@
 
 ## Purpose and Mental Model
 
-Agentweaver is a self-hosted control system for AI-assisted software work. Its core job is to turn an intent such as "make this change" or "coordinate a team on this outcome" into a controlled sequence of repository operations: isolate the work, let an agent act, record what happened, evaluate the result, ask a human before irreversible changes, merge only when approved, and preserve reusable learning.
+Agentweaver is a platform for running teams of AI agents on infrastructure the operator controls. It turns described work into a governed execution model. The platform generates or reuses roles, skills, and workflows. It isolates the work, records events, evaluates results, stops at configured gates, and preserves reusable learning. Software delivery has the deepest repository integration. The workflow model also supports content, product, operations, and organization-specific processes.
 
 The easiest way to understand the system is to separate three concerns:
 
@@ -10,7 +10,7 @@ The easiest way to understand the system is to separate three concerns:
 2. **Control plane** — the API owns durable state, workflow orchestration, permissions, events, review gates, recovery, merge coordination, and memory.
 3. **Execution plane** — agent runtimes, model providers, git worktrees, and sandboxes do the actual work under policies chosen by the control plane.
 
-This separation is deliberate. Models are useful but non-deterministic, so Agentweaver keeps authority in deterministic services: persistent stores define truth, review gates define who may approve, merge locks define when repository history changes, and sandbox policy defines what tools may touch.
+This separation is deliberate. Models are useful but non-deterministic, so Agentweaver puts workflow authority in deterministic services. Persistent stores define truth. Workflow state determines the next eligible step. Review gates define who can approve. Merge locks control repository changes. Sandbox policy controls tool access. The platform governs the route toward an outcome. It does not claim that model outputs are deterministic.
 
 ![Purpose and Mental Model: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers](../diagrams/00-system-overview-fig1.png)
 

@@ -2,6 +2,10 @@ namespace Agentweaver.Domain;
 
 public enum ClaimReserveResult { Won, Lost, ProjectUnavailable }
 
+public sealed record ClaimReserveOutcome(
+    ClaimReserveResult Result,
+    RunApprovalPolicySnapshot? ApprovalPolicySnapshot = null);
+
 /// <summary>
 /// Project-scoped persistence for backlog tasks. Every read and mutation includes the
 /// <see cref="ProjectId"/> in its WHERE clause, so a task can never be read or mutated through the
@@ -117,6 +121,20 @@ public interface IBacklogTaskStore
         Run coordinatorRun,
         DateTimeOffset claimedAt,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomic claim+reserve variant that also returns the persisted backlog approval-policy snapshot.
+    /// The snapshot is read from the project row and written to the run row in the claim transaction.
+    /// </summary>
+    async Task<ClaimReserveOutcome> TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+        ProjectId projectId,
+        BacklogTaskId id,
+        Run coordinatorRun,
+        DateTimeOffset claimedAt,
+        CancellationToken ct = default) =>
+        new(
+            await TryClaimAndReserveCoordinatorRunAsync(
+                projectId, id, coordinatorRun, claimedAt, ct).ConfigureAwait(false));
 
     /// <summary>
     /// Returns the set of task titles already associated with a given source file path in a project.

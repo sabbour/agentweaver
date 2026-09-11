@@ -126,6 +126,8 @@ describe('StartOrchestrationFab', () => {
 
     expect(screen.getByText(/Direct starts faster/i)).toBeDefined();
     expect(screen.getByText(/review, tool approval, assembly, and merge gates still apply/i)).toBeDefined();
+    fireEvent.click(screen.getByRole('switch', { name: 'Auto-approve safe tools' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Autopilot' }));
     fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
@@ -135,6 +137,7 @@ describe('StartOrchestrationFab', () => {
         null,
         'direct',
         'signed-provider-key',
+        { auto_approve_tools: true, autopilot: true },
       ),
     );
     expect(navigateMock).toHaveBeenCalledWith('/projects/proj-b/orchestrations/run-77');
@@ -170,6 +173,7 @@ describe('StartOrchestrationFab', () => {
         null,
         'direct',
         'signed-provider-key',
+        { auto_approve_tools: false, autopilot: false },
       ),
     );
   });
@@ -210,6 +214,7 @@ describe('StartOrchestrationFab', () => {
         null,
         'direct',
         'signed-provider-key',
+        { auto_approve_tools: false, autopilot: false },
       ),
     );
   });
@@ -284,6 +289,7 @@ describe('StartOrchestrationFab', () => {
         'software-delivery',
         undefined,
         'signed-provider-key',
+        { auto_approve_tools: false, autopilot: false },
       ),
     );
   });

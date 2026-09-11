@@ -189,6 +189,24 @@ public sealed class DiagnosticsEndpointTests : IClassFixture<ProjectsWebApplicat
         check.GetProperty("status").GetString().Should().Be("pass");
     }
 
+    [Fact]
+    public async Task ClusterTopology_ReturnsTypedBoundedEnvelopeForRequestedLayers()
+    {
+        var response = await _client.GetAsync(
+            "/api/diagnostics/cluster/topology?layers=runtime,networking");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("requested_layers").EnumerateArray()
+            .Select(value => value.GetString())
+            .Should().Equal("runtime", "networking");
+        body.GetProperty("nodes").ValueKind.Should().Be(JsonValueKind.Array);
+        body.GetProperty("edges").ValueKind.Should().Be(JsonValueKind.Array);
+        body.GetProperty("layers").EnumerateArray()
+            .Should().Contain(layer => layer.GetProperty("name").GetString() == "runtime");
+        body.TryGetProperty("truncated", out _).Should().BeTrue();
+    }
+
     // -------------------------------------------------------------------------
     // GET /api/diagnostics/heartbeat
     // -------------------------------------------------------------------------
@@ -469,5 +487,4 @@ public sealed class HeartbeatStatusStoreRingBufferTests
         snapshot.Should().HaveCount(1, "the snapshot must not be mutated by subsequent writes");
     }
 }
-
 

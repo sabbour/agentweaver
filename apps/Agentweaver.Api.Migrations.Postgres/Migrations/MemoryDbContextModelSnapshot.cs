@@ -2048,6 +2048,26 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasDefaultValue(1)
                         .HasColumnName("approval_generation");
 
+                    b.Property<DateTimeOffset?>("ApprovalPolicyCapturedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approval_policy_captured_at");
+
+                    b.Property<string>("ApprovalPolicyInheritedFromRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("approval_policy_inherited_from_run_id");
+
+                    b.Property<DateTimeOffset?>("ApprovalPolicySettingsUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approval_policy_settings_updated_at");
+
+                    b.Property<string>("ApprovalPolicySnapshotId")
+                        .HasColumnType("text")
+                        .HasColumnName("approval_policy_snapshot_id");
+
+                    b.Property<string>("ApprovalPolicySource")
+                        .HasColumnType("text")
+                        .HasColumnName("approval_policy_source");
+
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("archived_at");
@@ -2075,6 +2095,14 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset?>("HeartbeatAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("heartbeat_at");
+
+                    b.Property<bool?>("LaunchAutoApproveTools")
+                        .HasColumnType("boolean")
+                        .HasColumnName("launch_auto_approve_tools");
+
+                    b.Property<bool?>("LaunchAutopilot")
+                        .HasColumnType("boolean")
+                        .HasColumnName("launch_autopilot");
 
                     b.Property<DateTimeOffset?>("LeaseExpiresAt")
                         .HasColumnType("timestamp with time zone")

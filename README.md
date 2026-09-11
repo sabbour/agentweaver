@@ -6,11 +6,11 @@
 
 > ⚠️ **Alpha software.** Agentweaver is under active development. Expect breaking changes and incomplete features. Do not use it in production.
 
-**Turn a goal into coordinated, reviewable work by a team of AI agents.**
+**Run teams of AI agents on your own infrastructure.**
 
-Agentweaver is a self-hosted multi-agent orchestration platform for teams that need more than one agent in a chat window. It turns a stated outcome into a work plan and runs specialist agents in isolated worktrees.
+Describe the work you want done. Agentweaver can generate the agent roles, skills, and workflow for that work, then run the team in isolated environments on infrastructure you control.
 
-It supports software delivery, content authoring, product discovery, incident response, and other knowledge work. Teams can split work, assign roles, track progress, and review the result.
+Workflows turn probabilistic agent work into a governed path toward a defined outcome, with the gates and approvals you set. Start and supervise work in the Agentweaver interface or through MCP from an assistant, editor, or CLI.
 
 ![Architecture diagram: Clients connect through identity and authorization services to the API control plane. The API coordinates workflows, git services, catalog and memory, and sandboxed AgentHost execution on AKS. PostgreSQL, Key Vault, Git repositories, and model providers provide durable state and external services.](docs/public/pitch-architecture.png)
 
@@ -18,9 +18,10 @@ It supports software delivery, content authoring, product discovery, incident re
 
 ## Why Agentweaver
 
-- **Set review gates.** Approve the outcome specification before work starts. Approve the assembled change before it merges.
-- **Coordinate specialists.** Reusable blueprints assign named agents to roles. Workflows define how those roles work together.
+- **Generate the team and process.** Start from a description or reusable blueprint to define roles, skills, and the workflow the agents follow.
+- **Set review gates.** Confirm the intended outcome before work starts and approve the assembled result before it merges.
 - **Inspect every run.** Watch agent events and topology live. Runs keep their work in isolated git worktrees.
+- **Use your preferred surface.** Operate the same projects, teams, workflows, and runs from the web interface or an MCP client.
 - **Carry context forward.** Team memory and decisions give later runs prior constraints and learnings.
 
 ## What it includes

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox;
@@ -276,7 +277,7 @@ public sealed class DiagnosticsService
             claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
-        var (active, orphaned) = await podsTask.ConfigureAwait(false);
+        var (activePods, orphanedPods) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
         var claims = await claimsTask.ConfigureAwait(false);
         var warmPoolSnapshots = await warmPoolSnapshotsTask.ConfigureAwait(false);
@@ -284,11 +285,26 @@ public sealed class DiagnosticsService
         // "<pool-name>-<suffix>" via the SandboxWarmPool's pod-template generateName), so this
         // must run after warmPoolSnapshotsTask rather than concurrently with it.
         var warmPoolPods = await GetWarmPoolPodInventoryAsync(warmPoolSnapshots, ct).ConfigureAwait(false);
+        var runMetadata = await ResolveRunMetadataAsync(
+            claims.Select(c => c.RunId)
+                .Concat(activePods.Select(p => p.RunId))
+                .Concat(orphanedPods.Select(p => p.RunId)),
+            ct).ConfigureAwait(false);
+        claims = EnrichClaims(claims, runMetadata);
         var warmPools = BuildWarmPoolInventory(
             warmPoolSnapshots,
             warmPoolPods,
             claims,
-            await ResolveRunProjectIdsAsync(claims.Select(c => c.RunId), ct).ConfigureAwait(false));
+            runMetadata);
+        var active = EnrichAgentPods(activePods, warmPoolPods, runMetadata, orphaned: false);
+        var orphaned = EnrichAgentPods(orphanedPods, warmPoolPods, runMetadata, orphaned: true);
+        var clusterStatus = checks.Any(c => c.Status is "critical" or "degraded")
+            ? "critical"
+            : checks.Any(c => c.Status == "warning") ? "warning"
+            : checks.Length > 0 && checks.All(c => c.Status == "healthy") ? "healthy"
+            : "unknown";
+        var clusterReason = checks.FirstOrDefault(c => c.Status is "critical" or "degraded" or "warning");
+        var quota = checks.FirstOrDefault(c => c.Name == "agent_pod_quota");
 
         overallSw.Stop();
 
@@ -302,6 +318,26 @@ public sealed class DiagnosticsService
             PendingCapacityRuns = pending,
             WarmPools           = warmPools,
             SandboxClaims       = claims,
+            Details             = new TopologyResourceDetailsDto
+            {
+                ResourceId = "cluster",
+                ResourceType = "cluster",
+                Status = clusterStatus,
+                Summary = $"{checks.Count(c => c.Status == "healthy")} of {checks.Length} checks healthy",
+                AttentionRequired = clusterStatus is "critical" or "warning",
+                Reason = clusterReason is null ? null : $"{clusterReason.Name} is {clusterReason.Status}",
+                CreatedUtc = ProcessStartUtc,
+                Capacity = new TopologyResourceCapacityDto
+                {
+                    Desired = warmPools.Sum(p => p.DesiredReplicas),
+                    Ready = warmPools.Sum(p => p.ReadyReplicas),
+                    Available = warmPools.Sum(p => p.AvailableReplicas),
+                    Claimed = warmPools.Sum(p => p.Instances.Count(i => i.Claimed)),
+                    Used = quota?.Used,
+                    Limit = quota?.Limit,
+                    Unit = quota?.Unit,
+                },
+            },
         };
     }
 
@@ -327,7 +363,7 @@ public sealed class DiagnosticsService
                 var dto = new AgentPodInfoDto
                 {
                     ClaimName  = c.ClaimName,
-                    RunId      = c.RunId,
+                    RunId      = c.RunId ?? c.AnnotatedRunId,
                     PodName    = c.PodName,
                     Status     = c.Ready ? "ready" : "pending",
                     AgeSeconds = c.CreatedAt is { } created ? (now - created).TotalSeconds : null,
@@ -630,13 +666,20 @@ public sealed class DiagnosticsService
                     : ready > 0 ? "warning"
                     : "critical";
 
+                DateTimeOffset? createdUtc = null;
+                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
+                    meta.TryGetProperty("creationTimestamp", out var createdElement) &&
+                    DateTimeOffset.TryParse(createdElement.GetString(), out var parsedCreated))
+                    createdUtc = parsedCreated;
+
                 result.Add(new WarmPoolSnapshot(
                     name,
                     desired,
                     ready,
                     available,
                     poolStatus,
-                    age));
+                    age,
+                    createdUtc));
             }
             return result;
         }
@@ -655,7 +698,7 @@ public sealed class DiagnosticsService
     private async Task<IReadOnlyList<WarmPoolPodSnapshot>> GetWarmPoolPodInventoryAsync(
         IReadOnlyList<WarmPoolSnapshot> pools, CancellationToken ct)
     {
-        if (_k8s is null || pools.Count == 0) return Array.Empty<WarmPoolPodSnapshot>();
+        if (_k8s is null) return Array.Empty<WarmPoolPodSnapshot>();
 
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
         var poolPrefixes = pools
@@ -676,18 +719,29 @@ public sealed class DiagnosticsService
                     continue;
 
                 var poolPrefix = poolPrefixes.FirstOrDefault(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
-                if (poolPrefix is null)
-                    continue;
-
                 double? age = null;
                 if (pod.Metadata?.CreationTimestamp is { } created)
                     age = (now - created).TotalSeconds;
 
+                var lastTransitionUtc = pod.Status?.Conditions?
+                    .Where(condition => condition.LastTransitionTime is not null)
+                    .Select(condition => new DateTimeOffset(condition.LastTransitionTime!.Value))
+                    .OrderByDescending(value => value)
+                    .FirstOrDefault();
+                var image = pod.Spec?.Containers?.FirstOrDefault()?.Image;
+
                 result.Add(new WarmPoolPodSnapshot(
-                    poolPrefix[..^1],
+                    poolPrefix is null ? null : poolPrefix[..^1],
                     name,
                     IsPodReady(pod),
-                    age));
+                    age,
+                    pod.Metadata?.CreationTimestamp is { } podCreated ? new DateTimeOffset(podCreated) : null,
+                    lastTransitionUtc == default ? null : lastTransitionUtc,
+                    pod.Status?.Phase,
+                    BoundedReason(pod.Status?.Reason),
+                    pod.Spec?.NodeName,
+                    image,
+                    pod.Spec?.RuntimeClassName));
             }
             return result;
         }
@@ -714,7 +768,7 @@ public sealed class DiagnosticsService
         IReadOnlyList<WarmPoolSnapshot> pools,
         IReadOnlyList<WarmPoolPodSnapshot> pods,
         IReadOnlyList<SandboxClaimObjectDto> claims,
-        IReadOnlyDictionary<string, string> runProjects)
+        IReadOnlyDictionary<string, RunTopologyMetadata> runMetadata)
     {
         var claimsByPool = claims
             .Where(c => !string.IsNullOrWhiteSpace(c.WarmPool))
@@ -722,8 +776,9 @@ public sealed class DiagnosticsService
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
         var podsByPool = pods
+            .Where(p => !string.IsNullOrWhiteSpace(p.WarmPoolName))
             .GroupBy(p => p.WarmPoolName, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.PodName, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+            .ToDictionary(g => g.Key!, g => g.OrderBy(p => p.PodName, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
 
         var result = new List<WarmPoolStatusDto>(pools.Count);
         foreach (var pool in pools)
@@ -745,6 +800,7 @@ public sealed class DiagnosticsService
                     seenNames.Add(pod.PodName);
                     if (claimsBySandbox.TryGetValue(pod.PodName, out var claim))
                     {
+                        var metadata = GetRunMetadata(claim.RunId, runMetadata);
                         instances.Add(new WarmPoolInstanceDto
                         {
                             Name = pod.PodName,
@@ -752,10 +808,9 @@ public sealed class DiagnosticsService
                             Claimed = true,
                             ClaimName = claim.Name,
                             RunId = claim.RunId,
-                            ProjectId = claim.RunId is { Length: > 0 } && runProjects.TryGetValue(claim.RunId, out var projectId)
-                                ? projectId
-                                : null,
+                            ProjectId = metadata?.ProjectId,
                             AgeSeconds = pod.AgeSeconds ?? claim.AgeSeconds,
+                            Details = BuildWarmInstanceDetails(pool.Name, pod, claim, metadata),
                         });
                     }
                     else
@@ -766,6 +821,7 @@ public sealed class DiagnosticsService
                             Status = pod.Ready ? "available" : "warming",
                             Claimed = false,
                             AgeSeconds = pod.AgeSeconds,
+                            Details = BuildWarmInstanceDetails(pool.Name, pod, null, null),
                         });
                     }
                 }
@@ -776,6 +832,7 @@ public sealed class DiagnosticsService
                 if (!seenNames.Add(claim.BoundSandbox!))
                     continue;
 
+                var metadata = GetRunMetadata(claim.RunId, runMetadata);
                 instances.Add(new WarmPoolInstanceDto
                 {
                     Name = claim.BoundSandbox!,
@@ -783,10 +840,20 @@ public sealed class DiagnosticsService
                     Claimed = true,
                     ClaimName = claim.Name,
                     RunId = claim.RunId,
-                    ProjectId = claim.RunId is { Length: > 0 } && runProjects.TryGetValue(claim.RunId, out var projectId)
-                        ? projectId
-                        : null,
+                    ProjectId = metadata?.ProjectId,
                     AgeSeconds = claim.AgeSeconds,
+                    Details = new TopologyResourceDetailsDto
+                    {
+                        ResourceId = $"warm-instance:{claim.BoundSandbox}",
+                        ResourceType = "warm_instance",
+                        Status = "claimed",
+                        Summary = "Warm instance claimed by a run",
+                        AttentionRequired = true,
+                        Reason = "claimed",
+                        Ownership = BuildOwnership(claim.RunId, claim.Name, metadata),
+                        Runtime = new TopologyResourceRuntimeDto { PodName = claim.BoundSandbox },
+                        DeepLinks = BuildDeepLinks(claim.RunId, claim.Name, pool.Name, claim.BoundSandbox, metadata),
+                    },
                 });
             }
 
@@ -807,6 +874,26 @@ public sealed class DiagnosticsService
                     .ThenBy(i => i.Name, StringComparer.Ordinal)
                     .ToList(),
                 AgeSeconds = pool.AgeSeconds,
+                Details = new TopologyResourceDetailsDto
+                {
+                    ResourceId = $"warm-pool:{pool.Name}",
+                    ResourceType = "warm_pool",
+                    Status = pool.Status,
+                    Summary = $"{pool.ReadyReplicas} of {pool.DesiredReplicas} replicas ready; {pool.AvailableReplicas} available",
+                    AttentionRequired = pool.Status is "warning" or "critical",
+                    Reason = pool.Status == "healthy"
+                        ? null
+                        : BoundedReason($"{pool.DesiredReplicas - pool.ReadyReplicas} replicas are not ready"),
+                    CreatedUtc = pool.CreatedUtc,
+                    Capacity = new TopologyResourceCapacityDto
+                    {
+                        Desired = pool.DesiredReplicas,
+                        Ready = pool.ReadyReplicas,
+                        Available = pool.AvailableReplicas,
+                        Claimed = instances.Count(i => i.Claimed),
+                    },
+                    DeepLinks = new TopologyResourceDeepLinksDto { WarmPoolName = pool.Name },
+                },
             });
         }
 
@@ -849,11 +936,20 @@ public sealed class DiagnosticsService
 
                 var st = item.TryGetProperty("status", out var s) ? s : default;
                 var ready = false;
+                string? conditionReason = null;
+                DateTimeOffset? lastTransitionUtc = null;
                 if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
                     st.TryGetProperty("conditions", out var conds) && conds.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {
                     foreach (var cond in conds.EnumerateArray())
                     {
+                        if (cond.TryGetProperty("lastTransitionTime", out var transition) &&
+                            DateTimeOffset.TryParse(transition.GetString(), out var parsedTransition) &&
+                            (lastTransitionUtc is null || parsedTransition > lastTransitionUtc))
+                            lastTransitionUtc = parsedTransition;
+                        if (conditionReason is null &&
+                            cond.TryGetProperty("reason", out var reasonElement))
+                            conditionReason = BoundedReason(reasonElement.GetString());
                         if (cond.TryGetProperty("type", out var ct2) && ct2.GetString() == "Ready" &&
                             cond.TryGetProperty("status", out var cs) && cs.GetString() == "True")
                         { ready = true; break; }
@@ -876,10 +972,14 @@ public sealed class DiagnosticsService
                 }
 
                 double? age = null;
+                DateTimeOffset? createdUtc = null;
                 if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
                     meta.TryGetProperty("creationTimestamp", out var ts) &&
                     DateTimeOffset.TryParse(ts.GetString(), out var created))
+                {
                     age = (now - created).TotalSeconds;
+                    createdUtc = created;
+                }
 
                 result.Add(new SandboxClaimObjectDto
                 {
@@ -890,6 +990,25 @@ public sealed class DiagnosticsService
                     BoundSandbox       = string.IsNullOrEmpty(boundSandbox) ? null : boundSandbox,
                     WarmPool           = string.IsNullOrEmpty(warmPool) ? null : warmPool,
                     AgeSeconds         = age,
+                    Details            = new TopologyResourceDetailsDto
+                    {
+                        ResourceId = $"sandbox-claim:{name}",
+                        ResourceType = "sandbox_claim",
+                        Status = phase,
+                        Summary = ready ? "Sandbox claim is bound and ready" : "Sandbox claim is waiting to become ready",
+                        AttentionRequired = !ready || !string.IsNullOrWhiteSpace(runId),
+                        Reason = ready ? null : conditionReason ?? "pending",
+                        CreatedUtc = createdUtc,
+                        LastTransitionUtc = lastTransitionUtc,
+                        Ownership = new TopologyResourceOwnershipDto { RunId = runId, ClaimName = name },
+                        DeepLinks = new TopologyResourceDeepLinksDto
+                        {
+                            RunId = runId,
+                            ClaimName = name,
+                            WarmPoolName = warmPool,
+                            PodName = boundSandbox,
+                        },
+                    },
                 });
             }
             return result;
@@ -1450,7 +1569,184 @@ public sealed class DiagnosticsService
         public double Headroom => Math.Min(PodLimit - PodUsed, SandboxClaimLimit - SandboxClaimUsed);
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> ResolveRunProjectIdsAsync(
+    private static IReadOnlyList<SandboxClaimObjectDto> EnrichClaims(
+        IReadOnlyList<SandboxClaimObjectDto> claims,
+        IReadOnlyDictionary<string, RunTopologyMetadata> runMetadata) =>
+        claims.Select(claim =>
+        {
+            var metadata = GetRunMetadata(claim.RunId, runMetadata);
+            if (claim.Details is null)
+                return claim;
+
+            return claim with
+            {
+                Details = claim.Details with
+                {
+                    Ownership = BuildOwnership(claim.RunId, claim.Name, metadata),
+                    DeepLinks = BuildDeepLinks(
+                        claim.RunId,
+                        claim.Name,
+                        claim.WarmPool,
+                        claim.BoundSandbox,
+                        metadata),
+                },
+            };
+        }).ToList();
+
+    private static IReadOnlyList<AgentPodInfoDto> EnrichAgentPods(
+        IReadOnlyList<AgentPodInfoDto> pods,
+        IReadOnlyList<WarmPoolPodSnapshot> podSnapshots,
+        IReadOnlyDictionary<string, RunTopologyMetadata> runMetadata,
+        bool orphaned)
+    {
+        var snapshotsByName = podSnapshots.ToDictionary(p => p.PodName, StringComparer.Ordinal);
+        return pods.Select(pod =>
+        {
+            var metadata = GetRunMetadata(pod.RunId, runMetadata);
+            var snapshot = pod.PodName is { Length: > 0 } &&
+                           snapshotsByName.TryGetValue(pod.PodName, out var value)
+                ? value
+                : null;
+            var status = orphaned
+                ? "orphaned"
+                : string.Equals(snapshot?.Phase, "Failed", StringComparison.OrdinalIgnoreCase)
+                    ? "failed"
+                    : pod.Status;
+            var reason = orphaned ? "Run is no longer active" : snapshot?.Reason;
+
+            return pod with
+            {
+                Details = new TopologyResourceDetailsDto
+                {
+                    ResourceId = $"agent-host-pod:{pod.PodName ?? pod.ClaimName}",
+                    ResourceType = "agent_host_pod",
+                    Status = status,
+                    Summary = orphaned
+                        ? "AgentHost pod is orphaned and eligible for cleanup"
+                        : status == "failed" ? "AgentHost pod failed"
+                        : pod.Status == "ready" ? "AgentHost pod is ready" : "AgentHost pod is pending",
+                    AttentionRequired = orphaned || status != "ready",
+                    Reason = reason,
+                    CreatedUtc = snapshot?.CreatedUtc,
+                    LastTransitionUtc = snapshot?.LastTransitionUtc,
+                    Ownership = BuildOwnership(pod.RunId, pod.ClaimName, metadata),
+                    Runtime = new TopologyResourceRuntimeDto
+                    {
+                        PodName = pod.PodName,
+                        NodeName = snapshot?.NodeName,
+                        Image = snapshot?.Image,
+                        RuntimeClass = snapshot?.RuntimeClass,
+                    },
+                    DeepLinks = BuildDeepLinks(
+                        pod.RunId,
+                        pod.ClaimName,
+                        snapshot?.WarmPoolName,
+                        pod.PodName,
+                        metadata),
+                },
+            };
+        }).ToList();
+    }
+
+    private static TopologyResourceDetailsDto BuildWarmInstanceDetails(
+        string poolName,
+        WarmPoolPodSnapshot pod,
+        SandboxClaimObjectDto? claim,
+        RunTopologyMetadata? metadata)
+    {
+        var status = claim is not null
+            ? "claimed"
+            : string.Equals(pod.Phase, "Failed", StringComparison.OrdinalIgnoreCase)
+                ? "failed"
+                : pod.Ready ? "available" : "warming";
+        return new TopologyResourceDetailsDto
+        {
+            ResourceId = $"warm-instance:{pod.PodName}",
+            ResourceType = "warm_instance",
+            Status = status,
+            Summary = status switch
+            {
+                "claimed" => "Warm instance claimed by a run",
+                "available" => "Warm instance is ready for a claim",
+                "failed" => "Warm instance pod failed",
+                _ => "Warm instance is still becoming ready",
+            },
+            AttentionRequired = status != "available",
+            Reason = status == "claimed"
+                ? "claimed"
+                : status is "warming" or "failed" ? pod.Reason ?? pod.Phase : null,
+            CreatedUtc = pod.CreatedUtc,
+            LastTransitionUtc = pod.LastTransitionUtc,
+            Ownership = claim is null ? null : BuildOwnership(claim.RunId, claim.Name, metadata),
+            Runtime = new TopologyResourceRuntimeDto
+            {
+                PodName = pod.PodName,
+                NodeName = pod.NodeName,
+                Image = pod.Image,
+                RuntimeClass = pod.RuntimeClass,
+            },
+            DeepLinks = BuildDeepLinks(claim?.RunId, claim?.Name, poolName, pod.PodName, metadata),
+        };
+    }
+
+    private static TopologyResourceOwnershipDto? BuildOwnership(
+        string? runId,
+        string? claimName,
+        RunTopologyMetadata? metadata)
+    {
+        if (string.IsNullOrWhiteSpace(runId) && string.IsNullOrWhiteSpace(claimName))
+            return null;
+
+        return new TopologyResourceOwnershipDto
+        {
+            RunId = runId,
+            ProjectId = metadata?.ProjectId,
+            RunStatus = metadata?.Status,
+            AgentName = metadata?.AgentName,
+            ClaimName = claimName,
+            RunStartedUtc = metadata?.StartedAt,
+            RunEndedUtc = metadata?.EndedAt,
+        };
+    }
+
+    private static TopologyResourceDeepLinksDto BuildDeepLinks(
+        string? runId,
+        string? claimName,
+        string? warmPoolName,
+        string? podName,
+        RunTopologyMetadata? metadata) =>
+        new()
+        {
+            ProjectId = metadata?.ProjectId,
+            RunId = runId,
+            ClaimName = claimName,
+            WarmPoolName = warmPoolName,
+            PodName = podName,
+        };
+
+    private static RunTopologyMetadata? GetRunMetadata(
+        string? runId,
+        IReadOnlyDictionary<string, RunTopologyMetadata> metadata) =>
+        runId is { Length: > 0 } && metadata.TryGetValue(runId, out var value) ? value : null;
+
+    private static string? BoundedReason(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = string.Join(' ', value.Split(
+            ['\r', '\n', '\t'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        normalized = Regex.Replace(
+            normalized,
+            @"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])",
+            "[redacted address]",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(50));
+        return normalized.Length <= 240 ? normalized : normalized[..237] + "...";
+    }
+
+    private async Task<IReadOnlyDictionary<string, RunTopologyMetadata>> ResolveRunMetadataAsync(
         IEnumerable<string?> runIds,
         CancellationToken ct)
     {
@@ -1459,28 +1755,30 @@ public sealed class DiagnosticsService
             .Distinct(StringComparer.Ordinal)
             .ToList();
         if (ids.Count == 0)
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            return new Dictionary<string, RunTopologyMetadata>(StringComparer.Ordinal);
 
         var provider = _configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
         if (provider is "postgres" or "postgresql")
         {
             if (_scopeFactory is null)
-                return new Dictionary<string, string>(StringComparer.Ordinal);
+                return new Dictionary<string, RunTopologyMetadata>(StringComparer.Ordinal);
 
             using var scope = _scopeFactory.CreateScope();
             var memDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var rows = await memDb.Runs.AsNoTracking()
-                .Where(r => r.ProjectId != null && ids.Contains(r.RunId))
-                .Select(r => new { r.RunId, r.ProjectId })
+                .Where(r => ids.Contains(r.RunId))
+                .Select(r => new { r.RunId, r.ProjectId, r.Status, r.AgentName, r.StartedAt, r.EndedAt })
                 .ToListAsync(ct)
                 .ConfigureAwait(false);
             return rows
-                .Where(r => !string.IsNullOrWhiteSpace(r.ProjectId))
-                .ToDictionary(r => r.RunId, r => r.ProjectId!, StringComparer.Ordinal);
+                .ToDictionary(
+                    r => r.RunId,
+                    r => new RunTopologyMetadata(r.ProjectId, r.Status, r.AgentName, r.StartedAt, r.EndedAt),
+                    StringComparer.Ordinal);
         }
 
         if (_db is null)
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            return new Dictionary<string, RunTopologyMetadata>(StringComparer.Ordinal);
 
         await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = conn.CreateCommand();
@@ -1493,19 +1791,26 @@ public sealed class DiagnosticsService
         }
 
         command.CommandText =
-            $"SELECT run_id, project_id FROM runs WHERE project_id IS NOT NULL AND run_id IN ({string.Join(", ", paramNames)});";
+            $"SELECT run_id, project_id, status, agent_name, started_at, ended_at FROM runs WHERE run_id IN ({string.Join(", ", paramNames)});";
 
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, RunTopologyMetadata>(StringComparer.Ordinal);
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            if (reader.IsDBNull(1))
+            var runId = reader.GetString(0);
+            if (string.IsNullOrWhiteSpace(runId))
                 continue;
 
-            var runId = reader.GetString(0);
-            var projectId = reader.GetString(1);
-            if (!string.IsNullOrWhiteSpace(runId) && !string.IsNullOrWhiteSpace(projectId))
-                result[runId] = projectId;
+            var projectId = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var status = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var agentName = reader.IsDBNull(3) ? null : reader.GetString(3);
+            var startedAt = reader.IsDBNull(4)
+                ? (DateTimeOffset?)null
+                : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture);
+            var endedAt = reader.IsDBNull(5)
+                ? (DateTimeOffset?)null
+                : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture);
+            result[runId] = new RunTopologyMetadata(projectId, status, agentName, startedAt, endedAt);
         }
 
         return result;
@@ -1517,11 +1822,26 @@ public sealed class DiagnosticsService
         int ReadyReplicas,
         int AvailableReplicas,
         string Status,
-        double? AgeSeconds);
+        double? AgeSeconds,
+        DateTimeOffset? CreatedUtc);
 
     private sealed record WarmPoolPodSnapshot(
-        string WarmPoolName,
+        string? WarmPoolName,
         string PodName,
         bool Ready,
-        double? AgeSeconds);
+        double? AgeSeconds,
+        DateTimeOffset? CreatedUtc,
+        DateTimeOffset? LastTransitionUtc,
+        string? Phase,
+        string? Reason,
+        string? NodeName,
+        string? Image,
+        string? RuntimeClass);
+
+    private sealed record RunTopologyMetadata(
+        string? ProjectId,
+        string? Status,
+        string? AgentName,
+        DateTimeOffset? StartedAt,
+        DateTimeOffset? EndedAt);
 }

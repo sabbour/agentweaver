@@ -475,73 +475,32 @@ public static class OAuthAuthorizationServerEndpoints
                 """;
         }));
 
-        return $$"""
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Authorize {{Encode(clientName)}} | Agentweaver</title>
-              <style nonce="{{Encode(styleNonce)}}">
-                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
-                * { box-sizing: border-box; }
-                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; -webkit-font-smoothing: antialiased; }
-                .card { width: min(560px, 100%); overflow: hidden; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
-                .content { padding: 32px; }
-                .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
-                .brand-mark { width: 28px; height: 28px; display: block; object-fit: contain; }
-                h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
-                .intro { margin: 10px 0 0; color: #3c3c3c; font-size: 15px; }
-                .client { margin: 24px 0; padding: 16px; background: #f3f1ed; border: 1px solid #e6e6e6; border-radius: 10px; }
-                .label { display: block; margin-bottom: 4px; color: #707070; font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
-                .client-name { display: block; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
-                .client-id { display: block; margin-top: 4px; color: #707070; font: 12px/1.4 Consolas, "Courier New", monospace; overflow-wrap: anywhere; }
-                h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
-                .permissions { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
-                .permission { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
-                .permission-icon { width: 20px; height: 20px; display: grid; place-items: center; margin-top: 1px; border-radius: 50%; background: #e8f5ed; color: #107c41; font-size: 12px; font-weight: 700; }
-                .permission strong, .permission small, .permission code { display: block; }
-                .permission strong { font-size: 14px; font-weight: 600; }
-                .permission small { margin-top: 2px; color: #3c3c3c; font-size: 13px; }
-                .permission code { width: fit-content; margin-top: 5px; padding: 2px 6px; border-radius: 4px; background: #f3f1ed; color: #707070; font: 11px/1.4 Consolas, "Courier New", monospace; }
-                .identity { margin-top: 24px; padding-top: 18px; border-top: 1px solid #dedede; color: #3c3c3c; font-size: 13px; }
-                .identity strong { display: block; margin-top: 3px; color: #242424; font-weight: 600; overflow-wrap: anywhere; }
-                .actions { display: flex; justify-content: flex-end; gap: 10px; padding: 20px 32px; background: #faf8f5; border-top: 1px solid #dedede; }
-                button { min-width: 96px; min-height: 34px; padding: 7px 16px; border: 1px solid #c7c7c7; border-radius: 8px; background: #fcfcfa; color: #242424; font: 600 14px/1.2 inherit; cursor: pointer; }
-                button:hover { background: #f3f1ed; border-color: #adadad; }
-                button:active { transform: translateY(1px); }
-                button:focus-visible { outline: 2px solid #242424; outline-offset: 2px; }
-                .primary { border-color: #242424; background: #242424; color: #faf8f5; }
-                .primary:hover { border-color: #3c3c3c; background: #3c3c3c; }
-                @media (max-width: 480px) { body { padding: 16px; } .content { padding: 24px; } .actions { padding: 18px 24px; } .actions button { flex: 1; } }
-              </style>
-            </head>
-            <body>
-              <main class="card" aria-labelledby="consent-title">
-                <section class="content">
-                  <div class="brand"><img class="brand-mark" src="/agentweaver.png" alt="Agentweaver logo"><span>Agentweaver</span></div>
-                  <h1 id="consent-title">Allow access to Agentweaver?</h1>
-                  <p class="intro">An MCP client wants to connect to your Agentweaver account.</p>
-                  <div class="client">
-                    <span class="label">Requesting application</span>
-                    <span class="client-name">{{Encode(clientName)}}</span>
-                    <span class="client-id">Client ID: {{Encode(request.ClientId!)}}</span>
-                  </div>
-                  <h2>This application will be able to:</h2>
-                  <ul class="permissions">{{permissions}}</ul>
-                  <div class="identity"><span class="label">Signed in to Agentweaver as</span><strong>{{Encode(signedInName)}}</strong><span>{{Encode(signedInIdentifier)}}</span></div>
-                </section>
-                <form method="post" action="/oauth/authorize">
-                  {{hidden}}
-                  <div class="actions">
-                    <button type="submit" name="decision" value="deny">Deny</button>
-                    <button class="primary" type="submit" name="decision" value="approve">Allow</button>
-                  </div>
-                </form>
-              </main>
-            </body>
-            </html>
+        var content = $"""
+            <div class="client">
+              <span class="label">Requesting application</span>
+              <span class="client-name">{Encode(clientName)}</span>
+              <span class="client-id">Client ID: {Encode(request.ClientId!)}</span>
+            </div>
+            <h2>This application will be able to:</h2>
+            <ul class="permissions">{permissions}</ul>
+            <div class="identity"><span class="label">Signed in to Agentweaver as</span><strong>{Encode(signedInName)}</strong><span>{Encode(signedInIdentifier)}</span></div>
             """;
+        var actions = $"""
+            <form method="post" action="/oauth/authorize">
+              {hidden}
+              {AuthDialogPage.SubmitButton("Deny", "decision", "deny")}
+              {AuthDialogPage.SubmitButton("Allow", "decision", "approve", primary: true)}
+            </form>
+            """;
+        return AuthDialogPage.Render(new(
+            $"Authorize {clientName}",
+            "Allow access to Agentweaver?",
+            "An MCP client wants to connect to your Agentweaver account.",
+            AuthDialogTone.Info,
+            content,
+            actions,
+            "Only approve applications you recognize.",
+            styleNonce));
     }
 
     private static string RenderReauthentication(
@@ -549,40 +508,14 @@ public static class OAuthAuthorizationServerEndpoints
         string continuationPath,
         string styleNonce)
     {
-        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
-
-        return $$"""
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Sign in again | Agentweaver</title>
-              <style nonce="{{Encode(styleNonce)}}">
-                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
-                * { box-sizing: border-box; }
-                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; -webkit-font-smoothing: antialiased; }
-                .card { width: min(520px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
-                .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
-                .brand-mark { width: 28px; height: 28px; display: block; object-fit: contain; }
-                h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
-                p { margin: 12px 0 0; color: #3c3c3c; font-size: 15px; }
-                .client-name { font-weight: 600; overflow-wrap: anywhere; }
-                .primary { display: inline-block; margin-top: 24px; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-size: 14px; font-weight: 600; text-decoration: none; }
-                .primary:hover { background: #3c3c3c; }
-                .primary:focus-visible { outline: 2px solid #242424; outline-offset: 3px; }
-              </style>
-            </head>
-            <body>
-              <main class="card" aria-labelledby="reauthentication-title">
-                <div class="brand"><img class="brand-mark" src="/agentweaver.png" alt="Agentweaver logo"><span>Agentweaver</span></div>
-                <h1 id="reauthentication-title">Sign in again to continue</h1>
-                <p>Your Agentweaver session expired before you finished authorizing <span class="client-name">{{Encode(clientName)}}</span>.</p>
-                <a class="primary" href="{{Encode(continuationPath)}}">Sign in again</a>
-              </main>
-            </body>
-            </html>
-            """;
+        return AuthDialogPage.Render(new(
+            "Sign in again",
+            "Sign in again to continue",
+            $"Your Agentweaver session expired before you finished authorizing {clientName}.",
+            AuthDialogTone.Warning,
+            ActionsHtml: AuthDialogPage.Link("Sign in again", continuationPath, primary: true),
+            Footer: "You will return here to review the request.",
+            StyleNonce: styleNonce));
     }
 
     private static string RenderUnsignedAuthorization(
@@ -590,33 +523,14 @@ public static class OAuthAuthorizationServerEndpoints
         string continuationPath,
         string styleNonce)
     {
-        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
-
-        return $$"""
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Sign in to authorize | Agentweaver</title>
-              <style nonce="{{Encode(styleNonce)}}">
-                :root { color-scheme: light; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; }
-                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; }
-                main { width: min(520px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
-                h1 { margin: 0; font-size: 24px; } p { margin: 12px 0 0; color: #3c3c3c; } .client { font-weight: 600; overflow-wrap: anywhere; }
-                a { display: inline-block; margin-top: 24px; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-weight: 600; text-decoration: none; }
-              </style>
-            </head>
-            <body>
-              <main>
-                <h1>Not signed in to Agentweaver</h1>
-                <p><span class="client">{{Encode(clientName)}}</span> wants to use Agentweaver MCP tools.</p>
-                <p>Sign in with Microsoft Entra ID to review and approve this authorization request.</p>
-                <a href="{{Encode(continuationPath)}}">Sign in to Agentweaver</a>
-              </main>
-            </body>
-            </html>
-            """;
+        return AuthDialogPage.Render(new(
+            "Sign in to authorize",
+            "Sign in to review this request",
+            $"{clientName} wants to use Agentweaver MCP tools.",
+            AuthDialogTone.Info,
+            ActionsHtml: AuthDialogPage.Link("Sign in to Agentweaver", continuationPath, primary: true),
+            Footer: "Sign in with Microsoft Entra ID before you approve or deny access.",
+            StyleNonce: styleNonce));
     }
 
     private sealed record ConsentApplication(string ClientName, string CallbackSource);

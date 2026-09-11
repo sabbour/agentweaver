@@ -80,18 +80,26 @@ public sealed class NotificationsService
             .ToDictionaryAsync(item => item.RunId, item => (DateTimeOffset?)item.CreatedAt, StringComparer.Ordinal, ct)
             .ConfigureAwait(false);
 
-        // Tool approval gates fire mid-execution, so the candidate pool is the caller's owned,
-        // non-archived InProgress runs (mirrors the Human Review candidate pool above, just against
-        // a different RunStatus — the pending-approval signal itself is never derivable from status
-        // alone, hence the PendingToolApprovalRunsQuery lookup).
+        // Any active child can own the gate, but the notification targets the top-level run whose
+        // review surface displays the canonical approval set.
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         var ownedInProgress = inProgress
             .Where(run => run.ArchivedAt is null && run.ProjectId is not null)
             .Where(run => ownedProjectNames.ContainsKey(run.ProjectId!.ToString()!))
             .ToList();
+        var approvalRoots = new Dictionary<string, Run>(StringComparer.Ordinal);
+        foreach (var run in ownedInProgress)
+        {
+            var root = run;
+            if (run.ParentRunId is { } parentId && RunId.TryParse(parentId, out var parsedParent))
+                root = await _runStore.GetAsync(parsedParent, ct).ConfigureAwait(false) ?? run;
+            if (root.ArchivedAt is null && root.ProjectId is not null
+                && ownedProjectNames.ContainsKey(root.ProjectId.ToString()!))
+                approvalRoots[root.Id.ToString()] = root;
+        }
 
         var pendingApprovals = await _pendingApprovalQuery
-            .GetPendingApprovalDetailsAsync(ownedInProgress.Select(run => run.Id.ToString()).ToList(), ct)
+            .GetPendingApprovalDetailsAsync(approvalRoots.Keys.ToList(), ct)
             .ConfigureAwait(false);
 
         var promoted = await BuildBacklogPromotedNotificationsAsync(ownedProjectNames, ct).ConfigureAwait(false);
@@ -101,7 +109,7 @@ public sealed class NotificationsService
                 run,
                 reviewRequestedAtByRunId.GetValueOrDefault(run.Id.ToString()),
                 ownedProjectNames))
-            .Concat(ownedInProgress
+            .Concat(approvalRoots.Values
                 .Where(run => pendingApprovals.ContainsKey(run.Id.ToString()))
                 .Select(run => ToToolApprovalNotification(run, pendingApprovals[run.Id.ToString()], ownedProjectNames)))
             .Concat(promoted)
@@ -113,6 +121,26 @@ public sealed class NotificationsService
             .Select(dismissal => dismissal.NotificationId)
             .ToHashSetAsync(ct)
             .ConfigureAwait(false);
+
+        // A tool-approval dismissal is scoped to one continuous pending lifecycle. Once no
+        // actionable approval remains, remove it so a genuinely new future gate can notify again.
+        var activeToolIds = notifications
+            .Where(notification => notification.Type == "tool_approval")
+            .Select(notification => notification.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var staleToolDismissals = await _db.DismissedNotifications
+            .Where(dismissal => dismissal.User == caller.User
+                && dismissal.NotificationId.StartsWith("tool_approval:")
+                && !activeToolIds.Contains(dismissal.NotificationId))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        if (staleToolDismissals.Count > 0)
+        {
+            _db.DismissedNotifications.RemoveRange(staleToolDismissals);
+            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            foreach (var stale in staleToolDismissals)
+                dismissedIds.Remove(stale.NotificationId);
+        }
 
         return new NotificationsResponseDto
         {
@@ -264,13 +292,15 @@ public sealed class NotificationsService
         IReadOnlyDictionary<string, string> ownedProjectNames)
     {
         var projectId = run.ProjectId!.ToString()!;
-        var title = string.IsNullOrWhiteSpace(approval.ToolName)
-            ? "A run needs tool approval"
-            : Truncate($"Approval needed to run \"{approval.ToolName}\"", 120);
+        var title = approval.Count > 1
+            ? $"{approval.Count} tool approvals need review"
+            : string.IsNullOrWhiteSpace(approval.ToolName)
+                ? "A run needs tool approval"
+                : Truncate($"Approval needed to run \"{approval.ToolName}\"", 120);
 
         return new NotificationDto
         {
-            Id = $"tool_approval:{run.Id}:{approval.RequestId}",
+            Id = $"tool_approval:{run.Id}",
             Type = "tool_approval",
             RunId = run.Id.ToString(),
             ProjectId = projectId,

@@ -7,10 +7,48 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // empty API_URL) so a regression can never reintroduce the sign-in "unauthorized" bug.
 
 afterEach(() => {
+  FakeBroadcastChannel.reset();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.resetModules();
   delete (window as unknown as { __AGENTWEAVER_CONFIG__?: unknown }).__AGENTWEAVER_CONFIG__;
 });
+
+class FakeBroadcastChannel {
+  static instances: FakeBroadcastChannel[] = [];
+
+  readonly name: string;
+  private listeners: Array<(event: MessageEvent) => void> = [];
+
+  constructor(name: string) {
+    this.name = name;
+    FakeBroadcastChannel.instances.push(this);
+  }
+
+  addEventListener(_type: 'message', listener: (event: MessageEvent) => void) {
+    this.listeners.push(listener);
+  }
+
+  postMessage(message: unknown) {
+    for (const instance of FakeBroadcastChannel.instances) {
+      if (instance !== this && instance.name === this.name) {
+        instance.dispatch(message);
+      }
+    }
+  }
+
+  dispatch(message: unknown) {
+    for (const listener of this.listeners) {
+      listener(new MessageEvent('message', { data: message }));
+    }
+  }
+
+  close() {}
+
+  static reset() {
+    FakeBroadcastChannel.instances = [];
+  }
+}
 
 async function loadConfigWith(apiUrl: string | undefined) {
   vi.resetModules();
@@ -55,6 +93,75 @@ describe('ApiClient request() single /api prefix', () => {
       'http://localhost:5000/api/runs/abc',
       expect.anything(),
     );
+  });
+
+  describe('cross-tab session auth', () => {
+    it('restores a requested token into sessionStorage without using localStorage', async () => {
+      vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
+      const localStorageSet = vi.spyOn(window.localStorage, 'setItem');
+      const cfg = await loadConfigWith('');
+      const peer = new FakeBroadcastChannel('agentweaver.session-auth');
+      peer.addEventListener('message', (event) => {
+        const request = event.data as { type: string; requestId: string };
+        if (request.type === 'request') {
+          peer.postMessage({
+            type: 'response',
+            requestId: request.requestId,
+            token: 'peer-token',
+            login: 'peer-login',
+          });
+        }
+      });
+
+      await expect(cfg.requestSessionAuthFromPeer()).resolves.toBe(true);
+
+      expect(sessionStorage.getItem(cfg.SESSION_TOKEN_STORAGE_KEY)).toBe('peer-token');
+      expect(sessionStorage.getItem(cfg.SESSION_LOGIN_STORAGE_KEY)).toBe('peer-login');
+      expect(localStorageSet).not.toHaveBeenCalledWith(cfg.SESSION_TOKEN_STORAGE_KEY, expect.anything());
+    });
+
+    it('does not return the token that a requester already had rejected', async () => {
+      vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
+      const cfg = await loadConfigWith('');
+      cfg.setSessionAuth('stale-token', 'member');
+      const peer = new FakeBroadcastChannel('agentweaver.session-auth');
+      const received = vi.fn();
+      peer.addEventListener('message', received);
+
+      peer.postMessage({ type: 'request', requestId: 'request-1', rejectedToken: 'stale-token' });
+      await Promise.resolve();
+
+      expect(received).not.toHaveBeenCalled();
+    });
+
+    it('clears this tab when sign-out is broadcast by another tab', async () => {
+      vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
+      const cfg = await loadConfigWith('');
+      cfg.setSessionAuth('session-token', 'member');
+      const invalid = vi.fn();
+      window.addEventListener(cfg.SESSION_AUTH_INVALID_EVENT, invalid);
+      const peer = new FakeBroadcastChannel('agentweaver.session-auth');
+
+      peer.postMessage({ type: 'clear' });
+
+      expect(cfg.getSessionToken()).toBeNull();
+      expect(cfg.getSessionLogin()).toBeNull();
+      expect(invalid).toHaveBeenCalledTimes(1);
+      window.removeEventListener(cfg.SESSION_AUTH_INVALID_EVENT, invalid);
+    });
+
+    it('notifies a signed-out tab when another tab finishes authentication', async () => {
+      vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
+      const cfg = await loadConfigWith('');
+      const available = vi.fn();
+      window.addEventListener(cfg.SESSION_AUTH_AVAILABLE_EVENT, available);
+      const peer = new FakeBroadcastChannel('agentweaver.session-auth');
+
+      peer.postMessage({ type: 'available' });
+
+      expect(available).toHaveBeenCalledTimes(1);
+      window.removeEventListener(cfg.SESSION_AUTH_AVAILABLE_EVENT, available);
+    });
   });
 
   it('yields a single same-origin /api prefix when baseUrl is "" (deployed gateway)', async () => {

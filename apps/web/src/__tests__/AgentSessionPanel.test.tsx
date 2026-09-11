@@ -137,6 +137,65 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('AgentSessionPanel', () => {
+  it('renders the canonical six-item pending set without counting replay duplicates', async () => {
+    const approvals = Array.from({ length: 6 }, (_, index) => ({
+      root_run_id: 'coord-run-1',
+      owning_run_id: 'child-run-1',
+      action_run_id: 'child-run-1',
+      request_id: `request-${index + 1}`,
+      tool_name: index === 5 ? 'start_preview' : 'web_fetch',
+      url: index === 5 ? 'sandbox-preview:5173' : 'https://example.com',
+      message: null,
+      requested_at: new Date().toISOString(),
+      expires_at: null,
+      is_shell: false,
+    }));
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          pendingApprovals={approvals}
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText('Needs input: 6 approvals.', undefined, { timeout: 4000 })).toBeDefined();
+    expect(screen.getAllByTestId('session-approval-gate')).toHaveLength(6);
+    expect(screen.getByText(/Allow start_preview/)).toBeDefined();
+  });
+
+  it('shows a retryable approval error instead of an empty successful panel', async () => {
+    const retry = vi.fn();
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          pendingApprovals={[]}
+          pendingApprovalsError="service unavailable"
+          onRetryPendingApprovals={retry}
+        />
+      </Wrapper>,
+    );
+
+    const error = await screen.findByTestId('session-approval-error', undefined, { timeout: 4000 });
+    expect(error.textContent).toContain('service unavailable');
+    fireEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it('shows a subtle model badge next to the agent name when the selected node has a model (#282)', async () => {
     const modelTree: RunSessionTree[] = [
       {

@@ -118,6 +118,53 @@ internal sealed class GitHubCapabilityBroker(
     }
 
     /// <summary>
+    /// Verifies that the selected durable binding can supply the unattended-Copilot purpose without
+    /// creating a run snapshot. This mirrors the snapshot source, fencing, refresh, and credential
+    /// checks used at launch so readiness cannot be inferred from a provider label alone.
+    /// </summary>
+    internal async Task<bool> CanSupplyUnattendedCopilotPurposeAsync(
+        string projectId,
+        string expectedBindingId,
+        string? expectedCredentialVersion,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var binding = await persistence.GetActiveCopilotBindingOrPlatformDefaultAsync(projectId, ct)
+            .ConfigureAwait(false);
+        if (binding is null ||
+            string.IsNullOrWhiteSpace(binding.Id) ||
+            string.IsNullOrWhiteSpace(binding.CredentialReference) ||
+            string.IsNullOrWhiteSpace(binding.CredentialVersion) ||
+            string.IsNullOrWhiteSpace(binding.GrantDigest) ||
+            !string.Equals(binding.Id, expectedBindingId, StringComparison.Ordinal) ||
+            (!string.IsNullOrWhiteSpace(expectedCredentialVersion) &&
+             !string.Equals(binding.CredentialVersion, expectedCredentialVersion, StringComparison.Ordinal)) ||
+            !await persistence.IsLiveCopilotBindingAsync(
+                projectId, binding.Id, binding.GrantDigest, ct).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        GitHubConnectionsCredentialLocator locator;
+        try
+        {
+            locator = GitHubConnectionsCredentialLocator.ForCopilotBinding(binding.CredentialReference);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        await EnsureCopilotCredentialFreshAsync(locator, now, ct).ConfigureAwait(false);
+        var secret = await vault.ReadCurrentAsync(locator, ct).ConfigureAwait(false);
+        if (!secret.Found || !TryGetUsableCopilotCredential(secret.Value, now, out _))
+            return false;
+
+        return await persistence.IsLiveCopilotBindingAsync(
+            projectId, binding.Id, binding.GrantDigest, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Redeems one single-use marketplace capability. The capability is claimed before the vault
     /// read and re-fenced afterwards, preventing replay and binding replacement races.
     /// </summary>

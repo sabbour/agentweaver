@@ -62,6 +62,7 @@ export const DEFAULTS = Object.freeze({
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
   AUTH_MODE: "Entra",
+  OAUTH_ACCESS_TOKEN_LIFETIME_HOURS: "8",
   OAUTH_SIGNING_CERTIFICATE_NAME: "agentweaver-oauth-signing",
   OAUTH_ENCRYPTION_CERTIFICATE_NAME: "agentweaver-oauth-encryption",
 });
@@ -249,6 +250,8 @@ export async function resolveVariables(options = {}) {
   const ENTRA_CLIENT_ID = env.ENTRA_CLIENT_ID || "";
   const ENTRA_TENANT_ID = env.ENTRA_TENANT_ID || "";
   const ENTRA_ENTERPRISE_APP_OBJECT_ID = env.ENTRA_ENTERPRISE_APP_OBJECT_ID || "";
+  const OAUTH_ACCESS_TOKEN_LIFETIME_HOURS =
+    env.OAUTH_ACCESS_TOKEN_LIFETIME_HOURS || DEFAULTS.OAUTH_ACCESS_TOKEN_LIFETIME_HOURS;
   const OAUTH_SIGNING_CERTIFICATE_NAME =
     env.OAUTH_SIGNING_CERTIFICATE_NAME || DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME;
   const OAUTH_ENCRYPTION_CERTIFICATE_NAME =
@@ -328,6 +331,7 @@ export async function resolveVariables(options = {}) {
     ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID,
     ENTRA_ENTERPRISE_APP_OBJECT_ID,
+    OAUTH_ACCESS_TOKEN_LIFETIME_HOURS,
     OAUTH_SIGNING_CERTIFICATE_NAME,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME,
     REPO_APP_PRIVATE_KEY_FILE,
@@ -362,6 +366,7 @@ export function printSummary(vars, log) {
     log.field("AgentHost digest", vars.AGENTHOST_IMAGE_DIGEST);
   }
   log.field("Key Vault", vars.KEYVAULT_NAME);
+  log.field("OAuth access token lifetime", `${vars.OAUTH_ACCESS_TOKEN_LIFETIME_HOURS} hours`);
   log.field("OAuth signing certificate", vars.OAUTH_SIGNING_CERTIFICATE_NAME);
   log.field("OAuth encryption certificate", vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME);
   log.field("AgentHost KV", vars.AGENTHOST_KEYVAULT_URI);

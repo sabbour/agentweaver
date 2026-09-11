@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
 } from '../components/AiExecutionProviderHint';
 import { aiExecutionProviderLabel } from '../components/aiExecutionContext';
 import { AzureFluentProvider } from '../copilot-fluent-system';
@@ -58,10 +59,32 @@ describe('AI execution provider hints', () => {
     await user.tab();
 
     expect(document.activeElement).toBe(button);
+    expect(screen.getByText('Expected: GitHub Copilot')).toBeTruthy();
     expect(screen.getByText('Expected provider: GitHub Copilot. Model: gpt-5.')).toBeTruthy();
     expect(screen.getByText('Scope: Platform.')).toBeTruthy();
     await waitFor(() => expect(button.getAttribute('aria-describedby')).toBeTruthy());
     expect(document.body.textContent).not.toContain('secret-provider-key');
+  });
+
+  it('uses one compact non-growing indicator pattern at narrow widths', () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <div style={{ width: 120 }}>
+          <AiExecutionProviderStatus context={context('completed', 'byok')} />
+        </div>
+      </AzureFluentProvider>,
+    );
+
+    const indicator = screen.getByTestId('ai-provider-indicator');
+    const style = getComputedStyle(indicator);
+    const rootStyle = getComputedStyle(indicator.parentElement!);
+    expect(indicator.textContent).toBe('Used: Azure BYOK');
+    expect(style.whiteSpace).toBe('nowrap');
+    expect(style.overflow).toBe('hidden');
+    expect(style.textOverflow).toBe('ellipsis');
+    expect(style.maxWidth).not.toBe('');
+    expect(rootStyle.flexDirection).toBe('row');
+    expect(rootStyle.flexWrap).toBe('wrap');
   });
 
   it('shows the required goal hint instead of provider-unavailable text for an empty form', () => {
@@ -73,6 +96,7 @@ describe('AI execution provider hints', () => {
       </AzureFluentProvider>,
     );
 
+    expect(screen.getByText('Goal required')).toBeTruthy();
     expect(screen.getByText('Enter a goal to continue')).toBeTruthy();
     expect(screen.getByRole('button').getAttribute('title')).toBe('Enter a goal to continue');
     expect(document.body.textContent).not.toContain('AI provider information unavailable');
@@ -87,9 +111,32 @@ describe('AI execution provider hints', () => {
       </AzureFluentProvider>,
     );
 
+    expect(screen.getByText('Checking provider')).toBeTruthy();
     expect(screen.getByText('Checking AI provider readiness')).toBeTruthy();
     expect(screen.getByRole('button').getAttribute('title')).toBe('Checking AI provider readiness');
     expect(document.body.textContent).not.toContain('AI provider information unavailable');
+  });
+
+  it('does not describe missing or failed provider lookup data as an unavailable provider', () => {
+    const { rerender } = render(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderStatus context={null} error="request failed" />
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Provider check failed')).toBeTruthy();
+    expect(screen.getByText('Could not check AI provider readiness')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
+
+    rerender(
+      <AzureFluentProvider density="compact">
+        <AiExecutionProviderStatus context={null} />
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText('Provider not recorded')).toBeTruthy();
+    expect(screen.getByText('Provider details not recorded')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
   });
 
   it('routes an unavailable platform provider to Platform settings and allows refresh', async () => {
@@ -117,6 +164,7 @@ describe('AI execution provider hints', () => {
     );
 
     expect(screen.getByText('A Platform Administrator must configure a model provider before you can continue.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('AI provider unavailable');
     expect(screen.getByRole('link', { name: 'Open Platform settings' }).getAttribute('href')).toBe('/platform-settings');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh provider' }));
     expect(onRefresh).toHaveBeenCalledOnce();

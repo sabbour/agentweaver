@@ -44,7 +44,7 @@ public sealed record PreviewApprovalAttempt(
 /// <para>Auto-approve sources (any true ⇒ auto-grant, prod default is human-gated):</para>
 /// <list type="number">
 ///   <item><c>Sandbox:Preview:AutoApprove</c> config / env <c>SANDBOX_PREVIEW_AUTO_APPROVE</c> (default false).</item>
-///   <item>Per-run <see cref="RunOptions.AutoApproveTools"/> (operator live toggle).</item>
+///   <item>The run's immutable <c>auto_approve_tools</c> launch policy (default false).</item>
 ///   <item>An existing run/always-scoped policy on the shared approval gate.</item>
 /// </list>
 /// This is the seam that lets an automated demo run grant the preview unattended while production
@@ -66,6 +66,7 @@ public sealed class AgentPreviewGate
     private readonly IRunStore? _runStore;
     private readonly IProjectStore? _projectStore;
     private readonly ILogger<AgentPreviewGate> _logger;
+    private readonly TimeSpan _completionGrace;
 
     /// <summary>
     /// Builds the preview approval gate, resolving the global auto-approve flag and approval
@@ -104,7 +105,8 @@ public sealed class AgentPreviewGate
         ILogger<AgentPreviewGate> logger,
         TimeSpan? approvalTimeout = null,
         IRunStore? runStore = null,
-        IProjectStore? projectStore = null)
+        IProjectStore? projectStore = null,
+        TimeSpan? completionGrace = null)
     {
         _approvalGate = approvalGate;
         _runOptions = runOptions;
@@ -114,16 +116,8 @@ public sealed class AgentPreviewGate
         _fallbackApprovalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
         _runStore = runStore;
         _projectStore = projectStore;
+        _completionGrace = completionGrace ?? TimeSpan.FromSeconds(2);
     }
-
-    /// <summary>
-    /// Returns true if the preview should be granted without an operator: the global config/env
-    /// flag, the per-run auto-approve-tools option, or an existing scoped allow policy.
-    /// </summary>
-    public bool IsAutoApproved(string runId) =>
-        _autoApproveConfigured
-        || _runOptions.Get(runId).AutoApproveTools
-        || _approvalGate.IsAutoApproved(runId, ToolName, null);
 
     /// <summary>
     /// Requests approval for exposing <paramref name="port"/> on <paramref name="runId"/>. Returns
@@ -154,10 +148,36 @@ public sealed class AgentPreviewGate
         string? treeHash = null,
         string? retryOfRequestId = null)
     {
-        if (IsAutoApproved(runId))
+        var snapshot = await ResolvePolicySnapshotAsync(runId, ct).ConfigureAwait(false);
+        var runPolicyApproved = IsRunPolicyApproved(runId, snapshot);
+        if (_autoApproveConfigured
+            || runPolicyApproved
+            || _approvalGate.IsAutoApproved(runId, ToolName, null))
         {
+            var approvalSource = runPolicyApproved
+                ? "run_policy"
+                : _autoApproveConfigured
+                    ? "preview_configuration"
+                    : "scoped_tool_policy";
+            var decisionId = Guid.NewGuid().ToString("n");
             _logger.LogInformation(
-                "start_preview auto-approved (config/run-option/policy) — port={Port} runId={RunId}", port, runId);
+                "start_preview auto-approved ({ApprovalSource}) — port={Port} runId={RunId} policySnapshotId={PolicySnapshotId}",
+                approvalSource, port, runId, snapshot?.SnapshotId);
+            _streams.Get(runId)?.RecordNext(EventTypes.ToolAutoApproved, new
+            {
+                decisionId,
+                runId,
+                toolName = ToolName,
+                risk = ToolApprovalPolicySemantics.RiskFor(ToolName),
+                approvalSource,
+                policySnapshotId = snapshot?.SnapshotId,
+                previewTarget = "run_sandbox",
+                targetPort = port,
+                workPlanId,
+                treeHash,
+                retryOfRequestId,
+                decidedAt = DateTimeOffset.UtcNow.ToString("O"),
+            });
             var retryRequestId = retryOfRequestId is null ? null : Guid.NewGuid().ToString("n");
             if (retryRequestId is not null)
             {
@@ -206,6 +226,7 @@ public sealed class AgentPreviewGate
             expiresAt = expiresAt.ToString("O"),
             timeoutMinutes = (int)approvalTimeout.TotalMinutes,
             retryOfRequestId,
+            approvalPolicySnapshotId = snapshot?.SnapshotId,
         });
         _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
         {
@@ -218,6 +239,7 @@ public sealed class AgentPreviewGate
             retry_of_request_id = retryOfRequestId,
             expires_at = expiresAt.ToString("O"),
             timeout_minutes = (int)approvalTimeout.TotalMinutes,
+            approval_policy_snapshot_id = snapshot?.SnapshotId,
             timestamp_utc = requestedAt.ToString("O"),
         });
         _streams.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
@@ -230,13 +252,37 @@ public sealed class AgentPreviewGate
         });
 
         _logger.LogInformation(
-            "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId}",
-            displayId, port, runId);
+            "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId} approvalPolicySnapshotId={ApprovalPolicySnapshotId}",
+            displayId,
+            port,
+            runId,
+            snapshot?.SnapshotId);
 
         return new PreviewApprovalAttempt(
             requestId,
             expiresAt,
             CompleteAsync(runId, requestId, expiresAt, approvalTask));
+    }
+
+    private bool IsRunPolicyApproved(string runId, RunApprovalPolicySnapshot? snapshot) =>
+        snapshot?.Policy.AllowsAutoApproval(ToolName)
+        ?? (_runStore is null && _runOptions.GetLaunchPolicy(runId).AllowsAutoApproval(ToolName));
+
+    private async Task<RunApprovalPolicySnapshot?> ResolvePolicySnapshotAsync(
+        string runId,
+        CancellationToken ct)
+    {
+        if (_runStore is null || !RunId.TryParse(runId, out var parsedRunId))
+            return null;
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        var snapshot = run?.GetApprovalPolicySnapshot();
+        if (snapshot is not null || string.IsNullOrWhiteSpace(run?.ParentRunId))
+            return snapshot;
+
+        return RunId.TryParse(run.ParentRunId, out var parentRunId)
+            ? (await _runStore.GetAsync(parentRunId, ct).ConfigureAwait(false))?.GetApprovalPolicySnapshot()
+            : null;
     }
 
     private async Task<PreviewApprovalResult> CompleteAsync(
@@ -245,13 +291,81 @@ public sealed class AgentPreviewGate
         DateTimeOffset expiresAt,
         Task<bool> approvalTask)
     {
-        var approved = await approvalTask.ConfigureAwait(false);
+        var remaining = expiresAt - DateTimeOffset.UtcNow + _completionGrace;
+        if (remaining < _completionGrace)
+            remaining = _completionGrace;
+
+        bool approved;
+        try
+        {
+            approved = await approvalTask.WaitAsync(remaining).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            var terminalState = _approvalGate.GetRequestState(runId, requestId);
+            if (terminalState is ToolApprovalRequestState.Approved
+                or ToolApprovalRequestState.Denied
+                or ToolApprovalRequestState.Expired)
+            {
+                return new PreviewApprovalResult(
+                    terminalState == ToolApprovalRequestState.Approved
+                        ? PreviewApprovalOutcome.Approved
+                        : terminalState == ToolApprovalRequestState.Expired
+                            ? PreviewApprovalOutcome.TimedOut
+                            : PreviewApprovalOutcome.Denied,
+                    requestId,
+                    expiresAt);
+            }
+
+            _logger.LogError(
+                "start_preview approval waiter exceeded its completion deadline: requestId={RequestId} runId={RunId}",
+                requestId.Length >= 8 ? requestId[..8] : requestId,
+                runId);
+            EmitBackstopTimeout(runId, requestId);
+            _ = approvalTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return new PreviewApprovalResult(PreviewApprovalOutcome.TimedOut, requestId, expiresAt);
+        }
+
         var outcome = approved
             ? PreviewApprovalOutcome.Approved
             : _approvalGate.GetRequestState(runId, requestId) == ToolApprovalRequestState.Expired
                 ? PreviewApprovalOutcome.TimedOut
                 : PreviewApprovalOutcome.Denied;
+        _logger.LogInformation(
+            "start_preview approval completed: requestId={RequestId} runId={RunId} outcome={Outcome}",
+            requestId.Length >= 8 ? requestId[..8] : requestId,
+            runId,
+            outcome);
         return new PreviewApprovalResult(outcome, requestId, expiresAt);
+    }
+
+    private void EmitBackstopTimeout(string runId, string requestId)
+    {
+        var stream = _streams.Get(runId);
+        if (stream is null || stream.GetSnapshotSince(0).Events.Any(evt =>
+            {
+                if (evt.Type != EventTypes.ToolApprovalResolved)
+                    return false;
+                var payload = System.Text.Json.JsonSerializer.SerializeToElement(evt.Payload);
+                return payload.TryGetProperty("requestId", out var persistedRequestId)
+                    && string.Equals(persistedRequestId.GetString(), requestId, StringComparison.Ordinal);
+            }))
+        {
+            return;
+        }
+
+        stream.RecordNext(EventTypes.ToolApprovalResolved, new
+        {
+            requestId,
+            runId,
+            approved = false,
+            expired = true,
+            reason = "approval_waiter_timeout",
+        });
     }
 
     internal async Task<TimeSpan> ResolveApprovalTimeoutForRunAsync(string runId, CancellationToken ct)

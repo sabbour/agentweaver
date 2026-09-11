@@ -219,7 +219,7 @@ export function Composer({
 
   return (
     <div
-      className={mergeClasses(styles.root, className)}
+      className={mergeClasses(styles.root, contentBelow ? styles.rootWithFooter : undefined, className)}
       role="region"
       aria-label="Message input"
     >

@@ -67,6 +67,29 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeDefined();
   });
 
+  describe('LifecycleEventCard — tool.auto_approved', () => {
+    it('renders preview audit metadata as a muted line without approval actions', () => {
+      render(
+        <Wrapper>
+          <LifecycleEventCard
+            event={makeEvent('tool.auto_approved', {
+              toolName: 'start_preview',
+              previewTarget: 'run_sandbox',
+              targetPort: 5173,
+              policySnapshotId: 'snapshot-123',
+            })}
+            runId="run-preview"
+          />
+        </Wrapper>,
+      );
+
+      expect(screen.getByText('Tool auto-approved: start_preview run_sandbox:5173')).toBeDefined();
+      expect(screen.queryByText('Tool Approval Required')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
+    });
+  });
+
   it('truncates URL longer than 80 chars', () => {
     const longUrl = 'https://example.com/' + 'a'.repeat(100);
     render(

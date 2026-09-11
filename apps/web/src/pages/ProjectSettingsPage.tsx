@@ -63,13 +63,13 @@ function modelProviderReadiness(readiness: UnattendedReadiness) {
     || readiness.reason_code === 'copilot_app_registration_unavailable'
     || readiness.reason_code === 'project_model_provider_reconnect_required';
   return {
-    status: blocked ? 'not_ready' as const : 'ready' as const,
+    status: blocked ? 'unavailable' as const : 'unattended_ready' as const,
     source: 'none' as const,
     reason_code: readiness.reason_code === 'project_model_provider_reconnect_required'
       ? 'project_model_provider_reconnect_required' as const
       : blocked
         ? 'model_provider_connection_required' as const
-        : 'ready' as const,
+        : 'unattended_ready' as const,
   };
 }
 
@@ -105,8 +105,8 @@ function repositoryReadiness(
   }
   return {
     required: true,
-    status: 'ready',
-    reason_code: 'ready',
+    status: 'repository_ready',
+    reason_code: 'repository_ready',
     repo_app_installation_connected: readiness.repo_app_installation_connected,
   };
 }
@@ -1252,17 +1252,17 @@ export function ProjectSettingsPage() {
                           <>
                             <TitleText>Model provider readiness</TitleText>
                             <MetricRow items={[
-                              { label: 'Status', value: model.status === 'ready' ? 'Ready' : 'Not ready' },
+                              { label: 'Status', value: model.status === 'unattended_ready' ? 'Ready' : 'Not ready' },
                               { label: 'Reason code', value: model.reason_code },
                             ]} />
-                            <MessageBar intent={model.status === 'ready' ? 'success' : 'warning'}>
+                            <MessageBar intent={model.status === 'unattended_ready' ? 'success' : 'warning'}>
                               <MessageBarBody>{modelProviderReadinessMessage(model.reason_code)}</MessageBarBody>
                             </MessageBar>
                             <TitleText>Repository readiness</TitleText>
                             <MetricRow items={[
                               {
                                 label: 'Status',
-                                value: repository.status === 'ready'
+                                value: repository.status === 'repository_ready'
                                   ? 'Ready'
                                   : repository.status === 'not_required'
                                     ? 'Not required'
@@ -1270,7 +1270,7 @@ export function ProjectSettingsPage() {
                               },
                               { label: 'Reason code', value: repository.reason_code },
                             ]} />
-                            <MessageBar intent={repository.status === 'ready' ? 'success' : 'warning'}>
+                            <MessageBar intent={repository.status === 'repository_ready' ? 'success' : 'warning'}>
                               <MessageBarBody>{repositoryReadinessMessage(repository.reason_code)}</MessageBarBody>
                             </MessageBar>
                           </>

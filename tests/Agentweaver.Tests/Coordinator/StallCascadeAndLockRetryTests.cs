@@ -541,7 +541,24 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
     public async Task RetryableInfrastructureFailure_RedispatchesFreshChild_ThenCanSucceed()
     {
         var stream = new SqliteRunEventStream(_streamConfig);
-        const string coord = "infra-retry-success-coord";
+        var coordinatorRunId = RunId.New();
+        var coord = coordinatorRunId.ToString();
+        var parentSnapshot = new RunApprovalPolicySnapshot(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+            Source: "direct",
+            CapturedAt: DateTimeOffset.UtcNow.AddMinutes(-2));
+        await _runStore.InsertAsync(new Run
+        {
+            Id = coordinatorRunId,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "coordinate",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-2),
+            AgentName = "Coordinator",
+        }.WithApprovalPolicySnapshot(parentSnapshot));
         var failedChild = await SeedChildRunAsync(RunStatus.InProgress);
         var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, failedChild)]);
         _streamStore.Create(coord, "owner");
@@ -580,6 +597,15 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         row.InfrastructureRetryCount.Should().Be(1);
         row.InfrastructureRetryEligibleAt.Should().NotBeNull();
         _assembly.Started.Should().Be(1);
+        var persistedChild = await _runStore.GetAsync(RunId.Parse(successfulChild!));
+        persistedChild!.GetApprovalPolicySnapshot().Should().BeEquivalentTo(
+            new RunApprovalPolicySnapshot(
+                parentSnapshot.Policy,
+                Source: "child",
+                CapturedAt: persistedChild.ApprovalPolicyCapturedAt!.Value,
+                SettingsUpdatedAt: parentSnapshot.SettingsUpdatedAt,
+                InheritedFromRunId: coord));
+        persistedChild.GetApprovalPolicySnapshot()!.SnapshotId.Should().NotBe(parentSnapshot.SnapshotId);
 
         var retry = _streamStore.Get(coord)!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched);

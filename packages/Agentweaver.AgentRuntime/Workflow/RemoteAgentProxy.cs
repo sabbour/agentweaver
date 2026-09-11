@@ -371,17 +371,21 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                 var trail = recentUpdateTrail.Count > 0
                     ? string.Join(" -> ", recentUpdateTrail)
                     : "(no prior updates observed this turn)";
+                var correlationId = Guid.NewGuid().ToString("n");
                 var terminal = StructuredRunFailureTerminal.CreateInternalError(
                     "Agent turn ended unexpectedly before a structured terminal response was received.",
-                    $"{ex.GetType().Name}: {ex.Message}; recent update trail: {trail}");
+                    $"{ex.GetType().Name}: {ex.Message}; recent update trail: {trail}",
+                    ex,
+                    correlationId);
 
                 _logger.LogWarning(
                     ex,
                     "RemoteAgentProxy: A2A stream ended with an unsupported or unset event for run " +
-                    "'{RunId}'; synthesizing {ErrorCode}. Recent update trail: {Trail}",
+                    "'{RunId}'; synthesizing {ErrorCode}. Recent update trail: {Trail}. CorrelationId={CorrelationId}",
                     _runId,
                     StructuredRunFailureTerminal.InternalErrorCode,
-                    trail);
+                    trail,
+                    correlationId);
 
                 if (_streamWriter is not null && !_streamWriter.TryWrite(terminal))
                 {

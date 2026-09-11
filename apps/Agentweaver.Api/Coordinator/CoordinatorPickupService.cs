@@ -112,8 +112,16 @@ public sealed class CoordinatorPickupService
         else
         {
             effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
-            if (effectiveProvider is EffectiveModelProviderResult.Byok)
+            if (effectiveProvider is EffectiveModelProviderResult.Byok
+                && !WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
                 blockedReason = "operation_requires_github_copilot";
+        }
+        if (effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
+        {
+            blockedReason = unavailable.UnavailableReason ==
+                EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization
+                    ? "project_model_provider_reconnect_required"
+                    : "model_provider_connection_required";
         }
 
         var run = new Run
@@ -151,8 +159,7 @@ public sealed class CoordinatorPickupService
 
         try
         {
-            if (blockedReason is null)
-                CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
+            CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
         }
         catch (NoTeamException)
         {
@@ -176,11 +183,11 @@ public sealed class CoordinatorPickupService
             };
         }
 
-        var result = await _backlogStore
-            .TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, run, now, ct)
+        var claim = await _backlogStore
+            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct)
             .ConfigureAwait(false);
 
-        switch (result)
+        switch (claim.Result)
         {
             case ClaimReserveResult.Lost:
                 // Another heartbeat/instance won, or the task moved back to Backlog. Nothing persisted.
@@ -190,6 +197,11 @@ public sealed class CoordinatorPickupService
                     "Pickup: project {ProjectId} not active; task {TaskId} left Ready", project.Id, task.Id);
                 return;
         }
+
+        var approvalSnapshot = claim.ApprovalPolicySnapshot
+            ?? throw new InvalidOperationException(
+                $"Won backlog claim for run {runId} did not return its persisted approval-policy snapshot.");
+        run = run.WithApprovalPolicySnapshot(approvalSnapshot);
 
         if (blockedReason is not null)
         {
@@ -227,8 +239,7 @@ public sealed class CoordinatorPickupService
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
                     run,
-                    autoApproveTools: project.PickupAutoApproveTools,
-                    autopilot: project.PickupAutopilot,
+                    approvalSnapshot,
                     confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
                     ct: CancellationToken.None,
                     effectiveProvider: effectiveProvider)

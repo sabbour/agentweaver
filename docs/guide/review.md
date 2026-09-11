@@ -31,6 +31,42 @@ The same preview status appears in the human-review file panel so you do not hav
 
 For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
 
+### Tool approvals
+
+The run tree, **Needs input** count, approval cards, board badge, and global notification
+center use the same server-projected pending set. Each request appears once, even when
+the live stream reconnects or both a durable gate event and a display event exist.
+Resolved, denied, expired, cleared, duplicate, terminal-run, and orphaned requests are
+not actionable.
+
+Approval-sensitive run settings are snapshotted before coordinator activation. The immutable
+snapshot records the launch auto-approve/autopilot flags, preview approval timeout, launch source,
+and source project update timestamp. Preview approval uses the captured launch defaults and timeout
+instead of re-reading mutable project pickup settings. Live run controls remain separate and are
+cleared at completion; the launch snapshot remains available for audit, terminal details, and retry.
+
+Coordinator approvals can originate from the coordinator itself, a coordinator phase,
+or a child run. Agentweaver maps the request to its owning scope while keeping the
+operator on the top-level run review page. Approval authorization is unchanged, and
+Agentweaver never approves a request automatically because it disappeared from the
+pending set.
+
+The pending set is independent of how a run was launched. A per-run auto-approval
+policy controls the approval gate; it is not evidence that a run came from backlog
+heartbeat pickup. If a request is durably pending, review surfaces keep showing it
+until the gate resolves it or its owning run is no longer actionable.
+
+`start_preview` approval waits and preview registration calls have finite deadlines.
+An approval-window timeout returns an explicit retryable response, and MCP or
+in-sandbox tool calls stop after three minutes rather than holding a run indefinitely.
+If that client deadline expires before approval or publication completes, verify the
+run and preview process, then retry `start_preview`; Agentweaver creates a new approval
+request when one is still required.
+
+If approval data cannot be loaded, the review page shows an error with **Retry**. An
+empty panel is shown only after the server successfully confirms that no actionable
+approval remains.
+
 ### Request changes and steering
 
 When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).

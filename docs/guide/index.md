@@ -4,9 +4,11 @@ title: What is Agentweaver?
 
 # What is Agentweaver?
 
-**Run a team of AI agents for any scenario you can describe.**
+**Describe the work. Generate the team and workflow. Run it on your infrastructure.**
 
-Agentweaver is a self-hosted, multi-agent orchestration platform. Submit a goal — software delivery, content authoring, PM discovery, incident response, or anything else knowledge-work — and a team of named specialist agents delivers it in isolated sandboxes, with you in control at every gate that matters.
+Agentweaver is a platform for running teams of AI agents on infrastructure you control. Describe a software delivery, content, product, operations, or organization-specific process. Agentweaver can generate its roles, skills, and workflow. It then runs the team in isolated sandboxes.
+
+The agents remain probabilistic. Agentweaver makes their path toward the outcome governed and repeatable through persisted workflow state, explicit gates, and human approvals. Use the web interface or connect an assistant, editor, or CLI through MCP.
 
 ![Agentweaver](/guide/images/overview.png)
 
@@ -44,7 +46,7 @@ A **Project** is the top-level container — a git working directory bound to an
 
 ### Blueprints and casting
 
-A **Blueprint** is a reusable team definition: roles, workflows, review policy, and sandbox policy. When you instantiate a Blueprint into a project, the **casting algorithm** assigns named agents to each role — drawn from thematic universes like The Matrix or Star Wars. Five predefined Blueprints ship with Agentweaver.
+A **Blueprint** is a reusable team definition: roles, workflows, review policy, and sandbox policy. Start from a predefined Blueprint or generate one from a description of the work. When you instantiate it into a project, the **casting algorithm** assigns named agents to each role.
 
 → [Agent Teams & Blueprints](./teams)
 
@@ -124,11 +126,11 @@ The full Agentweaver feature set is available programmatically through an MCP se
 
 | Other tools | Agentweaver |
 |---|---|
-| Orchestration primitives you wire up yourself | Full-stack, scenario-flexible experience out of the box |
+| Orchestration primitives you wire up yourself | Generated or reusable teams, skills, and workflows in one platform |
 | Optional HITL through workflow patterns | Mandatory OutcomeSpec gate + mandatory human review — enforced by the platform |
 | State in opaque managed stores | File-native, repo-resident, inspectable team/memory/decisions |
 | One review gate per agent | Single collective review over all assembled work |
-| Platform-specific | Self-hosted, no platform-level cloud dependency |
+| Vendor-hosted control plane | Run the platform on infrastructure you control |
 | Code-only scenarios | Any knowledge-work scenario via the workflow system |
 
 ## Next steps

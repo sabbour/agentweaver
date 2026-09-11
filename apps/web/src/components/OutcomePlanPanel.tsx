@@ -29,7 +29,11 @@ import {
   LockClosedRegular,
 } from '@fluentui/react-icons';
 import { AgentStepList } from './ui/agentic';
-import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import {
+  AiExecutionProviderHint,
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from './AiExecutionProviderHint';
 import { aiExecutionContextFromEvents } from './aiExecutionContext';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -552,7 +556,12 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         />
       </Field>
       <div role="group" className={styles.actionRow}>
-        <AiExecutionProviderHint context={providerContext}>
+        <AiExecutionProviderStatus
+          context={providerContext}
+          loading={providerPreparation.loading}
+          error={providerPreparation.error}
+        />
+        <AiExecutionProviderHint context={providerContext} showIndicator={false}>
           <Button
             appearance="primary"
             icon={<CheckmarkCircleRegular />}
@@ -563,7 +572,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
             {acting ? 'Confirming plan...' : 'Confirm plan'}
           </Button>
         </AiExecutionProviderHint>
-        <AiExecutionProviderHint context={providerContext}>
+        <AiExecutionProviderHint context={providerContext} showIndicator={false}>
           <Button
             appearance="secondary"
             icon={<EditRegular />}

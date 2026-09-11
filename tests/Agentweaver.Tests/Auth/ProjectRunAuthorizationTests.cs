@@ -421,8 +421,13 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     public async Task InternalService_CanInvokeExplicitProjectRunPreviewCallback()
     {
         var projectId = await CreateProjectAsync(VictimOwnerOid);
-        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
-        _factory.Services.GetRequiredService<IRunOptionsStore>().SetAutoApproveTools(runId, true);
+        var runId = await InsertRunAsync(
+            projectId,
+            "unrelated-submitting-user",
+            approvalSnapshot: new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true),
+                Source: "direct",
+                CapturedAt: DateTimeOffset.UtcNow));
         using var internalService = _factory.CreateClient();
         internalService.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", "internal-test-api-key");
@@ -836,7 +841,8 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         string submittingUser,
         string agentName = "Coordinator",
         RunStatus status = RunStatus.Pending,
-        bool addOperatorStartMarker = false)
+        bool addOperatorStartMarker = false,
+        RunApprovalPolicySnapshot? approvalSnapshot = null)
     {
         var run = new Run
         {
@@ -851,6 +857,8 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             ProjectId = projectId,
             AgentName = agentName,
         };
+        if (approvalSnapshot is not null)
+            run = run.WithApprovalPolicySnapshot(approvalSnapshot);
         await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(run);
         if (addOperatorStartMarker)
             await AppendPersonalSessionMarkerAsync(run.Id.ToString());

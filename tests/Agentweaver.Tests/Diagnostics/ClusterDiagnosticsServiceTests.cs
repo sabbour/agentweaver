@@ -1,9 +1,11 @@
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 
 namespace Agentweaver.Tests;
 
@@ -114,6 +116,22 @@ public sealed class ClusterDiagnosticsServiceTests
     }
 
     [Fact]
+    public async Task GetClusterDiagnosticsAsync_MarksPendingClaimForAttention_WithBoundedReason()
+    {
+        var service = NewClusterService(
+            BuildConfiguration(),
+            ClientFor(PendingClaimHandler()));
+
+        var claim = (await service.GetClusterDiagnosticsAsync()).SandboxClaims.Should().ContainSingle().Subject;
+
+        claim.Phase.Should().Be("pending");
+        claim.Details!.AttentionRequired.Should().BeTrue();
+        claim.Details.Status.Should().Be("pending");
+        claim.Details.Reason.Should().Be("FailedScheduling");
+        claim.Details.LastTransitionUtc.Should().Be(DateTimeOffset.Parse("2026-07-28T12:00:10Z"));
+    }
+
+    [Fact]
     public async Task GetClusterDiagnosticsAsync_ExposesWarmPoolInstances_WithClaimOwnership()
     {
         await using var db = await TestSqliteDatabase.CreateAsync();
@@ -136,20 +154,45 @@ public sealed class ClusterDiagnosticsServiceTests
         var service = NewClusterService(
             BuildConfiguration(db.Path),
             ClientFor(WarmPoolTopologyHandler()),
-            db.Db);
+            db.Db,
+            new StubAgentHostReaper([
+                new AgentHostClaimInfo(
+                    "agent-0123456789ab",
+                    runId,
+                    "agentweaver-agent-host-claimed",
+                    Ready: true,
+                    CreatedAt: DateTimeOffset.Parse("2026-07-28T12:00:00Z"),
+                    Orphaned: false,
+                    AnnotatedRunId: runId),
+            ]));
 
         var dto = await service.GetClusterDiagnosticsAsync();
 
         dto.SandboxClaims.Should().ContainSingle();
         dto.SandboxClaims[0].RunId.Should().Be(runId);
+        dto.SandboxClaims[0].Details.Should().NotBeNull();
+        var claimDetails = dto.SandboxClaims[0].Details!;
+        claimDetails.ResourceId.Should().Be("sandbox-claim:agent-0123456789ab");
+        claimDetails.ResourceType.Should().Be("sandbox_claim");
+        claimDetails.AttentionRequired.Should().BeTrue();
+        claimDetails.Ownership!.ProjectId.Should().Be(projectId.ToString());
+        claimDetails.LastTransitionUtc.Should().Be(DateTimeOffset.Parse("2026-07-28T12:00:10Z"));
 
         var pool = dto.WarmPools.Should().ContainSingle().Subject;
+        pool.Details!.ResourceId.Should().Be("warm-pool:agentweaver-agent-host");
+        pool.Details.Capacity.Should().BeEquivalentTo(new TopologyResourceCapacityDto
+        {
+            Desired = 2,
+            Ready = 2,
+            Available = 1,
+            Claimed = 1,
+        });
         pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
         {
             Name = "agentweaver-agent-host-available",
             Status = "available",
             Claimed = false,
-        }, options => options.Excluding(x => x.AgeSeconds));
+        }, options => options.Excluding(x => x.AgeSeconds).Excluding(x => x.Details));
 
         pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
         {
@@ -159,7 +202,31 @@ public sealed class ClusterDiagnosticsServiceTests
             ClaimName = "agent-0123456789ab",
             RunId = runId,
             ProjectId = projectId.ToString(),
-        }, options => options.Excluding(x => x.AgeSeconds));
+        }, options => options.Excluding(x => x.AgeSeconds).Excluding(x => x.Details));
+        var claimed = pool.Instances.Single(instance => instance.Claimed);
+        claimed.Details!.AttentionRequired.Should().BeTrue();
+        claimed.Details.Runtime.Should().BeEquivalentTo(new TopologyResourceRuntimeDto
+        {
+            PodName = "agentweaver-agent-host-claimed",
+            NodeName = "aks-kata-123",
+            Image = "example.azurecr.io/agentweaver-agent-host:v1",
+            RuntimeClass = "kata-vm-isolation",
+        });
+        claimed.Details.DeepLinks!.RunId.Should().Be(runId);
+        claimed.Details.DeepLinks.ProjectId.Should().Be(projectId.ToString());
+
+        var activePod = dto.ActiveAgentPods.Should().ContainSingle().Subject;
+        activePod.Details!.ResourceType.Should().Be("agent_host_pod");
+        activePod.Details.Runtime!.NodeName.Should().Be("aks-kata-123");
+        activePod.Details.Ownership!.AgentName.Should().BeNull();
+
+        dto.Details!.ResourceId.Should().Be("cluster");
+        dto.Details.Capacity!.Desired.Should().Be(2);
+        dto.Details.Capacity.Available.Should().Be(1);
+
+        var json = JsonSerializer.Serialize(dto);
+        json.Should().NotContain("10.240.0.9");
+        json.Should().NotContain("imagePullSecrets");
     }
 
     [Fact]
@@ -184,7 +251,8 @@ public sealed class ClusterDiagnosticsServiceTests
     private static DiagnosticsService NewClusterService(
         IConfiguration configuration,
         IKubernetes client,
-        SqliteDb? db = null) =>
+        SqliteDb? db = null,
+        IAgentHostReaper? reaper = null) =>
         new(
             db: db!,
             projectStore: new EmptyProjectStore(),
@@ -193,7 +261,8 @@ public sealed class ClusterDiagnosticsServiceTests
             workflowRegistry: null!,
             configuration: configuration,
             scopeFactory: null!,
-            k8s: client);
+            k8s: client,
+            reaper: reaper);
 
     private static DiagnosticsService NewSystemService(
         IConfiguration configuration,
@@ -282,7 +351,10 @@ public sealed class ClusterDiagnosticsServiceTests
                     "conditions": [
                       {
                         "type": "Ready",
-                        "status": "True"
+                        "status": "True",
+                        "reason": "SandboxReady",
+                        "message": "controller endpoint 10.240.0.9 is reachable",
+                        "lastTransitionTime": "2026-07-28T12:00:10Z"
                       }
                     ]
                   }
@@ -333,10 +405,24 @@ public sealed class ClusterDiagnosticsServiceTests
                     "namespace": "agentweaver",
                     "creationTimestamp": "2026-07-28T12:00:00Z"
                   },
+                  "spec": {
+                    "nodeName": "aks-kata-123",
+                    "runtimeClassName": "kata-vm-isolation",
+                    "containers": [
+                      { "name": "agent-host", "image": "example.azurecr.io/agentweaver-agent-host:v1" }
+                    ],
+                    "imagePullSecrets": [
+                      { "name": "registry-secret" }
+                    ]
+                  },
                   "status": {
                     "phase": "Running",
                     "conditions": [
-                      { "type": "Ready", "status": "True" }
+                      {
+                        "type": "Ready",
+                        "status": "True",
+                        "lastTransitionTime": "2026-07-28T12:00:20Z"
+                      }
                     ]
                   }
                 },
@@ -357,6 +443,48 @@ public sealed class ClusterDiagnosticsServiceTests
             }
             """);
         return handler;
+    }
+
+    private static FakeKubeHandler PendingClaimHandler()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """
+            {
+              "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+              "kind": "SandboxClaimList",
+              "items": [
+                {
+                  "metadata": {
+                    "name": "agent-pending",
+                    "namespace": "agentweaver",
+                    "creationTimestamp": "2026-07-28T12:00:00Z"
+                  },
+                  "status": {
+                    "conditions": [
+                      {
+                        "type": "Ready",
+                        "status": "False",
+                        "reason": "FailedScheduling",
+                        "message": "scheduler detail that is deliberately not returned",
+                        "lastTransitionTime": "2026-07-28T12:00:10Z"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """);
+        return handler;
+    }
+
+    private sealed class StubAgentHostReaper(IReadOnlyList<AgentHostClaimInfo> claims) : IAgentHostReaper
+    {
+        public Task<int> SweepOrphanedPodsAsync(CancellationToken ct = default) => Task.FromResult(0);
+
+        public Task<IReadOnlyList<AgentHostClaimInfo>> GetClaimInventoryAsync(CancellationToken ct = default) =>
+            Task.FromResult(claims);
     }
 
     private sealed class EmptyProjectStore : IProjectStore

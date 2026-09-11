@@ -21,8 +21,16 @@ When your session expires, select **Sign in with Microsoft Entra ID**. Browser s
 After a successful sign-in, Agentweaver sets a host-only, `HttpOnly`, `Secure`,
 `SameSite=Lax` browser-session cookie. It lets additional tabs in the same browser
 profile restore the signed-in Agentweaver session without repeating Entra sign-in.
-The cookie is never shared with another host or browser profile. The tab-local bearer
-token remains a compatibility mechanism; it is not required to open a new tab.
+The session has a fixed eight-hour lifetime from successful sign-in. Activity does not
+extend that deadline; signing in again replaces the current browser session with a new
+eight-hour session. Signing out revokes the server-side session immediately and expires
+the cookie. The cookie is never shared with another host or browser profile.
+
+This browser-session lifetime does not extend the Microsoft Entra access token. The
+tab-local bearer token remains a compatibility mechanism and is kept only in
+`sessionStorage`; Agentweaver does not put bearer tokens in cookies or `localStorage`.
+The opaque browser cookie restores identity for new tabs and binds OAuth handoffs, but
+does not replace bearer authorization for platform API operations.
 
 For a TLS-terminating reverse proxy, configure
 `Auth:OAuth:ForwardedHeaders:TrustedNetworks` with only the proxy network(s), and
@@ -49,6 +57,13 @@ The active platform provider applies to interactive and unattended work for all 
 projects. A configured custom-key provider (BYOK) is therefore a complete platform provider,
 not an interactive-only fallback.
 
+Unattended work never reuses a browser bearer token. Before schedule, event, or heartbeat
+execution, Agentweaver captures the selected durable provider authority in an activation and
+copies a purpose-bound capability snapshot to the run. Project provider bindings take
+precedence over platform providers. If an active project binding is expired or revoked,
+execution fails closed instead of falling through to a different identity. A configured BYOK
+provider follows the same activation and run-snapshot boundary.
+
 If you cannot manage this setup, Agentweaver shows **Unavailable to you**. Ask a Platform Admin to complete the setup.
 
 When the provider is ready, select **Continue to Agentweaver**.
@@ -72,6 +87,28 @@ Agentweaver GitHub App installation. Installation settings can grant all reposit
 selected repositories.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
+
+The project readiness check reports separate capability dimensions:
+
+- `unattended_ready`: a durable project or platform provider can execute the unattended purpose,
+  and required repository access is ready.
+- `interactive_ready`: the current user can run interactively, but no durable provider can run
+  unattended work.
+- `repository_ready`: required Repo App access is ready, but the unattended model provider is not.
+- `reauthorization_required`: a selected provider credential expired or was revoked and must be
+  connected again.
+- `unavailable`: neither the current interactive session nor unattended execution can use a
+  provider for the requested purpose.
+
+A repositoryless project does not require a Repo App installation. A GitHub-backed project is
+repository-ready only when the Repo App installation and its project repository grant are both
+current.
+
+Repository status alone never makes a project unattended-ready. For GitHub Copilot, the readiness
+check verifies that the selected live binding still has the complete grant and credential tuple
+required to issue an `UnattendedCopilot` run snapshot, refreshes the credential when possible, and
+rechecks the binding after the vault read. For custom-key providers, it verifies that the exact
+selected provider configuration is still active.
 
 After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
 
@@ -144,3 +181,15 @@ current Agentweaver version and API status. In-flight runs continue on the serve
 If sign-in fails, make sure that your Entra account has an Agentweaver App Role.
 
 If the redirect fails, make sure that the Entra redirect URI matches the deployed Agentweaver URL.
+
+Authentication and authorization callbacks use the same lightweight Agentweaver dialog,
+including flows that finish outside the main web app. Each dialog identifies success,
+pending approval, cancellation, expiry, or failure and tells you whether to return to
+Agentweaver, return to the MCP client, retry, or close the tab. These pages do not show
+OAuth codes, tokens, state values, callback cookies, or raw identity-provider errors.
+Unknown provider errors are replaced with safe guidance.
+
+MCP browser handoffs keep polling in the client while the completion tab shows its final
+status. Closing that tab does not cancel or repeat the authorization. If the browser
+cannot close the tab automatically, close it with the browser controls and return to the
+MCP client.

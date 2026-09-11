@@ -15,6 +15,7 @@ import {
   MessageBarBody,
   Select,
   Spinner,
+  Switch,
   Text,
   Textarea,
   tokens,
@@ -27,6 +28,7 @@ import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -54,6 +56,8 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const [error, setError] = useState<string | null>(null);
   const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
+  const [autoApproveTools, setAutoApproveTools] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
   const providerContext = useAiExecutionContext('orchestration', projectId);
   const saving = savingMode !== null;
@@ -75,6 +79,8 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     setNoTeamError(null);
     setSavingMode(null);
     setWorkflowOverride(null);
+    setAutoApproveTools(false);
+    setAutopilot(false);
     setSelectableWorkflows([]);
   };
 
@@ -90,13 +96,15 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             goal.trim(),
             workflowOverride || null,
             'direct',
-            providerContext.providerKey)
+            providerContext.providerKey,
+            { auto_approve_tools: autoApproveTools, autopilot })
         : await apiClient.startOrchestration(
             projectId,
             goal.trim(),
             workflowOverride || null,
             undefined,
-            providerContext.providerKey);
+            providerContext.providerKey,
+            { auto_approve_tools: autoApproveTools, autopilot });
       setOpen(false);
       reset();
       onStarted(result.runId);
@@ -166,6 +174,23 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                   </Select>
                 </Field>
               )}
+              <div role="group" aria-label="Run approval policy">
+                <Text weight="semibold">Run approval policy</Text>
+                <Switch
+                  label="Auto-approve safe tools"
+                  checked={autoApproveTools}
+                  onChange={(_, data) => setAutoApproveTools(data.checked)}
+                />
+                <Switch
+                  label="Autopilot"
+                  checked={autopilot}
+                  onChange={(_, data) => setAutopilot(data.checked)}
+                />
+                <Text size={200}>
+                  Safe-tool approval covers only repository-defined safe tools. Preview,
+                  destructive, privileged, secret, and other network approvals remain gated.
+                </Text>
+              </div>
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>
@@ -189,10 +214,16 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary" disabled={saving}>Cancel</Button>
             </DialogTrigger>
+            <AiExecutionProviderStatus
+              context={providerContext.context}
+              loading={providerContext.loading}
+              error={providerContext.error}
+            />
             <AiExecutionProviderHint
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="secondary"
@@ -206,6 +237,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="primary"

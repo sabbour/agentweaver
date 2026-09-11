@@ -13,11 +13,13 @@ public sealed class McpRunTaskTests
     public async Task RunTask_HappyPath_ReturnsArtifactsInline()
     {
         var statusCalls = 0;
+        JsonElement? startBody = null;
         var tools = CreateRunTools((request, _) =>
         {
             var path = request.RequestUri!.AbsolutePath;
             if (request.Method == HttpMethod.Post && path == "/api/projects/proj-1/orchestrations")
             {
+                startBody = request.Content!.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
                 {
                     Content = JsonContent.Create(new { runId = "run-1" })
@@ -52,12 +54,17 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var result = await tools.RunTaskAsync("proj-1", "Ship it", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync(
+            "proj-1", "Ship it", workflow_id: null, model_id: null, start_mode: "direct",
+            auto_approve_tools: true, autopilot: true,
+            timeout_seconds: 5, poll_interval_seconds: 1, ct: CancellationToken.None);
 
         result.RunId.Should().Be("run-1");
         result.Status.Should().Be("merged");
         result.Artifacts.Should().NotBeNull();
         result.Artifacts![0].GetProperty("path").GetString().Should().Be("README.md");
+        startBody!.Value.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue();
+        startBody.Value.GetProperty("autopilot").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -90,7 +97,7 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var result = await tools.RunTaskAsync("proj-1", "Plan it", workflow_id: null, model_id: null, start_mode: "defineOutcome", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync("proj-1", "Plan it", workflow_id: null, model_id: null, start_mode: "defineOutcome", timeout_seconds: 5, poll_interval_seconds: 1, ct: CancellationToken.None);
 
         result.Status.Should().Be("awaiting_confirmation");
         result.ReviewPrompt.Should().Contain("coordinator_outcome_spec_get");
@@ -121,7 +128,7 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var result = await tools.RunTaskAsync("proj-1", "Wait", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 1, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync("proj-1", "Wait", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 1, poll_interval_seconds: 1, ct: CancellationToken.None);
 
         result.RunId.Should().Be("run-3");
         result.Status.Should().Be("timed_out");

@@ -19,6 +19,14 @@ public sealed class RunModelProviderSnapshotStore(
     IServiceScopeFactory scopeFactory)
 {
     private const int Version = 1;
+    private static readonly TimeSpan[] WinnerReadRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(25),
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(400),
+    ];
     private static readonly JsonSerializerOptions SnapshotJsonOptions = new()
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -40,7 +48,7 @@ public sealed class RunModelProviderSnapshotStore(
     {
         var boundary = await TryGetAsync(run.Id, ct).ConfigureAwait(false);
         if (boundary is not null && boundary.Provider.ToModelSource() != run.ModelSource)
-            throw SnapshotUnavailable();
+            throw SnapshotMismatch();
         return boundary;
     }
 
@@ -92,6 +100,11 @@ public sealed class RunModelProviderSnapshotStore(
             provider.CredentialVersion(),
             byokConfiguration);
         ValidateSnapshot(candidate);
+
+        var existing = await TryGetCaptureWinnerAsync(run, ct).ConfigureAwait(false);
+        if (existing is not null)
+            return new Capture(existing, null);
+
         var value = JsonSerializer.Serialize(candidate);
         var candidateSecretReference = CandidateKey(run.Id);
         await secrets.SetSecretAsync(candidateSecretReference, value, ct: ct).ConfigureAwait(false);
@@ -115,20 +128,10 @@ public sealed class RunModelProviderSnapshotStore(
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
                 db.ChangeTracker.Clear();
-                for (var attempt = 0; attempt < 3; attempt++)
-                {
-                    try
-                    {
-                        var winner = await TryGetAsync(run, ct).ConfigureAwait(false);
-                        if (winner is not null)
-                            return new Capture(winner, null);
-                    }
-                    catch (AgentProviderException) when (attempt < 2)
-                    {
-                        await Task.Delay(TimeSpan.FromMilliseconds(10), ct).ConfigureAwait(false);
-                    }
-                }
-                throw SnapshotUnavailable();
+                var winner = await TryGetCaptureWinnerAsync(run, ct).ConfigureAwait(false);
+                return winner is not null
+                    ? new Capture(winner, null)
+                    : throw SnapshotUnavailable();
             }
         }
         finally
@@ -201,9 +204,33 @@ public sealed class RunModelProviderSnapshotStore(
     private static AgentProviderException SnapshotUnavailable() => new(
         ModelSource.GitHubCopilot,
         AgentProviderFailureKind.Configuration,
+        "model_provider_snapshot_unavailable",
+        "The run's accepted model provider snapshot is unavailable. Retry the run to create a new snapshot.",
+        isRetryable: true);
+
+    private static AgentProviderException SnapshotMismatch() => new(
+        ModelSource.GitHubCopilot,
+        AgentProviderFailureKind.Configuration,
         "model_provider_changed",
         "The accepted model provider snapshot is unavailable.",
         isRetryable: true);
+
+    private async Task<ResolvedRunModelProviderBoundary?> TryGetCaptureWinnerAsync(
+        Run run,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await TryGetAsync(run, ct).ConfigureAwait(false);
+            }
+            catch (AgentProviderException) when (attempt < WinnerReadRetryDelays.Length)
+            {
+                await Task.Delay(WinnerReadRetryDelays[attempt], ct).ConfigureAwait(false);
+            }
+        }
+    }
 
     private static string CandidateKey(RunId runId) =>
         $"run-model-provider-{runId}-{Guid.NewGuid():N}";
@@ -276,7 +303,7 @@ public sealed class RunModelProviderSnapshotStore(
                     expectedByok.ConfigurationFingerprint,
                     StringComparison.Ordinal))
             {
-                throw SnapshotUnavailable();
+                throw SnapshotMismatch();
             }
 
             return;
@@ -285,7 +312,7 @@ public sealed class RunModelProviderSnapshotStore(
         if (boundary.ByokProviderConfiguration is not null
             || boundary.ByokProviderFingerprint is not null)
         {
-            throw SnapshotUnavailable();
+            throw SnapshotMismatch();
         }
     }
 
@@ -299,7 +326,15 @@ public sealed class RunModelProviderSnapshotStore(
             && Guid.TryParseExact(secretReference[prefix.Length..], "N", out _);
     }
 
-    private static bool IsUniqueViolation(DbUpdateException exception) =>
-        exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }
-        || exception.InnerException is SqliteException { SqliteErrorCode: 19 };
+    private static bool IsUniqueViolation(DbUpdateException exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }
+                or SqliteException { SqliteErrorCode: 19 })
+                return true;
+        }
+
+        return false;
+    }
 }

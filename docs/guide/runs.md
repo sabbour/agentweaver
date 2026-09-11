@@ -16,9 +16,27 @@ Supported AI actions show three provider states:
 - **Using** shows the provider for active execution.
 - **Used** shows the provider recorded for completed execution.
 
-The labels include the provider kind and the model name when it is available.
+Every execution surface uses the same compact provider indicator. It stays on one line,
+truncates before it can displace primary controls, and wraps beside its action only when
+the surrounding layout is narrow. The visible indicator contains the phase and provider
+kind. Its tooltip and accessible description contain the full model and scope details.
+Multi-action groups show one visible indicator while each AI action retains the complete
+accessible provider description.
+
 Screen readers announce changes, including replacement by another provider of the same kind.
 The UI and API do not expose credentials, account names, or provider-binding identities.
+
+A pending readiness check says **Checking AI provider readiness**. A failed readiness
+request says that the check could not complete and offers **Refresh provider**; it does
+not claim that the provider itself is unavailable. Provider setup guidance appears only
+when the API returns `effective_model_provider.state: "unavailable"`. If a completed run
+has no recorded provider event, the UI says **Provider details not recorded** or omits the
+provider footer instead of inferring which provider ran.
+
+For failed runs, the header shows the provider recorded in the run once. The retry action
+keeps its newly prepared provider in its accessible label. A second visible **Expected
+provider** label appears only when it differs from the recorded run provider, so operators
+can review the change before retrying.
 
 Agentweaver records an immutable provider and capability snapshot when a run starts. Provider
 enablement, disablement, or configuration changes apply to future runs only; they do not switch
@@ -59,10 +77,12 @@ Enter your task as a natural-language goal in the **Goal** field:
 
 > "Refactor the authentication module to use JWT and add integration tests."
 
-The action buttons show **Enter a goal to continue** until the required Goal field contains
-text. While provider preparation is still in progress, they show **Checking AI provider
-readiness**; this is not a provider failure. Provider setup guidance appears only when the
-resolved provider is actually unavailable.
+The action buttons use the concise **Goal required** indicator until the required Goal
+field contains text; their accessible description remains **Enter a goal to continue**.
+While provider preparation is still in progress, the compact indicator says **Checking
+provider** and its accessible description says **Checking AI provider readiness**. This
+is not a provider failure. Provider setup guidance appears only when the resolved provider
+is actually unavailable.
 
 Click **Start task**. The coordinator orchestration begins and you're taken to the topology view.
 
@@ -243,6 +263,8 @@ Agentweaver does not replace more specific outcomes with this fallback:
 
 - a cancellation requested by the caller remains a cancellation;
 - an existing typed timeout or failure keeps its own error code and retryability;
+- an unavailable project or platform Copilot connection remains
+  `model_provider_connection_required` and stops before workflow fallback validation;
 - other A2A exceptions become `a2a_transport_failure`, with retryability determined by
   the transport failure;
 - a clean A2A stream end without `agent.turn.end` becomes the retryable
@@ -264,9 +286,28 @@ persisted. API and MCP clients can read the same projection through
 The project's **Observability → Traces** page shows the same diagnostic beside failed
 traces. Use **Show failed only** to focus investigation. Correlation IDs are links back
 to that trace's focused view; they are navigation handles, not raw telemetry payloads.
+The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
+available without repeating the provider or error code in separate status fragments.
+
+Provider snapshot failures are separate from provider health and authorization:
+
+- `model_provider_snapshot_unavailable` means Agentweaver could not load the immutable
+  provider snapshot saved for the run.
+- `github_copilot_capability_snapshot_unavailable` means the run-bound Copilot capability
+  snapshot was missing, expired, or could not be redeemed.
+
+Both diagnostics recommend retrying to create a new run snapshot. They do not claim that
+the configured provider changed, became unavailable, or requires reconnection. Reconnect
+GitHub only when a new run reports `github_copilot_auth_required`.
 
 The projection contains only a bounded error code, safe message, component,
 timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
+AgentHost-generated internal failures and pre-launch provider failures include a
+server-generated correlation ID, the active trace ID when available, and a bounded
+exception-type chain. If an earlier
+best-effort agent operation failed but the Coordinator later terminalized for another
+reason, the projection uses the latest terminal failure instead of the earlier recovered
+failure.
 It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
 credentials, tokens, or keys. Project Viewers can read diagnostics for their project.
 Projectless runs remain visible only to their submitting owner. Unauthorized and

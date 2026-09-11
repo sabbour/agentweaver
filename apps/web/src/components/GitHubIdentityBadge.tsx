@@ -247,7 +247,7 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
     setSigningOut(true);
     try {
       await apiClient.signOutSession();
-      clearSessionAuth();
+      clearSessionAuth(true);
       window.location.assign('/');
     } catch (err) {
       setSessionError(formatApiErrorMessage(err, 'Could not sign out. Try again.'));

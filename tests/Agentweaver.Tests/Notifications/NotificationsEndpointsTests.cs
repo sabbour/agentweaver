@@ -68,7 +68,12 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         return run;
     }
 
-    private async Task<Run> InsertInProgressRunAsync(string projectId, string task, string? agentName = null, string? workflowRunId = null)
+    private async Task<Run> InsertInProgressRunAsync(
+        string projectId,
+        string task,
+        string? agentName = null,
+        string? workflowRunId = null,
+        string? parentRunId = null)
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -84,6 +89,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             ProjectId = ProjectId.Parse(projectId),
             AgentName = agentName,
             WorkflowRunId = workflowRunId,
+            ParentRunId = parentRunId,
         };
         await runStore.InsertAsync(run);
         return run;
@@ -94,10 +100,11 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var sequence = (await db.RunEvents.Where(e => e.RunId == runId).MaxAsync(e => (int?)e.Sequence) ?? 0) + 1;
         db.RunEvents.Add(new RunEventRecord
         {
             RunId = runId,
-            Sequence = 1,
+            Sequence = sequence,
             EventType = EventTypes.ToolApprovalRequired,
             PayloadJson = $$"""{"requestId":"{{requestId}}","toolName":"{{toolName}}","url":"https://example.com"}""",
             CreatedAt = createdAt ?? DateTime.UtcNow,
@@ -110,13 +117,30 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var sequence = (await db.RunEvents.Where(e => e.RunId == runId).MaxAsync(e => (int?)e.Sequence) ?? 0) + 1;
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = sequence,
+            EventType = "tool.approval_context",
+            PayloadJson = $$"""{"RequestId":"{{requestId}}","ToolName":"{{toolName}}","Url":"https://example.com"}""",
+            CreatedAt = createdAt ?? DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task InsertToolAutoApprovedEventAsync(
+        string runId, string decisionId, string toolName = "start_preview")
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         db.RunEvents.Add(new RunEventRecord
         {
             RunId = runId,
             Sequence = 1,
-            EventType = "tool.approval_context",
-            PayloadJson = $$"""{"RequestId":"{{requestId}}","ToolName":"{{toolName}}","Url":"https://example.com"}""",
-            CreatedAt = createdAt ?? DateTime.UtcNow,
+            EventType = EventTypes.ToolAutoApproved,
+            PayloadJson = $$"""{"decisionId":"{{decisionId}}","toolName":"{{toolName}}","targetPort":5173}""",
+            CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
     }
@@ -465,7 +489,132 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         match.GetProperty("project_id").GetString().Should().Be(projectId);
         match.GetProperty("agent_name").GetString().Should().Be("Researcher");
         match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/{run.Id}");
-        match.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}:toolu_01pending");
+        match.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}");
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_DeduplicatesContextAndCard_AndReturnsSixActionableItems()
+    {
+        var projectId = await CreateBlankProjectAsync("Canonical approval set");
+        var run = await InsertInProgressRunAsync(projectId, "Run six tools", "Coordinator");
+        for (var i = 1; i <= 6; i++)
+        {
+            var requestId = $"request-{i}";
+            await InsertToolApprovalContextEventAsync(run.Id.ToString(), requestId, i == 6 ? "start_preview" : "web_fetch");
+            await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), requestId, i == 6 ? "start_preview" : "web_fetch");
+        }
+
+        var response = await _client.GetAsync($"/api/runs/{run.Id}/pending-approvals");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("count").GetInt32().Should().Be(6);
+        body.GetProperty("approvals").EnumerateArray()
+            .Select(item => item.GetProperty("request_id").GetString())
+            .Should().OnlyHaveUniqueItems();
+        body.GetProperty("approvals").EnumerateArray()
+            .Should().ContainSingle(item => item.GetProperty("tool_name").GetString() == "start_preview");
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_ExcludesResolvedExpiredAndTerminalRequests()
+    {
+        var projectId = await CreateBlankProjectAsync("Approval cleanup");
+        var run = await InsertInProgressRunAsync(projectId, "Clean stale approvals", "Coordinator");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "resolved", "web_fetch");
+        await InsertToolApprovalResolvedEventAsync(run.Id.ToString(), "resolved", expired: false);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = run.Id.ToString(),
+                Sequence = 3,
+                EventType = EventTypes.ToolApprovalRequired,
+                PayloadJson = """{"requestId":"expired","toolName":"start_preview","expiresAt":"2020-01-01T00:00:00Z"}""",
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var beforeTerminal = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
+        beforeTerminal.GetProperty("count").GetInt32().Should().Be(0);
+
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "orphaned", "start_preview");
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        var afterTerminal = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
+        afterTerminal.GetProperty("count").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_MapsSyntheticCoordinatorScope_ToRootActionRun()
+    {
+        var projectId = await CreateBlankProjectAsync("Synthetic approval scope");
+        var run = await InsertInProgressRunAsync(projectId, "Draft with a tool", "Coordinator");
+        var syntheticRunId = run.Id + "-coordinator-draft";
+        await InsertToolApprovalContextEventAsync(syntheticRunId, "synthetic-request", "start_preview");
+        await InsertToolApprovalRequiredEventAsync(syntheticRunId, "synthetic-request", "start_preview");
+
+        var body = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
+
+        var approval = body.GetProperty("approvals").EnumerateArray().Should().ContainSingle().Subject;
+        approval.GetProperty("owning_run_id").GetString().Should().Be(syntheticRunId);
+        approval.GetProperty("action_run_id").GetString().Should().Be(run.Id.ToString());
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_ChildFailureWithoutResolution_ClearsRootProjection()
+    {
+        // Production correlation: project 96e489ca-4d61-4724-8d3b-a17e700dc203,
+        // root e78bd0cb-e31b-4c37-b13d-2a9e2b56f019, child 3fed0b49-4b12-463f-8017-e2aef7ff0779.
+        // The child failed before approval expiry without a terminal stream or approval-resolution event.
+        var projectId = await CreateBlankProjectAsync("Terminal child approval cleanup");
+        var root = await InsertInProgressRunAsync(projectId, "Coordinate preview implementation", "Coordinator");
+        var child = await InsertInProgressRunAsync(
+            projectId,
+            "Implement the confirmed outcome",
+            "Neo",
+            parentRunId: root.Id.ToString());
+        await InsertToolApprovalContextEventAsync(child.Id.ToString(), "stuck-preview", "start_preview");
+        await InsertToolApprovalRequiredEventAsync(child.Id.ToString(), "stuck-preview", "start_preview");
+
+        var pending = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        pending.GetProperty("count").GetInt32().Should().Be(1);
+        var approval = pending.GetProperty("approvals").EnumerateArray().Should().ContainSingle().Subject;
+        approval.GetProperty("owning_run_id").GetString().Should().Be(child.Id.ToString());
+        approval.GetProperty("action_run_id").GetString().Should().Be(child.Id.ToString());
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await runStore.UpdateStatusAsync(child.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        var afterChildFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        afterChildFailure.GetProperty("count").GetInt32().Should().Be(0);
+        var notifications = await _client.GetFromJsonAsync<JsonElement>("/api/notifications");
+        notifications.GetProperty("notifications").EnumerateArray()
+            .Should().NotContain(item => item.GetProperty("run_id").GetString() == root.Id.ToString());
+
+        await runStore.UpdateStatusAsync(root.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        var afterRootFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
+        afterRootFailure.GetProperty("count").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetPendingApprovals_UsesPersistedGateState_NotLaunchOrHeartbeatPolicy()
+    {
+        var projectId = await CreateBlankProjectAsync("Direct run approval policy");
+        var run = await InsertInProgressRunAsync(projectId, "Run a directly submitted tool", "Researcher");
+        var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
+        runOptions.Set(run.Id.ToString(), new RunOptions(AutoApproveTools: true));
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "direct-policy-request", "start_preview");
+
+        var pending = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
+
+        pending.GetProperty("count").GetInt32().Should().Be(1);
+        pending.GetProperty("approvals").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("request_id").GetString().Should().Be("direct-policy-request");
     }
 
     [Fact]
@@ -526,6 +675,20 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
     }
 
     [Fact]
+    public async Task GetNotifications_AutoApprovedPreview_DoesNotCreateApprovalNotification()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Auto Preview");
+        var run = await InsertInProgressRunAsync(projectId, "Preview without waiting", "Coordinator");
+        await InsertToolAutoApprovedEventAsync(run.Id.ToString(), "preview-decision");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+    }
+
+    [Fact]
     public async Task GetNotifications_DoesNotDoubleFire_HumanReviewAndToolApproval_ForSameRun()
     {
         // A run cannot be both AwaitingReview and InProgress at once, so a pending tool approval on
@@ -559,7 +722,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
 
         notification.GetProperty("type").GetString().Should().Be("tool_approval");
-        notification.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}:toolu_ctx_01pending");
+        notification.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}");
     }
 
     [Fact]
@@ -602,6 +765,30 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             .GetProperty("id").GetString();
 
         secondId.Should().Be(firstId);
+    }
+
+    [Fact]
+    public async Task GetNotifications_DismissalEndsWhenPendingLifecycleClears()
+    {
+        var projectId = await CreateBlankProjectAsync("Approval dismissal lifecycle");
+        var run = await InsertInProgressRunAsync(projectId, "Approve preview generations", "Coordinator");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "preview-first", "start_preview");
+
+        var first = await _client.GetFromJsonAsync<JsonElement>("/api/notifications");
+        var notificationId = first.GetProperty("notifications").EnumerateArray()
+            .Single(item => item.GetProperty("run_id").GetString() == run.Id.ToString())
+            .GetProperty("id").GetString()!;
+        await _client.PostAsync($"/api/notifications/{Uri.EscapeDataString(notificationId)}/dismiss", null);
+
+        await InsertToolApprovalResolvedEventAsync(run.Id.ToString(), "preview-first", expired: true);
+        var cleared = await _client.GetFromJsonAsync<JsonElement>("/api/notifications");
+        cleared.GetProperty("notifications").EnumerateArray()
+            .Should().NotContain(item => item.GetProperty("run_id").GetString() == run.Id.ToString());
+
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "preview-second", "start_preview");
+        var next = await _client.GetFromJsonAsync<JsonElement>("/api/notifications");
+        next.GetProperty("notifications").EnumerateArray()
+            .Should().ContainSingle(item => item.GetProperty("run_id").GetString() == run.Id.ToString());
     }
 
     [Fact]
