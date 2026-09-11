@@ -173,6 +173,8 @@ export interface ConnectorBridge {
   orientation: 'horizontal' | 'vertical';
 }
 
+const BRIDGE_ENDPOINT_CLEARANCE = 18;
+
 interface OrthogonalSegment {
   orientation: 'horizontal' | 'vertical';
   constant: number;
@@ -259,7 +261,7 @@ export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, 
           const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
           const x = vertical.constant;
           const y = horizontal.constant;
-          const inset = 8;
+          const inset = BRIDGE_ENDPOINT_CLEARANCE;
           if (
             x <= horizontal.start + inset || x >= horizontal.end - inset ||
             y <= vertical.start + inset || y >= vertical.end - inset

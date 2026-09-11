@@ -88,6 +88,20 @@ describe('diagram connector geometry', () => {
     );
   });
 
+  it('keeps bridges 18px clear of rounded connector endpoints', () => {
+    const nearCorner = findConnectorBridges([
+      { id: 'horizontal', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },
+      { id: 'vertical', points: [{ x: 17, y: 0 }, { x: 17, y: 200 }] },
+    ]);
+    const clearOfCorner = findConnectorBridges([
+      { id: 'horizontal', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },
+      { id: 'vertical', points: [{ x: 19, y: 0 }, { x: 19, y: 200 }] },
+    ]);
+
+    expect(nearCorner.has('vertical')).toBe(false);
+    expect(clearOfCorner.get('vertical')).toEqual([{ x: 19, y: 50, orientation: 'vertical' }]);
+  });
+
   it('emits one explicit junction only for an exact shared split origin', () => {
     const junctions = findConnectorJunctions([
       { id: 'edge-b', source: 'origin', target: 'right', points: [{ x: 10, y: 20 }, { x: 100, y: 20 }] },

@@ -5,6 +5,7 @@ import {
   SUBTASK_NODE_W,
   analyzeWorkflowLayout,
   findConnectorJunctions,
+  findConnectorBridges,
   findLoopbackReturnJoinNode,
   findRoutedConnectorJunctions,
   layoutDagBalancedGrid,
@@ -73,6 +74,41 @@ describe('cardinal connector junctions', () => {
 
   it.each(cardinalTeeRoutes)('marks a $orientation fan-in tee exactly once', ({ continuation, branch }) => {
     expect(teeMarkers('merge', continuation, branch)).toEqual([{ x: 0, y: 0 }]);
+  });
+});
+
+describe('connector bridge endpoint clearance', () => {
+  const bridgeNodes = (x: number): Node[] => [
+    { ...makeNode('left'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('right'), position: { x: 200, y: 0 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('top'), position: { x: x - 50, y: -100 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('bottom'), position: { x: x - 50, y: 200 }, initialWidth: 100, initialHeight: 100 },
+  ];
+  const bridgeEdges: Edge[] = [
+    {
+      id: 'horizontal',
+      source: 'left',
+      target: 'right',
+      type: 'spine',
+      sourceHandle: 'source-right',
+      targetHandle: 'target-left',
+      data: { flowDirection: 'horizontal' },
+    },
+    {
+      id: 'vertical',
+      source: 'top',
+      target: 'bottom',
+      type: 'spine',
+      sourceHandle: 'source-bottom',
+      targetHandle: 'target-top',
+      data: { flowDirection: 'vertical' },
+    },
+  ];
+
+  it('does not bridge within 18px of a rounded endpoint, but bridges after that clearance', () => {
+    expect(findConnectorBridges(bridgeEdges, bridgeNodes(117)).has('vertical')).toBe(false);
+    expect(findConnectorBridges(bridgeEdges, bridgeNodes(119)).get('vertical'))
+      .toEqual([{ x: 119, y: 50, orientation: 'vertical' }]);
   });
 });
 

@@ -1034,7 +1034,7 @@ export function layout(spec: GraphSpec): {
   const labelledReturnFamilies = new Set<string>();
   for (const route of routed) {
     if (!route.e.loopback || !route.e.label) continue;
-    const key = `${route.e.returnJoin ?? route.e.to}\0${route.e.label}`;
+    const key = `${findLoopbackReturnJoinNode(route.e, spec.edges)}\0${route.e.label}`;
     if (labelledReturnFamilies.has(key)) continue;
     labelledReturnFamilies.add(key);
     loopbackLabelOwners.add(route.idx);
@@ -1266,27 +1266,6 @@ export function layout(spec: GraphSpec): {
     }
   }
 
-  const bridgesByEdge = findConnectorBridges(rfEdges.map((edge) => ({
-    id: edge.id,
-    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
-  })));
-  const junctionsByEdge = findConnectorJunctions(rfEdges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    loopback: (edge.data as { loopback?: boolean } | undefined)?.loopback,
-    returnJoin: (edge.data as { returnJoin?: string } | undefined)?.returnJoin,
-    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
-  })));
-  for (const edge of rfEdges) {
-    const bridges = bridgesByEdge.get(edge.id);
-    const junctions = junctionsByEdge.get(edge.id);
-    if (!bridges && !junctions) continue;
-    const data = edge.data as { bridges?: unknown; junctions?: unknown };
-    if (bridges) data.bridges = bridges;
-    if (junctions) data.junctions = junctions;
-  }
-
   // A label is always drawn centred on its edge's run -- that is what makes it
   // unambiguous which connector it belongs to -- so the only freedom left is
   // sliding it along that run. The space it needs was already reserved during
@@ -1397,6 +1376,71 @@ export function layout(spec: GraphSpec): {
     return resolved;
   };
   for (const group of groups) resolveGroupBox(group.id);
+
+  // Nested group bounds expand after side channels are chosen. Move every
+  // vertical transit segment outside unrelated expanded groups it crosses;
+  // direct members (including descendants) retain their in-group route.
+  const nodeGroup = new Map(spec.nodes.map((node) => [node.id, node.group]));
+  const belongsToGroup = (nodeId: string, groupId: string) => {
+    let current = nodeGroup.get(nodeId);
+    while (current) {
+      if (current === groupId) return true;
+      current = groupById.get(current)?.parent;
+    }
+    return false;
+  };
+  for (const edge of rfEdges) {
+    const data = edge.data as { points?: Point[] };
+    const points = data.points;
+    if (!points || points.length < 2) continue;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const from = points[index];
+      const to = points[index + 1];
+      if (Math.abs(from.x - to.x) >= 0.5 || Math.abs(from.y - to.y) < 0.5) continue;
+      const y0 = Math.min(from.y, to.y);
+      const y1 = Math.max(from.y, to.y);
+      const crossed = groups
+        .filter((group) => !belongsToGroup(edge.source, group.id) && !belongsToGroup(edge.target, group.id))
+        .map((group) => groupBoxes.get(group.id))
+        .filter((box): box is Box =>
+          box !== undefined &&
+          from.x > box.x + 0.5 &&
+          from.x < box.x + box.w - 0.5 &&
+          y1 > box.y + 0.5 &&
+          y0 < box.y + box.h - 0.5,
+        );
+      if (crossed.length === 0) continue;
+      const left = Math.min(...crossed.map((box) => box.x)) - 24;
+      const right = Math.max(...crossed.map((box) => box.x + box.w)) + 24;
+      const bypassX = from.x <= (left + right) / 2 ? left : right;
+      from.x = bypassX;
+      to.x = bypassX;
+    }
+  }
+
+  // Decorations must follow the final route after group-boundary bypassing,
+  // rather than a stale pre-expansion side-channel coordinate.
+  const finalBridgesByEdge = findConnectorBridges(rfEdges.map((edge) => ({
+    id: edge.id,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
+  const finalJunctionsByEdge = findConnectorJunctions(rfEdges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    loopback: (edge.data as { loopback?: boolean } | undefined)?.loopback,
+    returnJoin: (edge.data as { returnJoin?: string } | undefined)?.returnJoin,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
+  for (const edge of rfEdges) {
+    const data = edge.data as { bridges?: unknown; junctions?: unknown };
+    delete data.bridges;
+    delete data.junctions;
+    const bridges = finalBridgesByEdge.get(edge.id);
+    const junctions = finalJunctionsByEdge.get(edge.id);
+    if (bridges) data.bridges = bridges;
+    if (junctions) data.junctions = junctions;
+  }
 
   // Nested containers may extend beyond the original canvas margin. Shift all
   // rendered geometry together so outer group titles and surfaces are not
