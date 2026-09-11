@@ -83,22 +83,45 @@ describe('diagram connector geometry', () => {
         id: 'split-a',
         source: 'split',
         target: 'upper',
-        points: [{ x: 0, y: 100 }, { x: 80, y: 100 }, { x: 80, y: 160 }, { x: 160, y: 160 }],
+        points: [{ x: 0, y: 100 }, { x: 0, y: 160 }, { x: 160, y: 160 }],
       },
       {
         id: 'split-b',
         source: 'split',
         target: 'lower',
-        points: [{ x: 0, y: 100 }, { x: 80, y: 100 }, { x: 80, y: 220 }],
+        points: [{ x: 0, y: 100 }, { x: 0, y: 220 }],
       },
     ]);
 
     expect(junctions.has('plain')).toBe(false);
     expect(junctions.get('split-a')).toEqual([
       { x: 0, y: 100 },
-      { x: 80, y: 100 },
+      { x: 0, y: 160 },
     ]);
-    expect([...junctions.values()].flat().filter((point) => point.x === 80 && point.y === 100)).toHaveLength(1);
+    expect([...junctions.values()].flat().filter((point) => point.x === 0 && point.y === 160)).toHaveLength(1);
+  });
+
+  it('marks a tee when a branch elbow meets its sibling continuation', () => {
+    const junctions = findConnectorJunctions([
+      {
+        id: 'continue',
+        source: 'decision',
+        target: 'downstream',
+        points: [{ x: 100, y: 0 }, { x: 100, y: 200 }],
+      },
+      {
+        id: 'branch',
+        source: 'decision',
+        target: 'side-path',
+        points: [{ x: 100, y: 0 }, { x: 100, y: 80 }, { x: 240, y: 80 }],
+      },
+    ]);
+
+    expect(junctions.get('branch')).toEqual([
+      { x: 100, y: 0 },
+      { x: 100, y: 80 },
+    ]);
+    expect([...junctions.values()].flat().filter((point) => point.x === 100 && point.y === 80)).toHaveLength(1);
   });
 
   it('marks only the return point shared with the target continuation', () => {
