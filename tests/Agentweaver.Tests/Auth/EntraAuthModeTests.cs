@@ -87,7 +87,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
     }
 
     [Fact]
-    public async Task AuthSession_UsesSharedBrowserSessionForANewBrowserTab()
+    public async Task BrowserSessionCookie_BootstrapsNewTabIdentity_ButDoesNotAuthorizePlatformApis()
     {
         const string sessionId = "browser-session-new-tab";
         using (var scope = _factory.Services.CreateScope())
@@ -118,6 +118,13 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         json.GetProperty("email").GetString().Should().Be("new-tab-test@example.com");
         json.GetProperty("platform_roles").EnumerateArray().Select(role => role.GetString())
             .Should().Contain(PlatformRoles.Contributor);
+
+        using var projectsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/projects");
+        projectsRequest.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var projectsResponse = await newTab.SendAsync(projectsRequest);
+
+        projectsResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "the shared browser cookie remains limited to session bootstrap and OAuth handoffs and must not replace bearer auth for platform APIs");
     }
 
     [Fact]

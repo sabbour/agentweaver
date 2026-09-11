@@ -622,6 +622,43 @@ app.MapGet("/api/runs/{id}/events", async (
     return Results.Ok(result);
 });
 
+app.MapGet("/api/runs/{id}/pending-approvals", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    PendingToolApprovalRunsQuery pendingApprovals,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
+
+    var rootRunId = run.ParentRunId ?? run.Id.ToString();
+    var items = await pendingApprovals.GetPendingApprovalsAsync([rootRunId], ct).ConfigureAwait(false);
+    return Results.Ok(new PendingApprovalsResponse
+    {
+        RunId = rootRunId,
+        Count = items.Count,
+        Approvals = items.Select(item => new PendingApprovalDto
+        {
+            RootRunId = item.RootRunId,
+            OwningRunId = item.OwningStreamId,
+            ActionRunId = item.ActionRunId,
+            RequestId = item.RequestId,
+            ToolName = item.ToolName,
+            Url = item.Url,
+            Message = item.Message,
+            RequestedAt = item.RequestedUtc,
+            ExpiresAt = item.ExpiresUtc,
+            IsShell = item.IsShell,
+        }).ToList(),
+    });
+});
+
 // GET /api/runs/{id}/graph — return the run's dynamic workflow graph descriptor (the per-run
 // visualization). Built from the same code that wires the MAF workflow (no runtime reflection):
 // plumbing adapters/storers/terminals are collapsed/dropped and edges transitively re-stitched.
@@ -1538,12 +1575,12 @@ app.MapPost("/api/runs/{id}/retry", async (
         if (isCoordinatorRun && run.Origin == RunOrigin.BacklogPickup)
         {
             // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
-            var project = run.ProjectId is { } ppid ? await projectStore.GetAsync(ppid, ct) : null;
-            var autoApproveTools = project?.PickupAutoApproveTools ?? true;
-            var autopilot = project?.PickupAutopilot ?? true;
+            // Preserve the policy captured by the heartbeat-created source run rather than reading
+            // mutable project pickup defaults during retry.
+            var sourcePolicy = runOptions.GetLaunchPolicy(run.Id.ToString());
             newRunId = await coordinator
                 .StartRetriedPickupCoordinatorRunAsync(
-                    run, autoApproveTools, autopilot, ct,
+                    run, sourcePolicy, ct,
                     submittingUserDisplayName: retryCallerDisplayName)
                 .ConfigureAwait(false);
         }
@@ -1552,7 +1589,7 @@ app.MapPost("/api/runs/{id}/retry", async (
             // Interactive coordinator run: reuse the normal interactive start seam. Preserve the
             // source run's launch options (#332) — auto_approve_tools / autopilot must NOT silently
             // reset to false on retry, which would be an unexpected behavior change from the original.
-            var sourceOptions = runOptions.Get(run.Id.ToString());
+            var sourcePolicy = runOptions.GetLaunchPolicy(run.Id.ToString());
             var startMode = await coordinator.GetStartModeAsync(run.Id.ToString(), ct);
             newRunId = await coordinator.StartCoordinatorRunAsync(
                 run.ProjectId!.Value,
@@ -1561,8 +1598,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                 run.RepositoryPath,
                 run.OriginatingBranch,
                 run.ModelId,
-                autoApproveTools: sourceOptions.AutoApproveTools,
-                autopilot: sourceOptions.Autopilot,
+                approvalPolicy: sourcePolicy,
                 ct,
                 retriedFrom: run.Id.ToString(),
                 startMode: startMode,

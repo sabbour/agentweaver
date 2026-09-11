@@ -39,6 +39,59 @@ rules:
       - get
       - list
       - patch
+  # Cluster topology discovery. These namespaced resources are read-only; existing
+  # lifecycle permissions above remain unchanged.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+      - serviceaccounts
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - replicasets
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - autoscaling
+    resources:
+      - horizontalpodautoscalers
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - autoscaling.k8s.io
+    resources:
+      - verticalpodautoscalers
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - keda.sh
+    resources:
+      - scaledobjects
+    verbs:
+      - get
+      - list
   # Legacy generic sandbox commands still use exec. Pod creation is deliberately
   # delegated to the SandboxClaim controller, never granted to this identity.
   # Note (issue #473): Kubernetes RBAC does not support label-based resourceNames for 'create' on pods/exec.
@@ -56,6 +109,7 @@ rules:
     resources:
       - services
     verbs:
+      - get
       - list
       - create
       - delete
@@ -71,6 +125,13 @@ rules:
       - delete
       - patch
       - update
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - gateways
+    verbs:
+      - get
+      - list
   # ResourceQuota — read by DiagnosticsService.CheckAgentPodQuotaDetailedAsync for the
   # Cluster health page (agent_pod_quota check).
   - apiGroups:
@@ -95,6 +156,45 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: agentweaver-api-sandbox
+---
+# The topology storage layer needs two cluster-scoped resource types. Keep this
+# separate from the namespaced API Role and strictly read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentweaver-api-topology-storage
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumes
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - storageclasses
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentweaver-api-topology-storage
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+subjects:
+  - kind: ServiceAccount
+    name: agentweaver-api
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentweaver-api-topology-storage
 ---
 # Worker sandbox-dispatch permissions. Keep this distinct from the API Role:
 # the worker never CREATES browser-preview Services/HTTPRoutes (route lifecycle

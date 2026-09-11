@@ -69,11 +69,13 @@ request port. If the Agentweaver browser session expires before consent is
 submitted, the POST renders a same-origin sign-in continuation instead of
 redirecting the form submission into the Entra sign-in chain.
 
-Access tokens are signed JWTs with a ten-minute lifetime. Authorization codes and
-refresh tokens are opaque references persisted by OpenIddict. Code replay is
-rejected. Refresh-token replay atomically revokes all tokens in its authorization
-family. Refresh-family expiration is fixed at 30 days, and redeemed records are
-retained for that lifetime plus a seven-day replay-detection margin.
+Access tokens are signed JWTs with an eight-hour lifetime by default. Clients that
+need a longer session use `offline_access` and renew through the rotating refresh
+token; the token response reports `expires_in=28800`. Authorization codes and refresh
+tokens are opaque references persisted by OpenIddict. Code replay is rejected.
+Refresh-token replay atomically revokes all tokens in its authorization family.
+Refresh-family expiration is fixed at 30 days, and redeemed records are retained for
+that lifetime plus a seven-day replay-detection margin.
 
 Production loads active and previous signing and encryption certificate versions
 from Azure Key Vault. Startup fails closed without usable durable keys.
@@ -85,6 +87,13 @@ rotation adds a new version under the same name; the loader selects the newest t
 enabled, time-valid versions. Deployment verification checks the canonical origin,
 exact `/mcp` resource, runtime certificate names, Key Vault versions, and keyed RS256
 JWKS output.
+
+The API setting `Auth:OAuth:AccessTokenLifetimeHours` controls only
+Agentweaver-issued OAuth access tokens. AKS deployment supplies it through
+`OAUTH_ACCESS_TOKEN_LIFETIME_HOURS`, which defaults to `8` and is included in the
+OAuth runtime checksum. Supported values are 1 through 24 hours. It does not change
+authorization-code, refresh-family, provider-capability, Entra, or Copilot token
+lifetimes.
 
 Azure deployments derive the canonical origin from the trusted managed
 `DefaultDomainCertificate` status. The deploy renderer rejects the committed

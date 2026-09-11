@@ -49,6 +49,25 @@ export type RunStatus =
   | 'merge_failed'
   | 'assemble_ready';
 
+export interface PendingApprovalDto {
+  root_run_id: string;
+  owning_run_id: string;
+  action_run_id: string;
+  request_id: string;
+  tool_name: string | null;
+  url: string | null;
+  message: string | null;
+  requested_at: string;
+  expires_at: string | null;
+  is_shell: boolean;
+}
+
+export interface PendingApprovalsResponse {
+  run_id: string;
+  count: number;
+  approvals: PendingApprovalDto[];
+}
+
 export interface RunSandboxInfo {
   backend: string;
   isRealIsolation: boolean;
@@ -139,6 +158,8 @@ export function safeTerminalFailureMessage(_message: string, code: string, retry
     'a2a_transport_failure',
     'agent_host_turn_incomplete',
     'github_copilot_auth_required',
+    'github_copilot_capability_snapshot_unavailable',
+    'model_provider_snapshot_unavailable',
     'shell_execution_timeout',
   ]);
   const safeCode = allowedCodes.has(code) ? code : 'agent_turn_internal_error';
@@ -652,19 +673,27 @@ export interface ProjectAccessOverview {
 }
 
 export interface UnattendedReadiness {
-  status: 'ready' | 'not_ready';
+  status: 'interactive_ready' | 'unattended_ready' | 'repository_ready' | 'reauthorization_required' | 'unavailable';
   reason_code: string;
   message: string;
+  interactive_ready: boolean;
+  unattended_ready: boolean;
+  repository_ready: boolean;
   repo_app_installation_connected: boolean;
+  interactive?: {
+    status: 'interactive_ready' | 'reauthorization_required' | 'unavailable';
+    source: 'user' | 'user_byok' | 'byok' | 'none';
+    reason_code: 'interactive_ready' | 'interactive_model_provider_connection_required' | 'user_model_provider_reconnect_required';
+  };
   model_provider?: {
-    status: 'ready' | 'not_ready';
+    status: 'unattended_ready' | 'reauthorization_required' | 'unavailable';
     source: 'project' | 'platform_default' | 'byok' | 'none';
-    reason_code: 'ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
+    reason_code: 'unattended_ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
   };
   repository?: {
     required: boolean;
-    status: 'ready' | 'not_ready' | 'not_required';
-    reason_code: 'ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
+    status: 'repository_ready' | 'not_ready' | 'not_required';
+    reason_code: 'repository_ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
     repo_app_installation_connected: boolean;
   };
 }
@@ -842,6 +871,13 @@ export type StartOrchestrationMode = 'define_outcome' | 'direct';
 export interface StartOrchestrationRequest {
   goal: string;
   start_mode?: StartOrchestrationMode;
+  auto_approve_tools?: boolean;
+  autopilot?: boolean;
+}
+
+export interface RunApprovalPolicy {
+  auto_approve_tools: boolean;
+  autopilot: boolean;
 }
 
 export interface StartOrchestrationResponse {
@@ -1313,6 +1349,7 @@ export interface AgentPodInfoDto {
   pod_name?: string | null;
   status: string; // 'ready' | 'pending'
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface PendingCapacityRunDto {
@@ -1332,6 +1369,7 @@ export interface WarmPoolStatusDto {
   status: string; // 'healthy' | 'warning' | 'critical'
   instances?: WarmPoolInstanceDto[];
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface WarmPoolInstanceDto {
@@ -1342,6 +1380,7 @@ export interface WarmPoolInstanceDto {
   run_id?: string | null;
   project_id?: string | null;
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
 }
 
 export interface SandboxClaimObjectDto {
@@ -1352,6 +1391,57 @@ export interface SandboxClaimObjectDto {
   bound_sandbox?: string | null;
   warm_pool?: string | null;
   age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface TopologyResourceDetailsDto {
+  resource_id: string;
+  resource_type: 'cluster' | 'warm_pool' | 'warm_instance' | 'sandbox_claim' | 'agent_host_pod';
+  status: string;
+  summary: string;
+  attention_required: boolean;
+  reason?: string | null;
+  created_utc?: string | null;
+  last_transition_utc?: string | null;
+  ownership?: TopologyResourceOwnershipDto | null;
+  capacity?: TopologyResourceCapacityDto | null;
+  runtime?: TopologyResourceRuntimeDto | null;
+  deep_links?: TopologyResourceDeepLinksDto | null;
+}
+
+export interface TopologyResourceOwnershipDto {
+  run_id?: string | null;
+  project_id?: string | null;
+  run_status?: string | null;
+  agent_name?: string | null;
+  claim_name?: string | null;
+  run_started_utc?: string | null;
+  run_ended_utc?: string | null;
+}
+
+export interface TopologyResourceCapacityDto {
+  desired?: number | null;
+  ready?: number | null;
+  available?: number | null;
+  claimed?: number | null;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+}
+
+export interface TopologyResourceRuntimeDto {
+  pod_name?: string | null;
+  node_name?: string | null;
+  image?: string | null;
+  runtime_class?: string | null;
+}
+
+export interface TopologyResourceDeepLinksDto {
+  project_id?: string | null;
+  run_id?: string | null;
+  claim_name?: string | null;
+  warm_pool_name?: string | null;
+  pod_name?: string | null;
 }
 
 export interface ClusterDiagnosticsDto {
@@ -1363,6 +1453,53 @@ export interface ClusterDiagnosticsDto {
   pending_capacity_runs: PendingCapacityRunDto[];
   warm_pools?: WarmPoolStatusDto[];
   sandbox_claims?: SandboxClaimObjectDto[];
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export type KubernetesTopologyLayer =
+  | 'runtime'
+  | 'networking'
+  | 'workloads'
+  | 'storage'
+  | 'autoscaling'
+  | 'availability';
+
+export interface KubernetesTopologyLayerDto {
+  name: KubernetesTopologyLayer;
+  status: 'available' | 'partial' | 'unavailable' | 'not_requested';
+  resource_count: number;
+  message: string;
+}
+
+export interface KubernetesTopologyNodeDto {
+  id: string;
+  layer: KubernetesTopologyLayer;
+  type: string;
+  api_version: string;
+  name: string;
+  namespace?: string | null;
+  health: 'healthy' | 'attention' | 'critical' | 'unknown';
+  summary: string;
+  details: Record<string, string>;
+}
+
+export interface KubernetesTopologyEdgeDto {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  inferred: boolean;
+  summary: string;
+}
+
+export interface KubernetesTopologyDto {
+  generated_utc: string;
+  namespace: string;
+  requested_layers: KubernetesTopologyLayer[];
+  layers: KubernetesTopologyLayerDto[];
+  nodes: KubernetesTopologyNodeDto[];
+  edges: KubernetesTopologyEdgeDto[];
+  truncated: boolean;
 }
 
 // Global system diagnostics snapshot (FR-016). All fields sourced from live state.

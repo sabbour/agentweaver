@@ -56,6 +56,39 @@ public sealed record Run
     /// backlog-pickup claim+reserve transaction stamps <see cref="RunOrigin.BacklogPickup"/>.</summary>
     public RunOrigin Origin { get; init; } = RunOrigin.Interactive;
 
+    /// <summary>Crash-safe immutable launch-policy snapshot. Null only for legacy runs.</summary>
+    public bool? LaunchAutoApproveTools { get; init; }
+    public bool? LaunchAutopilot { get; init; }
+    public string? ApprovalPolicySnapshotId { get; init; }
+    public string? ApprovalPolicySource { get; init; }
+    public DateTimeOffset? ApprovalPolicyCapturedAt { get; init; }
+    public DateTimeOffset? ApprovalPolicySettingsUpdatedAt { get; init; }
+    public string? ApprovalPolicyInheritedFromRunId { get; init; }
+
+    public RunApprovalPolicySnapshot? GetApprovalPolicySnapshot() =>
+        LaunchAutoApproveTools is not { } autoApproveTools
+        || LaunchAutopilot is not { } autopilot
+        || ApprovalPolicyCapturedAt is not { } capturedAt
+            ? null
+            : new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(autoApproveTools, autopilot),
+                ApprovalPolicySource ?? "legacy",
+                capturedAt,
+                ApprovalPolicySettingsUpdatedAt,
+                ApprovalPolicyInheritedFromRunId,
+                ApprovalPolicySnapshotId);
+
+    public Run WithApprovalPolicySnapshot(RunApprovalPolicySnapshot snapshot) => this with
+    {
+        LaunchAutoApproveTools = snapshot.Policy.AutoApproveTools,
+        LaunchAutopilot = snapshot.Policy.Autopilot,
+        ApprovalPolicySnapshotId = snapshot.SnapshotId,
+        ApprovalPolicySource = snapshot.Source,
+        ApprovalPolicyCapturedAt = snapshot.CapturedAt,
+        ApprovalPolicySettingsUpdatedAt = snapshot.SettingsUpdatedAt,
+        ApprovalPolicyInheritedFromRunId = snapshot.InheritedFromRunId,
+    };
+
     /// <summary>
     /// The run_id of the FAILED run this run was retriggered from (POST /api/runs/{id}/retry).
     /// Null for runs that were not produced by a retry. Forms a provenance chain (a retry of a retry

@@ -38,6 +38,9 @@ public sealed class BacklogClaimReserveTests
 
         var project = MakeProject();
         await projects.InsertAsync(project);
+        var settingsUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await projects.UpdatePickupSettingsAsync(
+            project.Id, 3, autopilot: true, autoApproveTools: true, settingsUpdatedAt);
         var task = MakeReadyTask(project.Id, "n");
         await store.InsertAsync(task);
 
@@ -48,7 +51,7 @@ public sealed class BacklogClaimReserveTests
         var claimTasks = Enumerable.Range(0, contenders).Select(i => Task.Run(async () =>
         {
             barrier.SignalAndWait();
-            return await store.TryClaimAndReserveCoordinatorRunAsync(
+            return await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
                 project.Id, task.Id,
                 MakeCoordinatorRun(project.Id, runIds[i]),
                 DateTimeOffset.UtcNow);
@@ -57,12 +60,18 @@ public sealed class BacklogClaimReserveTests
         var results = await Task.WhenAll(claimTasks);
 
         // Exactly one Won; every other is Lost (never ProjectUnavailable — the project is active).
-        results.Count(r => r == ClaimReserveResult.Won).Should().Be(1);
-        results.Count(r => r == ClaimReserveResult.Lost).Should().Be(contenders - 1);
-        results.Should().NotContain(ClaimReserveResult.ProjectUnavailable);
+        results.Count(r => r.Result == ClaimReserveResult.Won).Should().Be(1);
+        results.Count(r => r.Result == ClaimReserveResult.Lost).Should().Be(contenders - 1);
+        results.Select(r => r.Result).Should().NotContain(ClaimReserveResult.ProjectUnavailable);
 
-        var winnerIdx = Array.FindIndex(results, r => r == ClaimReserveResult.Won);
+        var winnerIdx = Array.FindIndex(results, r => r.Result == ClaimReserveResult.Won);
         var winnerRunId = runIds[winnerIdx];
+        results[winnerIdx].ApprovalPolicySnapshot.Should().Be(
+            new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "backlog_pickup",
+                results[winnerIdx].ApprovalPolicySnapshot!.CapturedAt,
+                settingsUpdatedAt));
 
         // Task ends Claimed with exactly the winner's run_id.
         var claimed = await store.GetAsync(project.Id, task.Id);
@@ -83,6 +92,46 @@ public sealed class BacklogClaimReserveTests
             if (i == winnerIdx) continue;
             (await runStore.GetAsync(runIds[i])).Should().BeNull("loser run must not be persisted");
         }
+    }
+
+    [Fact]
+    public async Task ClaimsSnapshotLatestPersistedSettings_WithoutChangingEarlierRuns()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var store = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+
+        var trueSettingsAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        await projects.UpdatePickupSettingsAsync(
+            project.Id, 3, autopilot: true, autoApproveTools: true, trueSettingsAt);
+        var firstTask = MakeReadyTask(project.Id, "a");
+        await store.InsertAsync(firstTask);
+        var firstRunId = RunId.New();
+        var first = await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, firstTask.Id, MakeCoordinatorRun(project.Id, firstRunId), DateTimeOffset.UtcNow);
+
+        var falseSettingsAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await projects.UpdatePickupSettingsAsync(
+            project.Id, 3, autopilot: false, autoApproveTools: false, falseSettingsAt);
+        var secondTask = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(secondTask);
+        var secondRunId = RunId.New();
+        var second = await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, secondTask.Id, MakeCoordinatorRun(project.Id, secondRunId), DateTimeOffset.UtcNow);
+
+        first.Result.Should().Be(ClaimReserveResult.Won);
+        first.ApprovalPolicySnapshot!.Policy.Should().Be(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true));
+        first.ApprovalPolicySnapshot.SettingsUpdatedAt.Should().Be(trueSettingsAt);
+        second.Result.Should().Be(ClaimReserveResult.Won);
+        second.ApprovalPolicySnapshot!.Policy.Should().Be(new RunApprovalPolicy());
+        second.ApprovalPolicySnapshot.SettingsUpdatedAt.Should().Be(falseSettingsAt);
+
+        (await runStore.GetAsync(firstRunId))!.GetApprovalPolicySnapshot().Should().Be(first.ApprovalPolicySnapshot);
+        (await runStore.GetAsync(secondRunId))!.GetApprovalPolicySnapshot().Should().Be(second.ApprovalPolicySnapshot);
     }
 
     // =========================================================================

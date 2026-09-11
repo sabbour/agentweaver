@@ -87,6 +87,13 @@ public sealed class SqliteDb
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'interactive';", ct);
         await TryAlterAsync(connection, "CREATE INDEX IF NOT EXISTS idx_runs_origin_status ON runs (origin, status);", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN launch_auto_approve_tools INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN launch_autopilot INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_snapshot_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_source TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_captured_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_settings_updated_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_inherited_from_run_id TEXT;", ct);
 
         // Retry provenance (POST /api/runs/{id}/retry): the run_id of the failed run a fresh run was
         // retriggered from. Existing rows default to NULL (not produced by a retry).
@@ -576,7 +583,14 @@ public sealed class SqliteDb
             sandbox_backend    TEXT,
             sandbox_claim_name TEXT,
             sandbox_pod_name   TEXT,
-            sandbox_namespace  TEXT
+            sandbox_namespace  TEXT,
+            launch_auto_approve_tools INTEGER,
+            launch_autopilot INTEGER,
+            approval_policy_snapshot_id TEXT,
+            approval_policy_source TEXT,
+            approval_policy_captured_at TEXT,
+            approval_policy_settings_updated_at TEXT,
+            approval_policy_inherited_from_run_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_revisions (

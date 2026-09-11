@@ -74,6 +74,24 @@ public sealed class RunTerminalDiagnosticReaderTests
         System.Text.Json.JsonSerializer.Serialize(diagnostic).Should().NotContain("must-not-escape");
     }
 
+    [Theory]
+    [InlineData("model_provider_snapshot_unavailable")]
+    [InlineData("github_copilot_capability_snapshot_unavailable")]
+    public void TryRead_IdentifiesRunSnapshotFailuresWithoutCallingTheProviderUnavailable(string errorCode)
+    {
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            errorCode,
+            retryable = true,
+        });
+
+        RunTerminalDiagnosticReader.TryRead(payload, DateTime.UtcNow, out var diagnostic).Should().BeTrue();
+
+        diagnostic!.Code.Should().Be(errorCode);
+        diagnostic.Component.Should().Be("provider_snapshot");
+        diagnostic.Message.Should().Be($"Run failed with code '{errorCode}'. Retry is available.");
+    }
+
     [Fact]
     public void TryRead_RedactsUnsafeMessageInsteadOfProxyingIt()
     {
@@ -148,5 +166,73 @@ public sealed class RunTerminalDiagnosticReaderTests
         var serialized = System.Text.Json.JsonSerializer.Serialize(diagnostic);
         serialized.Should().NotContain(jwt).And.NotContain(githubToken).And.NotContain(azureKey)
             .And.NotContain(credentialUrl).And.NotContain(stackPath);
+    }
+
+    [Fact]
+    public async Task GetAsync_PrefersLatestTerminalFailureOverEarlierRecoverableAgentHostFailure()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new MemoryDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.RunEvents.AddRange(
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 1,
+                EventType = EventTypes.RunFailed,
+                PayloadJson = """{"errorCode":"agent_turn_internal_error","retryable":true}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-1),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 2,
+                EventType = EventTypes.RunFailed,
+                PayloadJson = """
+                    {
+                      "errorCode":"coordinator_direct_execution_failed",
+                      "retryable":false,
+                      "correlationId":"0f8fad5bd9cb469fa16570867728950e",
+                      "causeChain":["InvalidOperationException"]
+                    }
+                    """,
+                CreatedAt = DateTime.UtcNow,
+            });
+        await db.SaveChangesAsync();
+
+        var diagnostic = await new RunTerminalDiagnosticReader(db)
+            .GetAsync("run-1", CancellationToken.None);
+
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be("coordinator_direct_execution_failed");
+        diagnostic.Component.Should().Be("coordinator");
+        diagnostic.CorrelationIds.Should().ContainKey("correlation_id");
+        diagnostic.CauseChain.Should().Equal("InvalidOperationException");
+    }
+
+    [Fact]
+    public void TryRead_ProjectsCorrelatedPreLaunchProviderFailure()
+    {
+        const string payload = """
+            {
+              "errorCode":"model_provider_connection_required",
+              "retryable":false,
+              "correlationId":"0f8fad5bd9cb469fa16570867728950e",
+              "causeChain":["ModelProviderConnectionRequiredException"]
+            }
+            """;
+
+        RunTerminalDiagnosticReader.TryRead(payload, DateTime.UtcNow, out var diagnostic).Should().BeTrue();
+
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be("model_provider_connection_required");
+        diagnostic.Component.Should().Be("model_provider");
+        diagnostic.Retryable.Should().BeFalse();
+        diagnostic.CorrelationIds.Should().ContainKey("correlation_id");
+        diagnostic.CauseChain.Should().Equal("ModelProviderConnectionRequiredException");
     }
 }

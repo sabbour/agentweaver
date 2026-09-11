@@ -25,6 +25,8 @@ namespace Agentweaver.AgentRuntime;
 /// </remarks>
 public static class PreviewPublishTool
 {
+    internal static readonly TimeSpan RegistrationTimeout = TimeSpan.FromMinutes(3);
+
     /// <summary>
     /// Builds the <c>start_preview</c> tool for the given run. The model supplies ONLY the port; the
     /// run ID is bound server-side in the closure so the model cannot target another run.
@@ -42,9 +44,10 @@ public static class PreviewPublishTool
     /// </param>
     public static AIFunction Build(
         string apiBaseUrl, string? apiKey, string runId, HttpClient? httpClientOverride = null,
-        ILogger? logger = null)
+        ILogger? logger = null, TimeSpan? registrationTimeout = null)
     {
         var http = httpClientOverride ?? CreateHttpClient(apiBaseUrl, apiKey);
+        var timeout = registrationTimeout ?? RegistrationTimeout;
 
         return AIFunctionFactory.Create(
             async (
@@ -53,12 +56,22 @@ public static class PreviewPublishTool
                 CancellationToken ct = default) =>
             {
                 HttpResponseMessage response;
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(timeout);
                 try
                 {
                     response = await http.PostAsJsonAsync(
                         $"api/runs/{runId}/sandbox/preview",
                         new { target_port = port, preview_runner_session_id = session_id },
-                        ct).ConfigureAwait(false);
+                        timeoutCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    logger?.LogWarning(
+                        "Tool call timed out: tool={ToolName} runId={RunId} port={Port} timeoutSeconds={TimeoutSeconds}",
+                        "start_preview", runId, port, timeout.TotalSeconds);
+                    return $"start_preview failed: preview registration did not complete within {FormatDuration(timeout)}. " +
+                        "Check run status, resolve any pending approval, and retry.";
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -116,6 +129,11 @@ public static class PreviewPublishTool
             ? redacted[..MaxLoggedBodyLength] + "...[truncated]"
             : redacted;
     }
+
+    private static string FormatDuration(TimeSpan timeout) =>
+        timeout < TimeSpan.FromSeconds(1)
+            ? $"{timeout.TotalMilliseconds:n0} milliseconds"
+            : $"{timeout.TotalSeconds:n0} seconds";
 
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
     {

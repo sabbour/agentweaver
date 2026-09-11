@@ -1273,9 +1273,14 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     const toolName = String(p['toolName'] ?? p['tool_name'] ?? 'unknown');
     const rawUrl = p['url'] ? String(p['url']) : '';
     const url = rawUrl.length > 80 ? rawUrl.slice(0, 80) + '…' : rawUrl;
+    const targetPort = p['targetPort'] ?? p['target_port'];
+    const previewTarget = p['previewTarget'] ?? p['preview_target'];
+    const preview = toolName === 'start_preview' && targetPort
+      ? ` ${String(previewTarget ?? 'run_sandbox')}:${String(targetPort)}`
+      : '';
     return (
       <Text size={100} className={styles.intentAnnotation}>
-        Tool auto-approved: {toolName}{url ? ` ${url}` : ''}
+        Tool auto-approved: {toolName}{preview}{url ? ` ${url}` : ''}
       </Text>
     );
   }

@@ -463,6 +463,23 @@ describe('timelineReducer', () => {
     expect(turn.steps).toHaveLength(0);
   });
 
+  it('auto-approved preview creates audit history without pending approval UI', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.auto_approved', {
+        toolName: 'start_preview',
+        decisionId: 'decision-1',
+        policySnapshotId: 'snapshot-1',
+        previewTarget: 'run_sandbox',
+        targetPort: 5173,
+      }),
+    ]);
+
+    expect(s.items).toHaveLength(2);
+    expect(s.items[1].kind).toBe('lifecycle');
+    expect(s.pendingApprovals.size).toBe(0);
+  });
+
   // --- BLOCKING #1: HITL question gates ------------------------------------
 
   // Q-01: agent.question_asked creates a top-level, unresolved question item

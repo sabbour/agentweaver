@@ -293,11 +293,13 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                 // exactly as before — only the diagnosis carried to the worker is improved.
                 if (!sawStructuredTerminalFailure)
                 {
+                    var correlationId = Guid.NewGuid().ToString("n");
                     _logger.LogWarning(
                         turnFailure.SourceException,
                         "A2ATurnBridgeAgent: turn aborted without a structured RunFailed; emitting " +
                         "synthetic agent_turn_internal_error terminal so the worker avoids a bare " +
-                        "'Received: None' classification (#267).");
+                        "'Received: None' classification (#267). CorrelationId={CorrelationId}",
+                        correlationId);
 
                     yield return new AgentResponseUpdate(
                         ChatRole.Assistant,
@@ -307,7 +309,9 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                                 StructuredRunFailureTerminal.CreateInternalError(
                                     "Agent turn aborted before reporting a structured terminal failure.",
                                     $"{turnFailure.SourceException.GetType().Name}: " +
-                                    turnFailure.SourceException.Message)),
+                                    turnFailure.SourceException.Message,
+                                    turnFailure.SourceException,
+                                    correlationId)),
                         });
                 }
 

@@ -58,6 +58,34 @@ public sealed class RunModelProviderSnapshotStoreTests
     }
 
     [Fact]
+    public async Task RepeatedCapture_ReusesOwnerWithoutWritingAnotherCandidateSecret()
+    {
+        var secrets = new CountingSecretStore();
+        await using var fixture = await Fixture.CreateAsync(secrets);
+        var run = Run() with { ModelSource = ModelSource.GitHubCopilot };
+        var accepted = new EffectiveModelProviderResult.PlatformGitHubCopilot("accepted", null, "v1");
+
+        var first = await fixture.CreateStore()
+            .CaptureWithOwnershipAsync(run, accepted, null, CancellationToken.None);
+        var repeated = await fixture.CreateStore()
+            .CaptureWithOwnershipAsync(
+                run,
+                new EffectiveModelProviderResult.PlatformGitHubCopilot("later", null, "v2"),
+                null,
+                CancellationToken.None);
+
+        first.OwnedSecretReference.Should().NotBeNull();
+        repeated.OwnedSecretReference.Should().BeNull();
+        repeated.Boundary.Provider.ProviderKey().Should().Be(accepted.ProviderKey());
+        secrets.SetCount.Should().Be(1);
+        secrets.DeleteCount.Should().Be(0);
+
+        await using var scope = fixture.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.RunModelProviderSnapshotOwners.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
     public async Task CapabilityPreparationFailure_ReleaseRemovesWinningOwnerAndPrivateSecret()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -155,7 +183,8 @@ public sealed class RunModelProviderSnapshotStoreTests
 
         var action = () => fixture.CreateStore().TryGetAsync(run, CancellationToken.None);
 
-        await action.Should().ThrowAsync<AgentProviderException>();
+        var exception = await action.Should().ThrowAsync<AgentProviderException>();
+        exception.Which.ErrorCode.Should().Be("model_provider_snapshot_unavailable");
     }
 
     [Fact]
@@ -208,7 +237,7 @@ public sealed class RunModelProviderSnapshotStoreTests
         var action = () => fixture.CreateStore().TryGetAsync(run, CancellationToken.None);
 
         var exception = await action.Should().ThrowAsync<AgentProviderException>();
-        exception.Which.ErrorCode.Should().Be("model_provider_changed");
+        exception.Which.ErrorCode.Should().Be("model_provider_snapshot_unavailable");
         exception.Which.Message.Should().NotContain("secret");
     }
 
@@ -334,5 +363,29 @@ public sealed class RunModelProviderSnapshotStoreTests
 
         public Task DeleteSecretAsync(string key, CancellationToken ct = default) =>
             throw new InvalidOperationException("secret cleanup failed");
+    }
+
+    private sealed class CountingSecretStore : ISecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+
+        public int SetCount { get; private set; }
+        public int DeleteCount { get; private set; }
+
+        public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>
+            _inner.GetSecretAsync(key, ct);
+
+        public Task<string> SetSecretAsync(
+            string key, string value, string? etag = null, CancellationToken ct = default)
+        {
+            SetCount++;
+            return _inner.SetSecretAsync(key, value, etag, ct);
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default)
+        {
+            DeleteCount++;
+            return _inner.DeleteSecretAsync(key, ct);
+        }
     }
 }

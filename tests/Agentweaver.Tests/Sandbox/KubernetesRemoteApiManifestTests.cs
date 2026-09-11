@@ -238,7 +238,35 @@ public sealed class KubernetesRemoteApiManifestTests
             verbs.Should().BeEquivalentTo(["get", "list"],
                 "issue #476 does not overlap #481 by creating per-run templates, pools, or volumes");
         }
-        rbac.Should().NotContain("persistentvolumeclaims");
+        var pvcRule = Regex.Match(
+            rbac,
+            @"(?ms)^\s{4}resources:\r?\n\s{6}- persistentvolumeclaims\r?\n\s{6}- serviceaccounts\r?\n" +
+            @"\s{4}verbs:\r?\n(?<verbs>(?:\s{6}- \S+\r?\n)+)");
+        pvcRule.Success.Should().BeTrue();
+        Regex.Matches(pvcRule.Groups["verbs"].Value, @"- (\S+)")
+            .Select(match => match.Groups[1].Value)
+            .Should().BeEquivalentTo(["get", "list"]);
+    }
+
+    [Fact]
+    public void ApiTopologyDiscovery_KeepsNewResourceAccessReadOnly()
+    {
+        var rbac = ReadManifest("rbac-api.yaml");
+        foreach (var resource in new[]
+        {
+            "gateways", "networkpolicies", "deployments", "replicasets",
+            "horizontalpodautoscalers", "verticalpodautoscalers", "scaledobjects",
+            "poddisruptionbudgets", "persistentvolumes", "storageclasses",
+        })
+        {
+            var rule = Regex.Match(
+                rbac,
+                $@"(?ms)^\s{{4}}resources:\r?\n(?:\s{{6}}- \S+\r?\n)*\s{{6}}- {resource}\r?\n(?:\s{{6}}- \S+\r?\n)*\s{{4}}verbs:\r?\n(?<verbs>(?:\s{{6}}- \S+\r?\n)+)");
+            rule.Success.Should().BeTrue($"{resource} must have an explicit topology read rule");
+            Regex.Matches(rule.Groups["verbs"].Value, @"- (\S+)")
+                .Select(match => match.Groups[1].Value)
+                .Should().BeEquivalentTo(["get", "list"], $"{resource} topology access must be read-only");
+        }
     }
 
     [Fact]

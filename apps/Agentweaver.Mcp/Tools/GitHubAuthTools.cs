@@ -93,7 +93,7 @@ public sealed class GitHubAuthTools(AgentweaverApiClient api)
     }
 
     [McpServerTool(Name = "project_github_capability_status"), Description(
-        "Get the server-derived, redacted unattended GitHub capability readiness for a project. No GitHub identities, credentials, installations, repositories, or permissions are returned.")]
+        "Get redacted interactive, unattended, and repository readiness for a project. Status distinguishes unattended_ready, interactive_ready, repository_ready, reauthorization_required, and unavailable. No GitHub identities, credentials, installations, repositories, or permissions are returned.")]
     public async Task<string> ProjectGitHubCapabilityStatusAsync(
         [Description("Project ID to inspect. The backend verifies current project Owner authority.")] string project_id,
         CancellationToken ct)
@@ -108,6 +108,9 @@ public sealed class GitHubAuthTools(AgentweaverApiClient api)
                 status = RequiredString(readiness, "status"),
                 reason_code = RequiredString(readiness, "reason_code"),
                 message = RequiredString(readiness, "message"),
+                interactive_ready = RequiredBoolean(readiness, "interactive_ready"),
+                unattended_ready = RequiredBoolean(readiness, "unattended_ready"),
+                repository_ready = RequiredBoolean(readiness, "repository_ready"),
                 repo_app_installation_connected = RequiredBoolean(readiness, "repo_app_installation_connected"),
             });
         }

@@ -26,7 +26,12 @@ The response is a `ClusterDiagnosticsDto`:
   "orphaned_agent_pods": [],
   "pending_capacity_runs": [],
   "warm_pools": [],
-  "sandbox_claims": []
+  "sandbox_claims": [],
+  "resource_graph": {
+    "nodes": [],
+    "edges": [],
+    "layers": []
+  }
 }
 ```
 
@@ -40,6 +45,7 @@ The response is a `ClusterDiagnosticsDto`:
 | `pending_capacity_runs` | `PendingCapacityRunDto[]` | Capacity-waiting subtasks. New runs usually leave this legacy surface empty. |
 | `warm_pools` | `WarmPoolStatusDto[]` | SandboxWarmPool objects in the namespace. |
 | `sandbox_claims` | `SandboxClaimObjectDto[]` | SandboxClaim objects in the namespace. |
+| `resource_graph` | `ClusterTopologyResourceGraphDto` | Optional bounded Kubernetes infrastructure graph. Older/runtime-only responses can omit it. |
 
 ## Checks
 
@@ -57,11 +63,118 @@ Each check has `name`, `status`, `message`, and `latencyMs`. Status values are `
 
 ## Inventory objects
 
-`AgentPodInfoDto` has `claim_name`, optional `run_id`, optional `pod_name`, `status`, and optional `age_seconds`.
+`AgentPodInfoDto` has `claim_name`, optional `run_id`, optional `pod_name`, `status`, optional `age_seconds`, and optional `details`.
 
-`WarmPoolStatusDto` has `name`, `desired_replicas`, `ready_replicas`, `available_replicas`, `status`, `instances`, and optional `age_seconds`.
+`WarmPoolStatusDto` has `name`, `desired_replicas`, `ready_replicas`, `available_replicas`, `status`, `instances`, optional `age_seconds`, and optional `details`.
 
-`SandboxClaimObjectDto` has `name`, `phase`, `ready`, optional `run_id`, optional `bound_sandbox`, optional `warm_pool`, and optional `age_seconds`.
+`SandboxClaimObjectDto` has `name`, `phase`, `ready`, optional `run_id`, optional `bound_sandbox`, optional `warm_pool`, optional `age_seconds`, and optional `details`.
+
+Warm-pool instances also have optional `details`. The response root can include `details`
+for the cluster itself. These additions are optional so older clients can continue to
+consume the existing polling shape.
+
+### Expandable resource details
+
+Each `details` object uses the same bounded contract:
+
+| Field | Description |
+| --- | --- |
+| `resource_id` | Stable type-prefixed identity, such as `warm-pool:agentweaver-agent-host`. |
+| `resource_type` | `cluster`, `warm_pool`, `warm_instance`, `sandbox_claim`, or `agent_host_pod`. |
+| `status` / `summary` | Concise state and display text for an expanded card. |
+| `attention_required` | Whether the UI should consider expanding the resource automatically. |
+| `reason` | Optional short failure, pending, claimed, or orphaned reason. |
+| `created_utc` / `last_transition_utc` | Optional timing sources from the process or Kubernetes resource. |
+| `ownership` | Optional run, project, agent, claim, run-status, and run-timing identifiers. |
+| `capacity` | Optional desired, ready, available, claimed, used, and limit counts. |
+| `runtime` | Optional pod name, node name, container image, and runtime class. |
+| `deep_links` | Identifiers for existing project, run, claim, pool, and pod routes or filters. |
+
+`attention_required` is true for unhealthy or degraded resources, pending pods and
+claims, orphaned pods, warming instances, and claimed resources where ownership is
+useful to inspect.
+
+The details contract never includes credentials, secret values, internal IP addresses,
+raw Kubernetes objects, condition messages, or logs. Kubernetes reasons are normalized
+to a single line and capped at 240 characters.
+
+## Kubernetes topology graph
+
+`GET /api/diagnostics/cluster/topology` returns a separate bounded relationship graph.
+Keeping it separate prevents the normal 30-second diagnostics poll from repeatedly listing
+every opt-in Kubernetes resource.
+
+The default request is runtime-only:
+
+```text
+GET /api/diagnostics/cluster/topology
+```
+
+Request additional comma-separated layers with `layers`:
+
+```text
+GET /api/diagnostics/cluster/topology?layers=runtime,networking,workloads,storage,autoscaling,availability
+```
+
+| Layer | Resources |
+| --- | --- |
+| `runtime` | Pod, SandboxClaim, SandboxWarmPool, SandboxTemplate |
+| `networking` | Gateway, HTTPRoute, Service, NetworkPolicy |
+| `workloads` | Deployment, ReplicaSet, ServiceAccount |
+| `storage` | PersistentVolumeClaim, PersistentVolume, StorageClass |
+| `autoscaling` | HorizontalPodAutoscaler, VerticalPodAutoscaler, KEDA ScaledObject |
+| `availability` | PodDisruptionBudget |
+
+Nodes have stable IDs, explicit resource types, namespace, health, a short summary, and a
+small allow-listed `details` map. Edges record their relationship type and whether the
+relationship is inferred. Owner references, Gateway API references, identity references,
+scale targets, and volume claims are authoritative. Selector matches are marked
+`inferred: true`.
+
+Each requested layer reports `available`, `partial`, or `unavailable`. A missing CRD or an
+RBAC denial affects only that layer; it does not fail the graph. Lists are capped at 100
+objects per resource type, the response is capped at 250 nodes and 500 edges, and
+`truncated` reports when a cap was reached.
+
+The response never includes full manifests, Secret values, tokens, service cluster IPs,
+internal endpoint addresses, or container environment values.
+
+## Kubernetes resource graph contract
+
+The web UI is ready to consume `resource_graph` when backend discovery is integrated.
+Its absence preserves the runtime-only graph and marks infrastructure discovery as
+unavailable.
+
+Each `nodes` entry contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Stable snapshot identifier. Edges use this exact value. |
+| `kind` | string | Kubernetes kind, such as `Gateway`, `HTTPRoute`, `Service`, `NetworkPolicy`, `ServiceAccount`, `Deployment`, `Pod`, `PersistentVolumeClaim`, `PersistentVolume`, `StorageClass`, `HorizontalPodAutoscaler`, `PodDisruptionBudget`, `VerticalPodAutoscaler`, `ScaledObject`, or an Agentweaver CRD kind. |
+| `name` | string | Resource metadata name. |
+| `namespace` | string or null | Namespace, or null for a cluster-scoped resource. |
+| `status` | string | Concise machine-readable state used for card status treatment. |
+| `summary` | string or null | Short human-readable state summary. |
+| `layer` | string | `traffic`, `security`, `workloads`, `storage`, `scaling`, or `agentweaver`. |
+| `api_version` | string or null | Kubernetes API version when available. |
+| `details` | object | Optional small set of display-safe scalar details. Do not put secrets or unbounded payloads here. |
+
+Each `edges` entry contains `source`, `target`, a short `relationship`, and `authority`.
+`authority` is `authoritative` when Kubernetes ownership, references, or controller state
+establishes the edge. Use `inferred` for selector, label, naming, or other best-effort
+correlation. An edge can connect to a runtime card without depending on UI-generated
+identifiers by using one of these endpoint forms:
+
+- `runtime:cluster`
+- `runtime:pool:<pool-name>`
+- `runtime:instance:<pool-name>/<instance-name>`
+- `runtime:claim:<claim-name>`
+- `runtime:pod:<claim-name>/<pod-name>`
+
+Each optional `layers` entry contains `layer`, `status`, and an optional `message`.
+Status is `available`, `empty`, `forbidden`, or `unavailable`. Return per-layer failures
+instead of failing the full diagnostics response so the UI can keep usable layers
+interactive.
 
 ## Status codes
 
@@ -78,6 +191,7 @@ Each check has `name`, `status`, `message`, and `latencyMs`. Status values are `
 | Endpoint | `apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs` |
 | Snapshot and checks | `apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs` |
 | DTOs | `apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs` |
+| Topology discovery | `apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs` |
 
 ## Related reading
 

@@ -191,7 +191,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             preview_runner_session_id = "retained-process",
         });
 
-        timeoutResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        timeoutResponse.StatusCode.Should().Be(HttpStatusCode.RequestTimeout);
         var expired = streams.Get(runId)!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.SandboxPreviewFailed);
         ReadString(expired.Payload, "preview_runner_session_id").Should().Be("retained-process");

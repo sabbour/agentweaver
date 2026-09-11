@@ -8,6 +8,14 @@ namespace Agentweaver.Tests.Workflow;
 public sealed class StructuredRunFailureTerminalTests
 {
     [Theory]
+    [InlineData("model_provider_snapshot_unavailable")]
+    [InlineData("github_copilot_capability_snapshot_unavailable")]
+    public void NormalizeErrorCode_PreservesRunSnapshotFailures(string errorCode)
+    {
+        StructuredRunFailureTerminal.NormalizeErrorCode(errorCode).Should().Be(errorCode);
+    }
+
+    [Theory]
     [InlineData("agent_turn_access_token_secret_123")]
     [InlineData("a2a_bearer_eyJhbGciOiJIUzI1NiJ9")]
     [InlineData("sandbox_password_production")]

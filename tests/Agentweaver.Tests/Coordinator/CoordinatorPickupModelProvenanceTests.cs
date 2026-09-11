@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
@@ -208,6 +209,74 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         boundary.Provider.Should().BeOfType<EffectiveModelProviderResult.Byok>();
         boundary.ByokProviderConfiguration.Should().Be(accepted);
         boundary.ByokProviderFingerprint.Should().Be(accepted.ExecutionFingerprint());
+    }
+
+    [Fact]
+    public async Task TrustedAutomationPickup_UsesActivatedByokWithoutBrowserExecutionKey()
+    {
+        var projectId = await CreateProjectAsync();
+        var pid = ProjectId.Parse(projectId);
+        ByokProviderConfiguration provider;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            provider = await byok.AddAsync(
+                new ByokProviderConfiguration(
+                    "unused", "Automation BYOK", "azure",
+                    "https://automation.example.test", "gpt-4.1", "key"),
+                CancellationToken.None);
+            await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (!db.Projects.Any(x => x.ProjectId == projectId))
+                db.Projects.Add(new ProjectRecord { ProjectId = projectId, OriginKind = "blank" });
+            db.AutomationActivations.Add(new AutomationActivationRecord
+            {
+                Id = SnapshotRef.Create().Value,
+                ProjectId = projectId,
+                ModelProviderSource = AutomationModelProviderSource.Byok,
+                ByokProviderId = provider.Id,
+                AutomationKey = "trusted-byok-activation",
+                Status = AutomationActivationStatus.Active,
+                ActivatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using var invocationScope = _factory.Services.CreateAsyncScope();
+        var invocations = invocationScope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
+        var claim = await invocations.TryClaimForProjectAsync(
+            pid, "workflow-schedule-trigger:test:2026-09-10", null, "schedule");
+        claim.Should().NotBeNull();
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(),
+            ProjectId = pid,
+            Title = "Activated BYOK automation",
+            Description = "Draft this outcome without borrowing an interactive bearer.",
+            State = BacklogTaskState.Ready,
+            OrderKey = "n",
+            CapturedBy = "automation-owner",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CommittedAt = DateTimeOffset.UtcNow,
+            WorkflowOverrideId = "automation-workflow",
+            SourceFilePath = "workflow-schedule-trigger:test:2026-09-10",
+        };
+        var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        await backlogStore.InsertAsync(task);
+        (await invocations.TryBindBacklogTaskAsync(claim!.InvocationId, pid, task.Id)).Should().BeTrue();
+
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        await _factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+
+        var drafted = await WaitForDraftAsync(
+            _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+                .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject);
+        drafted.Should().BeTrue();
+        var claimed = await backlogStore.GetAsync(pid, task.Id);
+        var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed!.RunId!.Value);
+        run!.ModelSource.Should().Be(ModelSource.Byok);
+        run.Result.Should().NotBe("operation_requires_github_copilot");
     }
 
     private async Task<string> CreateProjectAsync()

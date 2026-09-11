@@ -11,13 +11,24 @@ namespace Agentweaver.AgentRuntime;
 public sealed class InMemoryRunOptionsStore : IRunOptionsStore
 {
     private readonly ConcurrentDictionary<string, RunOptions> _options = new();
+    private readonly ConcurrentDictionary<string, RunApprovalPolicy> _launchPolicies = new();
 
     /// <inheritdoc />
-    public void Set(string runId, RunOptions options) => _options[runId] = options;
+    public void Set(string runId, RunOptions options)
+    {
+        _launchPolicies.TryAdd(runId, RunApprovalPolicy.FromOptions(options));
+        _options[runId] = options;
+    }
 
     /// <inheritdoc />
     public RunOptions Get(string runId) =>
-        _options.TryGetValue(runId, out var opts) ? opts : new RunOptions();
+        _options.TryGetValue(runId, out var opts)
+            ? opts
+            : GetLaunchPolicy(runId).ToRunOptions();
+
+    /// <inheritdoc />
+    public RunApprovalPolicy GetLaunchPolicy(string runId) =>
+        _launchPolicies.TryGetValue(runId, out var policy) ? policy : new RunApprovalPolicy();
 
     /// <inheritdoc />
     public void SetAutoApproveTools(string runId, bool enabled) =>

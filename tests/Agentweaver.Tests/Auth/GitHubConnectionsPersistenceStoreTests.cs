@@ -3,6 +3,8 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Api.Webhooks;
+using Agentweaver.Api.Sandbox;
+using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -726,6 +728,45 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             "other valid snapshots may still be captured for an interactive run");
         (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
             "AgentHost /configure redeems the unattended Copilot capability and cannot use an ambient or partial fallback");
+    }
+
+    [Fact]
+    public async Task CopilotCredentialProvider_CoordinatorDraftRedeemsOwningRunSnapshot()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var secrets = new SeededCopilotCredentialStore();
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            new GitHubConnectionsCredentialVault(secrets),
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var run = RunForSnapshotLifecycle(projectId);
+        var lifecycle = new RunGitHubCapabilitySnapshotLifecycle(persistence, broker);
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None))
+            .Should().BeTrue();
+
+        var services = new ServiceCollection()
+            .AddSingleton(persistence)
+            .AddSingleton(broker)
+            .BuildServiceProvider();
+        var provider = new RunGitHubCapabilityCredentialProvider(
+            services.GetRequiredService<IServiceScopeFactory>());
+
+        var credential = await ((IGitHubCopilotCapabilityCredentialProvider)provider)
+            .GetCredentialAsync(run.Id + "-coordinator-draft", CancellationToken.None);
+
+        credential.Should().NotBeNull();
+        credential!.AccessToken.Should().Be("project-token");
     }
 
     [Fact]

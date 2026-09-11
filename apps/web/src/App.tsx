@@ -6,6 +6,10 @@ import { AppShell } from './components/shell/AppShell';
 import {
   captureSessionAuthFromUrl,
   clearSessionAuth,
+  getSessionToken,
+  requestSessionAuthFromPeer,
+  SESSION_AUTH_AVAILABLE_EVENT,
+  SESSION_AUTH_INVALID_EVENT,
 } from './config';
 import { CastingWizardPage } from './pages/CastingWizardPage';
 import { ClusterPage } from './pages/ClusterPage';
@@ -180,6 +184,9 @@ function AuthGate() {
 
     try {
       await captureSessionAuthFromUrl();
+      if (!getSessionToken()) {
+        await requestSessionAuthFromPeer();
+      }
       await apiClient.getServerInfo();
       if (cancelledRef?.cancelled) return;
       const session = await apiClient.getAuthSession();
@@ -189,6 +196,16 @@ function AuthGate() {
         clearRequiredSetupPending();
         setRequiredSetupPending(false);
         clearSessionAuth();
+        setSignedIn(false);
+        setHasPlatformAccess(false);
+        setIsPlatformAdmin(false);
+        setAiConfigured(true);
+        setAuthChecked(true);
+        return;
+      }
+      if (!getSessionToken()) {
+        clearRequiredSetupPending();
+        setRequiredSetupPending(false);
         setSignedIn(false);
         setHasPlatformAccess(false);
         setIsPlatformAdmin(false);
@@ -239,6 +256,30 @@ function AuthGate() {
     return () => {
       cancelledRef.cancelled = true;
       window.clearTimeout(timer);
+    };
+  }, [runSessionCheck]);
+
+  useEffect(() => {
+    const handleAvailableSessionAuth = () => {
+      if (!getSessionToken()) void runSessionCheck();
+    };
+    const handleInvalidSessionAuth = () => {
+      clearSessionAuth();
+      clearRequiredSetupPending();
+      setRequiredSetupPending(false);
+      setSignedIn(false);
+      setHasPlatformAccess(false);
+      setIsPlatformAdmin(false);
+      setTourUserKey(null);
+      setAiConfigured(true);
+      setSessionError(null);
+      setAuthChecked(true);
+    };
+    window.addEventListener(SESSION_AUTH_AVAILABLE_EVENT, handleAvailableSessionAuth);
+    window.addEventListener(SESSION_AUTH_INVALID_EVENT, handleInvalidSessionAuth);
+    return () => {
+      window.removeEventListener(SESSION_AUTH_AVAILABLE_EVENT, handleAvailableSessionAuth);
+      window.removeEventListener(SESSION_AUTH_INVALID_EVENT, handleInvalidSessionAuth);
     };
   }, [runSessionCheck]);
 

@@ -80,9 +80,12 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.getTeam).mockResolvedValue({ members: [] } as never);
   vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
-    status: 'ready',
-    reason_code: 'ready',
+    status: 'unattended_ready',
+    reason_code: 'unattended_ready',
     message: 'Ready.',
+    interactive_ready: false,
+    unattended_ready: true,
+    repository_ready: false,
     repo_app_installation_connected: false,
     repository: {
       required: false,
@@ -167,9 +170,12 @@ describe('ProjectPage board (board-dedupe)', () => {
     firstRender.unmount();
 
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
-      status: 'not_ready',
+      status: 'unavailable',
       reason_code: 'repo_app_installation_required',
       message: 'Repository access is required.',
+      interactive_ready: false,
+      unattended_ready: false,
+      repository_ready: false,
       repo_app_installation_connected: false,
       repository: {
         required: true,

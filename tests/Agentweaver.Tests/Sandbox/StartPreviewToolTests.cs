@@ -150,6 +150,29 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
+    public async Task StartPreview_HungApi_ReturnsBoundedFailure()
+    {
+        using var http = new HttpClient(new HangingPreviewHandler())
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var tool = PreviewPublishTool.Build(
+            "http://localhost",
+            null,
+            RunId,
+            http,
+            registrationTimeout: TimeSpan.FromMilliseconds(50));
+
+        var result = (await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
+
+        result.Should().Contain("start_preview failed:");
+        result.Should().Contain("50 milliseconds");
+        result.Should().Contain("resolve any pending approval");
+    }
+
+    [Fact]
     public void BuildSessionConfigTools_WrapsProviderTools_WhenInstrumentProviderToolSupplied()
     {
         // #850 follow-up: PreviewRunnerToolProvider tools (start_preview and its siblings) must be
@@ -351,6 +374,17 @@ internal sealed class CapturingHandler : HttpMessageHandler
     }
 }
 
+internal sealed class HangingPreviewHandler : HttpMessageHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        throw new InvalidOperationException("unreachable");
+    }
+}
+
 internal sealed class TempWorkspace : IDisposable
 {
     public string Path { get; } = System.IO.Path.Combine(
@@ -370,4 +404,3 @@ internal sealed class TempWorkspace : IDisposable
         }
     }
 }
-

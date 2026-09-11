@@ -18,6 +18,7 @@ import {
   Option,
   Select,
   Spinner,
+  Switch,
   Text,
   Textarea,
   tokens,
@@ -34,6 +35,7 @@ import { EmptyState } from './ui';
 import {
   AiExecutionProviderHint,
   AiExecutionProviderReadiness,
+  AiExecutionProviderStatus,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -74,6 +76,8 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
   const [error, setError] = useState<string | null>(null);
   const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
+  const [autoApproveTools, setAutoApproveTools] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
   const providerContext = useAiExecutionContext(
     'orchestration',
@@ -113,6 +117,8 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
     let cancelled = false;
     const loadWorkflows = async () => {
       setWorkflowOverride(null);
+      setAutoApproveTools(false);
+      setAutopilot(false);
       if (!open || !selectedProjectId) {
         setSelectableWorkflows([]);
         return;
@@ -155,13 +161,15 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
             goal.trim(),
             workflowOverride,
             'direct',
-            providerContext.providerKey)
+            providerContext.providerKey,
+            { auto_approve_tools: autoApproveTools, autopilot })
         : await apiClient.startOrchestration(
             selectedProjectId,
             goal.trim(),
             workflowOverride,
             undefined,
-            providerContext.providerKey);
+            providerContext.providerKey,
+            { auto_approve_tools: autoApproveTools, autopilot });
       setOpen(false);
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
@@ -299,6 +307,25 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
                   </Select>
                 </Field>
               )}
+              <div role="group" aria-label="Run approval policy">
+                <Text weight="semibold">Run approval policy</Text>
+                <Switch
+                  label="Auto-approve safe tools"
+                  checked={autoApproveTools}
+                  onChange={(_, data) => setAutoApproveTools(data.checked)}
+                  disabled={noProjects}
+                />
+                <Switch
+                  label="Autopilot"
+                  checked={autopilot}
+                  onChange={(_, data) => setAutopilot(data.checked)}
+                  disabled={noProjects}
+                />
+                <Text size={200}>
+                  Safe-tool approval covers only repository-defined safe tools. Preview,
+                  destructive, privileged, secret, and other network approvals remain gated.
+                </Text>
+              </div>
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>
@@ -328,10 +355,16 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
             <Button appearance="secondary" disabled={saving} onClick={() => setOpen(false)}>
               Cancel
             </Button>
+            <AiExecutionProviderStatus
+              context={providerContext.context}
+              loading={providerContext.loading}
+              error={providerContext.error}
+            />
             <AiExecutionProviderHint
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="secondary"
@@ -345,6 +378,7 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
               context={providerContext.context}
               loading={providerContext.loading}
               required={!goal.trim()}
+              showIndicator={false}
             >
               <Button
                 appearance="primary"

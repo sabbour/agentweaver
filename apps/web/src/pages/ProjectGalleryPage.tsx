@@ -30,6 +30,7 @@ import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '.
 import { GitHubIcon } from '../components/GitHubIcon';
 import { GitHubRepositoryAccessNotice } from '../components/GitHubRepositoryAccessNotice';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
+import { RepoAppAuthorizationResultNotice } from '../components/GitHubAuthorizationResultNotices';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
 import { ENTRA_AUTHORIZE_URL } from '../config';
@@ -460,7 +461,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       trigger={<Button appearance="primary" icon={<AddRegular />}>Create blank project</Button>}
       icon={<SparkleRegular />}
       title="Create blank project"
-      subtitle="Start from scratch and let Agentweaver design the right squad and workflow for you."
+      subtitle="Describe the work and let Agentweaver propose the team, skills, and workflow."
       left={left}
       right={right}
       saving={d.saving}
@@ -526,19 +527,6 @@ function useGitHubData(open: boolean) {
   };
 }
 
-function repositoryAuthorizationError(result: string | null): string | null {
-  if (!result || result === 'success') return null;
-  const messages: Record<string, string> = {
-    human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
-    authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
-    authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
-    github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
-    rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
-  };
-  return messages[result] ?? 'Repository authorization could not be completed. Start a new authorization.';
-}
-
-
 function CreateFromGitHubDialog({
   onCreated,
   dataDir,
@@ -582,9 +570,7 @@ function CreateFromGitHubDialog({
   const [folderEdited, setFolderEdited] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
-  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(
-    () => repositoryAuthorizationError(authorizationResult),
-  );
+  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
   const connectRepoApp = async () => {
@@ -710,6 +696,7 @@ function CreateFromGitHubDialog({
           </MessageBarActions>
         </MessageBar>
       )}
+      <RepoAppAuthorizationResultNotice code={authorizationResult} />
       {repoAppConnectionError && (
         <MessageBar intent="error">
           <MessageBarBody>{repoAppConnectionError}</MessageBarBody>
@@ -975,7 +962,7 @@ export function ProjectGalleryPage() {
       <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
-        description="Create a local project now. Add repository access when you want to publish a pull request."
+        description="Create a workspace for the team, skills, workflows, runs, and approvals for your work."
         actions={showGalleryActions ? (
           <>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
@@ -1026,7 +1013,7 @@ export function ProjectGalleryPage() {
       {!loading && !loadError && !authError && totalProjects === 0 && (
         <EmptyState
           title="No projects yet"
-          description="Create a local project for agent work. Repository access is optional until you publish a pull request."
+          description="Create a project, describe the work, and generate or choose the team and workflow. Connect a repository when the outcome belongs in Git."
           action={
             <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'center' }}>
               <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />

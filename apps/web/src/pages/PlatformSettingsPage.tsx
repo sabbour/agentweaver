@@ -40,6 +40,7 @@ import {
 } from '../components/ui';
 import { useSearchParams } from 'react-router-dom';
 import { markRequiredSetupPending } from '../components/onboarding/firstRunTourStorage';
+import { PlatformCopilotAuthorizationResultNotice } from '../components/GitHubAuthorizationResultNotices';
 
 const useStyles = makeStyles({
   form: {
@@ -192,41 +193,6 @@ function parseHeadersText(text: string): Record<string, string> | undefined {
     throw new Error('Custom headers must be a flat JSON object of string values.');
   }
   return Object.fromEntries(entries as [string, string][]);
-}
-
-const PLATFORM_COPILOT_AUTH_RESULTS = {
-  success: {
-    intent: 'success',
-    message: 'The platform-default GitHub Copilot account is connected.',
-  },
-  human_entra_subject_required: {
-    intent: 'warning',
-    message: 'Authorize GitHub Copilot while signed in with your work account.',
-  },
-  platform_admin_required: {
-    intent: 'warning',
-    message: 'Only a Platform Admin can connect the platform-default GitHub Copilot account.',
-  },
-  authorization_transaction_invalid: {
-    intent: 'error',
-    message: 'The GitHub Copilot connection failed. Start a new connection from Platform settings.',
-  },
-  authorization_transaction_consumed: {
-    intent: 'error',
-    message: 'This GitHub Copilot connection has already been used. Start a new connection from Platform settings.',
-  },
-  github_binding_unavailable: {
-    intent: 'error',
-    message: 'The GitHub Copilot connection is currently unavailable. Try again later.',
-  },
-} as const;
-
-type PlatformCopilotAuthorizationResultCode = keyof typeof PLATFORM_COPILOT_AUTH_RESULTS;
-
-function isPlatformCopilotAuthorizationResultCode(
-  value: string | null,
-): value is PlatformCopilotAuthorizationResultCode {
-  return value !== null && Object.hasOwn(PLATFORM_COPILOT_AUTH_RESULTS, value);
 }
 
 export function PlatformSettingsPage({
@@ -457,15 +423,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  const authorizationResult = isPlatformCopilotAuthorizationResultCode(copilotAuthorizationResult)
-    ? PLATFORM_COPILOT_AUTH_RESULTS[copilotAuthorizationResult]
-    : copilotAuthorizationResult
-      ? {
-        intent: 'error' as const,
-        message: 'The GitHub Copilot connection failed. Start a new connection from Platform settings.',
-      }
-      : null;
-
   const copilotIsActive = activeProviderId === null;
   const activeCustomProvider = providers.find((provider) => provider.id === activeProviderId) ?? null;
   const modelProviderReady = activeCustomProvider !== null
@@ -538,14 +495,10 @@ export function PlatformSettingsPage({
             </MessageBarBody>
           </MessageBar>
         )}
-        {authorizationResult && (
-          <MessageBar intent={authorizationResult.intent}>
-            <MessageBarBody>{authorizationResult.message}</MessageBarBody>
-            <Button appearance="subtle" size="small" onClick={dismissCopilotAuthorizationResult}>
-              Dismiss
-            </Button>
-          </MessageBar>
-        )}
+        <PlatformCopilotAuthorizationResultNotice
+          code={copilotAuthorizationResult}
+          onDismiss={dismissCopilotAuthorizationResult}
+        />
         {!loading && !loadError && (
           <div className={styles.providerList}>
             {/* GitHub Copilot is always shown first, is never removable, and is implicitly

@@ -37,10 +37,28 @@ export const ENTRA_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/entra/aut
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
 export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';
+export const SESSION_AUTH_AVAILABLE_EVENT = 'agentweaver:session-auth-available';
+export const SESSION_AUTH_INVALID_EVENT = 'agentweaver:session-auth-invalid';
 
-// SECURITY (accepted residual risk, tracked separately — do not duplicate this token
-// anywhere else, e.g. localStorage or a cookie, without updating this note): the
-// session token is stored in sessionStorage and is therefore readable by any
+const SESSION_AUTH_CHANNEL_NAME = 'agentweaver.session-auth';
+const SESSION_AUTH_REQUEST_TIMEOUT_MS = 300;
+
+type SessionAuthMessage =
+  | { type: 'request'; requestId: string; rejectedToken?: string }
+  | { type: 'response'; requestId: string; token: string; login: string | null }
+  | { type: 'available' }
+  | { type: 'clear' };
+
+type PendingSessionAuthRequest = {
+  resolve: (restored: boolean) => void;
+  timeoutId: number;
+};
+
+const pendingSessionAuthRequests = new Map<string, PendingSessionAuthRequest>();
+let sessionAuthChannel: BroadcastChannel | null | undefined;
+
+// SECURITY (accepted residual risk, tracked separately): the session token is stored
+// only in sessionStorage and is therefore readable by any
 // same-origin script. There is no confirmed XSS sink in this app today (LLM/tool
 // output is escaped/sanitized — see .security findings-frontend-web.md, Alert 1),
 // but this remains a JS-readable secret and would become higher severity the moment
@@ -49,7 +67,76 @@ export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';
 // CSRF protection since cookies are attached automatically) is a larger auth-flow
 // change tracked as a follow-up, not attempted in this pass. In the meantime, the
 // CSP `script-src 'self'` (no `unsafe-inline`/`unsafe-eval`) added alongside this
-// comment narrows the practical avenues for third-party script injection.
+// comment narrows the practical avenues for third-party script injection. Same-origin
+// tabs transfer the token transiently through BroadcastChannel only in response to a
+// nonce-bearing request; the token is never copied to localStorage, a JS-readable
+// cookie, URLs, or durable cross-tab storage.
+function getSessionAuthChannel(): BroadcastChannel | null {
+  if (sessionAuthChannel !== undefined) return sessionAuthChannel;
+  if (typeof BroadcastChannel === 'undefined') {
+    sessionAuthChannel = null;
+    return null;
+  }
+
+  try {
+    sessionAuthChannel = new BroadcastChannel(SESSION_AUTH_CHANNEL_NAME);
+    sessionAuthChannel.addEventListener('message', handleSessionAuthMessage);
+  } catch {
+    sessionAuthChannel = null;
+  }
+  return sessionAuthChannel;
+}
+
+function handleSessionAuthMessage(event: MessageEvent<SessionAuthMessage>): void {
+  const message = event.data;
+  if (!message || typeof message !== 'object') return;
+
+  if (message.type === 'request') {
+    const token = getSessionToken();
+    if (!token || token === message.rejectedToken) return;
+    getSessionAuthChannel()?.postMessage({
+      type: 'response',
+      requestId: message.requestId,
+      token,
+      login: getSessionLogin(),
+    } satisfies SessionAuthMessage);
+    return;
+  }
+
+  if (message.type === 'response') {
+    const pending = pendingSessionAuthRequests.get(message.requestId);
+    if (!pending || !message.token) return;
+    pendingSessionAuthRequests.delete(message.requestId);
+    window.clearTimeout(pending.timeoutId);
+    storeSessionAuth(message.token, message.login);
+    pending.resolve(true);
+    return;
+  }
+
+  if (message.type === 'available') {
+    window.dispatchEvent(new Event(SESSION_AUTH_AVAILABLE_EVENT));
+    return;
+  }
+
+  if (message.type === 'clear') {
+    clearLocalSessionAuth();
+    window.dispatchEvent(new Event(SESSION_AUTH_INVALID_EVENT));
+  }
+}
+
+function storeSessionAuth(token: string, login?: string | null): void {
+  sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
+  if (login) sessionStorage.setItem(SESSION_LOGIN_STORAGE_KEY, login);
+  else sessionStorage.removeItem(SESSION_LOGIN_STORAGE_KEY);
+}
+
+function clearLocalSessionAuth(): void {
+  sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+  sessionStorage.removeItem(SESSION_LOGIN_STORAGE_KEY);
+}
+
+getSessionAuthChannel();
+
 export function getSessionToken(): string | null {
   try {
     return sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
@@ -68,8 +155,8 @@ export function getSessionLogin(): string | null {
 
 export function setSessionAuth(token: string, login?: string | null): void {
   try {
-    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
-    if (login) sessionStorage.setItem(SESSION_LOGIN_STORAGE_KEY, login);
+    storeSessionAuth(token, login);
+    getSessionAuthChannel()?.postMessage({ type: 'available' } satisfies SessionAuthMessage);
   } catch {
     // Session storage can be unavailable in private/embedded contexts.
   }
@@ -84,13 +171,34 @@ export function bindSessionLogin(login: string | null | undefined): void {
   }
 }
 
-export function clearSessionAuth(): void {
+export function clearSessionAuth(notifyPeers = false): void {
   try {
-    sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-    sessionStorage.removeItem(SESSION_LOGIN_STORAGE_KEY);
+    clearLocalSessionAuth();
+    if (notifyPeers) {
+      getSessionAuthChannel()?.postMessage({ type: 'clear' } satisfies SessionAuthMessage);
+    }
   } catch {
     // Nothing to clear.
   }
+}
+
+export function notifySessionAuthInvalid(): void {
+  window.dispatchEvent(new Event(SESSION_AUTH_INVALID_EVENT));
+}
+
+export function requestSessionAuthFromPeer(rejectedToken?: string): Promise<boolean> {
+  const channel = getSessionAuthChannel();
+  if (!channel) return Promise.resolve(false);
+
+  const requestId = crypto.randomUUID();
+  return new Promise<boolean>((resolve) => {
+    const timeoutId = window.setTimeout(() => {
+      pendingSessionAuthRequests.delete(requestId);
+      resolve(false);
+    }, SESSION_AUTH_REQUEST_TIMEOUT_MS);
+    pendingSessionAuthRequests.set(requestId, { resolve, timeoutId });
+    channel.postMessage({ type: 'request', requestId, rejectedToken } satisfies SessionAuthMessage);
+  });
 }
 
 export async function captureSessionAuthFromUrl(): Promise<void> {

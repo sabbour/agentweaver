@@ -31,6 +31,7 @@ import {
   type McpClientId,
 } from './mcpClientGuidance';
 import { UserAiAccessSettings } from '../components/UserAiAccessSettings';
+import { RepoAppAuthorizationResultNotice } from '../components/GitHubAuthorizationResultNotices';
 import {
   Body,
   Label,
@@ -101,6 +102,9 @@ export function SettingsPage() {
   const [repoAppConnecting, setRepoAppConnecting] = useState(false);
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
   const [repoAppConnection, setRepoAppConnection] = useState<RepoAppConnectionStatus | null>(null);
+  const [repoAppAuthorizationResult, setRepoAppAuthorizationResult] = useState(
+    () => searchParams.get('repo_app_auth'),
+  );
   const [repoAppStatusLoading, setRepoAppStatusLoading] = useState(true);
   const [repoAppInstallations, setRepoAppInstallations] = useState<GitHubRepositoryInstallation[] | null>(null);
   const [mcpClientId, setMcpClientId] = useState<McpClientId>('copilot-cli');
@@ -172,23 +176,26 @@ export function SettingsPage() {
   }, [repoAppConnection?.connected]);
 
   useEffect(() => {
-    const repoAppAuth = searchParams.get('repo_app_auth');
+    const repoAppAuth = repoAppAuthorizationResult;
     if (!repoAppAuth) return;
 
     if (repoAppAuth === 'success') {
       queueMicrotask(() => { void loadRepoAppConnection(); });
     } else {
       queueMicrotask(() => {
-        setRepoAppError('The GitHub Repo App connection could not be completed. Start a new connection from Account settings.');
         setRepoAppConnecting(false);
         setRepoAppStatusLoading(false);
       });
     }
 
+  }, [loadRepoAppConnection, repoAppAuthorizationResult]);
+
+  const dismissRepoAppAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('repo_app_auth');
     setSearchParams(next, { replace: true });
-  }, [loadRepoAppConnection, searchParams, setSearchParams]);
+    setRepoAppAuthorizationResult(null);
+  };
 
   const connectRepoApp = async () => {
     setRepoAppConnecting(true);
@@ -211,6 +218,10 @@ export function SettingsPage() {
       <PageHeader
         title="Account settings"
         description="Manage your authentication, personal AI access, repository access, and MCP clients."
+      />
+      <RepoAppAuthorizationResultNotice
+        code={repoAppAuthorizationResult}
+        onDismiss={dismissRepoAppAuthorizationResult}
       />
 
       <PageSection

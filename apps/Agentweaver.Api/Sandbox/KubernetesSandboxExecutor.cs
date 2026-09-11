@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -1654,6 +1655,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName, cancellationToken: ct);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: deleted claim {Claim}", claimName);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.NotFound)
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: claim {Claim} was already absent", claimName);
         }
         catch (Exception ex)
         {

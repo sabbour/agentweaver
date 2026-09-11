@@ -136,17 +136,28 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_configure"), Description("Configure the AI model provider settings for a project.")]
+    [McpServerTool(Name = "project_configure"), Description("Configure the AI model provider and generation-model settings for a project.")]
     public async Task<string> ProjectConfigureAsync(
         [Description("Project ID")] string project_id,
         [Description("Default model provider (e.g. github-copilot or byok; legacy microsoft-foundry is still accepted)")] string default_provider,
         [Description("Model ID for GitHub Copilot provider (optional)")] string? default_model_github_copilot = null,
         [Description("Model ID for the BYOK provider (optional; uses the legacy default_model_microsoft_foundry field name)")] string? default_model_microsoft_foundry = null,
+        [Description("Model ID for blueprint generation (optional; null or empty inherits the global generation default)")] string? blueprint_generation_model = null,
+        [Description("Model ID for workflow generation (optional; null or empty inherits the global generation default)")] string? workflow_generation_model = null,
+        [Description("Model ID for coordinator outcome-spec generation (optional; null or empty inherits the global generation default)")] string? outcome_spec_generation_model = null,
         CancellationToken ct = default)
     {
         try
         {
-            var body = new { default_provider, default_model_github_copilot, default_model_microsoft_foundry };
+            var body = new
+            {
+                default_provider,
+                default_model_github_copilot,
+                default_model_microsoft_foundry,
+                blueprint_generation_model,
+                workflow_generation_model,
+                outcome_spec_generation_model,
+            };
             await api.PutAsync($"/api/projects/{Uri.EscapeDataString(project_id)}/provider-settings", body, ct);
             return "Project provider settings updated successfully.";
         }

@@ -44,7 +44,7 @@ What makes this scenario different from the blueprint demo:
 
 ## Beat 0.0 — Hand off to secure sign-in
 
-Narration: "Agentweaver is an AI agent platform for engineering teams. It takes the recurring work — issue triage, blog posts, release notes, roadmap analysis — and runs it automatically, in the context of your actual repo and your team. Sign-in goes through your company's Microsoft Entra identity."
+Narration: "Agentweaver runs teams of AI agents on your own infrastructure. Describe work like issue triage, blog posts, release notes, or roadmap analysis, and it generates the roles, skills, and workflow for your organization. Those agents follow a governed path through the gates and approvals you set. Sign-in goes through your company's Microsoft Entra identity."
 
 Fresh navigation: true
 
@@ -114,6 +114,6 @@ On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), wait for cl
 
 ## Beat 5.1 — Outro
 
-Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Everything you saw here — generating a blueprint against a live repo, importing skills from GitHub and the marketplace, running scheduled and webhook-triggered triage, producing PRDs and blog drafts, and opening the PR workflow for review — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
+Narration: "You can drive the same teams, workflows, gates, and approvals from your own tools. In Settings, grab the MCP server URL, then connect an assistant, editor, or CLI such as Claude Desktop, VS Code, or Copilot CLI. Everything you saw here stays in the same Agentweaver workspace and team context, whether you operate it through the interface or through MCP."
 
 Fresh navigation: true

@@ -1,0 +1,32 @@
+[
+  {
+    "testId": "app-shell",
+    "role": "main",
+    "name": "Main content",
+    "visible": true
+  },
+  {
+    "testId": "cluster-topology-graph",
+    "role": "div",
+    "name": null,
+    "visible": true
+  },
+  {
+    "testId": "cluster-topology-layer-traffic",
+    "role": "group",
+    "name": "Traffic",
+    "visible": true
+  },
+  {
+    "testId": null,
+    "role": "checkbox",
+    "name": "Show Traffic topology layer",
+    "visible": true
+  },
+  {
+    "testId": "cluster-topology-reset-layers",
+    "role": "button",
+    "name": "Reset to runtime",
+    "visible": true
+  }
+]

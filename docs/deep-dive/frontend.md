@@ -185,9 +185,19 @@ Conceptually, sign-in works like this:
 2. The backend completes the GitHub flow and redirects back to the SPA with a short-lived code marker.
 3. Before rendering protected routes, the auth gate exchanges that code for session information.
 4. The frontend stores the session token and login in `sessionStorage`.
+   A newly opened same-origin tab requests the token from an already authenticated tab
+   through a transient `BroadcastChannel` exchange. The token is not copied to
+   `localStorage`, cookies, URLs, or other durable cross-tab storage.
 5. The API client sends the token as a bearer header when present and also includes cookies.
-6. The auth gate asks the backend for GitHub auth status.
+6. The auth gate asks the backend for auth status. The shared HttpOnly browser cookie can
+   authenticate this bootstrap check, but it intentionally cannot authorize general platform
+   APIs such as `/api/projects`; those calls still require the per-tab bearer token.
 7. If the backend says the user is signed in, the shell renders. Otherwise, local session state is cleared and the sign-in page renders.
+
+If multiple API calls reject the same stale bearer token at once, the client performs one
+shared peer-recovery request and lets all failed calls retry with the recovered token. This
+prevents a burst of concurrent 401 handlers from clearing a token that another call just
+restored.
 
 ![Authentication and Session Flow: User, React SPA, Agentweaver API, GitHub](../diagrams/frontend-fig6.png)
 
@@ -202,8 +212,12 @@ The top bar separately fetches auth status for avatar/login display and exposes 
 
 Trade-offs:
 
-- `sessionStorage` limits token lifetime to the browser tab/session, which is safer than long-lived local storage but means new sessions must rehydrate from cookies or sign in again.
-- Sending both bearer auth and cookies supports multiple backend session mechanisms, but every request path must be careful to include credentials consistently.
+- `sessionStorage` limits token lifetime to the browser tab/session. Same-origin tabs can
+  transfer the current token directly while an authenticated peer remains open; a new
+  browser session with no authenticated peer must sign in again.
+- Sending both bearer auth and cookies supports session bootstrap plus bearer-protected API
+  calls without expanding cookie authentication to mutation endpoints, which would require a
+  broader CSRF design.
 - URL auth parameters are stripped after exchange so tokens/codes do not linger in browser history or copied links.
 
 Where this lives:

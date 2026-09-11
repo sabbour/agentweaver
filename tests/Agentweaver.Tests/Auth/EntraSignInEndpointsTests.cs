@@ -329,6 +329,26 @@ public sealed class EntraSignInEndpointsTests
     }
 
     [Fact]
+    public async Task Callback_WhenProviderReturnsUnknownError_RedactsItFromFrontendRedirect()
+    {
+        await using var factory = new EntraSignInWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+        var authorizeResponse = await client.GetAsync("/auth/entra/authorize");
+        var state = EntraOAuthStateCookie.ExtractState(authorizeResponse.Headers.Location!.ToString());
+        var callbackRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/auth/entra/callback?error=sensitive_provider_detail&state={Uri.EscapeDataString(state!)}");
+        callbackRequest.Headers.Add("Cookie", $"{EntraOAuthStateCookie.Name}={state}");
+
+        using var response = await client.SendAsync(callbackRequest);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.ToString().Should()
+            .Contain("reason=sign_in_failed")
+            .And.NotContain("sensitive_provider_detail");
+    }
+
+    [Fact]
     public async Task BrokerCallback_WhenEntraDenies_CompletesOriginalClientWithAccessDenied()
     {
         await using var factory = new EntraSignInWebApplicationFactory();

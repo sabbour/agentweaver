@@ -121,6 +121,7 @@ describe('SteerPanel — rendering', () => {
     );
 
     expect(screen.getAllByText('Expected provider: GitHub Copilot. Model: gpt-5.')).not.toHaveLength(0);
+    expect(screen.getAllByTestId('ai-provider-indicator')).toHaveLength(1);
     expect(screen.getByTestId('steer-panel-send').getAttribute('aria-describedby')).toBeTruthy();
     expect((screen.getByTestId('steer-panel-send') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('steer-panel-redirect') as HTMLButtonElement).disabled).toBe(true);

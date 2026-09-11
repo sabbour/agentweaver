@@ -11,8 +11,8 @@ namespace Agentweaver.Tests.Sandbox;
 /// <summary>
 /// Unit tests for <see cref="AgentPreviewGate"/> — the human-in-the-loop approval seam behind the
 /// agent-initiated <c>start_preview</c> tool. Verifies the auto-approve sources (global config,
-/// per-run option, scoped policy) grant unattended, that an operator grant resolves the gate, and
-/// that deny / timeout produce distinct final outcomes.
+/// immutable run policy, scoped policy) grant unattended, that an operator grant resolves the gate,
+/// and that deny / timeout produce distinct final outcomes.
 /// </summary>
 [Trait("Category", "ProcessEnvironment")]
 public sealed class AgentPreviewGateTests
@@ -68,14 +68,56 @@ public sealed class AgentPreviewGateTests
     }
 
     [Fact]
-    public async Task RequestApproval_PerRunAutoApproveTools_GrantsImmediately()
+    public async Task RequestApproval_PerRunSafeToolPolicy_AutoApprovesWithoutCardOrWaiter()
     {
-        var gate = CreateGate(autoApproveConfigured: false, out _, out var runOptions, out _);
-        runOptions.SetAutoApproveTools(RunId, true);
+        var gate = CreateGate(
+            autoApproveConfigured: false,
+            out var approvalGate,
+            out var runOptions,
+            out var streams,
+            timeout: TimeSpan.FromSeconds(5));
+        runOptions.Set(RunId, new RunOptions(AutoApproveTools: true));
 
-        var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+        var outcome = await gate.RequestApprovalAsync(
+                RunId,
+                3000,
+                CancellationToken.None,
+                workPlanId: 42,
+                treeHash: "tree-abc")
+            .WaitAsync(TimeSpan.FromSeconds(1));
 
-        outcome.Outcome.Should().Be(PreviewApprovalOutcome.Approved);
+        outcome.Should().Be(new PreviewApprovalResult(PreviewApprovalOutcome.Approved, null, null));
+        approvalGate.Deny(RunId, "not-created").Should().BeFalse();
+        var events = streams.Get(RunId)!.GetSnapshotSince(0).Events;
+        events.Should().NotContain(e => e.Type == EventTypes.ToolApprovalRequired);
+        events.Should().NotContain(e => e.Type == EventTypes.SandboxPreviewPending);
+        var audit = events.Should().ContainSingle(e => e.Type == EventTypes.ToolAutoApproved).Subject;
+        ReadString(audit.Payload, "toolName").Should().Be("start_preview");
+        ReadString(audit.Payload, "approvalSource").Should().Be("run_policy");
+        ReadString(audit.Payload, "previewTarget").Should().Be("run_sandbox");
+        ReadInt(audit.Payload, "targetPort").Should().Be(3000);
+        ReadInt(audit.Payload, "workPlanId").Should().Be(42);
+        ReadString(audit.Payload, "treeHash").Should().Be("tree-abc");
+        audit.Payload.ToString().Should().NotContain("token").And.NotContain("credential");
+    }
+
+    [Fact]
+    public async Task RequestApproval_OmittedRunPolicy_RemainsHumanGated()
+    {
+        var gate = CreateGate(
+            autoApproveConfigured: false,
+            out var approvalGate,
+            out _,
+            out var streams,
+            timeout: TimeSpan.FromSeconds(5));
+
+        var pending = gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+        var requestId = await WaitForRequestIdAsync(streams);
+
+        approvalGate.Deny(RunId, requestId).Should().BeTrue();
+        (await pending).Outcome.Should().Be(PreviewApprovalOutcome.Denied);
+        streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Should().NotContain(e => e.Type == EventTypes.ToolAutoApproved);
     }
 
     [Fact]
@@ -136,6 +178,28 @@ public sealed class AgentPreviewGateTests
 
         outcome.Outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
         outcome.RequestId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task RequestApproval_BrokenWaiter_HitsCompletionBackstop()
+    {
+        var approvalGate = new NeverCompletingApprovalGate();
+        var streams = new RunStreamStore();
+        streams.Create(RunId, "owner");
+        var gate = new AgentPreviewGate(
+            approvalGate,
+            new InMemoryRunOptionsStore(),
+            streams,
+            autoApproveConfigured: false,
+            NullLogger<AgentPreviewGate>.Instance,
+            approvalTimeout: TimeSpan.FromMilliseconds(20),
+            completionGrace: TimeSpan.FromMilliseconds(20));
+
+        var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
+
+        outcome.Outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
+        streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(evt => evt.Type == EventTypes.ToolApprovalResolved);
     }
 
     [Fact]
@@ -229,6 +293,9 @@ public sealed class AgentPreviewGateTests
     private static string ReadString(object payload, string property) =>
         payload.GetType().GetProperty(property)!.GetValue(payload)!.ToString()!;
 
+    private static int ReadInt(object payload, string property) =>
+        (int)payload.GetType().GetProperty(property)!.GetValue(payload)!;
+
     private static IConfiguration BuildConfiguration(params (string Key, string? Value)[] values) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(values.ToDictionary(x => x.Key, x => x.Value))
@@ -249,5 +316,27 @@ public sealed class AgentPreviewGateTests
                 Environment.SetEnvironmentVariable(ApprovalTimeoutEnvVar, previousValue);
             }
         }
+    }
+
+    private sealed class NeverCompletingApprovalGate : IToolApprovalGate
+    {
+        public Task<bool> WaitForApprovalAsync(
+            string runId,
+            string requestId,
+            string toolName,
+            string? url,
+            TimeSpan timeout,
+            CancellationToken ct) =>
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+
+        public Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope) =>
+            Task.FromResult(false);
+
+        public bool Deny(string runId, string requestId) => false;
+        public bool IsAutoApproved(string runId, string toolName, string? url) => false;
+        public ToolApprovalRequestState GetRequestState(string runId, string requestId) =>
+            ToolApprovalRequestState.Pending;
+        public void Clear(string runId) { }
+        public void RegisterParentRun(string childRunId, string parentRunId) { }
     }
 }

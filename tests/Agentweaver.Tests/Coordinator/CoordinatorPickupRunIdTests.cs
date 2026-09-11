@@ -78,11 +78,18 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         // Drive the pickup directly (the heartbeat BackgroundService is disabled in this hermetic
         // host), exactly as CoordinatorHeartbeatService.RunTickAsync does for one project+task.
         var projectStore = _factory.Services.GetRequiredService<IProjectStore>();
+        await projectStore.UpdatePickupSettingsAsync(
+            pid, 3, autopilot: false, autoApproveTools: false, DateTimeOffset.UtcNow.AddMinutes(-1));
         var project = await projectStore.GetAsync(pid);
         project.Should().NotBeNull();
+        project!.PickupAutopilot.Should().BeFalse("this object intentionally becomes stale before claim");
 
-        var candidates = await backlogStore.ListReadyForClaimAsync(pid, project!.MaxReadyPerHeartbeat);
+        var candidates = await backlogStore.ListReadyForClaimAsync(pid, project.MaxReadyPerHeartbeat);
         candidates.Should().ContainSingle().Which.Id.Should().Be(task.Id);
+
+        var currentSettingsAt = DateTimeOffset.UtcNow;
+        await projectStore.UpdatePickupSettingsAsync(
+            pid, 3, autopilot: true, autoApproveTools: true, currentSettingsAt);
 
         var pickupService = _factory.Services.GetRequiredService<CoordinatorPickupService>();
         await pickupService.TryPickupAsync(project, candidates[0], CancellationToken.None);
@@ -99,10 +106,28 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             "the coordinator-run detail endpoint resolves by run_id; pickup must not 404");
         var run = await runResp.Content.ReadFromJsonAsync<JsonElement>();
         run.GetProperty("status").GetString().Should().Be("in_progress");
+        run.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue(
+            "status must serialize the settings captured inside the claim, not the stale heartbeat project object");
+        run.GetProperty("autopilot").GetBoolean().Should().BeTrue();
         var persistedRun = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId));
         persistedRun!.SubmittingUser.Should().Be(
             CoordinatorWebApplicationFactory.OwnerUser,
             "background pickup must carry the durable auth subject, not the display GitHub login");
+        persistedRun.GetApprovalPolicySnapshot().Should().Be(
+            new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "backlog_pickup",
+                persistedRun.ApprovalPolicyCapturedAt!.Value,
+                currentSettingsAt));
+
+        var policyAudit = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(runId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunApprovalPolicySelected);
+        var auditJson = JsonSerializer.Serialize(policyAudit.Payload);
+        auditJson.Should().Contain("\"source\":\"backlog_pickup\"");
+        JsonSerializer.Deserialize<JsonElement>(auditJson)
+            .GetProperty("settingsUpdatedAt").GetDateTimeOffset()
+            .Should().Be(currentSettingsAt);
         // Identity parity with interactive coordinator runs: no distinct workflow_run_id.
         var wf = run.GetProperty("workflow_run_id");
         (wf.ValueKind == JsonValueKind.Null || wf.GetString() == runId)

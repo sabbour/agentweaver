@@ -5,6 +5,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Webhooks;
 using Agentweaver.Domain;
+using Microsoft.IdentityModel.Tokens;
 using System.Text.Json.Serialization;
 
 namespace Agentweaver.Api.Endpoints;
@@ -364,7 +365,12 @@ public static class AuthEndpoints
             if (!string.IsNullOrWhiteSpace(error))
             {
                 if (claim.ReturnHandle is null)
-                    return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+                {
+                    var safeReason = string.Equals(error, "access_denied", StringComparison.Ordinal)
+                        ? "access_denied"
+                        : "sign_in_failed";
+                    return Results.Redirect($"{frontendUrl}/?auth=error&reason={safeReason}");
+                }
                 return await CompleteBrokerErrorAsync(
                     brokerTransactions,
                     claim.ReturnHandle,
@@ -477,52 +483,80 @@ internal static class McpBrowserHandoffCompletionPage
 {
     public static IResult Result(RepoAppAuthorizationOutcome outcome)
     {
-        var (title, message) = outcome switch
+        var (title, message, tone) = outcome switch
         {
             RepoAppAuthorizationOutcome.Success => (
                 "GitHub authorization completed",
-                "GitHub repository authorization completed. Return to your MCP client; it will detect the completed authorization when it polls."),
+                "Return to your MCP client. It will detect the completed repository authorization automatically.",
+                AuthDialogTone.Success),
             RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed => (
                 "GitHub authorization already completed",
-                "This authorization attempt was already completed. Return to your MCP client and check its authorization status."),
+                "Return to your MCP client and check the authorization status before starting another request.",
+                AuthDialogTone.Warning),
+            RepoAppAuthorizationOutcome.RateLimited => (
+                "GitHub authorization is temporarily unavailable",
+                "Return to your MCP client and try again after a short wait.",
+                AuthDialogTone.Pending),
             _ => (
                 "GitHub authorization was not completed",
-                "GitHub repository authorization could not be completed. Return to your MCP client to check the authorization status or start a new authorization."),
+                "Return to your MCP client to check the status or start a new authorization.",
+                AuthDialogTone.Error),
         };
 
-        return new StaticHtmlResult(
-            $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title></head><body><main><h1>{title}</h1><p>{message}</p></main></body></html>");
+        return new StaticHtmlResult(title, message, tone);
     }
 
     public static IResult Result(CopilotBindingOutcome outcome)
     {
-        var (title, message) = outcome switch
+        var (title, message, tone) = outcome switch
         {
             CopilotBindingOutcome.Success => (
                 "GitHub authorization completed",
-                "GitHub Copilot authorization completed. Return to your MCP client; it will detect the completed authorization when it polls."),
+                "Return to your MCP client. It will detect the completed Copilot authorization automatically.",
+                AuthDialogTone.Success),
             CopilotBindingOutcome.AuthorizationTransactionConsumed => (
                 "GitHub authorization already completed",
-                "This authorization attempt was already completed. Return to your MCP client and check its authorization status."),
+                "Return to your MCP client and check the authorization status before starting another request.",
+                AuthDialogTone.Warning),
             _ => (
                 "GitHub authorization was not completed",
-                "GitHub Copilot authorization could not be completed. Return to your MCP client to check the authorization status or start a new authorization."),
+                "Return to your MCP client to check the status or start a new authorization.",
+                AuthDialogTone.Error),
         };
 
-        return new StaticHtmlResult(
-            $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title></head><body><main><h1>{title}</h1><p>{message}</p></main></body></html>");
+        return new StaticHtmlResult(title, message, tone);
     }
 
-    private sealed class StaticHtmlResult(string html) : IResult
+    private sealed class StaticHtmlResult(
+        string title,
+        string message,
+        AuthDialogTone tone) : IResult
     {
         public async Task ExecuteAsync(HttpContext httpContext)
         {
+            var styleNonce = Base64UrlEncoder.Encode(System.Security.Cryptography.RandomNumberGenerator.GetBytes(18));
+            var scriptNonce = Base64UrlEncoder.Encode(System.Security.Cryptography.RandomNumberGenerator.GetBytes(18));
+            var actions =
+                "<button class=\"primary\" id=\"close-window\" type=\"button\">Close this tab</button>";
+            var html = AuthDialogPage.Render(new(
+                title,
+                title,
+                message,
+                tone,
+                ContentHtml: "<p id=\"close-help\" hidden>If this tab stays open, close it with your browser and return to the MCP client.</p>",
+                ActionsHtml: actions,
+                Footer: "No authorization codes or account details are shown on this page.",
+                StyleNonce: styleNonce,
+                ScriptNonce: scriptNonce));
             httpContext.Response.StatusCode = StatusCodes.Status200OK;
             httpContext.Response.ContentType = "text/html; charset=utf-8";
             httpContext.Response.Headers.CacheControl = "no-store";
             httpContext.Response.Headers["Content-Security-Policy"] =
-                "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+                $"default-src 'none'; style-src 'nonce-{styleNonce}'; script-src 'nonce-{scriptNonce}'; " +
+                "img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
             httpContext.Response.Headers["Referrer-Policy"] = "no-referrer";
+            httpContext.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            httpContext.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
             await httpContext.Response.WriteAsync(html, httpContext.RequestAborted).ConfigureAwait(false);
         }
     }

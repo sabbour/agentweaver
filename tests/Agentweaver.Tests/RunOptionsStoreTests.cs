@@ -7,6 +7,28 @@ namespace Agentweaver.Tests;
 /// <summary>Unit tests for <see cref="InMemoryRunOptionsStore"/> (per-run options source of truth).</summary>
 public sealed class RunOptionsStoreTests
 {
+    [Theory]
+    [InlineData("web_fetch", true)]
+    [InlineData("start_preview", true)]
+    [InlineData("run_command", false)]
+    [InlineData("shell", false)]
+    [InlineData("write_file", false)]
+    [InlineData("secret_read", false)]
+    public void ApprovalPolicy_AutoApprovesOnlyRepositoryDefinedSafeTools(string toolName, bool expected)
+    {
+        var policy = new RunApprovalPolicy(AutoApproveTools: true);
+
+        policy.AllowsAutoApproval(toolName).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ApprovalPolicy_DirectDefaultsOff_WhileHeartbeatUsesProjectDefaults()
+    {
+        RunApprovalPolicy.ForDirectRun(null, null).Should().Be(new RunApprovalPolicy());
+        RunApprovalPolicy.ForBacklogPickup(autoApproveTools: true, autopilot: true)
+            .Should().Be(new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true));
+    }
+
     [Fact]
     public void Get_UnknownRun_ReturnsDefaultsBothOff()
     {
@@ -57,13 +79,14 @@ public sealed class RunOptionsStoreTests
     }
 
     [Fact]
-    public void Clear_RemovesEntry_RevertsToDefaults()
+    public void Clear_RemovesRuntimeEntry_AndRetainsLaunchPolicy()
     {
         var store = new InMemoryRunOptionsStore();
         store.Set("r1", new RunOptions(AutoApproveTools: true, Autopilot: true));
         store.Clear("r1");
         var opts = store.Get("r1");
-        opts.AutoApproveTools.Should().BeFalse();
-        opts.Autopilot.Should().BeFalse();
+        opts.AutoApproveTools.Should().BeTrue();
+        opts.Autopilot.Should().BeTrue();
     }
+
 }

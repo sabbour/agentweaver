@@ -105,6 +105,7 @@ public sealed class RunRetryTests : IDisposable
         // The original run was launched with auto-approve + autopilot enabled.
         var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
         runOptions.Set(source.Id.ToString(), new RunOptions(AutoApproveTools: true, Autopilot: true));
+        runOptions.Clear(source.Id.ToString());
         await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
@@ -115,6 +116,37 @@ public sealed class RunRetryTests : IDisposable
         var newOptions = runOptions.Get(newId);
         newOptions.AutoApproveTools.Should().BeTrue("auto_approve_tools must be preserved across a coordinator retry (#332)");
         newOptions.Autopilot.Should().BeTrue("autopilot must be preserved across a coordinator retry (#332)");
+
+        var persistedRetry = await _factory.Services.GetRequiredService<SqliteRunStore>()
+            .GetAsync(RunId.Parse(newId));
+        persistedRetry!.GetApprovalPolicySnapshot().Should().BeEquivalentTo(
+            new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "retry",
+                persistedRetry.ApprovalPolicyCapturedAt!.Value,
+                InheritedFromRunId: source.Id.ToString()));
+
+        var audit = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(newId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunApprovalPolicySelected);
+        JsonSerializer.Serialize(audit.Payload).Should().Contain(
+            $"\"inheritedFromRunId\":\"{source.Id}\"");
+
+        var preview = await _owner.PostAsJsonAsync(
+            $"/api/runs/{newId}/sandbox/preview",
+            new { target_port = 3000 });
+        preview.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "the inherited policy must bypass HITL and reach normal preview publication");
+
+        var previewEvents = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(newId)!.GetSnapshotSince(0).Events;
+        previewEvents.Should().NotContain(e => e.Type == EventTypes.ToolApprovalRequired);
+        var previewAudit = previewEvents.Should()
+            .ContainSingle(e => e.Type == EventTypes.ToolAutoApproved).Subject;
+        var previewPayload = JsonSerializer.SerializeToElement(previewAudit.Payload);
+        previewPayload.GetProperty("policySnapshotId").GetString()
+            .Should().Be(persistedRetry.GetApprovalPolicySnapshot()!.SnapshotId);
+        previewPayload.GetProperty("targetPort").GetInt32().Should().Be(3000);
     }
 
     [Fact]
@@ -345,9 +377,15 @@ public sealed class RunRetryTests : IDisposable
         var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
         (await backlogStore.ListByProjectAsync(pid)).Should().BeEmpty("precondition: no backlog tasks");
 
+        var settingsUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
-            agentName: "Coordinator", origin: RunOrigin.BacklogPickup, projectId: pid);
+            agentName: "Coordinator", origin: RunOrigin.BacklogPickup, projectId: pid,
+            approvalSnapshot: new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "backlog_pickup",
+                DateTimeOffset.UtcNow.AddMinutes(-4),
+                settingsUpdatedAt));
         await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
@@ -361,6 +399,13 @@ public sealed class RunRetryTests : IDisposable
             "the accountable human (original CapturedBy) carries through (Principle IX)");
         newRun.WorkflowRunId.Should().BeNull("identity parity: the pickup retry resolves by run_id");
         newRun.RetriedFrom.Should().Be(source.Id.ToString());
+        newRun.GetApprovalPolicySnapshot().Should().Be(
+            new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true),
+                "retry",
+                newRun.ApprovalPolicyCapturedAt!.Value,
+                settingsUpdatedAt,
+                source.Id.ToString()));
 
         // No new backlog task was created or claimed by the retry.
         (await backlogStore.ListByProjectAsync(pid)).Should().BeEmpty("a pickup retry must not re-claim or create a backlog task");
@@ -571,6 +616,7 @@ public sealed class RunRetryTests : IDisposable
         string task = "do the thing",
         string? modelId = "gpt-4o",
         ModelSource modelSource = ModelSource.GitHubCopilot,
+        RunApprovalPolicySnapshot? approvalSnapshot = null,
         CoordinatorWebApplicationFactory? factory = null)
     {
         factory ??= _factory;
@@ -599,6 +645,8 @@ public sealed class RunRetryTests : IDisposable
             Origin = origin,
             RetriedFrom = retriedFrom,
         };
+        if (approvalSnapshot is not null)
+            run = run.WithApprovalPolicySnapshot(approvalSnapshot);
         await factory.Services.GetRequiredService<SqliteRunStore>().InsertAsync(run);
         return run;
     }

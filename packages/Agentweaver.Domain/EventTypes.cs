@@ -520,6 +520,7 @@ public static class EventTypes
     /// rejected upstream by governance and never reach the gate). Payload: { requestId, toolName, url? }.
     /// </summary>
     public const string ToolAutoApproved = "tool.auto_approved";
+    public const string RunApprovalPolicySelected = "run.approval_policy_selected";
 
     /// <summary>
     /// Audit event emitted on the COORDINATOR run's stream when Autopilot auto-answers a clarifying

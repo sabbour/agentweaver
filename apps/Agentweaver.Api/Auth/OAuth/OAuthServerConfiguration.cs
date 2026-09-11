@@ -13,6 +13,7 @@ namespace Agentweaver.Api.Auth.OAuth;
 public sealed record OAuthServerConfiguration(
     Uri PublicOrigin,
     Uri Resource,
+    TimeSpan AccessTokenLifetime,
     IReadOnlyList<OAuthStaticClient> StaticClients,
     bool EnableClaudeHostedClient,
     int DynamicRegistrationsPerDay,
@@ -22,6 +23,7 @@ public sealed record OAuthServerConfiguration(
 {
     public const string McpScope = "mcp:invoke";
     public const string OfflineAccessScope = "offline_access";
+    public static readonly TimeSpan DefaultAccessTokenLifetime = TimeSpan.FromHours(8);
     public static readonly TimeSpan RefreshTokenFamilyLifetime = TimeSpan.FromDays(30);
     public static readonly TimeSpan RefreshReplayRetention = RefreshTokenFamilyLifetime + TimeSpan.FromDays(7);
 
@@ -55,6 +57,13 @@ public sealed record OAuthServerConfiguration(
 
         var origin = new Uri(uri.GetLeftPart(UriPartial.Authority), UriKind.Absolute);
         var resource = new Uri(origin, "/mcp");
+        var accessTokenLifetimeHours = configuration.GetValue(
+            "Auth:OAuth:AccessTokenLifetimeHours",
+            (int)DefaultAccessTokenLifetime.TotalHours);
+        if (accessTokenLifetimeHours is < 1 or > 24)
+            throw new InvalidOperationException(
+                "Auth:OAuth:AccessTokenLifetimeHours must be between 1 and 24.");
+        var accessTokenLifetime = TimeSpan.FromHours(accessTokenLifetimeHours);
         var enableClaudeHostedClient = configuration.GetValue(
             "Auth:OAuth:EnableClaudeHostedClient", true);
         var configuredClients = configuration.GetSection("Auth:OAuth:Clients")
@@ -98,6 +107,7 @@ public sealed record OAuthServerConfiguration(
         return new(
             origin,
             resource,
+            accessTokenLifetime,
             clients,
             enableClaudeHostedClient,
             perDay,

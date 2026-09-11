@@ -225,11 +225,15 @@ server-bound, the agent physically cannot target another run.
    via `POST /api/runs/{runId}/tool-approvals` or the project-configured approval window times out
    (30 minutes by default; project owners choose 1–1440 minutes in Sandbox policy settings). The
    deployment config remains only a fallback for legacy/non-project runs.
-4. **Auto-approve** short-circuits the wait when any of these is on
+4. **Explicit preview auto-approve** short-circuits the wait when any of these is on
    ([`AgentPreviewGate.cs:93`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
-   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)), the per-run `AutoApproveTools`
-   operator option, or an existing scoped allow policy. Production stays human-gated (default `false`); the
-   flag exists so an automated demo can run unattended.
+   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)), the immutable run
+   `auto_approve_tools` policy, or an existing scoped allow policy. A run-policy grant emits
+   `tool.auto_approved` with the policy snapshot ID, `previewTarget=run_sandbox`, and target port;
+   it contains no credential, token, secret URL, or request body and creates no approval card,
+   notification, or waiter. Production remains human-gated when all sources are false. Auto-approval
+   bypasses only the human wait: port validation, process liveness, sandbox ownership, and Gateway or
+   port-forward publication still run and fail normally.
 5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
    ([`SandboxEndpoints.cs:238`](#source)) as the operator route — Gateway-direct preview when enabled,
    `kubectl` fallback otherwise — and returns `preview_url`.
@@ -254,8 +258,9 @@ an explicit parameter: `start_preview(run_id: string, port: int)`
 **same** `POST /api/runs/{runId}/sandbox/preview` endpoint, so it reuses the **same** `AgentPreviewGate` and
 `StartPreviewForRunAsync` path — no port-forward or approval logic is duplicated. Authorization is enforced by
 the MCP server forwarding the caller's bearer token to the API (`AgentweaverApiClient`), so the backend sees the
-real human identity and the owner check (`IsOwnerOrServiceCaller`) applies unchanged. The auto-approve flag still
-governs unattended runs; production stays human-gated.
+real human identity and the owner check (`IsOwnerOrServiceCaller`) applies unchanged. The same immutable run
+`auto_approve_tools` snapshot used by API- and AgentHost-initiated preview calls applies here, so MCP does not
+introduce a separate approval path. Omitted/false policy remains human-gated.
 
 > The MCP surface lives in the separate `agentweaver-mcp` deployable image, so changes to `start_preview` require
 > rebuilding **both** `agentweaver-api` and `agentweaver-mcp`.

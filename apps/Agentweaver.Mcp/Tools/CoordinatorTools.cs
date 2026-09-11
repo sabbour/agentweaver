@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 
@@ -10,16 +11,30 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    [McpServerTool(Name = "coordinator_start"), Description("Start a Coordinator orchestration for a project from a plain-language goal. The coordinator drafts a confirmable outcome spec and suspends at the confirmation gate; no work is dispatched until the spec is confirmed.")]
+    [McpServerTool(Name = "coordinator_start"), Description("Start a Coordinator orchestration for a project from a plain-language goal. Optional per-run approval policy can auto-approve repository-defined safe tools and enable autopilot; destructive, privileged, preview, secret, and other network approvals remain gated.")]
     public async Task<string> CoordinatorStartAsync(
         [Description("Project ID")] string project_id,
         [Description("The outcome the coordinator should draft a spec for")] string goal,
         [Description("Model id override (optional); falls back to the project default, then the role default")] string? model_id = null,
+        [Description("Workflow id override (optional)")] string? workflow_id = null,
+        [Description("Coordinator start mode: 'defineOutcome' (default) or 'direct'")] string? start_mode = null,
+        [Description("Auto-approve only repository-defined safe tools for this run and its children (optional; default false)")] bool? auto_approve_tools = null,
+        [Description("Auto-answer coordinator and child clarifying questions for this run (optional; default false)")] bool? autopilot = null,
         CancellationToken ct = default)
     {
         try
         {
-            var body = new { goal, modelId = model_id };
+            var body = new JsonObject { ["goal"] = goal };
+            if (!string.IsNullOrWhiteSpace(model_id))
+                body["modelId"] = model_id;
+            if (!string.IsNullOrWhiteSpace(workflow_id))
+                body["workflow_override_id"] = workflow_id;
+            if (!string.IsNullOrWhiteSpace(start_mode))
+                body["start_mode"] = start_mode;
+            if (auto_approve_tools.HasValue)
+                body["auto_approve_tools"] = auto_approve_tools.Value;
+            if (autopilot.HasValue)
+                body["autopilot"] = autopilot.Value;
             var result = await api.PostAiAsync<JsonElement>(
                 $"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations",
                 body,

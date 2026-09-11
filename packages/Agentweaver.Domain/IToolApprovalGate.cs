@@ -37,8 +37,22 @@ public static class ToolApprovalPolicySemantics
         "web_fetch",
     };
 
+    private static readonly HashSet<string> RunAutoApprovalEligibleTools = new(StringComparer.Ordinal)
+    {
+        "web_fetch",
+        "start_preview",
+    };
+
     public static bool IsAlwaysEligible(string toolName) =>
         AlwaysEligibleTools.Contains(toolName);
+
+    /// <summary>
+    /// Returns whether the repository classifies a tool as safe for the per-run auto-approval
+    /// policy. Preview publication is explicitly eligible; arbitrary shell, destructive,
+    /// privileged, secret-bearing, and unrelated network tools remain human- or policy-gated.
+    /// </summary>
+    public static bool IsRunAutoApprovalEligible(string toolName) =>
+        RunAutoApprovalEligibleTools.Contains(toolName);
 
     public static string RiskFor(string toolName) =>
         toolName switch

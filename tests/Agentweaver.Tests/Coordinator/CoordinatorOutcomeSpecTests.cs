@@ -189,7 +189,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
         payload.GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
@@ -308,9 +308,9 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "CopilotAIAgent already emitted the provider terminal before MAF surfaced ExecutorFailedEvent")
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(durableFailure.PayloadJson);
-        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
+        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_models_unavailable");
         payload.GetProperty("message").GetString().Should().Be(
-            "Run failed with code 'agent_turn_internal_error'. Retry is not available.");
+            "Run failed with code 'github_copilot_models_unavailable'. Retry is not available.");
         payload.TryGetProperty("category", out _).Should().BeFalse();
         payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
     }
@@ -344,7 +344,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("agent_turn_internal_error");
+            .Should().Be("coordinator_execution_failed");
     }
 
     [Fact]
@@ -582,6 +582,44 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         spec!.Status.Should().Be("awaiting_confirmation",
             "with autopilot off the run must park at the confirmation gate until a human confirms");
         spec.ConfirmedBy.Should().BeNull("no one has confirmed a run that is parked at the gate");
+    }
+
+    [Fact]
+    public async Task Start_DirectApprovalPolicy_PersistsAndEmitsAuditEvent()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Run directly with explicit approval policy",
+            startMode: "direct",
+            autopilot: true,
+            autoApproveTools: true);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("auto_approve_tools").GetBoolean().Should().BeTrue();
+        detail.GetProperty("autopilot").GetBoolean().Should().BeTrue();
+
+        var options = _factory.Services.GetRequiredService<IRunOptionsStore>();
+        options.GetLaunchPolicy(runId).Should().Be(
+            new RunApprovalPolicy(AutoApproveTools: true, Autopilot: true));
+
+        var audit = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(runId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunApprovalPolicySelected);
+        JsonSerializer.Serialize(audit.Payload).Should().Contain("\"source\":\"direct\"");
+        JsonSerializer.Serialize(audit.Payload).Should().Contain("\"web_fetch\"");
+    }
+
+    [Fact]
+    public async Task Start_OmittedApprovalPolicy_DefaultsBothOptionsOff()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(projectId, "Use the safe defaults");
+
+        var policy = _factory.Services.GetRequiredService<IRunOptionsStore>().GetLaunchPolicy(runId);
+        policy.Should().Be(new RunApprovalPolicy());
     }
 
     // =========================================================================
@@ -969,17 +1007,21 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     private async Task<string> StartOrchestrationAsync(
-        string projectId, string goal, string? startMode = null, bool autopilot = false)
+        string projectId,
+        string goal,
+        string? startMode = null,
+        bool autopilot = false,
+        bool? autoApproveTools = null)
     {
         await _factory.PrepareAiExecutionAsync(
             _owner, "orchestration", projectId);
-        object request = (startMode, autopilot) switch
-        {
-            (null, false) => new { goal },
-            (null, true) => new { goal, autopilot },
-            (_, false) => new { goal, start_mode = startMode },
-            (_, true) => new { goal, start_mode = startMode, autopilot },
-        };
+        var request = new Dictionary<string, object?> { ["goal"] = goal };
+        if (startMode is not null)
+            request["start_mode"] = startMode;
+        if (autopilot)
+            request["autopilot"] = true;
+        if (autoApproveTools.HasValue)
+            request["auto_approve_tools"] = autoApproveTools.Value;
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
         var responseBody = await resp.Content.ReadAsStringAsync();
         resp.StatusCode.Should().Be(
