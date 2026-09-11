@@ -131,94 +131,66 @@ function sharedSourcePoint(
     : undefined;
 }
 
-function pointOnTerminalSegment(point: Point, points: Point[]): boolean {
-  const from = points.at(-2);
-  const to = points.at(-1);
-  if (!from || !to || samePoint(from, to)) return false;
-  return (
-    (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
-      point.y >= Math.min(from.y, to.y) - 0.5 && point.y <= Math.max(from.y, to.y) + 0.5) ||
-    (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
-      point.x >= Math.min(from.x, to.x) - 0.5 && point.x <= Math.max(from.x, to.x) + 0.5)
-  );
-}
+type CardinalDirection = 'top' | 'right' | 'bottom' | 'left';
 
-function sharedMergePoint(
-  routes: Array<{ id: string; points: Point[] }>,
-): { edgeId: string; point: Point } | undefined {
-  const terminal = routes[0]?.points.at(-1);
-  if (!terminal || !routes.every((route) => {
-    const point = route.points.at(-1);
-    return point !== undefined && samePoint(terminal, point);
-  })) {
-    return undefined;
+function directionFrom(from: Point, to: Point): CardinalDirection | undefined {
+  if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+    return to.x > from.x ? 'right' : 'left';
   }
-
-  const candidates = routes.flatMap((route) => {
-    const point = route.points.at(-2);
-    return point && !samePoint(point, terminal) ? [{ edgeId: route.id, point }] : [];
-  }).filter((candidate) => routes.every((route) => pointOnTerminalSegment(candidate.point, route.points)));
-  if (candidates.length === 0) return undefined;
-  candidates.sort((left, right) =>
-    Math.hypot(left.point.x - terminal.x, left.point.y - terminal.y) -
-      Math.hypot(right.point.x - terminal.x, right.point.y - terminal.y) ||
-    left.edgeId.localeCompare(right.edgeId));
-  return candidates[0];
+  if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+    return to.y > from.y ? 'bottom' : 'top';
+  }
+  return undefined;
 }
 
-function isElbow(points: Point[], index: number): boolean {
-  const previous = points[index - 1];
-  const current = points[index];
-  const next = points[index + 1];
-  if (!previous || !current || !next) return false;
-  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
-  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
-  const horizontalBefore = Math.abs(previous.y - current.y) < 0.5;
-  const horizontalAfter = Math.abs(current.y - next.y) < 0.5;
-  return (verticalBefore && horizontalAfter) || (horizontalBefore && verticalAfter);
-}
-
-function pointOnInteriorSegment(point: Point, points: Point[]): boolean {
+function routeDirectionsAt(point: Point, points: Point[]): Set<CardinalDirection> {
+  const directions = new Set<CardinalDirection>();
   for (let index = 1; index < points.length; index += 1) {
     const from = points[index - 1];
     const to = points[index];
-    if (
+    const forward = directionFrom(from, to);
+    if (!forward) continue;
+    const reverse = directionFrom(to, from)!;
+    if (samePoint(point, from)) {
+      directions.add(forward);
+    } else if (samePoint(point, to)) {
+      directions.add(reverse);
+    } else if (
       (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
         point.y > Math.min(from.y, to.y) + 0.5 && point.y < Math.max(from.y, to.y) - 0.5) ||
       (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
         point.x > Math.min(from.x, to.x) + 0.5 && point.x < Math.max(from.x, to.x) - 0.5)
     ) {
-      return true;
+      directions.add(forward);
+      directions.add(reverse);
     }
   }
-  return false;
+  return directions;
 }
 
-function sharedElbowPoints(
+function logicalTeePoints(
   routes: Array<{ id: string; points: Point[] }>,
 ): Array<{ edgeId: string; point: Point }> {
-  const shared = new Map<string, { edgeId: string; point: Point }>();
+  const tees = new Map<string, { edgeId: string; point: Point }>();
   for (const route of routes) {
     for (let index = 1; index < route.points.length - 1; index += 1) {
       const point = route.points[index];
-      if (!isElbow(route.points, index) || routes.some((candidate) => {
+      if (routes.some((candidate) => {
         const terminal = candidate.points.at(-1);
         return terminal !== undefined && samePoint(point, terminal);
-      })) {
-        continue;
-      }
-      const peers = routes.filter((candidate) =>
-        candidate.points.some((candidatePoint) => samePoint(point, candidatePoint)) ||
-        pointOnInteriorSegment(point, candidate.points));
-      if (peers.length < 2) continue;
+      })) continue;
+      const related = routes.filter((candidate) => routeDirectionsAt(point, candidate.points).size > 0);
+      if (related.length < 2) continue;
+      const directions = new Set(related.flatMap((candidate) => [...routeDirectionsAt(point, candidate.points)]));
+      if (directions.size < 3) continue;
       const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
-      const existing = shared.get(key);
+      const existing = tees.get(key);
       if (!existing || route.id.localeCompare(existing.edgeId) < 0) {
-        shared.set(key, { edgeId: route.id, point });
+        tees.set(key, { edgeId: route.id, point });
       }
     }
   }
-  return [...shared.values()];
+  return [...tees.values()];
 }
 
 function pointLiesOnRoute(point: Point, points: Point[]): boolean {
@@ -242,9 +214,9 @@ function pointLiesOnRoute(point: Point, points: Point[]): boolean {
 /**
  * Marks only nonterminal routed points shared by two semantically related
  * graph edges. A merge marker belongs at a shared terminal trunk before the
- * card-entry arrowhead. A shared semantic elbow or tee is marked when related
- * paths form degree-three topology, while generic crossings, isolated elbows,
- * and container boundaries are never junctions.
+ * card-entry arrowhead. Shared route vertices are marked only when related
+ * paths form degree-three topology, independent of cardinal direction; generic
+ * crossings, isolated elbows, and container boundaries are never junctions.
  */
 export function findConnectorJunctions(
   routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
@@ -278,13 +250,11 @@ export function findConnectorJunctions(
     if (group.length < 2) continue;
     const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
     add(ordered[0].id, sharedSourcePoint(ordered));
-    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
+    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
-    const merge = sharedMergePoint(group);
-    if (merge) add(merge.edgeId, merge.point);
-    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
+    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
   }
   for (const route of routes.filter((route) => route.loopback)) {
     const join = route.points.at(-1);
