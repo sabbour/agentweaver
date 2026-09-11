@@ -12,7 +12,7 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { ClusterDiagnosticsDto } from '../api/types';
+import type { ClusterDiagnosticsDto, KubernetesTopologyDto } from '../api/types';
 import type { ReactNode } from 'react';
 
 class ResizeObserverStub {
@@ -50,10 +50,10 @@ function renderPage(projectId = 'proj-001') {
 const getClusterMock = () => vi.mocked(apiClient.getClusterDiagnostics);
 const getTopologyMock = () => vi.mocked(apiClient.getClusterTopology);
 
-const sampleTopology = {
+const sampleTopology: KubernetesTopologyDto = {
   generated_utc: new Date().toISOString(),
   namespace: 'agentweaver',
-  requested_layers: ['runtime'] as const,
+  requested_layers: ['runtime'],
   layers: [
     { name: 'runtime' as const, status: 'available' as const, resource_count: 1, message: 'available' },
     { name: 'networking' as const, status: 'not_requested' as const, resource_count: 0, message: 'not requested' },
