@@ -50,6 +50,19 @@ async function listSpecNames() {
     .sort();
 }
 
+async function selectSpecNames(requestedNames) {
+  const availableNames = await listSpecNames();
+  if (!requestedNames?.length) return availableNames;
+
+  const available = new Set(availableNames);
+  const names = [...new Set(requestedNames)].sort();
+  const missing = names.filter((name) => !available.has(name));
+  if (missing.length) {
+    throw new Error(`Diagram spec not found: ${missing.join(', ')}`);
+  }
+  return names;
+}
+
 function npmBin() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
@@ -142,8 +155,8 @@ async function specHash(name) {
   return createHash('sha256').update(canonical).digest('hex');
 }
 
-export async function render() {
-  const specNames = await listSpecNames();
+export async function render(requestedNames) {
+  const specNames = await selectSpecNames(requestedNames);
   await captureAll(specNames);
   for (const name of specNames) {
     const hash = await specHash(name);
@@ -162,8 +175,8 @@ export async function render() {
 // between Windows and Linux runners even for byte-identical input. Comparing
 // a content hash sidesteps that class of bug entirely: it only fails when the
 // *spec* (nodes/edges/labels) actually changed since the PNG was last built.
-export async function check() {
-  const specNames = await listSpecNames();
+export async function check(requestedNames) {
+  const specNames = await selectSpecNames(requestedNames);
   let drift = false;
   for (const name of specNames) {
     const hash = await specHash(name);
