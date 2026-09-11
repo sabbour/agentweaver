@@ -48,8 +48,27 @@ function passesThrough(
   });
 }
 
+function isPoint(value: unknown): value is { x: number; y: number } {
+  return typeof value === 'object' && value !== null &&
+    typeof (value as { x?: unknown }).x === 'number' &&
+    typeof (value as { y?: unknown }).y === 'number';
+}
+
 function routeData(edge: Edge): RouteData {
-  return edge.data as RouteData;
+  const data = edge.data;
+  if (!data || !Array.isArray(data.points) || !data.points.every(isPoint)) {
+    throw new Error(`Route ${edge.id} is missing normalized connector points`);
+  }
+  const junctions = Array.isArray(data.junctions) && data.junctions.every(isPoint)
+    ? data.junctions
+    : undefined;
+  return {
+    points: data.points,
+    ...(junctions ? { junctions } : {}),
+    ...(data.loopback === true ? { loopback: true } : {}),
+    ...(typeof data.returnJoin === 'string' ? { returnJoin: data.returnJoin } : {}),
+    ...(typeof data.loopbackLabel === 'string' ? { loopbackLabel: data.loopbackLabel } : {}),
+  };
 }
 
 function pointLiesOnRoute(point: { x: number; y: number }, points: Array<{ x: number; y: number }>): boolean {

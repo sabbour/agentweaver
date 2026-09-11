@@ -94,7 +94,10 @@ export function findConnectorBridges(
           const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
           const x = vertical.constant;
           const y = horizontal.constant;
-          const inset = 8;
+          // A rounded elbow consumes the first CORNER_RADIUS pixels of an
+          // adjoining segment. Leave that clearance plus the overpass radius
+          // so a bridge cannot collapse into a clipped three-quarter circle.
+          const inset = CORNER_RADIUS + 8;
           if (
             x <= horizontal.start + inset || x >= horizontal.end - inset ||
             y <= vertical.start + inset || y >= vertical.end - inset

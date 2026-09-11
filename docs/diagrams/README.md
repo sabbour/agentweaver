@@ -40,10 +40,12 @@ professional draw.io/Fluent architecture diagram.
 Instead, `DiagramCanvas.tsx` deterministically divides the graph into authored
 group bands and edge-derived rank bands, then routes orthogonal polylines
 through measured gutters between cards. Parallel runs receive separate packed
-lanes, long spans use side channels, and linear runs fold into compact
+lanes, long spans use side channels outside unrelated expanded group bounds,
+and linear runs fold into compact
 serpentine rows. Label dimensions participate in the spacing calculation, and
 each label remains centred on its own connector while avoiding other labels
-and crossing lines. This is a generic pipeline fix -- every current and future
+and crossing lines. Bridge and junction decorations are calculated from those
+final routed points. This is a generic pipeline fix -- every current and future
 graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
 
 ## Shared connector convention
