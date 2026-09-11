@@ -919,7 +919,7 @@ Errors: `400` invalid run id / missing `answer`; `404` run not found; `409` no p
 
 ### POST /api/runs/{id}/auto-approve
 
-Toggles the per-run **auto-approve-tools** option. When enabled, only tools in Agentweaver's repository-defined safe list (currently `web_fetch`) are auto-granted at the human-in-the-loop gate. Every auto-grant is logged as `tool.auto_approved`. Preview, destructive, privileged, secret-bearing, and other network approvals remain gated unless an existing scoped policy explicitly permits them. Set the launch policy with `auto_approve_tools` on `POST /api/projects/{id}/orchestrations`; the legacy `autoApproveTools` spelling is also accepted. It cascades to dispatched children and defaults OFF.
+Toggles the per-run **auto-approve-tools** option. When enabled, only `web_fetch` and `start_preview` are auto-granted at the human-in-the-loop gate. Every auto-grant is logged as `tool.auto_approved`. Preview validation still applies, and destructive, privileged, secret-bearing, and other network approvals remain gated. Set the launch policy with `auto_approve_tools` on `POST /api/projects/{id}/orchestrations`; the legacy `autoApproveTools` spelling is also accepted. It cascades to dispatched children and defaults OFF.
 
 Request:
 
