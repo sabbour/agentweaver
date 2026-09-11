@@ -32,6 +32,7 @@ public sealed class RunRecord
     public string Origin { get; set; } = "interactive";
     public bool? LaunchAutoApproveTools { get; set; }
     public bool? LaunchAutopilot { get; set; }
+    public string? ApprovalPolicySnapshotId { get; set; }
     public string? ApprovalPolicySource { get; set; }
     public DateTimeOffset? ApprovalPolicyCapturedAt { get; set; }
     public DateTimeOffset? ApprovalPolicySettingsUpdatedAt { get; set; }

@@ -448,6 +448,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             Origin = "backlog_pickup",
             LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
             LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
+            ApprovalPolicySnapshotId = approvalSnapshot.SnapshotId,
             ApprovalPolicySource = approvalSnapshot.Source,
             ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
             ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,

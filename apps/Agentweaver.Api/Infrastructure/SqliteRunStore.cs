@@ -28,7 +28,8 @@ public sealed class SqliteRunStore : IRunStore
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
                               origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
                               sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
-                              launch_auto_approve_tools, launch_autopilot, approval_policy_source,
+                              launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                              approval_policy_source,
                               approval_policy_captured_at, approval_policy_settings_updated_at,
                               approval_policy_inherited_from_run_id)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
@@ -37,7 +38,8 @@ public sealed class SqliteRunStore : IRunStore
                     $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
                     $origin, $retriedFrom, $archivedAt, $sandboxBackend, $sandboxClaimName,
                     $sandboxPodName, $sandboxNamespace, $workflowSelectionReason,
-                    $launchAutoApproveTools, $launchAutopilot, $approvalPolicySource,
+                    $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
+                    $approvalPolicySource,
                     $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt,
                     $approvalPolicyInheritedFromRunId);
             """;
@@ -71,6 +73,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$workflowSelectionReason", (object?)run.WorkflowSelectionReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$launchAutoApproveTools", run.LaunchAutoApproveTools is { } autoApproveTools ? autoApproveTools ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$launchAutopilot", run.LaunchAutopilot is { } autopilot ? autopilot ? 1 : 0 : DBNull.Value);
+        command.Parameters.AddWithValue("$approvalPolicySnapshotId", (object?)run.ApprovalPolicySnapshotId ?? DBNull.Value);
         command.Parameters.AddWithValue("$approvalPolicySource", (object?)run.ApprovalPolicySource ?? DBNull.Value);
         command.Parameters.AddWithValue("$approvalPolicyCapturedAt", NullableTs(run.ApprovalPolicyCapturedAt));
         command.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", NullableTs(run.ApprovalPolicySettingsUpdatedAt));
@@ -679,6 +682,7 @@ public sealed class SqliteRunStore : IRunStore
                               worktree_path, worktree_branch, project_id, model_id,
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
                               retried_from, launch_auto_approve_tools, launch_autopilot,
+                              approval_policy_snapshot_id,
                               approval_policy_source, approval_policy_captured_at,
                               approval_policy_settings_updated_at, approval_policy_inherited_from_run_id)
             SELECT $runId, $repo, $branch, $modelSource, $task,
@@ -686,6 +690,7 @@ public sealed class SqliteRunStore : IRunStore
                    NULL, NULL, $projectId, $modelId,
                    $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
                    $retriedFrom, $launchAutoApproveTools, $launchAutopilot,
+                   $approvalPolicySnapshotId,
                    $approvalPolicySource, $approvalPolicyCapturedAt,
                    $approvalPolicySettingsUpdatedAt, $approvalPolicyInheritedFromRunId
             WHERE EXISTS (
@@ -710,6 +715,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$retriedFrom", (object?)run.RetriedFrom ?? DBNull.Value);
         command.Parameters.AddWithValue("$launchAutoApproveTools", run.LaunchAutoApproveTools is { } autoApproveTools ? autoApproveTools ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$launchAutopilot", run.LaunchAutopilot is { } autopilot ? autopilot ? 1 : 0 : DBNull.Value);
+        command.Parameters.AddWithValue("$approvalPolicySnapshotId", (object?)run.ApprovalPolicySnapshotId ?? DBNull.Value);
         command.Parameters.AddWithValue("$approvalPolicySource", (object?)run.ApprovalPolicySource ?? DBNull.Value);
         command.Parameters.AddWithValue("$approvalPolicyCapturedAt", NullableTs(run.ApprovalPolicyCapturedAt));
         command.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", NullableTs(run.ApprovalPolicySettingsUpdatedAt));
@@ -726,9 +732,9 @@ public sealed class SqliteRunStore : IRunStore
     //           21=workflow_run_id 22=merged_commit_hash 23=parent_run_id 24=subtask_id
     //           25=origin 26=retried_from 27=archived_at 28=sandbox_backend 29=sandbox_claim_name
     //           30=sandbox_pod_name 31=sandbox_namespace 32=workflow_selection_reason
-    //           33=launch_auto_approve_tools 34=launch_autopilot 35=approval_policy_source
-    //           36=approval_policy_captured_at 37=approval_policy_settings_updated_at
-    //           38=approval_policy_inherited_from_run_id
+    //           33=launch_auto_approve_tools 34=launch_autopilot 35=approval_policy_snapshot_id
+    //           36=approval_policy_source 37=approval_policy_captured_at
+    //           38=approval_policy_settings_updated_at 39=approval_policy_inherited_from_run_id
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
@@ -738,7 +744,8 @@ public sealed class SqliteRunStore : IRunStore
                workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
                sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
-               launch_auto_approve_tools, launch_autopilot, approval_policy_source,
+               launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+               approval_policy_source,
                approval_policy_captured_at, approval_policy_settings_updated_at,
                approval_policy_inherited_from_run_id
           FROM runs
@@ -782,10 +789,11 @@ public sealed class SqliteRunStore : IRunStore
         WorkflowSelectionReason = r.IsDBNull(32) ? null : r.GetString(32),
         LaunchAutoApproveTools = r.IsDBNull(33) ? null : r.GetInt32(33) != 0,
         LaunchAutopilot = r.IsDBNull(34) ? null : r.GetInt32(34) != 0,
-        ApprovalPolicySource = r.IsDBNull(35) ? null : r.GetString(35),
-        ApprovalPolicyCapturedAt = r.IsDBNull(36) ? null : DateTimeOffset.Parse(r.GetString(36), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        ApprovalPolicySettingsUpdatedAt = r.IsDBNull(37) ? null : DateTimeOffset.Parse(r.GetString(37), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        ApprovalPolicyInheritedFromRunId = r.IsDBNull(38) ? null : r.GetString(38),
+        ApprovalPolicySnapshotId = r.IsDBNull(35) ? null : r.GetString(35),
+        ApprovalPolicySource = r.IsDBNull(36) ? null : r.GetString(36),
+        ApprovalPolicyCapturedAt = r.IsDBNull(37) ? null : DateTimeOffset.Parse(r.GetString(37), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ApprovalPolicySettingsUpdatedAt = r.IsDBNull(38) ? null : DateTimeOffset.Parse(r.GetString(38), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ApprovalPolicyInheritedFromRunId = r.IsDBNull(39) ? null : r.GetString(39),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

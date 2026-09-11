@@ -59,6 +59,7 @@ public sealed record Run
     /// <summary>Crash-safe immutable launch-policy snapshot. Null only for legacy runs.</summary>
     public bool? LaunchAutoApproveTools { get; init; }
     public bool? LaunchAutopilot { get; init; }
+    public string? ApprovalPolicySnapshotId { get; init; }
     public string? ApprovalPolicySource { get; init; }
     public DateTimeOffset? ApprovalPolicyCapturedAt { get; init; }
     public DateTimeOffset? ApprovalPolicySettingsUpdatedAt { get; init; }
@@ -74,12 +75,14 @@ public sealed record Run
                 ApprovalPolicySource ?? "legacy",
                 capturedAt,
                 ApprovalPolicySettingsUpdatedAt,
-                ApprovalPolicyInheritedFromRunId);
+                ApprovalPolicyInheritedFromRunId,
+                ApprovalPolicySnapshotId);
 
     public Run WithApprovalPolicySnapshot(RunApprovalPolicySnapshot snapshot) => this with
     {
         LaunchAutoApproveTools = snapshot.Policy.AutoApproveTools,
         LaunchAutopilot = snapshot.Policy.Autopilot,
+        ApprovalPolicySnapshotId = snapshot.SnapshotId,
         ApprovalPolicySource = snapshot.Source,
         ApprovalPolicyCapturedAt = snapshot.CapturedAt,
         ApprovalPolicySettingsUpdatedAt = snapshot.SettingsUpdatedAt,

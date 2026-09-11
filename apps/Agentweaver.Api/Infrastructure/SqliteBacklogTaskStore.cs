@@ -633,13 +633,15 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                   submitting_user, status, started_at, ended_at, result,
                                   worktree_path, worktree_branch, project_id, model_id,
                                   agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin,
-                                  launch_auto_approve_tools, launch_autopilot, approval_policy_source,
+                                  launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                                  approval_policy_source,
                                   approval_policy_captured_at, approval_policy_settings_updated_at)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
                        $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
                        $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup',
-                       $launchAutoApproveTools, $launchAutopilot, $approvalPolicySource,
+                       $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
+                       $approvalPolicySource,
                        $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt
                 WHERE EXISTS (
                     SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
@@ -664,6 +666,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$subtaskId", (object?)coordinatorRun.SubtaskId ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$launchAutoApproveTools", approvalSnapshot.Policy.AutoApproveTools ? 1 : 0);
             insertRun.Parameters.AddWithValue("$launchAutopilot", approvalSnapshot.Policy.Autopilot ? 1 : 0);
+            insertRun.Parameters.AddWithValue("$approvalPolicySnapshotId", approvalSnapshot.SnapshotId);
             insertRun.Parameters.AddWithValue("$approvalPolicySource", approvalSnapshot.Source);
             insertRun.Parameters.AddWithValue("$approvalPolicyCapturedAt", Ts(approvalSnapshot.CapturedAt));
             insertRun.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", Ts(approvalSnapshot.SettingsUpdatedAt!.Value));

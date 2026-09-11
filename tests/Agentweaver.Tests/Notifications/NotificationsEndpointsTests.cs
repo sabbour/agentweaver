@@ -129,6 +129,22 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         await db.SaveChangesAsync();
     }
 
+    private async Task InsertToolAutoApprovedEventAsync(
+        string runId, string decisionId, string toolName = "start_preview")
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = 1,
+            EventType = EventTypes.ToolAutoApproved,
+            PayloadJson = $$"""{"decisionId":"{{decisionId}}","toolName":"{{toolName}}","targetPort":5173}""",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task InsertToolResultEventAsync(string runId, string callId)
     {
         using var scope = _factory.Services.CreateScope();
@@ -650,6 +666,20 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         var run = await InsertInProgressRunAsync(projectId, "Preview approval", "Coordinator");
         await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "preview-expired", "start_preview");
         await InsertToolApprovalResolvedEventAsync(run.Id.ToString(), "preview-expired", expired: true);
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+    }
+
+    [Fact]
+    public async Task GetNotifications_AutoApprovedPreview_DoesNotCreateApprovalNotification()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Auto Preview");
+        var run = await InsertInProgressRunAsync(projectId, "Preview without waiting", "Coordinator");
+        await InsertToolAutoApprovedEventAsync(run.Id.ToString(), "preview-decision");
 
         var response = await _client.GetAsync("/api/notifications");
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

@@ -9,8 +9,10 @@ public sealed class RunOptionsStoreTests
 {
     [Theory]
     [InlineData("web_fetch", true)]
-    [InlineData("start_preview", false)]
+    [InlineData("start_preview", true)]
     [InlineData("run_command", false)]
+    [InlineData("shell", false)]
+    [InlineData("write_file", false)]
     [InlineData("secret_read", false)]
     public void ApprovalPolicy_AutoApprovesOnlyRepositoryDefinedSafeTools(string toolName, bool expected)
     {

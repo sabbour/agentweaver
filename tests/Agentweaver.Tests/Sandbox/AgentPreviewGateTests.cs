@@ -11,8 +11,8 @@ namespace Agentweaver.Tests.Sandbox;
 /// <summary>
 /// Unit tests for <see cref="AgentPreviewGate"/> — the human-in-the-loop approval seam behind the
 /// agent-initiated <c>start_preview</c> tool. Verifies the auto-approve sources (global config,
-/// scoped policy) grant unattended, that the safe-tool run option does not bypass preview, that an operator grant resolves the gate, and
-/// that deny / timeout produce distinct final outcomes.
+/// immutable run policy, scoped policy) grant unattended, that an operator grant resolves the gate,
+/// and that deny / timeout produce distinct final outcomes.
 /// </summary>
 [Trait("Category", "ProcessEnvironment")]
 public sealed class AgentPreviewGateTests
@@ -68,7 +68,7 @@ public sealed class AgentPreviewGateTests
     }
 
     [Fact]
-    public async Task RequestApproval_PerRunSafeToolPolicy_DoesNotBypassPreview()
+    public async Task RequestApproval_PerRunSafeToolPolicy_AutoApprovesWithoutCardOrWaiter()
     {
         var gate = CreateGate(
             autoApproveConfigured: false,
@@ -76,14 +76,48 @@ public sealed class AgentPreviewGateTests
             out var runOptions,
             out var streams,
             timeout: TimeSpan.FromSeconds(5));
-        runOptions.SetAutoApproveTools(RunId, true);
+        runOptions.Set(RunId, new RunOptions(AutoApproveTools: true));
+
+        var outcome = await gate.RequestApprovalAsync(
+                RunId,
+                3000,
+                CancellationToken.None,
+                workPlanId: 42,
+                treeHash: "tree-abc")
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        outcome.Should().Be(new PreviewApprovalResult(PreviewApprovalOutcome.Approved, null, null));
+        approvalGate.Deny(RunId, "not-created").Should().BeFalse();
+        var events = streams.Get(RunId)!.GetSnapshotSince(0).Events;
+        events.Should().NotContain(e => e.Type == EventTypes.ToolApprovalRequired);
+        events.Should().NotContain(e => e.Type == EventTypes.SandboxPreviewPending);
+        var audit = events.Should().ContainSingle(e => e.Type == EventTypes.ToolAutoApproved).Subject;
+        ReadString(audit.Payload, "toolName").Should().Be("start_preview");
+        ReadString(audit.Payload, "approvalSource").Should().Be("run_policy");
+        ReadString(audit.Payload, "previewTarget").Should().Be("run_sandbox");
+        ReadInt(audit.Payload, "targetPort").Should().Be(3000);
+        ReadInt(audit.Payload, "workPlanId").Should().Be(42);
+        ReadString(audit.Payload, "treeHash").Should().Be("tree-abc");
+        audit.Payload.ToString().Should().NotContain("token").And.NotContain("credential");
+    }
+
+    [Fact]
+    public async Task RequestApproval_OmittedRunPolicy_RemainsHumanGated()
+    {
+        var gate = CreateGate(
+            autoApproveConfigured: false,
+            out var approvalGate,
+            out _,
+            out var streams,
+            timeout: TimeSpan.FromSeconds(5));
 
         var pending = gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
         var requestId = await WaitForRequestIdAsync(streams);
 
         approvalGate.Deny(RunId, requestId).Should().BeTrue();
-        (await pending).Outcome.Should().Be(PreviewApprovalOutcome.Denied,
-            "safe-tool auto-approval must not bypass the separate preview approval boundary");
+        (await pending).Outcome.Should().Be(PreviewApprovalOutcome.Denied);
+        streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Should().NotContain(e => e.Type == EventTypes.ToolAutoApproved);
     }
 
     [Fact]
@@ -273,6 +307,9 @@ public sealed class AgentPreviewGateTests
 
     private static string ReadString(object payload, string property) =>
         payload.GetType().GetProperty(property)!.GetValue(payload)!.ToString()!;
+
+    private static int ReadInt(object payload, string property) =>
+        (int)payload.GetType().GetProperty(property)!.GetValue(payload)!;
 
     private static IConfiguration BuildConfiguration(params (string Key, string? Value)[] values) =>
         new ConfigurationBuilder()

@@ -131,6 +131,22 @@ public sealed class RunRetryTests : IDisposable
             .Single(e => e.Type == EventTypes.RunApprovalPolicySelected);
         JsonSerializer.Serialize(audit.Payload).Should().Contain(
             $"\"inheritedFromRunId\":\"{source.Id}\"");
+
+        var preview = await _owner.PostAsJsonAsync(
+            $"/api/runs/{newId}/sandbox/preview",
+            new { target_port = 3000 });
+        preview.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "the inherited policy must bypass HITL and reach normal preview publication");
+
+        var previewEvents = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(newId)!.GetSnapshotSince(0).Events;
+        previewEvents.Should().NotContain(e => e.Type == EventTypes.ToolApprovalRequired);
+        var previewAudit = previewEvents.Should()
+            .ContainSingle(e => e.Type == EventTypes.ToolAutoApproved).Subject;
+        var previewPayload = JsonSerializer.SerializeToElement(previewAudit.Payload);
+        previewPayload.GetProperty("policySnapshotId").GetString()
+            .Should().Be(persistedRetry.GetApprovalPolicySnapshot()!.SnapshotId);
+        previewPayload.GetProperty("targetPort").GetInt32().Should().Be(3000);
     }
 
     [Fact]

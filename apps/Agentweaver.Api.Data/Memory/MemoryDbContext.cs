@@ -265,6 +265,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.Origin).HasColumnName("origin").HasDefaultValue("interactive");
             e.Property(r => r.LaunchAutoApproveTools).HasColumnName("launch_auto_approve_tools");
             e.Property(r => r.LaunchAutopilot).HasColumnName("launch_autopilot");
+            e.Property(r => r.ApprovalPolicySnapshotId).HasColumnName("approval_policy_snapshot_id");
             e.Property(r => r.ApprovalPolicySource).HasColumnName("approval_policy_source");
             e.Property(r => r.ApprovalPolicyCapturedAt).HasColumnName("approval_policy_captured_at");
             e.Property(r => r.ApprovalPolicySettingsUpdatedAt).HasColumnName("approval_policy_settings_updated_at");

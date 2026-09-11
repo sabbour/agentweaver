@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Agentweaver.Domain;
 
 /// <summary>
@@ -26,21 +29,65 @@ public sealed record RunApprovalPolicy(bool AutoApproveTools = false, bool Autop
 /// Heartbeat claims capture the project settings and their update timestamp inside the same
 /// transaction that reserves the run.
 /// </summary>
-public sealed record RunApprovalPolicySnapshot(
-    RunApprovalPolicy Policy,
-    string Source,
-    DateTimeOffset CapturedAt,
-    DateTimeOffset? SettingsUpdatedAt = null,
-    string? InheritedFromRunId = null);
+public sealed record RunApprovalPolicySnapshot
+{
+    public RunApprovalPolicySnapshot(
+        RunApprovalPolicy Policy,
+        string Source,
+        DateTimeOffset CapturedAt,
+        DateTimeOffset? SettingsUpdatedAt = null,
+        string? InheritedFromRunId = null,
+        string? SnapshotId = null)
+    {
+        this.Policy = Policy;
+        this.Source = Source;
+        this.CapturedAt = CapturedAt;
+        this.SettingsUpdatedAt = SettingsUpdatedAt;
+        this.InheritedFromRunId = InheritedFromRunId;
+        this.SnapshotId = SnapshotId ?? ComputeSnapshotId(
+            Policy, Source, CapturedAt, SettingsUpdatedAt, InheritedFromRunId);
+    }
+
+    public RunApprovalPolicy Policy { get; }
+    public string Source { get; }
+    public DateTimeOffset CapturedAt { get; }
+    public DateTimeOffset? SettingsUpdatedAt { get; }
+    public string? InheritedFromRunId { get; }
+
+    /// <summary>
+    /// Stable, persisted, non-secret identity for this immutable snapshot.
+    /// </summary>
+    public string SnapshotId { get; }
+
+    private static string ComputeSnapshotId(
+        RunApprovalPolicy policy,
+        string source,
+        DateTimeOffset capturedAt,
+        DateTimeOffset? settingsUpdatedAt,
+        string? inheritedFromRunId)
+    {
+        var material = string.Join(
+            "\n",
+            policy.AutoApproveTools ? "1" : "0",
+            policy.Autopilot ? "1" : "0",
+            source,
+            capturedAt.ToUniversalTime().ToString("O"),
+            settingsUpdatedAt?.ToUniversalTime().ToString("O") ?? "",
+            inheritedFromRunId ?? "");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
+            .ToLowerInvariant()[..24];
+    }
+}
 
 /// <summary>
 /// Per-run operator options that change how a run handles human-in-the-loop interactions.
 /// Both default OFF. They cascade from a coordinator run to its dispatched child runs.
 /// </summary>
 /// <param name="AutoApproveTools">
-/// When true, an allow-with-approval tool request (e.g. <c>web_fetch</c>) is auto-granted at the
-/// HITL gate instead of stalling for an operator. This NEVER overrides a policy deny: dangerous
-/// tools are rejected upstream by sandbox governance before the HITL gate is ever reached.
+/// When true, a repository-approved safe tool request (<c>web_fetch</c> or
+/// <c>start_preview</c>) is auto-granted at the HITL gate instead of stalling for an operator.
+/// This NEVER overrides validation or a policy deny: dangerous tools are rejected upstream by
+/// sandbox governance before the HITL gate is ever reached.
 /// </param>
 /// <param name="Autopilot">
 /// Coordinator-only. When true, CLARIFYING QUESTIONS bubbled by child workers (or asked on the

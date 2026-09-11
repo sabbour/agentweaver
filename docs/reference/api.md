@@ -1513,11 +1513,12 @@ Request:
 | `goal` | string | Yes | The user's prompt/outcome for the coordinator. |
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
 | `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
-| `auto_approve_tools` | bool | No | Auto-approve only repository-defined safe tools for the coordinator and its children. Currently this covers `web_fetch`; it does not bypass preview, destructive, privileged, secret, or other network approvals. Defaults to `false`. The legacy `autoApproveTools` alias remains accepted. |
+| `auto_approve_tools` | bool | No | Auto-approve only repository-defined safe tools for the coordinator and its children. Currently this covers `web_fetch` and `start_preview`. Preview auto-approval bypasses only the human wait; invalid ports, exited/unreachable preview processes, sandbox ownership, and publication failures still fail normally. It does not bypass arbitrary shell, destructive, privileged, secret-bearing, or unrelated network approvals. Defaults to `false`. The legacy `autoApproveTools` alias remains accepted. |
 | `autopilot` | bool | No | Launch with Autopilot ON: auto-answers clarifying questions **and**, in `defineOutcome` mode, auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`. Does NOT auto-grant tool approvals. Cascades to children. Defaults to `false`. |
 
 The selected launch policy is persisted with the run and audited as
-`run.approval_policy_selected`. Retries reuse that immutable launch choice. Heartbeat-created
+`run.approval_policy_selected`, including a stable `policySnapshotId`. Retries reuse that immutable
+launch choice with explicit source-run lineage, and children receive an inherited immutable snapshot. Heartbeat-created
 runs still take their initial policy from `pickup_auto_approve_tools` and `pickup_autopilot`;
 the claim transaction snapshots the current persisted values onto the reserved run. Changing those
 project defaults affects the next won claim, but does not rewrite an existing run or its retry policy.

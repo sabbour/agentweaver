@@ -66,6 +66,10 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
+        var approvalSnapshot = new RunApprovalPolicySnapshot(
+            new RunApprovalPolicy(AutoApproveTools: true),
+            Source: "direct",
+            CapturedAt: DateTimeOffset.UtcNow);
 
         await runStore.InsertAsync(new Run
         {
@@ -77,19 +81,30 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
             SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
-        });
+        }.WithApprovalPolicySnapshot(approvalSnapshot));
 
         // Auto-approve at the HITL gate so the request reaches the preview-start path instead of
         // suspending for an operator. With the preview service disabled and no registered pod, the
         // legacy port-forward path then fails deterministically with 409.
         _factory.Services.GetRequiredService<IRunOptionsStore>()
-            .SetAutoApproveTools(runId.ToString(), true);
+            .Set(runId.ToString(), approvalSnapshot.Policy.ToRunOptions());
+        var streams = _factory.Services.GetRequiredService<RunStreamStore>();
+        streams.Create(runId.ToString(), ProjectsWebApplicationFactory.TestUser);
 
         var tools = CreateTools();
         var act = () => tools.StartPreviewAsync(runId.ToString(), 3000, ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 409);
+
+        var events = streams.Get(runId.ToString())!.GetSnapshotSince(0).Events;
+        events.Should().NotContain(e => e.Type == EventTypes.ToolApprovalRequired);
+        var audit = events.Should().ContainSingle(e => e.Type == EventTypes.ToolAutoApproved).Subject;
+        ReadString(audit.Payload, "toolName").Should().Be("start_preview");
+        ReadString(audit.Payload, "policySnapshotId").Should().Be(approvalSnapshot.SnapshotId);
+        ReadString(audit.Payload, "previewTarget").Should().Be("run_sandbox");
+        ReadInt(audit.Payload, "targetPort").Should().Be(3000);
+        audit.Payload.ToString().Should().NotContain("token").And.NotContain("credential");
     }
 
     [Fact]
@@ -231,6 +246,12 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
         error.Error.Should().Be("The preview process or its run is no longer active.");
         error.Hint.Should().Contain("session_id");
     }
+
+    private static string ReadString(object payload, string property) =>
+        payload.GetType().GetProperty(property)!.GetValue(payload)!.ToString()!;
+
+    private static int ReadInt(object payload, string property) =>
+        (int)payload.GetType().GetProperty(property)!.GetValue(payload)!;
 
     private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
     {

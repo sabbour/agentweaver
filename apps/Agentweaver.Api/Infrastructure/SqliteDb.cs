@@ -89,6 +89,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "CREATE INDEX IF NOT EXISTS idx_runs_origin_status ON runs (origin, status);", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN launch_auto_approve_tools INTEGER;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN launch_autopilot INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_snapshot_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_source TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_captured_at TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_policy_settings_updated_at TEXT;", ct);
@@ -585,6 +586,7 @@ public sealed class SqliteDb
             sandbox_namespace  TEXT,
             launch_auto_approve_tools INTEGER,
             launch_autopilot INTEGER,
+            approval_policy_snapshot_id TEXT,
             approval_policy_source TEXT,
             approval_policy_captured_at TEXT,
             approval_policy_settings_updated_at TEXT,

@@ -17,6 +17,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -456,6 +457,7 @@ public sealed class CoordinatorRunService
 
         var runId = run.Id.ToString();
         _runOptions.Set(runId, approvalPolicy.ToRunOptions());
+        var approvalSnapshot = run.GetApprovalPolicySnapshot();
 
         var entry = _streamStore.Create(runId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task, mode = direct ? "direct" : "defineOutcome" });
@@ -467,7 +469,10 @@ public sealed class CoordinatorRunService
             capturedAt = approvalPolicyCapturedAt,
             settingsUpdatedAt = approvalPolicySettingsUpdatedAt,
             inheritedFromRunId = approvalPolicyInheritedFromRunId,
-            safeTools = approvalPolicy.AutoApproveTools ? new[] { "web_fetch" } : Array.Empty<string>(),
+            policySnapshotId = approvalSnapshot?.SnapshotId,
+            safeTools = approvalPolicy.AutoApproveTools
+                ? new[] { "web_fetch", AgentPreviewGate.ToolName }
+                : Array.Empty<string>(),
         });
 
         // Durable provenance for the provider that actually serves this run's model turns.

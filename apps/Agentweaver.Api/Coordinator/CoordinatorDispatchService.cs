@@ -853,6 +853,21 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // BYOK child run persist (and render) as GitHub Copilot.
         var effectiveProvider = await ResolveEffectiveProviderAsync(context.ProjectId, ct).ConfigureAwait(false);
 
+        RunApprovalPolicySnapshot? childApprovalSnapshot = null;
+        if (_runStore is not null && RunId.TryParse(context.CoordinatorRunId, out var coordinatorRunId))
+        {
+            var coordinatorRun = await _runStore.GetAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            if (coordinatorRun?.GetApprovalPolicySnapshot() is { } parentSnapshot)
+            {
+                childApprovalSnapshot = new RunApprovalPolicySnapshot(
+                    parentSnapshot.Policy,
+                    Source: "child",
+                    CapturedAt: DateTimeOffset.UtcNow,
+                    SettingsUpdatedAt: parentSnapshot.SettingsUpdatedAt,
+                    InheritedFromRunId: context.CoordinatorRunId);
+            }
+        }
+
         var childRun = new Run
         {
             Id = childRunId,
@@ -870,6 +885,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             ParentRunId = context.CoordinatorRunId,
             SubtaskId = subtaskId.ToString(),
         };
+        if (childApprovalSnapshot is not null)
+            childRun = childRun.WithApprovalPolicySnapshot(childApprovalSnapshot);
 
         // Cascade the coordinator's per-run options (auto-approve-tools + Autopilot) to the child so
         // the child's runner honors auto-approve and the child's bubbled questions are eligible for

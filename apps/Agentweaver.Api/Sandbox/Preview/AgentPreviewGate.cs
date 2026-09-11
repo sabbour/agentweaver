@@ -44,6 +44,7 @@ public sealed record PreviewApprovalAttempt(
 /// <para>Auto-approve sources (any true ⇒ auto-grant, prod default is human-gated):</para>
 /// <list type="number">
 ///   <item><c>Sandbox:Preview:AutoApprove</c> config / env <c>SANDBOX_PREVIEW_AUTO_APPROVE</c> (default false).</item>
+///   <item>The run's immutable <c>auto_approve_tools</c> launch policy (default false).</item>
 ///   <item>An existing run/always-scoped policy on the shared approval gate.</item>
 /// </list>
 /// This is the seam that lets an automated demo run grant the preview unattended while production
@@ -119,14 +120,6 @@ public sealed class AgentPreviewGate
     }
 
     /// <summary>
-    /// Returns true if the preview should be granted without an operator: the global config/env
-    /// flag or an existing scoped allow policy. The per-run safe-tool policy never covers preview.
-    /// </summary>
-    public bool IsAutoApproved(string runId) =>
-        _autoApproveConfigured
-        || _approvalGate.IsAutoApproved(runId, ToolName, null);
-
-    /// <summary>
     /// Requests approval for exposing <paramref name="port"/> on <paramref name="runId"/>. Returns
     /// immediately as <see cref="PreviewApprovalOutcome.Approved"/> when auto-approved; otherwise
     /// emits a HITL card and suspends until an operator grants/denies or the timeout elapses.
@@ -155,14 +148,36 @@ public sealed class AgentPreviewGate
         string? treeHash = null,
         string? retryOfRequestId = null)
     {
-        var launchPolicy = _runOptions.GetLaunchPolicy(runId);
-        if (IsAutoApproved(runId))
+        var snapshot = await ResolvePolicySnapshotAsync(runId, ct).ConfigureAwait(false);
+        var runPolicyApproved = IsRunPolicyApproved(runId, snapshot);
+        if (_autoApproveConfigured
+            || runPolicyApproved
+            || _approvalGate.IsAutoApproved(runId, ToolName, null))
         {
+            var approvalSource = runPolicyApproved
+                ? "run_policy"
+                : _autoApproveConfigured
+                    ? "preview_configuration"
+                    : "scoped_tool_policy";
+            var decisionId = Guid.NewGuid().ToString("n");
             _logger.LogInformation(
-                "start_preview auto-approved (config/run-option/policy) — port={Port} runId={RunId} approvalPolicySnapshotId={ApprovalPolicySnapshotId}",
-                port,
+                "start_preview auto-approved ({ApprovalSource}) — port={Port} runId={RunId} policySnapshotId={PolicySnapshotId}",
+                approvalSource, port, runId, snapshot?.SnapshotId);
+            _streams.Get(runId)?.RecordNext(EventTypes.ToolAutoApproved, new
+            {
+                decisionId,
                 runId,
-                launchPolicy?.SnapshotId);
+                toolName = ToolName,
+                risk = ToolApprovalPolicySemantics.RiskFor(ToolName),
+                approvalSource,
+                policySnapshotId = snapshot?.SnapshotId,
+                previewTarget = "run_sandbox",
+                targetPort = port,
+                workPlanId,
+                treeHash,
+                retryOfRequestId,
+                decidedAt = DateTimeOffset.UtcNow.ToString("O"),
+            });
             var retryRequestId = retryOfRequestId is null ? null : Guid.NewGuid().ToString("n");
             if (retryRequestId is not null)
             {
@@ -247,6 +262,27 @@ public sealed class AgentPreviewGate
             requestId,
             expiresAt,
             CompleteAsync(runId, requestId, expiresAt, approvalTask));
+    }
+
+    private bool IsRunPolicyApproved(string runId, RunApprovalPolicySnapshot? snapshot) =>
+        snapshot?.Policy.AllowsAutoApproval(ToolName)
+        ?? (_runStore is null && _runOptions.GetLaunchPolicy(runId).AllowsAutoApproval(ToolName));
+
+    private async Task<RunApprovalPolicySnapshot?> ResolvePolicySnapshotAsync(
+        string runId,
+        CancellationToken ct)
+    {
+        if (_runStore is null || !RunId.TryParse(runId, out var parsedRunId))
+            return null;
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        var snapshot = run?.GetApprovalPolicySnapshot();
+        if (snapshot is not null || string.IsNullOrWhiteSpace(run?.ParentRunId))
+            return snapshot;
+
+        return RunId.TryParse(run.ParentRunId, out var parentRunId)
+            ? (await _runStore.GetAsync(parentRunId, ct).ConfigureAwait(false))?.GetApprovalPolicySnapshot()
+            : null;
     }
 
     private async Task<PreviewApprovalResult> CompleteAsync(
