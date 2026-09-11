@@ -8,6 +8,16 @@
     "kind": { "const": "graph", "description": "Optional for backward compatibility; omitted specs are treated as graph specs." },
     "title": { "type": "string" },
     "alt": { "type": "string", "description": "Markdown image alt text used in README.md / architecture-aks.md" },
+    "brand": {
+      "type": "object",
+      "description": "Optional product header shown above the graph. The logo path resolves from the renderer's public root.",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "logo": { "type": "string" }
+      }
+    },
     "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },
     "groups": {
       "type": "array",
