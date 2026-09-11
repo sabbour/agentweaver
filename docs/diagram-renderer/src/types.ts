@@ -18,6 +18,12 @@ export interface GraphGroup {
   parent?: string;
 }
 
+export interface GraphBrand {
+  name: string;
+  subtitle?: string;
+  logo?: string;
+}
+
 export interface GraphNode {
   id: string;
   label: string;
@@ -42,6 +48,7 @@ export interface GraphSpec {
   kind?: 'graph';
   title: string;
   alt: string;
+  brand?: GraphBrand;
   direction?: 'TB' | 'LR';
   groups?: GraphGroup[];
   nodes: GraphNode[];
