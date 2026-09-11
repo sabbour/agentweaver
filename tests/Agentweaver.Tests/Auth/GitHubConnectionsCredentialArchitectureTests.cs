@@ -221,7 +221,7 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
         hostProvider.Should().Contain("runtimeState.RunId, runId")
             .And.Contain("credential.ExpiresAt > DateTimeOffset.UtcNow");
         runtimeFactory.Should().Contain("IGitHubCopilotCapabilityCredentialProvider")
-            .And.Contain("live run-bound capability snapshot")
+            .And.Contain("GitHubCopilotCapabilitySnapshotUnavailableException")
             .And.NotContain("GetValue<string>(\"GitHubToken\")")
             .And.NotContain("GetValue<string>(\"ApiKey\")");
     }
