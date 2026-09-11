@@ -1356,8 +1356,12 @@ function layout(spec: GraphSpec): {
         const data = edge.data as {
           points?: Point[];
           labelPos?: { x: number; y: number };
+          bridges?: Array<{ x: number; y: number }>;
+          junctions?: Point[];
         };
         data.points = data.points?.map((point) => ({ x: point.x + dx, y: point.y + dy }));
+        data.bridges = data.bridges?.map((bridge) => ({ ...bridge, x: bridge.x + dx, y: bridge.y + dy }));
+        data.junctions = data.junctions?.map((junction) => ({ x: junction.x + dx, y: junction.y + dy }));
         if (data.labelPos) {
           data.labelPos = { x: data.labelPos.x + dx, y: data.labelPos.y + dy };
         }

@@ -284,16 +284,75 @@ export interface ConnectorJunction {
   y: number;
 }
 
-function turnsBetween(previous: ConnectorPoint, current: ConnectorPoint, next: ConnectorPoint): boolean {
-  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
-  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
-  return verticalBefore !== verticalAfter;
+export interface ConnectorContinuationJoin {
+  point: ConnectorPoint;
+  direction: 'left' | 'right' | 'top' | 'bottom';
+}
+
+function samePoint(left: ConnectorPoint, right: ConnectorPoint): boolean {
+  return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
+}
+
+function sharedEndpoint(
+  routes: Array<{ points: ConnectorPoint[] }>,
+  endpoint: 'start' | 'end',
+): ConnectorPoint | undefined {
+  const candidate = endpoint === 'start'
+    ? routes[0]?.points[0]
+    : routes[0]?.points.at(-1);
+  if (!candidate) return undefined;
+  return routes.every((route) => {
+    const point = endpoint === 'start' ? route.points[0] : route.points.at(-1);
+    return point !== undefined && samePoint(candidate, point);
+  })
+    ? candidate
+    : undefined;
 }
 
 /**
- * Marks semantic split and merge locations only: a shared source trunk, its
- * branch tees, and a shared target entry. Ordinary path intersections never
- * create a junction marker.
+ * Finds the point where a semantic return can safely join the target's actual
+ * continuation route. A marker is valid only when the two graph edges share
+ * this exact point; an isolated return rail corner is never a junction.
+ */
+export function findLoopbackContinuationJoin(
+  loopback: Edge,
+  edges: Edge[],
+  nodes: Node[],
+  clearance = 18,
+): ConnectorContinuationJoin | undefined {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const continuation = edges
+    .filter((edge) => edge.type === 'spine' && edge.source === loopback.target)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .at(0);
+  if (!continuation) return undefined;
+  const points = spineRoutePoints(continuation, byId);
+  if (!points || points.length < 2) return undefined;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    if (distance < 0.5) continue;
+    const dx = (to.x - from.x) / distance;
+    const dy = (to.y - from.y) / distance;
+    return {
+      point: {
+        x: from.x + dx * Math.min(clearance, distance / 2),
+        y: from.y + dy * Math.min(clearance, distance / 2),
+      },
+      direction: Math.abs(dx) >= Math.abs(dy)
+        ? (dx >= 0 ? 'right' : 'left')
+        : (dy >= 0 ? 'bottom' : 'top'),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Marks only true split and merge points. The endpoints must be identical in
+ * the routed geometry as well as related by the graph; elbows, layer bounds,
+ * and incidental path crossings never create a marker.
  */
 export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -329,18 +388,11 @@ export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string
 
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
-    add(group[0].edge.id, group[0].points[0]);
-    for (const route of group) {
-      for (let index = 1; index < route.points.length - 1; index += 1) {
-        if (turnsBetween(route.points[index - 1], route.points[index], route.points[index + 1])) {
-          add(route.edge.id, route.points[index]);
-        }
-      }
-    }
+    add(group[0].edge.id, sharedEndpoint(group, 'start'));
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
-    add(group[0].edge.id, group[0].points.at(-1));
+    add(group[0].edge.id, sharedEndpoint(group, 'end'));
   }
   return junctions;
 }

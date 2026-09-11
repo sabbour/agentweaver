@@ -4,6 +4,7 @@ import {
   SUBTASK_NODE_H,
   SUBTASK_NODE_W,
   analyzeWorkflowLayout,
+  findConnectorJunctions,
   layoutDagBalancedGrid,
   layoutDagColumns,
   layoutDagStaircase,
@@ -488,6 +489,38 @@ describe('layoutDagStaircase', () => {
     expect(new Set(offsets).size).toBe(edges.length);
     expect(Math.min(...offsets)).toBe(0);
     expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);
+  });
+
+  it('marks only exact shared split and merge endpoints, not elbows or crossings', () => {
+    const nodes: Node[] = [
+      { ...makeNode('split'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('upper'), position: { x: 300, y: -80 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('lower'), position: { x: 300, y: 120 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merge-left'), position: { x: 0, y: 300 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merge-right'), position: { x: 0, y: 500 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merged'), position: { x: 400, y: 400 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-top'), position: { x: 700, y: 250 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-bottom'), position: { x: 700, y: 550 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-left'), position: { x: 550, y: 400 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-right'), position: { x: 850, y: 400 }, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges = routeGridEdges([
+      { id: 'split-upper', source: 'split', target: 'upper', type: 'spine' },
+      { id: 'split-lower', source: 'split', target: 'lower', type: 'spine' },
+      { id: 'merge-left', source: 'merge-left', target: 'merged', type: 'spine' },
+      { id: 'merge-right', source: 'merge-right', target: 'merged', type: 'spine' },
+      { id: 'cross-vertical', source: 'cross-top', target: 'cross-bottom', type: 'spine' },
+      { id: 'cross-horizontal', source: 'cross-left', target: 'cross-right', type: 'spine' },
+    ], nodes);
+
+    const junctions = findConnectorJunctions(edges, nodes);
+    const points = [...junctions.values()].flat();
+
+    expect(points).toHaveLength(2);
+    expect(points).toContainEqual({ x: 100, y: 50 });
+    expect(points).toContainEqual({ x: 400, y: 450 });
+    expect(junctions.has('cross-horizontal')).toBe(false);
+    expect(junctions.has('cross-vertical')).toBe(false);
   });
 });
 
