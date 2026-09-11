@@ -276,9 +276,20 @@ export function buildBridgedPath(
 export function alignLoopbackToContinuation(
   points: Point[],
   continuation: Point[] | undefined,
+  targetBounds?: { x: number; y: number; width: number; height: number },
 ): Point[] {
   if (points.length < 4 || !continuation?.length) return points;
-  const join = continuation[1] ?? continuation[0];
+  const candidate = continuation[1] ?? continuation[0];
+  const clearance = 18;
+  const join = targetBounds
+    ? {
+        // Static diagrams flow top-to-bottom. The normal connector leaves
+        // here, so this is the local continuation junction rather than any
+        // point on the destination card's face or top edge.
+        x: continuation[0].x,
+        y: targetBounds.y + targetBounds.height + clearance,
+      }
+    : candidate;
   const sideX = points[1].x;
   return [
     points[0],
