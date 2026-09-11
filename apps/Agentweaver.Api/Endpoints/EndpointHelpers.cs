@@ -468,11 +468,10 @@ internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent ev
 }
 
 /// <summary>
-/// Ensures the wire payload carries a `timestamp_utc` key sourced from <see cref="RunEvent.TimestampUtc"/>
-/// (stamped centrally by RunStreamStore.RecordNext/Record — see RunEvent.cs) so the frontend's
-/// `readTimestamp()` (apps/web/src/components/AgentSessionPanel.tsx) never has to fall back to
-/// `Date.now()` at render time. Individual emitters that already embed their own `timestamp_utc`/
-/// `timestampUtc`/`timestamp` field in the payload are left untouched — this only fills the gap.
+/// Preserves an event's recorded UTC timestamp in the payload. Individual emitters that already
+/// embed their own `timestamp_utc`/`timestampUtc`/`timestamp` field are left untouched. Legacy
+/// events with no trustworthy recorded timestamp remain absent rather than being relabeled with
+/// serialization-time <c>DateTimeOffset.UtcNow</c>.
 /// </summary>
 internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
 {
@@ -482,9 +481,10 @@ internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
         : System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
             ?? new System.Text.Json.Nodes.JsonObject();
     if (!node.ContainsKey("timestamp_utc") && !node.ContainsKey("timestampUtc") && !node.ContainsKey("timestamp"))
-        node["timestamp_utc"] = evt.TimestampUtc == default
-            ? DateTimeOffset.UtcNow.ToString("O")
-            : evt.TimestampUtc.ToString("O");
+    {
+        if (evt.TimestampUtc != default)
+            node["timestamp_utc"] = evt.TimestampUtc.ToUniversalTime().ToString("O");
+    }
     return node;
 }
 

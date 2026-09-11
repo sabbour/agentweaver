@@ -1,5 +1,6 @@
 using Agentweaver.Api.Metrics;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
@@ -176,14 +177,25 @@ public static class MetricsEndpoints
             {
                 [run.Id.ToString()] = run.AgentName,
             };
+            var traceContextsByRunId = new Dictionary<string, RunTraceContext>(StringComparer.Ordinal)
+            {
+                [run.Id.ToString()] = CreateTraceContext(run),
+            };
             if (run.ParentRunId is null)
             {
                 var children = await runStore.GetRunsByParentAsync(run.Id.ToString(), ct).ConfigureAwait(false);
                 foreach (var child in children)
+                {
                     agentNameByRunId[child.Id.ToString()] = child.AgentName;
+                    traceContextsByRunId[child.Id.ToString()] = CreateTraceContext(child);
+                }
             }
 
-            return Results.Ok(await metrics.GetRunTracesAsync(runId, agentNameByRunId, ct).ConfigureAwait(false));
+            return Results.Ok(await metrics.GetRunTracesAsync(
+                runId,
+                agentNameByRunId,
+                traceContextsByRunId,
+                ct).ConfigureAwait(false));
         });
     }
 
@@ -195,6 +207,22 @@ public static class MetricsEndpoints
             ? result
             : null;
     }
+
+    private static RunTraceContext CreateTraceContext(Run run) =>
+        new(
+            run.Id.ToString(),
+            run.ProjectId?.ToString(),
+            run.ParentRunId,
+            run.AgentName,
+            run.WorkflowRunId,
+            run.ModelId,
+            run.ModelSource.ToApiString(),
+            run.SandboxBackend,
+            string.IsNullOrWhiteSpace(run.SandboxBackend)
+                ? null
+                : string.Equals(run.SandboxBackend, "kubernetes-sandbox-claim", StringComparison.Ordinal),
+            run.LaunchAutoApproveTools,
+            run.Status.ToApiString());
 
     private static ProjectMetricsDto MergeProjectMetrics(
         ProjectMetricsDto metrics,

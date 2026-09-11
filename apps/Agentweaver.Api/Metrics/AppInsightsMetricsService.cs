@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
+using Agentweaver.Domain;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
@@ -192,6 +193,7 @@ public sealed class AppInsightsMetricsService
     public async Task<RunTraceDto> GetRunTracesAsync(
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
+        IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId = null,
         CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
@@ -206,6 +208,7 @@ public sealed class AppInsightsMetricsService
             workspaceId,
             runId,
             agentNameByRunId,
+            traceContextsByRunId,
             ct).ConfigureAwait(false);
         return new RunTraceDto
         {
@@ -647,6 +650,7 @@ public sealed class AppInsightsMetricsService
         string workspaceId,
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
         CancellationToken ct)
     {
         var timeTo = DateTimeOffset.UtcNow;
@@ -728,6 +732,9 @@ public sealed class AppInsightsMetricsService
                     ?? ReadDimension(customDimensions, "gen_ai.request.model")
                     ?? ReadDimension(customDimensions, "model")
                     ?? ReadDimension(customDimensions, "model_id");
+                RunTraceContext? traceContext = null;
+                if (traceContextsByRunId is not null)
+                    traceContextsByRunId.TryGetValue(spanRunId ?? runId, out traceContext);
                 return new RunTraceSpanDto
                 {
                     Id = ReadRequiredString(row[0], $"{runId}-{index}"),
@@ -748,10 +755,84 @@ public sealed class AppInsightsMetricsService
                     OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
                     TotalNanoAiu = ReadDimensionLong(customDimensions, "agentweaver.aiu.nano"),
                     OperationName = operationName,
+                    Attributes = ProjectTraceAttributes(
+                        customDimensions,
+                        traceContext,
+                        spanRunId,
+                        ReadBool(row[5]),
+                        NullIfWhiteSpace(row[6]?.ToString())),
                 };
             })
             .ToList();
         return (spans, null);
+    }
+
+    /// <summary>
+    /// Projects only the fixed <see cref="TraceSpanAttributesDto"/> contract from an App Insights
+    /// custom-dimension bag. The source bag can contain third-party/unbounded telemetry, so this
+    /// method must remain an explicit allow-list rather than returning a copied dictionary.
+    /// </summary>
+    internal static TraceSpanAttributesDto ProjectTraceAttributes(
+        IReadOnlyDictionary<string, string?> dimensions,
+        RunTraceContext? context,
+        string? observedRunId,
+        bool success,
+        string? resultCode)
+    {
+        var runId = BoundedDimension(dimensions, TraceTelemetry.RunId, TraceTelemetry.LegacyRunId)
+            ?? BoundedValue(observedRunId)
+            ?? BoundedValue(context?.RunId);
+        return new TraceSpanAttributesDto
+        {
+            SessionId = BoundedDimension(dimensions, TraceTelemetry.SessionId),
+            RunId = runId,
+            ParentRunId = BoundedDimension(dimensions, "parent_run_id")
+                ?? BoundedValue(context?.ParentRunId),
+            ProjectId = BoundedDimension(dimensions, TraceTelemetry.ProjectId)
+                ?? BoundedValue(context?.ProjectId),
+            AgentName = BoundedDimension(dimensions, TraceTelemetry.AgentName, "agent_name")
+                ?? BoundedValue(context?.AgentName),
+            WorkflowRunId = BoundedDimension(dimensions, TraceTelemetry.WorkflowRunId)
+                ?? BoundedValue(context?.WorkflowRunId),
+            OperationName = AllowedDimension(dimensions, TraceTelemetry.OperationName,
+                ["chat", "text_completion", "execute_tool"]),
+            ModelId = BoundedDimension(dimensions, TraceTelemetry.ResponseModel, TraceTelemetry.RequestModel, "model", "model_id")
+                ?? BoundedValue(context?.ModelId),
+            ProviderSource = AllowedDimension(dimensions, TraceTelemetry.ProviderSource, ["github-copilot", "byok"])
+                ?? AllowedValue(context?.ProviderSource, ["github-copilot", "byok"]),
+            ProviderKind = AllowedDimension(dimensions, TraceTelemetry.ProviderKind,
+                ["github_copilot", "byok", "project_github_copilot", "platform_github_copilot", "user_github_copilot", "user_byok"]),
+            ProviderType = AllowedDimension(dimensions, TraceTelemetry.ProviderType, ["openai", "azure", "anthropic"]),
+            ProviderScope = AllowedDimension(dimensions, TraceTelemetry.ProviderScope, ["project", "platform", "user"]),
+            RoutingDecision = AllowedDimension(dimensions, TraceTelemetry.RoutingDecision, ["direct", "fallback"]),
+            ToolName = BoundedDimension(dimensions, TraceTelemetry.ToolName, "tool_name"),
+            ToolCallId = BoundedDimension(dimensions, TraceTelemetry.ToolCallId, "gen_ai.tool.call.id"),
+            ToolSuccess = ReadDimensionBoolean(dimensions, TraceTelemetry.ToolSuccess),
+            PolicyDecision = AllowedDimension(dimensions, TraceTelemetry.PolicyDecision,
+                [TraceTelemetry.DecisionAllowed, TraceTelemetry.DecisionDenied, TraceTelemetry.DecisionEvaluationError]),
+            AuthorizationDecision = AllowedDimension(dimensions, TraceTelemetry.AuthorizationDecision,
+                [TraceTelemetry.DecisionApprovalRequired, TraceTelemetry.DecisionApproved, TraceTelemetry.DecisionDenied, TraceTelemetry.DecisionAutoApproved]),
+            PolicyShellEnabled = ReadDimensionBoolean(dimensions, TraceTelemetry.PolicyShellEnabled),
+            PolicyNetworkEnabled = ReadDimensionBoolean(dimensions, TraceTelemetry.PolicyNetworkEnabled),
+            PolicyAutoApproveTools = ReadDimensionBoolean(dimensions, TraceTelemetry.PolicyAutoApproveTools)
+                ?? context?.AutoApproveTools,
+            RunStatus = BoundedDimension(dimensions, "agentweaver.run.status")
+                ?? BoundedValue(context?.RunStatus),
+            SandboxBackend = BoundedDimension(dimensions, TraceTelemetry.SandboxBackend)
+                ?? BoundedValue(context?.SandboxBackend),
+            SandboxIsolated = ReadDimensionBoolean(dimensions, TraceTelemetry.SandboxIsolated)
+                ?? context?.SandboxIsolated,
+            RuntimePurpose = AllowedDimension(dimensions, TraceTelemetry.RuntimePurpose,
+                ["default", "assembly_build_test", "implementation_turn", "operator_assistant"]),
+            InputTokens = ReadDimensionLong(dimensions, TraceTelemetry.InputTokens),
+            OutputTokens = ReadDimensionLong(dimensions, TraceTelemetry.OutputTokens),
+            TotalTokens = ReadDimensionLong(dimensions, TraceTelemetry.TotalTokens),
+            TotalNanoAiu = ReadDimensionLong(dimensions, TraceTelemetry.NanoAiu),
+            Status = AllowedDimension(dimensions, TraceTelemetry.Status, ["success", "error"])
+                ?? (success ? "success" : "error"),
+            ErrorType = BoundedDimension(dimensions, TraceTelemetry.ErrorType)
+                ?? (!success ? BoundedValue(resultCode) : null),
+        };
     }
 
     /// <summary>
@@ -1023,6 +1104,45 @@ public sealed class AppInsightsMetricsService
     {
         var value = ReadDimension(dimensions, key);
         return long.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static bool? ReadDimensionBoolean(IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = ReadDimension(dimensions, key);
+        return bool.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static string? BoundedDimension(IReadOnlyDictionary<string, string?> dimensions, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = BoundedValue(ReadDimension(dimensions, key));
+            if (value is not null)
+                return value;
+        }
+        return null;
+    }
+
+    private static string? AllowedDimension(
+        IReadOnlyDictionary<string, string?> dimensions,
+        string key,
+        IReadOnlyCollection<string> allowed) =>
+        AllowedValue(ReadDimension(dimensions, key), allowed);
+
+    private static string? AllowedValue(string? value, IReadOnlyCollection<string> allowed)
+    {
+        var bounded = BoundedValue(value);
+        return bounded is not null && allowed.Contains(bounded, StringComparer.Ordinal)
+            ? bounded
+            : null;
+    }
+
+    private static string? BoundedValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var trimmed = value.Trim();
+        return trimmed.Length <= 160 && !trimmed.Any(char.IsControl) ? trimmed : null;
     }
 
     private static string ReadDate(object? value) =>

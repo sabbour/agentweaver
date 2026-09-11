@@ -29,12 +29,20 @@ Expand or collapse rows to follow the transaction. Select a span to inspect even
 status, operation name, model, token usage, or tool name. If Application Insights has not produced
 trace data for the run yet, the panel shows an empty state.
 
-The **Attributes** tab lists the normalized fields returned by the run-traces API for the selected
-span. The API currently does not return arbitrary OpenTelemetry custom dimensions, so those are not
-shown as if they were available. The **Events** tab lists persisted run events using their actual
-sequence number and type. When the server-stamped `timestamp_utc` field is present in the event
-payload, the view shows that recorded time; otherwise it shows the sequence without synthesizing a
-time. Expand a payload only when its recorded fields are needed.
+The **Attributes** tab lists the typed, allow-listed dimensions returned by the run-traces API for
+the selected span: session/run/project identity; agent and workflow-run identity; operation,
+model, provider, and routing; tool and policy/authorization decisions; sandbox/runtime; token
+usage; and status/error type. Every field is explicit: **Not recorded** means the span predates the
+dimension or Agentweaver did not truthfully have that fact. The API never returns arbitrary
+OpenTelemetry custom dimensions, prompt text, credentials, raw tokens, or raw tool input/output.
+
+The **Events** tab lists persisted run events using their actual sequence number and type. Every
+newly persisted event has a server-side UTC append timestamp. The API projects that as
+`timestamp_utc` at the event level (and reports event status and an existing duration when
+available). For legacy rows with no trustworthy timestamp, the fields remain absent instead of
+being synthesized at read time. Historical `agent.system_prompt` and `agent.task` payloads are
+also withheld while their event sequence/type/time remain visible. Expand a payload only when its
+recorded fields are needed.
 
 For an **Execute Tool** span, the detail panel also shows the tool's **arguments** and **output**.
 These come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the
@@ -80,6 +88,7 @@ truncated failing KQL, so operators can distinguish a query failure from a genui
 | Trace DTO | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133` |
 | Trace endpoint | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:130` |
 | AppInsights trace query and span classification | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:522` |
+| Safe trace-dimension names | `packages/Agentweaver.Domain/TraceTelemetry.cs` |
 | Trace-query error response and Error-level logging | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:585`, `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:662` |
 | Persisted run event log (source of `tool.call`/`tool.result`/`tool.error`) | `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:503` |
 

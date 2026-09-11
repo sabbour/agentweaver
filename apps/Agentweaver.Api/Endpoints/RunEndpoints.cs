@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Metrics;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
@@ -498,7 +499,11 @@ app.MapGet("/api/runs/{id}/stream", async (
             // Legacy fallback: old completed runs may have no RunEvents rows but a result string.
             if (!replayedAny && !isSubStream && run?.Result is not null)
             {
-                var evt = new RunEvent(1, "agent.message", new { messageId = (string?)null, content = run.Result });
+                var evt = new RunEvent(
+                    1,
+                    "agent.message",
+                    new { messageId = (string?)null, content = run.Result },
+                    DateTimeOffset.UtcNow);
                 await EndpointHelpers.WriteSseEventAsync(httpContext.Response, evt, ct);
             }
             await EndpointHelpers.WriteSseDoneAsync(httpContext.Response, ct);
@@ -600,24 +605,42 @@ app.MapGet("/api/runs/{id}/events", async (
     var result = persisted.Select(rec =>
     {
         object payload;
+        double? durationMs;
         try
         {
             var element = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson);
-            // Defensive second layer (issue #850 security follow-up): the emitters already redact
-            // sensitive tool.call/tool.result/tool.error fields before persisting, but redact again
-            // here so any row persisted before that fix shipped is still masked in the API response.
-            payload = IsToolPayloadEventType(rec.EventType)
-                ? Agentweaver.Domain.SensitiveDataRedactor.RedactElement(element)
-                : element;
+            // Defensive second layer: tool payloads are redacted, while historical prompt/task
+            // events deliberately retain their position and metadata but never replay raw input
+            // through the public API.
+            payload = IsPromptPayloadEventType(rec.EventType)
+                ? new { }
+                : IsToolPayloadEventType(rec.EventType)
+                    ? Agentweaver.Domain.SensitiveDataRedactor.RedactElement(element)
+                    : element;
+            durationMs = ReadRecordedEventDuration(element);
         }
-        catch { payload = new { }; }
+        catch
+        {
+            payload = new { };
+            durationMs = null;
+        }
         // Use the row's persisted CreatedAt (server append time) as the timestamp source so a
         // replayed/finished run's timeline reflects when each event actually happened, not "now".
-        var evt = StructuredRunFailureTerminal.NormalizeFailure(
-            new RunEvent(rec.Sequence, rec.EventType, payload,
-                new DateTimeOffset(DateTime.SpecifyKind(rec.CreatedAt, DateTimeKind.Utc))));
-        return new { sequence = rec.Sequence, type = rec.EventType, payload = EndpointHelpers.StampTimestamp(evt) };
-    });
+        DateTimeOffset? timestampUtc = rec.CreatedAt == default
+            ? null
+            : new DateTimeOffset(DateTime.SpecifyKind(rec.CreatedAt, DateTimeKind.Utc));
+        var evt = StructuredRunFailureTerminal.NormalizeFailure(new RunEvent(
+            rec.Sequence, rec.EventType, payload, timestampUtc ?? default));
+        return new PersistedRunEventDto
+        {
+            Sequence = rec.Sequence,
+            Type = rec.EventType,
+            TimestampUtc = timestampUtc,
+            DurationMs = durationMs,
+            Status = PersistedEventStatus(rec.EventType),
+            Payload = EndpointHelpers.StampTimestamp(evt),
+        };
+    }).ToList();
 
     return Results.Ok(result);
 });
@@ -2811,6 +2834,9 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 /// </summary>
 static bool IsToolPayloadEventType(string eventType) => eventType is "tool.call" or "tool.result" or "tool.error";
 
+static bool IsPromptPayloadEventType(string eventType) =>
+    eventType is "agent.system_prompt" or "agent.task";
+
 /// <summary>
 /// Strips NUL, C0 control characters (0x00-0x1F, excluding \t and \n), DEL (0x7F),
 /// and C1 control characters (0x80-0x9F) from <paramref name="input"/>.
@@ -3503,6 +3529,36 @@ private static string? PayloadRequestId(object payload)
     var json = System.Text.Json.JsonSerializer.SerializeToElement(payload);
     return json.TryGetProperty("requestId", out var requestId) ? requestId.GetString() : null;
 }
+
+private static double? ReadRecordedEventDuration(System.Text.Json.JsonElement payload)
+{
+    if (payload.ValueKind != System.Text.Json.JsonValueKind.Object)
+        return null;
+
+    foreach (var key in new[] { "duration_ms", "durationMs" })
+    {
+        if (!payload.TryGetProperty(key, out var value))
+            continue;
+        if (value.TryGetDouble(out var duration) && duration >= 0)
+            return duration;
+        if (value.ValueKind == System.Text.Json.JsonValueKind.String
+            && double.TryParse(value.GetString(), out duration)
+            && duration >= 0)
+            return duration;
+    }
+
+    return null;
+}
+
+private static string? PersistedEventStatus(string eventType) => eventType switch
+{
+    EventTypes.RunCompleted or EventTypes.MergeCompleted or EventTypes.ToolResult => "success",
+    EventTypes.RunFailed or EventTypes.MergeFailed or EventTypes.ToolError or EventTypes.RunError => "error",
+    EventTypes.RunDegraded => "degraded",
+    EventTypes.ToolApprovalRequired or EventTypes.ToolApprovalPending => "pending",
+    EventTypes.ToolApprovalResolved or EventTypes.ToolAutoApproved => "approved",
+    _ => null,
+};
 }
 
 /// <summary>

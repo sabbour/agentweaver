@@ -110,6 +110,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     protected string? _apiCapabilityToken;
     protected string? _userId;
     private bool _preferModelIdOverByokConfiguration;
+    private AgentHostPurpose _purpose;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
     public ChannelWriter<RunEvent>? StreamWriter { get; private set; }
@@ -170,6 +171,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // matching ToolExecutionComplete, giving each tool call a proper child span under the agent
     // turn span (gen_ai.* semantic conventions) so the transaction trace tree can render it.
     private readonly ConcurrentDictionary<string, Activity> _activeToolSpans = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ToolTraceDecision> _toolTraceDecisions = new(StringComparer.Ordinal);
 
     // The current turn's span, captured explicitly so tool spans (and the usage-event model
     // tag) can be parented/targeted to it deterministically regardless of what Activity.Current
@@ -180,6 +182,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // under the turn. Marked volatile because tool-execution callbacks can arrive on SDK
     // callback threads distinct from the thread running RunStreamingAsync.
     private volatile Activity? _turnActivity;
+
+    private sealed record ToolTraceDecision(string? PolicyDecision, string? AuthorizationDecision);
 
     // Sandbox-degradation tracking. The permission handler (which fires on SDK callback
     // threads) records that at least one tool call was denied, plus the first deny reason.
@@ -374,6 +378,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _apiCapabilityToken = apiCapabilityToken;
         _userId = string.IsNullOrWhiteSpace(userId) ? null : userId;
         _preferModelIdOverByokConfiguration = preferModelIdOverByokConfiguration;
+        _purpose = purpose;
         _setupCt = ct;
 
         // Reset per-run emission state so a reused instance never leaks events across runs.
@@ -385,6 +390,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _emittedCalls = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         _emittedTerminals = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         _suppressedCallIds = new HashSet<string>(StringComparer.Ordinal);
+        _toolTraceDecisions.Clear();
         _degradedFlagged = false;
         _degradedToolName = null;
         _degradedReason = null;
@@ -866,13 +872,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Emit configuration snapshot for debuggability.
-        var fullSystemPrompt = string.IsNullOrEmpty(_systemPromptContext)
-            ? BuildBasePrompt(_includeTeamCoordinationPrompt)
-            : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext;
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext), skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(_systemPromptContext) });
-        Emit("agent.task", new { task });
-        Emit("agent.tools", new { provider = "copilot", tools = _registeredToolNames });
+        // Record only bounded operational configuration. Prompts, tasks, and unrestricted tool
+        // lists can contain user or secret material and must not enter the event stream.
+        Emit(EventTypes.AgentRuntimeContext, new
+        {
+            provider = "copilot",
+            memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext),
+            skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(_systemPromptContext),
+            registeredToolCount = _registeredToolNames.Count,
+        });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -899,6 +907,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var turnCt = totalTurnCts.Token;
         var shellExecutionGeneration = _shellExecutionTracker?.BeginObservedTurn() ?? 0;
         _shellExecutionGeneration = shellExecutionGeneration;
+        var turnSucceeded = false;
         try
         {
             var rateLimitRetryAttempt = 0;
@@ -911,6 +920,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     if (_modelInvocationGuard is not null)
                         await _modelInvocationGuard.ValidateAsync(_runId, turnCt).ConfigureAwait(false);
                     await StreamTurnOnceAsync(task, session, turnStarted, turnStartedAt, turnCt).ConfigureAwait(false);
+                    turnSucceeded = true;
                     break;
                 }
                 catch (Exception ex) when (GitHubCopilotClientFactory.IsUnauthorized(ex) && !unauthorizedRetried)
@@ -995,7 +1005,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // because the turn faulted) so no span is leaked as perpetually in-flight.
             foreach (var callId in _activeToolSpans.Keys.ToArray())
                 CompleteToolSpan(callId, success: false, error: "Tool execution did not report completion.");
-            CompleteModelTurnTelemetry(turnActivity);
+            CompleteModelTurnTelemetry(turnActivity, turnSucceeded);
             _turnActivity = null;
         }
 
@@ -1203,35 +1213,44 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var activity = ActivitySource.StartActivity("Agentweaver model turn", ActivityKind.Client);
         if (activity is null) return null;
 
-        activity.SetTag("agentweaver.span.kind", "agent_turn");
-        activity.SetTag("run_id", _runId);
-        activity.SetTag("run.id", _runId);
+        activity.SetTag(TraceTelemetry.SpanKind, "agent_turn");
+        activity.SetTag(TraceTelemetry.LegacyRunId, _runId);
+        activity.SetTag(TraceTelemetry.RunId, _runId);
         activity.SetTag("agent_name", string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName);
-        activity.SetTag("gen_ai.agent.name", string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName);
-        activity.SetTag("gen_ai.operation.name", "chat");
+        activity.SetTag(TraceTelemetry.AgentName, string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName);
+        activity.SetTag(TraceTelemetry.OperationName, "chat");
         activity.SetTag("model", _modelId);
         activity.SetTag("model_id", _modelId);
-        activity.SetTag("gen_ai.request.model", _modelId);
-        if (!string.IsNullOrWhiteSpace(_projectId))
-            activity.SetTag("project.id", _projectId);
+        activity.SetTag(TraceTelemetry.RequestModel, _modelId);
+        ApplySafeTraceContext(activity);
         return activity;
     }
 
-    private void CompleteModelTurnTelemetry(Activity? activity)
+    private void CompleteModelTurnTelemetry(Activity? activity, bool succeeded)
     {
         var model = _turnModelId ?? _modelId ?? "unknown";
         var agent = string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName!;
-        activity?.SetTag("agentweaver.span.kind", "agent_turn");
+        activity?.SetTag(TraceTelemetry.SpanKind, "agent_turn");
         activity?.SetTag("agent_name", agent);
-        activity?.SetTag("gen_ai.agent.name", agent);
+        activity?.SetTag(TraceTelemetry.AgentName, agent);
         activity?.SetTag("model", model);
         activity?.SetTag("model_id", model);
-        activity?.SetTag("gen_ai.request.model", model);
-        activity?.SetTag("gen_ai.response.model", model);
-        activity?.SetTag("gen_ai.usage.input_tokens", _turnInputTokens);
-        activity?.SetTag("gen_ai.usage.output_tokens", _turnOutputTokens);
-        activity?.SetTag("gen_ai.usage.total_tokens", _turnInputTokens + _turnOutputTokens);
-        activity?.SetTag("agentweaver.aiu.nano", _turnNanoAiu);
+        activity?.SetTag(TraceTelemetry.RequestModel, model);
+        activity?.SetTag(TraceTelemetry.ResponseModel, model);
+        activity?.SetTag(TraceTelemetry.InputTokens, _turnInputTokens);
+        activity?.SetTag(TraceTelemetry.OutputTokens, _turnOutputTokens);
+        activity?.SetTag(TraceTelemetry.TotalTokens, _turnInputTokens + _turnOutputTokens);
+        activity?.SetTag(TraceTelemetry.NanoAiu, _turnNanoAiu);
+        activity?.SetTag(TraceTelemetry.Status, succeeded ? "success" : "error");
+        if (!succeeded)
+        {
+            activity?.SetTag(TraceTelemetry.ErrorType, "model_turn_failed");
+            activity?.SetStatus(ActivityStatusCode.Error, "Model turn failed");
+        }
+        else
+        {
+            activity?.SetStatus(ActivityStatusCode.Ok);
+        }
         if (_turnTimeToFirstTokenMs is { } ttft)
         {
             activity?.SetTag("time_to_first_token_ms", ttft);
@@ -1259,6 +1278,56 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
             TokenUsage.Add(_turnNanoAiu, tags.ToArray());
         }
+    }
+
+    private void ApplySafeTraceContext(Activity activity)
+    {
+        activity.SetTag(TraceTelemetry.SessionId, $"agentweaver-run-{_runId}");
+        if (!string.IsNullOrWhiteSpace(_projectId))
+            activity.SetTag(TraceTelemetry.ProjectId, _projectId);
+        activity.SetTag(
+            TraceTelemetry.ProviderSource,
+            (_acceptedModelSource ?? ModelSource.GitHubCopilot).ToApiString());
+        activity.SetTag(
+            TraceTelemetry.ProviderKind,
+            _activeByokProviderConfiguration is null ? "github_copilot" : "byok");
+        if (!string.IsNullOrWhiteSpace(_activeByokProviderConfiguration?.Type))
+            activity.SetTag(TraceTelemetry.ProviderType, _activeByokProviderConfiguration.Type);
+        if (_activeExecutor is not null)
+        {
+            activity.SetTag(TraceTelemetry.SandboxBackend, _activeExecutor.BackendName);
+            activity.SetTag(TraceTelemetry.SandboxIsolated, _activeExecutor.IsRealIsolation);
+        }
+        if (_sandboxPolicy is not null)
+        {
+            activity.SetTag(TraceTelemetry.PolicyShellEnabled, _sandboxPolicy.ShellEnabled);
+            activity.SetTag(TraceTelemetry.PolicyNetworkEnabled, _sandboxPolicy.NetworkEnabled);
+        }
+        if (_runOptions is not null)
+            activity.SetTag(
+                TraceTelemetry.PolicyAutoApproveTools,
+                RunApprovalPolicy.FromOptions(_runOptions.Get(_runId)).AutoApproveTools);
+        activity.SetTag(TraceTelemetry.RuntimePurpose, TraceTelemetry.PurposeValue(_purpose));
+    }
+
+    private void SetToolTraceDecision(string callId, string? policyDecision = null, string? authorizationDecision = null)
+    {
+        var decision = _toolTraceDecisions.AddOrUpdate(
+            callId,
+            _ => new ToolTraceDecision(policyDecision, authorizationDecision),
+            (_, existing) => new ToolTraceDecision(
+                policyDecision ?? existing.PolicyDecision,
+                authorizationDecision ?? existing.AuthorizationDecision));
+        if (_activeToolSpans.TryGetValue(callId, out var activity))
+            ApplyToolTraceDecision(activity, decision);
+    }
+
+    private static void ApplyToolTraceDecision(Activity activity, ToolTraceDecision decision)
+    {
+        if (decision.PolicyDecision is not null)
+            activity.SetTag(TraceTelemetry.PolicyDecision, decision.PolicyDecision);
+        if (decision.AuthorizationDecision is not null)
+            activity.SetTag(TraceTelemetry.AuthorizationDecision, decision.AuthorizationDecision);
     }
 
     /// <summary>
@@ -1430,16 +1499,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             var redacted = SensitiveDataRedactor.RedactObject(arguments);
             Emit("tool.call", new { callId, toolName, arguments = redacted });
-            // Tag the still-open execute_tool OTel span with the arguments so that App Insights'
-            // Gen AI trace view can show them. The RunEvent path above feeds the Agentweaver UI;
-            // App Insights reads span attributes directly, and previously saw "No arguments
-            // recorded" because ConfigureToolSpanTags never set gen_ai.tool.call.arguments.
-            if (redacted is not null && _activeToolSpans.TryGetValue(callId, out var span))
-            {
-                var argsJson = redacted.ToJsonString();
-                if (!string.IsNullOrWhiteSpace(argsJson))
-                    span.SetTag("gen_ai.tool.call.arguments", argsJson);
-            }
         }
     }
 
@@ -1454,7 +1513,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         EmitToolCallOnce(callId, "unknown", null); // defensive call-before-error
         if (_emittedTerminals.TryAdd(callId, 0))
-            Emit("tool.error", new { callId, errorMessage });
+            Emit("tool.error", new { callId, errorMessage = SensitiveDataRedactor.RedactJsonStringIfApplicable(errorMessage) });
     }
 
     /// <summary>
@@ -1607,8 +1666,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var activity = StartToolSpanCore(_turnActivity, toolName, startTime);
         if (activity is null) return;
         ConfigureToolSpanTags(activity, toolName, callId, _agentName, _runId);
+        ApplySafeTraceContext(activity);
+        if (_toolTraceDecisions.TryGetValue(callId, out var decision))
+            ApplyToolTraceDecision(activity, decision);
         if (!_activeToolSpans.TryAdd(callId, activity))
             activity.Dispose();
+    }
+
+    private void RecordDeniedToolSpan(string callId, string toolName, string errorType)
+    {
+        if (!_activeToolSpans.ContainsKey(callId))
+            StartToolSpan(callId, toolName, DateTimeOffset.UtcNow);
+        SetToolTraceDecision(callId, TraceTelemetry.DecisionDenied);
+        if (_activeToolSpans.TryGetValue(callId, out var activity))
+            activity.SetTag(TraceTelemetry.ErrorType, errorType);
+        CompleteToolSpan(callId, success: false, error: "Tool execution denied.");
     }
 
     /// <summary>
@@ -1649,15 +1721,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     internal static void ConfigureToolSpanTags(Activity activity, string toolName, string callId, string? agentName, string? runId)
     {
-        activity.SetTag("agentweaver.span.kind", "tool_call");
-        activity.SetTag("gen_ai.operation.name", "execute_tool");
-        activity.SetTag("gen_ai.tool.name", toolName);
+        activity.SetTag(TraceTelemetry.SpanKind, "tool_call");
+        activity.SetTag(TraceTelemetry.OperationName, "execute_tool");
+        activity.SetTag(TraceTelemetry.ToolName, toolName);
         activity.SetTag("tool_name", toolName);
-        activity.SetTag("tool.call.id", callId);
-        activity.SetTag("run_id", runId);
-        activity.SetTag("run.id", runId);
+        activity.SetTag(TraceTelemetry.ToolCallId, callId);
+        activity.SetTag(TraceTelemetry.LegacyRunId, runId);
+        activity.SetTag(TraceTelemetry.RunId, runId);
         if (!string.IsNullOrWhiteSpace(agentName))
-            activity.SetTag("gen_ai.agent.name", agentName);
+            activity.SetTag(TraceTelemetry.AgentName, agentName);
     }
 
     /// <summary>
@@ -1680,6 +1752,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (!_activeToolSpans.TryRemove(callId, out var activity))
             return;
         CompleteToolSpanCore(activity, success, error, endTime, toolResult);
+        _toolTraceDecisions.TryRemove(callId, out _);
     }
 
     /// <summary>
@@ -1694,20 +1767,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime, string? toolResult = null)
     {
-        activity.SetTag("gen_ai.tool.call.success", success);
-        activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
-        if (!success && !string.IsNullOrWhiteSpace(error))
-            activity.SetTag("error.message", error);
-        // toolResult is expected to already be passed through
-        // SensitiveDataRedactor.RedactJsonStringIfApplicable, which is a no-op for content that
-        // isn't a JSON object/array (it can't safely redact free-form text). Plain-text results
-        // (file contents, shell output, etc.) are therefore not emitted to telemetry at all —
-        // only structured JSON results are tagged, matching that helper's safety guarantee that
-        // unredacted content never reaches App Insights, which has a broader read audience than
-        // the application DB. We only need a cheap prefix check here since the full parse already
-        // happened inside RedactJsonStringIfApplicable.
-        if (toolResult is not null && IsJsonObjectOrArray(toolResult))
-            activity.SetTag("gen_ai.tool.call.result", toolResult);
+        activity.SetTag(TraceTelemetry.ToolSuccess, success);
+        activity.SetTag(TraceTelemetry.Status, success ? "success" : "error");
+        if (!success)
+            activity.SetTag(TraceTelemetry.ErrorType, "tool_execution_failed");
+        // The error description and tool result can include command output, file content, or
+        // credentials. The trace contract carries only the bounded error category/status; the
+        // authorized persisted run-event API remains the redacted source for tool-call detail.
+        activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error,
+            success ? null : "Tool execution failed");
         if (endTime is { } ts && ts != default)
         {
             var endUtc = ts.UtcDateTime;
@@ -1715,22 +1783,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
-    }
-
-    /// <summary>
-    /// Cheap structural check for whether <paramref name="value"/> looks like a JSON object or
-    /// array (i.e. its trimmed content starts with <c>{</c> or <c>[</c>). Used to decide whether
-    /// a tool result is safe to attach to a span tag: only JSON-structured content has already
-    /// been through <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>'s redaction
-    /// logic, so plain text is deliberately excluded. This intentionally does not re-parse the
-    /// JSON — the caller is expected to have already run the value through
-    /// <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>, which performs the real
-    /// parse/redaction; this is just a lightweight gate on the result of that call.
-    /// </summary>
-    internal static bool IsJsonObjectOrArray(string value)
-    {
-        var trimmed = value.AsSpan().Trim();
-        return trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '[');
     }
 
     /// <summary>
@@ -1765,6 +1817,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 shellArgs["directory"] = workingDirectory;
                 var denyReason = BuildNativeShellDenyReason(
                     Interlocked.Increment(ref _nativeShellDenyAttempts));
+                RecordDeniedToolSpan(shellCallId, "run_command", "policy_denied");
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
                 EmitRunDegradedOnce("run_command", denyReason);
@@ -1789,6 +1842,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 // Short-circuit: skip the HITL card if a run-scoped or always-allowed policy already covers this tool+URL.
                 if (_toolApprovalGate.IsAutoApproved(runId, "web_fetch", rawUrl))
                 {
+                    SetToolTraceDecision(
+                        urlCallId,
+                        TraceTelemetry.DecisionAllowed,
+                        TraceTelemetry.DecisionAutoApproved);
                     _logger.LogInformation(
                         "Tool HITL auto-approved (policy) — url={Url} runId={RunId}",
                         rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
@@ -1803,6 +1860,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 if (_runOptions is not null
                     && RunApprovalPolicy.FromOptions(_runOptions.Get(runId)).AllowsAutoApproval("web_fetch"))
                 {
+                    SetToolTraceDecision(
+                        urlCallId,
+                        TraceTelemetry.DecisionAllowed,
+                        TraceTelemetry.DecisionAutoApproved);
                     emit(EventTypes.ToolAutoApproved, new { requestId, toolName = "web_fetch", url = SanitizeUrl(rawUrl) });
                     _logger.LogInformation(
                         "Tool HITL auto-approved (run option) — requestId={RequestId} runId={RunId}", displayId, runId);
@@ -1812,6 +1873,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 // Atomically register context and gate in one call so GrantAsync can record
                 // scope-based allow policies even if approval arrives immediately after registration.
                 var approvalTask = _toolApprovalGate.WaitForApprovalAsync(runId, requestId, "web_fetch", rawUrl, TimeSpan.FromMinutes(5), runCt);
+                SetToolTraceDecision(urlCallId, authorizationDecision: TraceTelemetry.DecisionApprovalRequired);
 
                 emit(EventTypes.ToolApprovalRequired, new
                 {
@@ -1848,12 +1910,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 if (!approved)
                 {
                     const string denyReason = "URL fetch was denied by the operator.";
+                    RecordDeniedToolSpan(urlCallId, "web_fetch", "authorization_denied");
                     emitToolErrorOnce(urlCallId, denyReason);
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
                     return Task.FromResult(PermissionDecision.Reject(denyReason));
                 }
 
                 _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
+                SetToolTraceDecision(urlCallId, authorizationDecision: TraceTelemetry.DecisionApproved);
                 return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
             }
 
@@ -1960,6 +2024,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
                     if (!allowed)
                     {
+                        RecordDeniedToolSpan(customCallId, toolName, "policy_denied");
                         emitToolCallOnce(customCallId, toolName, args);
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
@@ -1967,6 +2032,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         return Task.FromResult(PermissionDecision.Reject(denyReason));
                     }
 
+                    SetToolTraceDecision(customCallId, policyDecision: TraceTelemetry.DecisionAllowed);
                     return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
                 }
                 catch (Exception ex)
@@ -1974,6 +2040,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     _logger.LogError(ex,
                         "Permission handler exception for custom tool (fail-closed deny) — Tool={ToolName} RunId={RunId}",
                         toolName, runId);
+                    SetToolTraceDecision(customCallId, policyDecision: TraceTelemetry.DecisionEvaluationError);
+                    RecordDeniedToolSpan(customCallId, toolName, "policy_evaluation_failed");
                     emitToolCallOnce(customCallId, toolName, null);
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
@@ -2013,6 +2081,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     // self-consistent call+error pair, then a run.degraded event so the UI can
                     // show an amber badge regardless of the agent's self-assessment.
                     var denyReason2 = reason ?? "Operation denied by sandbox policy.";
+                    RecordDeniedToolSpan(callId, toolName, "policy_denied");
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
                     EmitRunDegradedOnce(toolName, denyReason2);
@@ -2023,6 +2092,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     TrackApprovedShell(realCallId, shell.FullCommandText ?? string.Empty);
                 }
 
+                SetToolTraceDecision(callId, policyDecision: TraceTelemetry.DecisionAllowed);
                 return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
             }
             catch (Exception ex)
@@ -2030,6 +2100,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 // Fail-closed: any failure mapping or evaluating the request denies the tool call.
                 _logger.LogError(ex, "Permission handler exception (fail-closed deny) — RunId={RunId}", runId);
                 var failReason2 = "Operation denied: internal error evaluating sandbox policy.";
+                SetToolTraceDecision(callId, policyDecision: TraceTelemetry.DecisionEvaluationError);
+                RecordDeniedToolSpan(callId, request.Kind ?? "unknown", "policy_evaluation_failed");
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
                 EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);

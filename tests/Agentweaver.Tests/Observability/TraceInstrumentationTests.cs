@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Metrics;
+using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -268,16 +269,12 @@ public sealed class TraceInstrumentationTests
     }
 
     /// <summary>
-    /// Regression test for the App Insights Gen AI trace view showing "No arguments recorded"
-    /// for every native SDK tool call. <see cref="CopilotAIAgent.ConfigureToolSpanTags"/> tags the
-    /// tool name/call id/agent name but never the call arguments; App Insights reads
-    /// <c>gen_ai.tool.call.arguments</c> directly off the span, so it always rendered empty even
-    /// though the Agentweaver UI's RunEvent-based trace panel (fixed by #850/#889) showed them
-    /// fine. <see cref="CopilotAIAgent.EmitToolCallOnce"/> must tag the still-open <c>execute_tool</c>
-    /// span with the (redacted) arguments in addition to emitting the <c>tool.call</c> RunEvent.
+    /// Tool arguments are redacted for the authorized persisted event stream but are intentionally
+    /// excluded from Application Insights. A trace span's public dimension contract may only carry
+    /// bounded operational identifiers and state, never arbitrary tool input.
     /// </summary>
     [Fact]
-    public void EmitToolCallOnce_SetsGenAiToolCallArgumentsOnSpan()
+    public void EmitToolCallOnce_DoesNotStoreToolArgumentsOnSpan()
     {
         Activity? capturedSpan = null;
         using var listener = new ActivityListener
@@ -300,21 +297,17 @@ public sealed class TraceInstrumentationTests
             DateTimeOffset.UtcNow);
 
         capturedSpan.Should().NotBeNull("StartToolSpan must have opened an execute_tool span before EmitToolCallOnce ran");
-        var argsTag = capturedSpan!.GetTagItem("gen_ai.tool.call.arguments") as string;
-        argsTag.Should().NotBeNullOrEmpty("App Insights reads gen_ai.tool.call.arguments directly off the span");
-        argsTag.Should().Contain("hello world");
+        capturedSpan!.GetTagItem("gen_ai.tool.call.arguments").Should().BeNull();
 
         capturedSpan.Stop();
     }
 
     /// <summary>
-    /// Regression test companion to <see cref="EmitToolCallOnce_SetsGenAiToolCallArgumentsOnSpan"/>:
-    /// verifies <see cref="CopilotAIAgent.CompleteToolSpanCore"/> tags
-    /// <c>gen_ai.tool.call.result</c> on the span (what App Insights reads for "Output") when a
-    /// result is supplied, mirroring the existing coverage for the success/error/duration tags.
+    /// Tool output must remain in the redacted, owner-authorized run-event log; it is not a bounded
+    /// trace dimension and must never be copied into Application Insights.
     /// </summary>
     [Fact]
-    public void CompleteToolSpanCore_WithResult_SetsGenAiToolCallResultTag()
+    public void CompleteToolSpanCore_WithResult_DoesNotStoreToolResultTag()
     {
         using var listener = ListenToAgentweaverSource();
 
@@ -324,11 +317,11 @@ public sealed class TraceInstrumentationTests
         CopilotAIAgent.CompleteToolSpanCore(
             activity!, success: true, error: null, endTime: null, toolResult: "{\"path\":\"file.txt\"}");
 
-        activity!.GetTagItem("gen_ai.tool.call.result").Should().Be("{\"path\":\"file.txt\"}");
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
     }
 
     [Fact]
-    public void CompleteToolSpanCore_NoResult_DoesNotSetGenAiToolCallResultTag()
+    public void CompleteToolSpanCore_NoResult_DoesNotStoreToolResultTag()
     {
         using var listener = ListenToAgentweaverSource();
 
@@ -340,12 +333,26 @@ public sealed class TraceInstrumentationTests
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
     }
 
+    [Fact]
+    public void CompleteToolSpanCore_FailureRecordsOnlyBoundedErrorState()
+    {
+        using var listener = ListenToAgentweaverSource();
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "read");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!,
+            success: false,
+            error: "credential ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            endTime: null);
+
+        activity!.GetTagItem(TraceTelemetry.ErrorType).Should().Be("tool_execution_failed");
+        activity.GetTagItem("error.message").Should().BeNull();
+        activity.StatusDescription.Should().Be("Tool execution failed");
+    }
+
     /// <summary>
-    /// Security regression test for Seraph's REJECT of PR #933: plain-text tool results (file
-    /// contents, shell output, etc.) must never be attached to the <c>gen_ai.tool.call.result</c>
-    /// span tag, because <c>SensitiveDataRedactor.RedactJsonStringIfApplicable</c> is a no-op for
-    /// non-JSON content and App Insights has a broader read audience than the application DB.
-    /// Only JSON-structured results (objects/arrays) are safe to tag.
+    /// Plain-text output is especially unsafe for a broad telemetry audience.
     /// </summary>
     [Fact]
     public void CompleteToolSpanCore_WithPlainTextResult_DoesNotSetGenAiToolCallResultTag()
@@ -364,7 +371,7 @@ public sealed class TraceInstrumentationTests
     }
 
     [Fact]
-    public void CompleteToolSpanCore_WithJsonArrayResult_SetsGenAiToolCallResultTag()
+    public void CompleteToolSpanCore_WithJsonArrayResult_DoesNotStoreToolResultTag()
     {
         using var listener = ListenToAgentweaverSource();
 
@@ -374,7 +381,111 @@ public sealed class TraceInstrumentationTests
         CopilotAIAgent.CompleteToolSpanCore(
             activity!, success: true, error: null, endTime: null, toolResult: "[1,2,3]");
 
-        activity!.GetTagItem("gen_ai.tool.call.result").Should().Be("[1,2,3]");
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
+    }
+
+    [Fact]
+    public void ProjectTraceAttributes_AllowListsBoundedOperationalDimensions()
+    {
+        var runId = Guid.NewGuid().ToString();
+        var dimensions = new Dictionary<string, string?>
+        {
+            [TraceTelemetry.SessionId] = $"agentweaver-run-{runId}",
+            [TraceTelemetry.RunId] = runId,
+            [TraceTelemetry.AgentName] = "morpheus",
+            [TraceTelemetry.OperationName] = "chat",
+            [TraceTelemetry.RequestModel] = "gpt-5.4",
+            [TraceTelemetry.ProviderSource] = "github-copilot",
+            [TraceTelemetry.ProviderKind] = "github_copilot",
+            [TraceTelemetry.ToolName] = "grep",
+            [TraceTelemetry.PolicyDecision] = TraceTelemetry.DecisionAllowed,
+            [TraceTelemetry.AuthorizationDecision] = TraceTelemetry.DecisionApproved,
+            [TraceTelemetry.PolicyShellEnabled] = "true",
+            [TraceTelemetry.SandboxIsolated] = "true",
+            [TraceTelemetry.RuntimePurpose] = "default",
+            [TraceTelemetry.InputTokens] = "42",
+            [TraceTelemetry.Status] = "success",
+            ["prompt"] = "must never be projected",
+            ["authorization"] = "must never be projected",
+        };
+
+        var attributes = AppInsightsMetricsService.ProjectTraceAttributes(
+            dimensions,
+            context: null,
+            observedRunId: runId,
+            success: true,
+            resultCode: null);
+
+        attributes.SessionId.Should().Be($"agentweaver-run-{runId}");
+        attributes.RunId.Should().Be(runId);
+        attributes.AgentName.Should().Be("morpheus");
+        attributes.OperationName.Should().Be("chat");
+        attributes.ModelId.Should().Be("gpt-5.4");
+        attributes.ProviderKind.Should().Be("github_copilot");
+        attributes.ToolName.Should().Be("grep");
+        attributes.PolicyDecision.Should().Be(TraceTelemetry.DecisionAllowed);
+        attributes.AuthorizationDecision.Should().Be(TraceTelemetry.DecisionApproved);
+        attributes.PolicyShellEnabled.Should().BeTrue();
+        attributes.SandboxIsolated.Should().BeTrue();
+        attributes.InputTokens.Should().Be(42);
+        attributes.RoutingDecision.Should().BeNull("Agentweaver has not emitted a routing decision");
+    }
+
+    [Fact]
+    public void ProjectTraceAttributes_BackfillsCompatibleRunFactsForLegacySpans()
+    {
+        var runId = Guid.NewGuid().ToString();
+        var parentRunId = Guid.NewGuid().ToString();
+        var attributes = AppInsightsMetricsService.ProjectTraceAttributes(
+            new Dictionary<string, string?>(),
+            new RunTraceContext(
+                runId,
+                ProjectId: Guid.NewGuid().ToString(),
+                ParentRunId: parentRunId,
+                AgentName: "trinity",
+                WorkflowRunId: "workflow-run-17",
+                ModelId: "gpt-5.4",
+                ProviderSource: "byok",
+                SandboxBackend: "kubernetes-sandbox-claim",
+                SandboxIsolated: true,
+                AutoApproveTools: false,
+                RunStatus: "in_progress"),
+            observedRunId: null,
+            success: false,
+            resultCode: "timeout");
+
+        attributes.RunId.Should().Be(runId);
+        attributes.ParentRunId.Should().Be(parentRunId);
+        attributes.AgentName.Should().Be("trinity");
+        attributes.WorkflowRunId.Should().Be("workflow-run-17");
+        attributes.ModelId.Should().Be("gpt-5.4");
+        attributes.ProviderSource.Should().Be("byok");
+        attributes.SandboxBackend.Should().Be("kubernetes-sandbox-claim");
+        attributes.SandboxIsolated.Should().BeTrue();
+        attributes.PolicyAutoApproveTools.Should().BeFalse();
+        attributes.RunStatus.Should().Be("in_progress");
+        attributes.Status.Should().Be("error");
+        attributes.ErrorType.Should().Be("timeout");
+        attributes.SessionId.Should().BeNull("legacy spans have no trustworthy session tag");
+    }
+
+    [Fact]
+    public void ProjectTraceAttributes_DropsOversizedOrUnsupportedDimensionValues()
+    {
+        var attributes = AppInsightsMetricsService.ProjectTraceAttributes(
+            new Dictionary<string, string?>
+            {
+                [TraceTelemetry.AgentName] = new string('a', 161),
+                [TraceTelemetry.PolicyDecision] = "because an arbitrary policy explanation is unsafe",
+                ["prompt"] = "not an allow-listed dimension",
+            },
+            context: null,
+            observedRunId: null,
+            success: true,
+            resultCode: null);
+
+        attributes.AgentName.Should().BeNull();
+        attributes.PolicyDecision.Should().BeNull();
     }
 
     private static CopilotAIAgent BuildAgent()

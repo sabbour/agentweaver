@@ -155,7 +155,83 @@ public sealed record RunTraceSpanDto
     [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }
     [JsonPropertyName("totalNanoAiu")] public long? TotalNanoAiu { get; init; }
     [JsonPropertyName("operationName")] public string? OperationName { get; init; }
+    /// <summary>
+    /// Bounded, allow-listed telemetry dimensions. Every property is nullable because older
+    /// persisted spans can lack dimensions that newly emitted spans carry.
+    /// </summary>
+    [JsonPropertyName("attributes")] public TraceSpanAttributesDto? Attributes { get; init; }
 }
+
+/// <summary>
+/// Public trace-attribute contract. This is intentionally a fixed shape: projections must not
+/// expose arbitrary Application Insights custom dimensions, prompts, credentials, raw tool data,
+/// or any other unrestricted payload.
+/// </summary>
+public sealed record TraceSpanAttributesDto
+{
+    [JsonPropertyName("sessionId")] public string? SessionId { get; init; }
+    [JsonPropertyName("runId")] public string? RunId { get; init; }
+    [JsonPropertyName("parentRunId")] public string? ParentRunId { get; init; }
+    [JsonPropertyName("projectId")] public string? ProjectId { get; init; }
+    [JsonPropertyName("agentName")] public string? AgentName { get; init; }
+    [JsonPropertyName("workflowRunId")] public string? WorkflowRunId { get; init; }
+    [JsonPropertyName("operationName")] public string? OperationName { get; init; }
+    [JsonPropertyName("modelId")] public string? ModelId { get; init; }
+    [JsonPropertyName("providerSource")] public string? ProviderSource { get; init; }
+    [JsonPropertyName("providerKind")] public string? ProviderKind { get; init; }
+    [JsonPropertyName("providerType")] public string? ProviderType { get; init; }
+    [JsonPropertyName("providerScope")] public string? ProviderScope { get; init; }
+    [JsonPropertyName("routingDecision")] public string? RoutingDecision { get; init; }
+    [JsonPropertyName("toolName")] public string? ToolName { get; init; }
+    [JsonPropertyName("toolCallId")] public string? ToolCallId { get; init; }
+    [JsonPropertyName("toolSuccess")] public bool? ToolSuccess { get; init; }
+    [JsonPropertyName("policyDecision")] public string? PolicyDecision { get; init; }
+    [JsonPropertyName("authorizationDecision")] public string? AuthorizationDecision { get; init; }
+    [JsonPropertyName("policyShellEnabled")] public bool? PolicyShellEnabled { get; init; }
+    [JsonPropertyName("policyNetworkEnabled")] public bool? PolicyNetworkEnabled { get; init; }
+    [JsonPropertyName("policyAutoApproveTools")] public bool? PolicyAutoApproveTools { get; init; }
+    [JsonPropertyName("runStatus")] public string? RunStatus { get; init; }
+    [JsonPropertyName("sandboxBackend")] public string? SandboxBackend { get; init; }
+    [JsonPropertyName("sandboxIsolated")] public bool? SandboxIsolated { get; init; }
+    [JsonPropertyName("runtimePurpose")] public string? RuntimePurpose { get; init; }
+    [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
+    [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }
+    [JsonPropertyName("totalTokens")] public long? TotalTokens { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public long? TotalNanoAiu { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("errorType")] public string? ErrorType { get; init; }
+}
+
+/// <summary>
+/// Compatibility-preserving public projection of a persisted run event. Legacy rows can have no
+/// trustworthy timestamp, duration, or status; those fields are null rather than synthesized.
+/// </summary>
+public sealed record PersistedRunEventDto
+{
+    [JsonPropertyName("sequence")] public required int Sequence { get; init; }
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("timestamp_utc")] public DateTimeOffset? TimestampUtc { get; init; }
+    [JsonPropertyName("duration_ms")] public double? DurationMs { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("payload")] public required object Payload { get; init; }
+}
+
+/// <summary>
+/// Server-side run facts that can safely backfill an allow-listed trace dimension when a legacy
+/// span predates the corresponding activity tag. This type is never serialized on its own.
+/// </summary>
+public sealed record RunTraceContext(
+    string RunId,
+    string? ProjectId,
+    string? ParentRunId,
+    string? AgentName,
+    string? WorkflowRunId,
+    string? ModelId,
+    string ProviderSource,
+    string? SandboxBackend,
+    bool? SandboxIsolated,
+    bool? AutoApproveTools,
+    string RunStatus);
 
 // =====================================================================================
 // ENDPOINT 2 — Global Overview ("Now"): GET /api/overview

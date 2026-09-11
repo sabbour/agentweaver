@@ -57,6 +57,12 @@ public static class EventTypes
 
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
+    /// <summary>
+    /// Bounded runtime configuration for a turn. Payload deliberately excludes the task,
+    /// system prompt, and arbitrary tool names: { provider, memoryContextIncluded,
+    /// skillsContextIncluded, registeredToolCount }.
+    /// </summary>
+    public const string AgentRuntimeContext = "agent.runtime_context";
     public const string AgentIntent       = "agent.intent";
     /// <summary>
     /// Emitted when the agent calls report_outcome at the end of a run.

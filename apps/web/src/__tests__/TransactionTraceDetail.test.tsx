@@ -32,6 +32,25 @@ beforeEach(() => {
         model: 'gpt-5',
         inputTokens: 120,
         outputTokens: 45,
+        attributes: {
+          sessionId: 'agentweaver-run-run-47',
+          runId: 'run-47',
+          projectId: 'project-1',
+          agentName: 'Coordinator',
+          operationName: 'chat',
+          modelId: 'gpt-5',
+          providerSource: 'github-copilot',
+          providerKind: 'github_copilot',
+          policyShellEnabled: true,
+          policyNetworkEnabled: false,
+          sandboxBackend: 'kubernetes-sandbox-claim',
+          sandboxIsolated: true,
+          runtimePurpose: 'default',
+          inputTokens: 120,
+          outputTokens: 45,
+          totalTokens: 165,
+          status: 'success',
+        },
       },
       {
         id: 'tool',
@@ -44,6 +63,16 @@ beforeEach(() => {
         resultCode: 'timeout',
         toolName: 'grep',
         toolCallId: 'call-7',
+        attributes: {
+          sessionId: 'agentweaver-run-run-47',
+          runId: 'run-47',
+          toolName: 'grep',
+          toolCallId: 'call-7',
+          toolSuccess: false,
+          policyDecision: 'denied',
+          status: 'error',
+          errorType: 'policy_denied',
+        },
       },
     ],
   });
@@ -51,10 +80,12 @@ beforeEach(() => {
     {
       sequence: 8,
       type: 'tool.call',
+      timestamp_utc: '2026-09-11T16:00:01.000Z',
+      duration_ms: 500,
+      status: 'pending',
       payload: {
         callId: 'call-7',
         toolName: 'grep',
-        timestamp_utc: '2026-09-11T16:00:01.000Z',
         arguments: { pattern: 'trace' },
       },
     },
@@ -82,6 +113,7 @@ describe('TransactionTracePanel trace detail', () => {
 
     expect(screen.getByLabelText('Trace summary').textContent).toContain('Coordinator');
     expect(screen.getByLabelText('Trace summary').textContent).toContain('run-47');
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('agentweaver-run-run-47');
     expect(screen.getByLabelText('Trace summary').textContent).toContain('120 input');
     expect(screen.getByLabelText('Trace summary').textContent).toContain('45 output');
     expect(screen.getByTestId('trace-timeline')).toBeTruthy();
@@ -112,10 +144,15 @@ describe('TransactionTracePanel trace detail', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Attributes' }));
     expect(screen.getByText('tool.call.id')).toBeTruthy();
     expect(screen.getByText('call-7')).toBeTruthy();
+    expect(screen.getByText('policy.decision')).toBeTruthy();
+    expect(screen.getByText('denied')).toBeTruthy();
+    expect(screen.getAllByText('Not recorded').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Events' }));
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('tool.call');
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Sequence 8');
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Call call-7');
+    expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Duration 500 ms');
+    expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Pending');
   });
 });

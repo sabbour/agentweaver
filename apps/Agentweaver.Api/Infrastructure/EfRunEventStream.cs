@@ -67,7 +67,7 @@ public sealed class EfRunEventStream : IRunEventStream
     /// <inheritdoc />
     public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
-        evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
@@ -114,6 +114,7 @@ public sealed class EfRunEventStream : IRunEventStream
                     .Select(e => (int?)e.Sequence).MaxAsync(ct).ConfigureAwait(false)) ?? 0;
                 var recorded = events
                     .Select(StructuredRunFailureTerminal.NormalizeFailure)
+                    .Select(StampTimestamp)
                     .Select(e => e with { Sequence = ++sequence })
                     .ToArray();
                 foreach (var evt in recorded)
@@ -301,6 +302,11 @@ public sealed class EfRunEventStream : IRunEventStream
         throw new InvalidOperationException(
             $"Failed to durably append RunEvent for run '{runId}' after {MaxWriteAttempts} attempts.");
     }
+
+    private static RunEvent StampTimestamp(RunEvent evt) =>
+        evt.TimestampUtc == default
+            ? evt with { TimestampUtc = DateTimeOffset.UtcNow }
+            : evt with { TimestampUtc = evt.TimestampUtc.ToUniversalTime() };
 
     private static async Task AcquireRunWriteLockAsync(MemoryDbContext db, string runId, CancellationToken ct)
     {
