@@ -23,6 +23,7 @@ public static class ByokProviderSettingsEndpoints
             if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
+            httpContext.Response.Headers.CacheControl = "no-store";
             var providers = await settings.ListAsync(ct).ConfigureAwait(false);
             var activeProviderId = await settings.GetActiveProviderIdAsync(ct).ConfigureAwait(false);
             return Results.Ok(new

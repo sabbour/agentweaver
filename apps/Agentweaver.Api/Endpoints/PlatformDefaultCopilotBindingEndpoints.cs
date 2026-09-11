@@ -51,6 +51,7 @@ public static class PlatformDefaultCopilotBindingEndpoints
         {
             var service = new PlatformDefaultCopilotBindingService(
                 configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
+            httpContext.Response.Headers.CacheControl = "no-store";
             var result = await service.GetConnectionAsync(
                 httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return result.Outcome == PlatformDefaultCopilotBindingOutcome.Success

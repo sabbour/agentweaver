@@ -55,11 +55,13 @@ public static class AuthEndpoints
             CancellationToken ct) =>
         {
             var caller = httpContext.GetCaller();
-            var effectiveProvider = string.IsNullOrWhiteSpace(caller.EntraObjectId)
-                ? await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false)
-                : await modelProviderResolver.ResolveForSessionAsync(caller.EntraObjectId, ct).ConfigureAwait(false);
-            var aiConfigured = effectiveProvider is not EffectiveModelProviderResult.Unavailable ||
-                !caller.PlatformRoles.Contains(PlatformRoles.PlatformAdmin, StringComparer.Ordinal);
+            httpContext.Response.Headers.CacheControl = "no-store";
+            var isPlatformAdmin = caller.PlatformRoles.Contains(
+                PlatformRoles.PlatformAdmin,
+                StringComparer.Ordinal);
+            var aiConfigured = !isPlatformAdmin ||
+                await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false)
+                    is not EffectiveModelProviderResult.Unavailable;
             return Results.Ok(new
             {
                 authenticated = true,

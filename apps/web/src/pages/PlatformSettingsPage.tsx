@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Dropdown,
@@ -21,7 +21,8 @@ import {
   EyeOff24Regular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
-import { formatApiErrorMessage } from '../api/errors';
+import { ApiError } from '../api/client';
+import { formatApiErrorMessage, parseApiBody } from '../api/errors';
 import type {
   ByokProviderConfig,
   ByokProviderRequest,
@@ -195,12 +196,23 @@ function parseHeadersText(text: string): Record<string, string> | undefined {
   return Object.fromEntries(entries as [string, string][]);
 }
 
+function formatPlatformCopilotError(err: unknown): string {
+  if (err instanceof ApiError && parseApiBody(err.body).error === 'github_binding_unavailable') {
+    return 'GitHub Copilot is unavailable. Reconnect the platform account, or set a custom provider active.';
+  }
+  return formatApiErrorMessage(err);
+}
+
 export function PlatformSettingsPage({
   setupRequired = false,
   onRetryAccess,
+  onProviderStateChanged,
+  onContinueSetup,
 }: {
   setupRequired?: boolean;
   onRetryAccess?: () => void;
+  onProviderStateChanged?: () => void | Promise<void>;
+  onContinueSetup?: () => Promise<boolean>;
 }) {
   const styles = useStyles();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -215,6 +227,10 @@ export function PlatformSettingsPage({
   const [disconnectingCopilot, setDisconnectingCopilot] = useState(false);
   const [switchingActive, setSwitchingActive] = useState<string | 'copilot' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
+  const continueInFlight = useRef(false);
+  const continueFailures = useRef(0);
   const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
 
   // Add/edit dialog state. `pickerOpen` shows the searchable type list; once a type is chosen
@@ -250,25 +266,59 @@ export function PlatformSettingsPage({
       setPlatformCopilotError(null);
     } catch (err) {
       setPlatformCopilotConnection(null);
-      setPlatformCopilotError(formatApiErrorMessage(err));
+      setPlatformCopilotError(formatPlatformCopilotError(err));
+    }
+  };
+
+  const providerStateChanged = async () => {
+    continueFailures.current = 0;
+    setContinueError(null);
+    await onProviderStateChanged?.();
+  };
+
+  const handleContinueSetup = async () => {
+    if (!onContinueSetup || continueInFlight.current) return;
+    continueInFlight.current = true;
+    setContinuing(true);
+    setContinueError(null);
+    try {
+      if (await onContinueSetup()) return;
+      continueFailures.current += 1;
+      setContinueError(continueFailures.current >= 3
+        ? 'Agentweaver still cannot confirm an active provider. Refresh the provider status before you try again.'
+        : 'Agentweaver could not confirm the active provider yet. Refresh the provider status and try again.');
+    } catch (err) {
+      setContinueError(formatApiErrorMessage(err));
+    } finally {
+      continueInFlight.current = false;
+      setContinuing(false);
     }
   };
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([apiClient.listByokProviders(), apiClient.getPlatformDefaultCopilotConnection()])
-      .then(([list, connection]) => {
-        if (cancelled) return;
+    void (async () => {
+      const [providersResult, copilotResult] = await Promise.allSettled([
+        apiClient.listByokProviders(),
+        apiClient.getPlatformDefaultCopilotConnection(),
+      ]);
+      if (cancelled) return;
+      if (providersResult.status === 'fulfilled') {
+        const list = providersResult.value;
         setProviders(list.providers);
         setActiveProviderId(list.active_provider_id);
-        setPlatformCopilotConnection(connection);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(formatApiErrorMessage(err));
-        setLoading(false);
-      });
+      } else {
+        setLoadError(formatApiErrorMessage(providersResult.reason));
+      }
+      if (copilotResult.status === 'fulfilled') {
+        setPlatformCopilotConnection(copilotResult.value);
+        setPlatformCopilotError(null);
+      } else {
+        setPlatformCopilotConnection(null);
+        setPlatformCopilotError(formatPlatformCopilotError(copilotResult.reason));
+      }
+      setLoading(false);
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -280,7 +330,7 @@ export function PlatformSettingsPage({
       if (setupRequired) markRequiredSetupPending();
       window.location.assign(handoff.authorization_url);
     } catch (err) {
-      setPlatformCopilotError(formatApiErrorMessage(err));
+      setPlatformCopilotError(formatPlatformCopilotError(err));
       setConnectingCopilot(false);
     }
   };
@@ -292,9 +342,10 @@ export function PlatformSettingsPage({
       await apiClient.disconnectPlatformDefaultCopilotConnection();
       setPlatformCopilotConnection({ connected: false, github_login: null });
       await refreshPlatformCopilotConnection();
+      await providerStateChanged();
       if (!setupRequired) onRetryAccess?.();
     } catch (err) {
-      setPlatformCopilotError(formatApiErrorMessage(err));
+      setPlatformCopilotError(formatPlatformCopilotError(err));
     } finally {
       setDisconnectingCopilot(false);
     }
@@ -307,6 +358,7 @@ export function PlatformSettingsPage({
       await apiClient.deactivateByokProviders();
       await refreshProviders();
       setNotice('GitHub Copilot is now the active AI inference source.');
+      await providerStateChanged();
       if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
@@ -322,6 +374,7 @@ export function PlatformSettingsPage({
       await apiClient.activateByokProvider(provider.id);
       await refreshProviders();
       setNotice(`"${provider.name}" is now the active AI inference source.`);
+      await providerStateChanged();
       if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
@@ -400,6 +453,7 @@ export function PlatformSettingsPage({
       }
       await refreshProviders();
       closeForm();
+      await providerStateChanged();
     } catch (err) {
       setFormError(formatApiErrorMessage(err));
     } finally {
@@ -415,6 +469,7 @@ export function PlatformSettingsPage({
       setNotice(`"${removeTarget.name}" was removed.`);
       setRemoveTarget(null);
       await refreshProviders();
+      await providerStateChanged();
       if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
@@ -467,10 +522,21 @@ export function PlatformSettingsPage({
           >
             {connectingCopilot ? 'Opening GitHub' : 'Authorize GitHub Copilot'}
           </Button>
-        ) : setupRequired && modelProviderReady && onRetryAccess ? (
-          <Button appearance="primary" onClick={onRetryAccess}>Continue to Agentweaver</Button>
+        ) : setupRequired && modelProviderReady && onContinueSetup ? (
+          <Button
+            appearance="primary"
+            disabled={continuing}
+            onClick={() => void handleContinueSetup()}
+          >
+            {continuing ? 'Checking setup…' : 'Continue to Agentweaver'}
+          </Button>
         ) : undefined}
       />
+      {continueError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{continueError}</MessageBarBody>
+        </MessageBar>
+      )}
       <PageSection
         title={setupRequired ? 'Choose a provider' : 'Model providers'}
         description={setupRequired
@@ -558,7 +624,10 @@ export function PlatformSettingsPage({
                 <Button
                   appearance="secondary"
                   disabled={connectingCopilot || disconnectingCopilot}
-                  onClick={() => void refreshPlatformCopilotConnection()}
+                  onClick={() => void Promise.all([
+                    refreshProviders(),
+                    refreshPlatformCopilotConnection(),
+                  ]).then(() => providerStateChanged())}
                 >
                   Refresh status
                 </Button>

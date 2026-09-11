@@ -45,14 +45,24 @@ vi.mock('../pages/PlatformSettingsPage', () => ({
   PlatformSettingsPage: ({
     setupRequired,
     onRetryAccess,
+    onProviderStateChanged,
+    onContinueSetup,
   }: {
     setupRequired?: boolean;
     onRetryAccess?: () => void;
+    onProviderStateChanged?: () => void | Promise<void>;
+    onContinueSetup?: () => Promise<boolean>;
   }) => (
     <div>
       <div>Platform settings</div>
       <div>{setupRequired ? 'Setup required' : 'Setup optional'}</div>
       <button type="button" onClick={() => { retrySpy(); onRetryAccess?.(); }}>Retry access</button>
+      <button type="button" onClick={() => { retrySpy(); void onProviderStateChanged?.(); }}>
+        Provider state changed
+      </button>
+      <button type="button" onClick={() => { retrySpy(); void onContinueSetup?.(); }}>
+        Continue to Agentweaver
+      </button>
     </div>
   ),
 }));
@@ -204,15 +214,28 @@ describe('App auth gate', () => {
         entra_object_id: 'entra-admin',
         platform_roles: ['PlatformAdmin'],
         ai_configured: true,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
       });
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry access' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider state changed' }));
+    expect(await screen.findByText('Setup required')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to Agentweaver' }));
 
     await waitFor(() => expect(retrySpy).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
-    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
+    expect(window.location.pathname).toBe('/projects/proj-1');
   });
 
   it('does not start the tour during a normal configured sign-in', async () => {
@@ -237,12 +260,50 @@ describe('App auth gate', () => {
   it('keeps the OAuth return in setup until the admin continues', async () => {
     sessionStorage.setItem('agentweaver.requiredSetup.pending', '1');
     window.history.pushState({}, '', '/platform-settings?copilot_app_auth=success');
+    vi.mocked(apiClient.getAuthSession)
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: null,
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: null,
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      });
+
+    render(<App />);
+
+    expect(await screen.findByText('Setup required')).toBeDefined();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to Agentweaver' }));
+
+    await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
+    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
+    expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
+  });
+
+  it('keeps a new tab on its requested route when setup is already complete', async () => {
+    window.history.pushState({}, '', '/sessions?project=proj-1');
     vi.mocked(apiClient.getAuthSession).mockResolvedValue({
       authenticated: true,
       auth_mode: 'entra',
       display_name: 'Admin',
       email: 'admin@example.com',
-      login: null,
+      login: 'admin',
       avatar_url: null,
       entra_object_id: 'entra-admin',
       platform_roles: ['PlatformAdmin'],
@@ -251,14 +312,43 @@ describe('App auth gate', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('Setup required')).toBeDefined();
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(window.location.pathname).toBe('/sessions');
+    expect(window.location.search).toBe('?project=proj-1');
+  });
+
+  it('does not leave setup when the authoritative session still reports stale provider state', async () => {
+    vi.mocked(apiClient.getAuthSession)
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: false,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: false,
+      });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to Agentweaver' }));
+
+    await waitFor(() => expect(apiClient.getAuthSession).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Setup required')).toBeDefined();
     expect(screen.queryByTestId('app-shell')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Retry access' }));
-
-    await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
-    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
-    expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
+    expect(window.location.pathname).toBe('/platform-settings');
   });
 
   it('lets a non-admin enter the app when platform AI is not configured', async () => {

@@ -39,11 +39,22 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useCallback, useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
 import { PageContainer, PageHeader, SetupReadiness } from './components/ui';
 import {
   clearRequiredSetupPending,
+  clearRequiredSetupReturnTo,
+  getRequiredSetupReturnTo,
   hasRequiredSetupPending,
+  rememberRequiredSetupReturnTo,
 } from './components/onboarding/firstRunTourStorage';
 
 function Shell({
@@ -163,6 +174,11 @@ function describeSessionCheckError(err: unknown): string | null {
 }
 
 function AuthGate() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [initialReturnTo] = useState(
+    () => `${location.pathname}${location.search}${location.hash}`,
+  );
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [hasPlatformAccess, setHasPlatformAccess] = useState(false);
@@ -214,9 +230,16 @@ function AuthGate() {
         return;
       }
       const roles = session.platform_roles;
+      const platformAdmin = roles.includes('PlatformAdmin');
+      if (platformAdmin && !session.ai_configured) {
+        rememberRequiredSetupReturnTo(initialReturnTo);
+      }
       setHasPlatformAccess(roles.length > 0);
-      setIsPlatformAdmin(roles.includes('PlatformAdmin'));
+      setIsPlatformAdmin(platformAdmin);
       setAiConfigured(session.ai_configured);
+      setRequiredSetupPending(
+        platformAdmin && (!session.ai_configured || hasRequiredSetupPending()),
+      );
       setTourUserKey(session.entra_object_id ?? session.login);
       setSignedIn(true);
       setAuthChecked(true);
@@ -235,14 +258,32 @@ function AuthGate() {
       setSessionError(describeSessionCheckError(err));
       setAuthChecked(true);
     }
+  }, [initialReturnTo]);
+
+  const refreshRequiredSetupState = useCallback(async () => {
+    const session = await apiClient.getAuthSession();
+    if (!session.authenticated || !session.platform_roles.includes('PlatformAdmin')) return;
+    setAiConfigured(session.ai_configured);
   }, []);
 
-  const completeRequiredSetup = useCallback(() => {
+  const completeRequiredSetup = useCallback(async () => {
+    const session = await apiClient.getAuthSession();
+    if (!session.authenticated ||
+        !session.platform_roles.includes('PlatformAdmin') ||
+        !session.ai_configured) {
+      setAiConfigured(false);
+      return false;
+    }
+
+    const returnTo = getRequiredSetupReturnTo();
     clearRequiredSetupPending();
+    clearRequiredSetupReturnTo();
     setRequiredSetupPending(false);
+    setAiConfigured(true);
     setStartFirstRunTour(true);
-    void runSessionCheck();
-  }, [runSessionCheck]);
+    navigate(returnTo ?? '/overview', { replace: true });
+    return true;
+  }, [navigate]);
 
   const handleFirstRunTourStarted = useCallback(() => {
     setStartFirstRunTour(false);
@@ -320,7 +361,13 @@ function AuthGate() {
       <Routes>
         <Route
           path="/platform-settings"
-          element={<PlatformSettingsPage setupRequired onRetryAccess={completeRequiredSetup} />}
+          element={(
+            <PlatformSettingsPage
+              setupRequired
+              onProviderStateChanged={refreshRequiredSetupState}
+              onContinueSetup={completeRequiredSetup}
+            />
+          )}
         />
         <Route path="*" element={<Navigate to="/platform-settings" replace />} />
       </Routes>

@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { PlatformSettingsPage } from '../pages/PlatformSettingsPage';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -21,7 +22,12 @@ vi.mock('../api/apiClient', () => ({
 
 function renderPage(
   initialEntry = '/platform-settings',
-  props: { setupRequired?: boolean; onRetryAccess?: () => void } = {},
+  props: {
+    setupRequired?: boolean;
+    onRetryAccess?: () => void;
+    onProviderStateChanged?: () => void | Promise<void>;
+    onContinueSetup?: () => Promise<boolean>;
+  } = {},
 ) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -100,22 +106,74 @@ describe('PlatformSettingsPage', () => {
     expect(screen.getByText('Anthropic')).toBeDefined();
   });
 
+  it('keeps unavailable Copilot gated and offers actionable provider alternatives', async () => {
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
+    vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+    );
+
+    renderPage('/platform-settings', {
+      setupRequired: true,
+      onContinueSetup: vi.fn().mockResolvedValue(false),
+    });
+
+    expect(await screen.findByText(/GitHub Copilot is unavailable/)).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Continue to Agentweaver' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Authorize GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Add provider' })).toBeDefined();
+  });
+
   it('waits for Continue before it opens Agentweaver after required setup', async () => {
-    const onRetryAccess = vi.fn();
+    const onContinueSetup = vi.fn().mockResolvedValue(true);
     vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
     vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
       connected: true,
       github_login: 'octocat',
     });
 
-    renderPage('/platform-settings', { setupRequired: true, onRetryAccess });
+    renderPage('/platform-settings', { setupRequired: true, onContinueSetup });
 
     const continueButton = await screen.findByRole('button', { name: 'Continue to Agentweaver' });
-    expect(onRetryAccess).not.toHaveBeenCalled();
+    expect(onContinueSetup).not.toHaveBeenCalled();
 
     fireEvent.click(continueButton);
 
-    expect(onRetryAccess).toHaveBeenCalledTimes(1);
+    expect(onContinueSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an active BYOK provider during required setup', async () => {
+    const onContinueSetup = vi.fn().mockResolvedValue(true);
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue({
+      active_provider_id: 'p1',
+      providers: [{ ...customProvider, is_active: true }],
+    });
+
+    renderPage('/platform-settings', { setupRequired: true, onContinueSetup });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to Agentweaver' }));
+    expect(onContinueSetup).toHaveBeenCalledOnce();
+  });
+
+  it('bounds repeated Continue clicks while the setup check is in flight', async () => {
+    let resolveContinue!: (value: boolean) => void;
+    const onContinueSetup = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveContinue = resolve;
+    }));
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
+    vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+      connected: true,
+      github_login: 'octocat',
+    });
+    renderPage('/platform-settings', { setupRequired: true, onContinueSetup });
+
+    const button = await screen.findByRole('button', { name: 'Continue to Agentweaver' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(onContinueSetup).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Checking setup…' })).toHaveProperty('disabled', true);
+    resolveContinue(false);
+    expect(await screen.findByText(/could not confirm the active provider yet/i)).toBeDefined();
   });
 
   it('lists configured custom providers below GitHub Copilot', async () => {
@@ -270,30 +328,50 @@ describe('PlatformSettingsPage', () => {
   });
 
   it('sets a configured provider active and shows it as Active afterward', async () => {
+    const onProviderStateChanged = vi.fn();
     vi.mocked(apiClient.listByokProviders)
       .mockResolvedValueOnce({ active_provider_id: null, providers: [customProvider] })
       .mockResolvedValueOnce({ active_provider_id: 'p1', providers: [{ ...customProvider, is_active: true }] });
     vi.mocked(apiClient.activateByokProvider).mockResolvedValue(undefined);
-    renderPage();
+    renderPage('/platform-settings', { onProviderStateChanged });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Set active' }));
 
     await waitFor(() => expect(apiClient.activateByokProvider).toHaveBeenCalledWith('p1'));
+    expect(onProviderStateChanged).toHaveBeenCalledOnce();
     expect(await screen.findByText(/is now the active AI inference source/)).toBeDefined();
   });
 
   it('switches back to GitHub Copilot via its own Set active action', async () => {
     const onRetryAccess = vi.fn();
+    const onProviderStateChanged = vi.fn();
     vi.mocked(apiClient.listByokProviders)
       .mockResolvedValueOnce({ active_provider_id: 'p1', providers: [{ ...customProvider, is_active: true }] })
       .mockResolvedValueOnce(emptyList);
     vi.mocked(apiClient.deactivateByokProviders).mockResolvedValue(undefined);
-    renderPage('/platform-settings', { onRetryAccess });
+    renderPage('/platform-settings', { onRetryAccess, onProviderStateChanged });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Set active' }));
 
     await waitFor(() => expect(apiClient.deactivateByokProviders).toHaveBeenCalled());
+    expect(onProviderStateChanged).toHaveBeenCalledOnce();
     expect(onRetryAccess).toHaveBeenCalled();
+  });
+
+  it('invalidates setup state after disconnecting and reconnecting Copilot status', async () => {
+    const onProviderStateChanged = vi.fn();
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
+    vi.mocked(apiClient.getPlatformDefaultCopilotConnection)
+      .mockResolvedValueOnce({ connected: true, github_login: 'octocat' })
+      .mockResolvedValueOnce({ connected: false, github_login: null });
+    vi.mocked(apiClient.disconnectPlatformDefaultCopilotConnection).mockResolvedValue(undefined);
+
+    renderPage('/platform-settings', { setupRequired: true, onProviderStateChanged });
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() => expect(apiClient.disconnectPlatformDefaultCopilotConnection).toHaveBeenCalledOnce());
+    expect(onProviderStateChanged).toHaveBeenCalledOnce();
+    expect(await screen.findByText(/Authorize GitHub Copilot to use it as the active model provider/)).toBeDefined();
   });
 
   it('starts the platform-default Copilot OAuth redirect', async () => {
