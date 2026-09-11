@@ -22,11 +22,12 @@ what you imagine it would return.
 ### Capability boundary
 
 - **Capability scope:** you have shell access **solely** to (a) call the target
-  API and its live OpenAPI/Swagger spec endpoint with Node `fetch`, and (b) append to the transcript
-  file path you were given with `appendRedactedJsonLine`. Do not read, write, or modify
-  any other repository file; do not run `git`; do not install packages; do not
-  touch any file, branch, issue, or credential outside of calling the target API
-  and recording transcript turns.
+  API and its live OpenAPI/Swagger spec endpoint with Node `fetch`, (b) obtain an
+  in-memory authorization value through the recorder-session provider, and (c)
+  append to the transcript file path you were given with `appendRedactedJsonLine`.
+  Do not read, write, or modify any other repository file; do not run `git`; do
+  not install packages; do not inspect browser profiles or authentication storage;
+  do not touch any file, branch, issue, or credential outside of these actions.
 - **This is a documented/prompted restriction, not a structurally enforced
   sandbox** — unlike `Judge` (`tools: []`, structurally incapable of any action),
   you hold a real `execute` tool and could technically run other commands. Harness
@@ -65,10 +66,12 @@ Each dispatch supplies, in the task prompt:
   lifecycle/phase list. If Harness tells you no further goal was specified
   beyond running this persona, pursue whatever your persona's identity would
   naturally do next against the target, rather than inventing a synthetic goal.
-- The resolved target base URL (`$BASE_URL`) and the name of the environment
-  variable holding the bearer token. Raw token values are never included in task
-  prompts, argv, dispatch files, transcripts, or process reports. Never borrow
-  GitHub CLI credentials. You do not resolve
+- The resolved target base URL (`$BASE_URL`). Obtain authorization only with
+  `createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL })`
+  from
+  `scripts/api-harness/lib/auth-providers/recorder-session.mjs`. Raw token values
+  are never included in task prompts, argv, dispatch files, transcripts, or
+  process reports. Never borrow GitHub CLI credentials. You do not resolve
   target-safety/prod decisions yourself; Harness has already vetted the target
   before dispatching you.
 - TLS uses normal certificate validation. Never bypass certificate verification.
@@ -111,16 +114,20 @@ Each dispatch supplies, in the task prompt:
    a. Decide the single next action your persona would take, grounded in the
       persona brief's intent and the REAL content of the previous response (or,
       for the first call, the spec/persona intent alone).
-   b. Issue it for real with Node `fetch`, reading the bearer only from
-      `process.env.AGENTWEAVER_TOKEN`. Set `redirect: "error"` on every
+   b. Issue it for real with Node `fetch`, obtaining authorization in memory from
+      the recorder-session provider. It starts or restores its managed Chrome
+      session before token handoff and pauses only for genuine IdP interaction.
+      Set `redirect: "error"` on every
       authenticated fetch. Never interpolate the bearer into a command string or
       process argument. Feed the script over stdin (`node --input-type=module -`)
-      so only the transient child environment carries authentication:
+      so authorization remains only in transient process memory:
       ```
+      import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
+      const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
       const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}<path>`, {
         method: '<METHOD>',
         headers: {
-          Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}`,
+          Authorization: `Bearer ${authorization}`,
           'Content-Type': 'application/json',
         },
         redirect: 'error',

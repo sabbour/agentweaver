@@ -1,9 +1,9 @@
-const SENSITIVE_KEY = /authorization|cookie|token|api[_-]?key|execution[_-]?key|secret|password|kubeconfig|storagestate|signedurl/i;
+const SENSITIVE_KEY = /authorization|cookie|token|api[_-]?key|execution[_-]?key|provider[_-]?key|secret|password|kubeconfig|storagestate|signedurl/i;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const GITHUB_TOKEN = /\bgh(?:p|o|u|s|r)_[A-Za-z0-9_]{20,}\b/g;
 const URL_PATTERN = /https?:\/\/[^\s"'\\]+/gi;
-const SECRET_ASSIGNMENT = /((?:authorization|cookie|token|api[_-]?key|execution[_-]?key|secret|password)\s*[:=]\s*["']?)(?:Bearer\s+)?[^"',;\s}\]]+/gi;
+const SECRET_ASSIGNMENT = /((?:authorization|cookie|token|api[_-]?key|execution[_-]?key|provider[_-]?key|secret|password)\s*[:=]\s*["']?)(?:Bearer\s+)?[^"',;\s}\]]+/gi;
 const SECRET_CANARY = /\b(?:(?:credential|secret|token|bearer)[_-]?canary|canary[_-]?(?:credential|secret|token|bearer))(?:[-_][A-Za-z0-9]+)*\b/gi;
 
 export function sanitizeUrl(match) {

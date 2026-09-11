@@ -23,16 +23,18 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 
 ## Run a persona scenario (dynamic)
 
-`PersonaActor` (dispatched by Harness with a resolved base URL + the
-`AGENTWEAVER_TOKEN` variable name + a transcript path to write to) drives itself,
-one real call at a time. Raw tokens never enter prompts or argv. Authenticated
-Node `fetch` scripts are supplied over stdin and read only the transient
-environment. Roughly, inside its own shell:
+`PersonaActor` is dispatched after Harness resolves the target. It drives one real
+call at a time. Its recorder-session provider automatically starts or restores the
+managed Chrome session before the first authenticated call. Raw tokens never enter
+prompts, argv, or transcripts. When an already-open recorder session has no local
+handoff sidecar, the provider refreshes and restores it once before failing.
 
 ```powershell
 @'
+import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
+const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}` },
+  headers: { Authorization: `Bearer ${authorization}` },
   redirect: 'error',
 });
 console.log(await response.text());
@@ -47,7 +49,6 @@ See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 
 ```powershell
 npm test
-$env:AGENTWEAVER_TOKEN = '<explicit Agentweaver token>'
 node run-persona.mjs --scenario generated-artifacts-seam --target https://agentweaver.example.staging.example --batch-id batch-1 --seed seed-1
 ```
 
@@ -60,5 +61,12 @@ can be forwarded. The generation-seam runner deletes only its owned throwaway pr
 from `finally`, including when judging or artifact persistence fails.
 
 The generated verdict uses `agentweaver.persona-judge-verdict/v1`, including its batch/scenario join key and repro provenance. When running as the `Harness` agent, the preferred judging path is agent-native: build the prompt with `node scripts/harness-judge/core.mjs <evidence.json> --prompt-out <prompt.txt>`, dispatch it via the `task` tool to `agent_type: "Judge"` (`.github/agents/judge.agent.md`, `tools: []` — pure text-in/text-out, no file/shell/network access), then parse and persist the result with `scripts/harness-judge/save-verdict.mjs`. See `.github/agents/harness.agent.md`'s "Judging" section for the exact flow.
+
+For each guarded generator call, the seam resolves current operation-scoped AI context
+through `POST /api/ai/execution-context` and sends its short-lived key only in the
+matching `If-Model-Provider-Key` request header. Findings retain context status and
+metadata, never the key or provider fingerprint. If a generator returns
+`model_provider_changed`, it safely retries the same draft-only request once with the
+replacement context returned by the API.
 
 For headless/CI use with no agent session to dispatch a `task` call from, set `AGENTWEAVER_JUDGE_CMD` to an external judge command consumed by `core.mjs`'s `makeDefaultJudge()`; without it, a schema-valid `CANNOT_DETERMINE` verdict is emitted.
