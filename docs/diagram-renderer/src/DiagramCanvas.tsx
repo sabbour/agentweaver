@@ -1046,6 +1046,22 @@ function layout(spec: GraphSpec): {
         { x: tx, y: runY },
         { x: tx, y: ty },
       ];
+    } else if (r.e.loopback) {
+      // Semantic revision/return edges always travel on their own outer rail.
+      // A backward edge can rank in the same band as its target, so it cannot
+      // safely assume that an inter-band gutter exists.
+      const goRight = (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
+      const lane = takeLane(`loopback-${goRight ? 'r' : 'l'}`);
+      const sideX = goRight
+        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + lane * LANE_STEP
+        : CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
+      runY = sy;
+      points = [
+        { x: sx, y: sy },
+        { x: sideX, y: sy },
+        { x: sideX, y: ty },
+        { x: tx, y: ty },
+      ];
     } else {
       // Spans an intermediate band: run out to a side channel so the line
       // never crosses a band it has nothing to do with. The exit run and the

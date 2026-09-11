@@ -89,7 +89,8 @@
     {
       "from": "safety-gate",
       "to": "eval-setup",
-      "label": "revise"
+      "label": "revise",
+      "loopback": true
     },
     {
       "from": "safety-gate",
