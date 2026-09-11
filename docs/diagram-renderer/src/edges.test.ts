@@ -22,11 +22,33 @@ describe('diagram connector geometry', () => {
 
   it('emits one explicit junction for connectors with the same origin', () => {
     const junctions = findConnectorJunctions([
-      { id: 'edge-b', points: [{ x: 10, y: 20 }, { x: 100, y: 20 }] },
-      { id: 'edge-a', points: [{ x: 10, y: 20 }, { x: 20, y: 100 }] },
+      { id: 'edge-b', source: 'origin', target: 'right', points: [{ x: 10, y: 20 }, { x: 100, y: 20 }] },
+      { id: 'edge-a', source: 'origin', target: 'down', points: [{ x: 10, y: 20 }, { x: 20, y: 100 }] },
     ]);
 
     expect(junctions.get('edge-a')).toEqual([{ x: 10, y: 20 }]);
     expect(junctions.has('edge-b')).toBe(false);
+  });
+
+  it('marks both the outer return and central join of a semantic loopback', () => {
+    const junctions = findConnectorJunctions([
+      {
+        id: 'revision',
+        source: 'review',
+        target: 'implement',
+        loopback: true,
+        points: [
+          { x: 200, y: 100 },
+          { x: 20, y: 100 },
+          { x: 20, y: 40 },
+          { x: 100, y: 40 },
+        ],
+      },
+    ]);
+
+    expect(junctions.get('revision')).toEqual([
+      { x: 20, y: 40 },
+      { x: 100, y: 40 },
+    ]);
   });
 });

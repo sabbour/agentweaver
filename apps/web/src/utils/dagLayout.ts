@@ -284,25 +284,63 @@ export interface ConnectorJunction {
   y: number;
 }
 
-/** Assigns a single visible connector circle to a shared source trunk. */
+function turnsBetween(previous: ConnectorPoint, current: ConnectorPoint, next: ConnectorPoint): boolean {
+  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
+  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
+  return verticalBefore !== verticalAfter;
+}
+
+/**
+ * Marks semantic split and merge locations only: a shared source trunk, its
+ * branch tees, and a shared target entry. Ordinary path intersections never
+ * create a junction marker.
+ */
 export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const starts = new Map<string, Array<{ id: string; point: ConnectorPoint }>>();
-  for (const edge of edges.filter((edge) => edge.type === 'spine')) {
-    const points = spineRoutePoints(edge, byId);
-    const point = points?.[0];
-    if (!point) continue;
-    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
-    const group = starts.get(key) ?? [];
-    group.push({ id: edge.id, point });
-    starts.set(key, group);
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ edge, points }] : [];
+    });
+  const bySource = new Map<string, typeof routes>();
+  const byTarget = new Map<string, typeof routes>();
+  for (const route of routes) {
+    const source = bySource.get(route.edge.source) ?? [];
+    source.push(route);
+    bySource.set(route.edge.source, source);
+    const target = byTarget.get(route.edge.target) ?? [];
+    target.push(route);
+    byTarget.set(route.edge.target, target);
   }
 
   const junctions = new Map<string, ConnectorJunction[]>();
-  for (const group of starts.values()) {
+  const claimed = new Set<string>();
+  const add = (edgeId: string, point: ConnectorPoint | undefined) => {
+    if (!point) return;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    const markers = junctions.get(edgeId) ?? [];
+    markers.push({ x: point.x, y: point.y });
+    junctions.set(edgeId, markers);
+  };
+
+  for (const group of bySource.values()) {
     if (group.length < 2) continue;
-    group.sort((left, right) => left.id.localeCompare(right.id));
-    junctions.set(group[0].id, [group[0].point]);
+    add(group[0].edge.id, group[0].points[0]);
+    for (const route of group) {
+      for (let index = 1; index < route.points.length - 1; index += 1) {
+        if (turnsBetween(route.points[index - 1], route.points[index], route.points[index + 1])) {
+          add(route.edge.id, route.points[index]);
+        }
+      }
+    }
+  }
+  for (const group of byTarget.values()) {
+    if (group.length < 2) continue;
+    add(group[0].edge.id, group[0].points.at(-1));
   }
   return junctions;
 }
@@ -1383,22 +1421,11 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     if (edge.type === 'loopback') {
       const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
         >= Math.abs(targetCenter.y - sourceCenter.y);
-      const peerCenters = nodes
-        .filter((peer) => peer.id !== edge.source && peer.id !== edge.target)
-        .map((peer) => center(peer));
       let side: 'left' | 'right' | 'top' | 'bottom';
       if (horizontal) {
-        const above = peerCenters.filter((peer) =>
-          peer.y < Math.min(sourceCenter.y, targetCenter.y)).length;
-        const below = peerCenters.filter((peer) =>
-          peer.y > Math.max(sourceCenter.y, targetCenter.y)).length;
-        side = above <= below ? 'top' : 'bottom';
+        side = targetCenter.x <= sourceCenter.x ? 'left' : 'right';
       } else {
-        const left = peerCenters.filter((peer) =>
-          peer.x < Math.min(sourceCenter.x, targetCenter.x)).length;
-        const right = peerCenters.filter((peer) =>
-          peer.x > Math.max(sourceCenter.x, targetCenter.x)).length;
-        side = left <= right ? 'left' : 'right';
+        side = targetCenter.y <= sourceCenter.y ? 'top' : 'bottom';
       }
       loopbackSides.set(edge.id, side);
       const key = `loopback:${side}`;

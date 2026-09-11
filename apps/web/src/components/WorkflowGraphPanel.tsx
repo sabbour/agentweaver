@@ -1271,7 +1271,7 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
       : side === 'left'
         ? nodeBounds.minX - RETURN_RAIL_GAP - laneOffset
         : nodeBounds.maxX + RETURN_RAIL_GAP + laneOffset;
-  const route = roundedOrthogonalPath(horizontalRail
+  const routePoints = horizontalRail
     ? [
         { x: sourceX, y: sourceY },
         { x: sourceX, y: rail },
@@ -1283,30 +1283,35 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
         { x: rail, y: sourceY },
         { x: rail, y: targetY },
         { x: targetX, y: targetY },
-      ], 10);
+      ];
+  const route = roundedOrthogonalPath(routePoints, 10);
+  const returnJunctions = [routePoints[routePoints.length - 2], routePoints[routePoints.length - 1]];
   const labelX = horizontalRail ? (sourceX + targetX) / 2 : rail;
   const labelY = horizontalRail ? rail : (sourceY + targetY) / 2;
-  const markerIdValue = markerId('lb-arrow', id);
   const isActive = id === activeEdgeId;
   const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
 
   return (
     <>
-      <defs>
-        <marker id={markerIdValue} markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
-          <path d="M 0 0 L 6 3 L 0 6 Z" fill={stroke} />
-        </marker>
-      </defs>
       <path
         d={route}
         fill="none"
         stroke={stroke}
         strokeWidth={isActive ? 2 : 1.5}
-        strokeDasharray={isActive ? undefined : '5 3'}
+        strokeDasharray="5 3"
         strokeLinecap="round"
         strokeLinejoin="round"
-        markerEnd={`url(#${markerIdValue})`}
       />
+      {returnJunctions.map((junction, index) => (
+        <circle
+          key={`${junction.x}-${junction.y}-${index}`}
+          data-testid="workflow-loopback-junction"
+          cx={junction.x}
+          cy={junction.y}
+          r={2.5}
+          fill={stroke}
+        />
+      ))}
       {label != null && (
         <text
           x={labelX}
@@ -1385,10 +1390,8 @@ export function SpineEdge({
           data-testid="workflow-connector-junction"
           cx={junction.x}
           cy={junction.y}
-          r={4}
-          fill="var(--colorNeutralBackground1)"
-          stroke={SPINE_STROKE}
-          strokeWidth={1.4}
+          r={2.5}
+          fill={SPINE_STROKE}
         />
       ))}
       {label != null && label !== '' && (

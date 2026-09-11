@@ -1055,11 +1055,8 @@ function layout(spec: GraphSpec): {
       // Semantic revision/return edges always travel on their own outer rail.
       // A backward edge can rank in the same band as its target, so it cannot
       // safely assume that an inter-band gutter exists.
-      const goRight = (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
-      const lane = takeLane(`loopback-${goRight ? 'r' : 'l'}`);
-      const sideX = goRight
-        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + lane * LANE_STEP
-        : CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
+      const lane = takeLane('loopback-left');
+      const sideX = CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
       runY = sy;
       points = [
         { x: sx, y: sy },
@@ -1145,7 +1142,7 @@ function layout(spec: GraphSpec): {
       // Pre-wrapped so the rendered box matches the size layout reserved.
       label: geom?.lines.join('\n'),
       zIndex: 2,
-      data: { points, labelPos, labelOffset: { dx: 0, dy: 0 } },
+      data: { points, labelPos, labelOffset: { dx: 0, dy: 0 }, loopback: isRevision },
       style: {
         stroke,
         strokeWidth: 1.8,
@@ -1163,6 +1160,9 @@ function layout(spec: GraphSpec): {
   })));
   const junctionsByEdge = findConnectorJunctions(rfEdges.map((edge) => ({
     id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    loopback: (edge.data as { loopback?: boolean } | undefined)?.loopback,
     points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
   })));
   for (const edge of rfEdges) {
