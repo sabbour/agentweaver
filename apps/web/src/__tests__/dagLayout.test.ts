@@ -483,8 +483,8 @@ describe('layoutDagStaircase', () => {
     const offsets = routed.map((edge) =>
       (edge.data as { returnLaneOffset: number }).returnLaneOffset);
 
-    expect(routed.every((edge) => edge.sourceHandle === 'source-top')).toBe(true);
-    expect(routed.every((edge) => edge.targetHandle === 'target-top')).toBe(true);
+    expect(routed.every((edge) => edge.sourceHandle === 'source-left')).toBe(true);
+    expect(routed.every((edge) => edge.targetHandle === 'target-left')).toBe(true);
     expect(new Set(offsets).size).toBe(edges.length);
     expect(Math.min(...offsets)).toBe(0);
     expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);

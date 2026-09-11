@@ -64,6 +64,13 @@ describe('LoopbackEdge — return arc rendering', () => {
     expect(loopbackPath).toBeTruthy();
     expect(loopbackPath?.getAttribute('d')).toContain('M 610,29');
     expect(loopbackPath?.getAttribute('d')).toContain('L 0,29');
+    const loopbackJunctions = container.querySelectorAll('[data-testid="workflow-loopback-junction"]');
+    expect(loopbackJunctions).toHaveLength(2);
+    for (const junction of loopbackJunctions) {
+      expect(junction.getAttribute('r')).toBe('2.5');
+      expect(junction.getAttribute('fill')).toBe(REVISION_EDGE_STROKE);
+      expect(junction.getAttribute('stroke')).toBeNull();
+    }
     // ...and its revision label is rendered as SVG text.
     expect(container.textContent).toContain('RAI flags');
   });
@@ -164,6 +171,9 @@ describe('LoopbackEdge — return arc rendering', () => {
       </AzureFluentProvider>,
     );
 
-    expect(container.querySelector('[data-testid="workflow-connector-junction"]')).toBeTruthy();
+    const junction = container.querySelector('[data-testid="workflow-connector-junction"]');
+    expect(junction).toBeTruthy();
+    expect(junction?.getAttribute('r')).toBe('2.5');
+    expect(junction?.getAttribute('stroke')).toBeNull();
   });
 });

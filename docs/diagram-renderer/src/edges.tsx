@@ -114,25 +114,62 @@ export function findConnectorBridges(
   return bridges;
 }
 
-/** Assigns one explicit origin circle to each shared connector trunk. */
+function turnsBetween(previous: Point, current: Point, next: Point): boolean {
+  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
+  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
+  return verticalBefore !== verticalAfter;
+}
+
+/**
+ * Marks semantic split and merge locations only. Generic geometric crossings
+ * are represented by bridge paths, never by junction circles.
+ */
 export function findConnectorJunctions(
-  routes: Array<{ id: string; points: Point[] }>,
+  routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
 ): Map<string, Point[]> {
-  const starts = new Map<string, Array<{ id: string; point: Point }>>();
+  const bySource = new Map<string, typeof routes>();
+  const byTarget = new Map<string, typeof routes>();
   for (const route of routes) {
-    const point = route.points[0];
-    if (!point) continue;
-    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
-    const group = starts.get(key) ?? [];
-    group.push({ id: route.id, point });
-    starts.set(key, group);
+    const source = bySource.get(route.source) ?? [];
+    source.push(route);
+    bySource.set(route.source, source);
+    const target = byTarget.get(route.target) ?? [];
+    target.push(route);
+    byTarget.set(route.target, target);
   }
 
   const junctions = new Map<string, Point[]>();
-  for (const group of starts.values()) {
+  const claimed = new Set<string>();
+  const add = (edgeId: string, point: Point | undefined) => {
+    if (!point) return;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    const markers = junctions.get(edgeId) ?? [];
+    markers.push(point);
+    junctions.set(edgeId, markers);
+  };
+
+  for (const group of bySource.values()) {
     if (group.length < 2) continue;
     group.sort((left, right) => left.id.localeCompare(right.id));
-    junctions.set(group[0].id, [group[0].point]);
+    add(group[0].id, group[0].points[0]);
+    for (const route of group) {
+      for (let index = 1; index < route.points.length - 1; index += 1) {
+        if (turnsBetween(route.points[index - 1], route.points[index], route.points[index + 1])) {
+          add(route.id, route.points[index]);
+        }
+      }
+    }
+  }
+  for (const group of byTarget.values()) {
+    if (group.length < 2) continue;
+    group.sort((left, right) => left.id.localeCompare(right.id));
+    add(group[0].id, group[0].points.at(-1));
+  }
+  for (const route of routes.filter((route) => route.loopback)) {
+    add(route.id, route.points.at(-2));
+    add(route.id, route.points.at(-1));
   }
   return junctions;
 }
@@ -259,10 +296,8 @@ export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
           data-testid="diagram-connector-junction"
           cx={junction.x}
           cy={junction.y}
-          r={4}
-          fill={neutral.background1}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
+          r={2.5}
+          fill={stroke}
         />
       ))}
       {label && labelPos ? (

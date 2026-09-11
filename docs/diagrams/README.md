@@ -56,8 +56,8 @@ renderer use the same visual convention while keeping their native layouts:
   outer loop rail.
 - At an unavoidable perpendicular connector crossing, the later stable connector has a
   true path interruption with a rounded overpass arc. It never draws a background mask.
-- When several connectors share one logical origin, one explicit small outlined junction
-  circle identifies the shared trunk.
+- Small solid junction dots identify shared source trunks, branch tees, merge entries, and
+  loopback return/join points. Geometric crossings never create a junction dot.
 
 The diagram renderer keeps its independent band/gutter router and card geometry. The
 web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
