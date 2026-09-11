@@ -596,7 +596,7 @@ export class AgentweaverApiClient {
   }
 
   getAuthSession(): Promise<AuthSessionResponse> {
-    return this.request<AuthSessionResponse>('GET', '/auth/session');
+    return this.request<AuthSessionResponse>('GET', '/auth/session', undefined, undefined, undefined, 'no-store');
   }
 
   prepareAiExecutionContext(
@@ -619,7 +619,14 @@ export class AgentweaverApiClient {
   // Multiple providers can be configured and their keys kept at once; exactly one may be
   // marked active (active_provider_id) — a null active id means GitHub Copilot mode.
   listByokProviders(): Promise<ByokProviderListResponse> {
-    return this.request<ByokProviderListResponse>('GET', '/admin/byok-providers');
+    return this.request<ByokProviderListResponse>(
+      'GET',
+      '/admin/byok-providers',
+      undefined,
+      undefined,
+      undefined,
+      'no-store',
+    );
   }
 
   addByokProvider(req: ByokProviderRequest): Promise<ByokProviderConfig> {
@@ -675,7 +682,14 @@ export class AgentweaverApiClient {
   }
 
   getPlatformDefaultCopilotConnection(): Promise<PlatformDefaultCopilotConnection> {
-    return this.request<PlatformDefaultCopilotConnection>('GET', '/admin/platform-default-copilot/status');
+    return this.request<PlatformDefaultCopilotConnection>(
+      'GET',
+      '/admin/platform-default-copilot/status',
+      undefined,
+      undefined,
+      undefined,
+      'no-store',
+    );
   }
 
   disconnectPlatformDefaultCopilotConnection(): Promise<void> {
@@ -1563,6 +1577,7 @@ export class AgentweaverApiClient {
     body?: unknown,
     signal?: AbortSignal,
     extraHeaders?: Record<string, string>,
+    cache?: RequestCache,
   ): Promise<T> {
     const send = async () => {
       const sessionToken = this.sessionTokenProvider();
@@ -1575,6 +1590,7 @@ export class AgentweaverApiClient {
         method,
         headers,
         credentials: 'include',
+        cache,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal,
       });

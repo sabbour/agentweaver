@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.Api.Auth;
@@ -8,6 +9,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -160,22 +162,24 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
                 {"active_provider_id":"p1","providers":[{"id":"p1","name":"Test","type":"openai","baseUrl":"https://api.example.com","model":"gpt-4o","apiKey":"sk-test"}]}
                 """);
         }
-        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
 
         var response = await client.GetAsync("/api/auth/session");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.CacheControl?.NoStore.Should().BeTrue();
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
-    public async Task AuthSession_ReportsAiConfiguredTrue_WhenPlatformDefaultCopilotBindingExists()
+    public async Task AuthSession_ReportsConfigured_WhenPlatformCopilotStatusIsConnectedAndNoByokIsActive()
     {
         using (var scope = _factory.Services.CreateScope())
         {
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await secrets.DeleteSecretAsync("byok-provider-configurations");
             db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
             db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
             {
@@ -189,16 +193,90 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
             });
             await secrets.SetSecretAsync(
                 "copilot-app-platform-default-version",
+                """{"Status":"signed-in","AccessToken":"ghu_platform","ExpiresAt":"2099-01-01T00:00:00Z","GitHubLogin":"octocat"}""");
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
+
+        var providerListResponse = await client.GetAsync("/api/admin/byok-providers");
+        providerListResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        providerListResponse.Headers.CacheControl?.NoStore.Should().BeTrue();
+        var providerList = JsonDocument.Parse(await providerListResponse.Content.ReadAsStringAsync());
+        providerList.RootElement.GetProperty("active_provider_id").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var copilotStatusResponse = await client.GetAsync("/api/admin/platform-default-copilot/status");
+        copilotStatusResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        copilotStatusResponse.Headers.CacheControl?.NoStore.Should().BeTrue();
+        var copilotStatus = JsonDocument.Parse(await copilotStatusResponse.Content.ReadAsStringAsync());
+        copilotStatus.RootElement.GetProperty("connected").GetBoolean().Should().BeTrue();
+        copilotStatus.RootElement.GetProperty("github_login").GetString().Should().Be("octocat");
+
+        var sessionResponse = await client.GetAsync("/api/auth/session");
+        sessionResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        sessionResponse.Headers.CacheControl?.NoStore.Should().BeTrue();
+        var session = JsonDocument.Parse(await sessionResponse.Content.ReadAsStringAsync());
+        session.RootElement.GetProperty("authenticated").GetBoolean().Should().BeTrue();
+        session.RootElement.GetProperty("platform_roles").EnumerateArray()
+            .Select(role => role.GetString())
+            .Should().Contain(PlatformRoles.PlatformAdmin);
+        session.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue(
+            "the setup guard must agree with the connected platform Copilot status");
+    }
+
+    [Fact]
+    public async Task AuthSession_TracksPlatformCopilotDisconnectAndReconnect()
+    {
+        const string credentialReference = "copilot-app-platform-default-loop-regression";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = credentialReference,
+                CredentialVersion = "version-one",
+                GrantDigest = "digest-one",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await secrets.SetSecretAsync(
+                credentialReference,
                 """{"status":"signed-in","accessToken":"ghu_platform","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"octocat"}""");
             await db.SaveChangesAsync();
         }
-        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
 
-        var response = await client.GetAsync("/api/auth/session");
+        var connected = await client.GetFromJsonAsync<JsonElement>("/api/auth/session");
+        connected.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
+        using var disconnect = await client.PostAsJsonAsync(
+            "/api/admin/platform-default-copilot/disconnect",
+            new { });
+        disconnect.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var disconnected = await client.GetFromJsonAsync<JsonElement>("/api/auth/session");
+        disconnected.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var binding = await db.PlatformDefaultCopilotBindings.SingleAsync();
+            binding.Status = GitHubBindingStatus.Active;
+            binding.CredentialReference = credentialReference;
+            binding.CredentialVersion = "version-two";
+            binding.GrantDigest = "digest-two";
+            binding.DeactivatedAt = null;
+            await secrets.SetSecretAsync(
+                credentialReference,
+                """{"status":"signed-in","accessToken":"ghu_platform_2","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"octocat"}""");
+            await db.SaveChangesAsync();
+        }
+
+        var reconnected = await client.GetFromJsonAsync<JsonElement>("/api/auth/session");
+        reconnected.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

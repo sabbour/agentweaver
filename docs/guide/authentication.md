@@ -67,7 +67,10 @@ provider follows the same activation and run-snapshot boundary.
 If you cannot manage this setup, Agentweaver shows **Unavailable to you**. Ask a Platform Admin to complete the setup.
 
 When the provider is ready, select **Continue to Agentweaver**.
-Agentweaver opens the app shell and starts a short product tour.
+Agentweaver checks the current platform provider again, then returns to the page that sent
+you to setup. The app does not use a cached setup result. If the provider is unavailable,
+the setup page stays open and tells you to refresh its status. Agentweaver starts a short
+product tour after the first successful setup.
 
 The tour introduces **Projects**, **Sessions**, and **Start task**.
 You can skip the tour or press Escape.
