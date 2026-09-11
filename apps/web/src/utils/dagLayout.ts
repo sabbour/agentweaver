@@ -293,20 +293,52 @@ function samePoint(left: ConnectorPoint, right: ConnectorPoint): boolean {
   return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
 }
 
-function sharedEndpoint(
+function sharedSourcePoint(
   routes: Array<{ points: ConnectorPoint[] }>,
-  endpoint: 'start' | 'end',
 ): ConnectorPoint | undefined {
-  const candidate = endpoint === 'start'
-    ? routes[0]?.points[0]
-    : routes[0]?.points.at(-1);
+  const candidate = routes[0]?.points[0];
   if (!candidate) return undefined;
   return routes.every((route) => {
-    const point = endpoint === 'start' ? route.points[0] : route.points.at(-1);
+    const point = route.points[0];
     return point !== undefined && samePoint(candidate, point);
   })
     ? candidate
     : undefined;
+}
+
+function pointOnTerminalSegment(point: ConnectorPoint, points: ConnectorPoint[]): boolean {
+  const from = points.at(-2);
+  const to = points.at(-1);
+  if (!from || !to || samePoint(from, to)) return false;
+  return (
+    (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
+      point.y >= Math.min(from.y, to.y) - 0.5 && point.y <= Math.max(from.y, to.y) + 0.5) ||
+    (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
+      point.x >= Math.min(from.x, to.x) - 0.5 && point.x <= Math.max(from.x, to.x) + 0.5)
+  );
+}
+
+function sharedMergePoint(
+  routes: Array<{ edge: Edge; points: ConnectorPoint[] }>,
+): { edgeId: string; point: ConnectorPoint } | undefined {
+  const terminal = routes[0]?.points.at(-1);
+  if (!terminal || !routes.every((route) => {
+    const point = route.points.at(-1);
+    return point !== undefined && samePoint(terminal, point);
+  })) {
+    return undefined;
+  }
+
+  const candidates = routes.flatMap((route) => {
+    const point = route.points.at(-2);
+    return point && !samePoint(point, terminal) ? [{ edgeId: route.edge.id, point }] : [];
+  }).filter((candidate) => routes.every((route) => pointOnTerminalSegment(candidate.point, route.points)));
+  if (candidates.length === 0) return undefined;
+  candidates.sort((left, right) =>
+    Math.hypot(left.point.x - terminal.x, left.point.y - terminal.y) -
+      Math.hypot(right.point.x - terminal.x, right.point.y - terminal.y) ||
+    left.edgeId.localeCompare(right.edgeId));
+  return candidates[0];
 }
 
 /**
@@ -350,9 +382,10 @@ export function findLoopbackContinuationJoin(
 }
 
 /**
- * Marks only true split and merge points. The endpoints must be identical in
- * the routed geometry as well as related by the graph; elbows, layer bounds,
- * and incidental path crossings never create a marker.
+ * Marks only nonterminal shared split and merge points. The endpoints must be
+ * identical in the routed geometry as well as related by the graph. A merge must share
+ * an incoming terminal trunk before its card entry; card-entry targets,
+ * elbows, layer bounds, and incidental path crossings never create a marker.
  */
 export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -388,11 +421,12 @@ export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string
 
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
-    add(group[0].edge.id, sharedEndpoint(group, 'start'));
+    add(group[0].edge.id, sharedSourcePoint(group));
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
-    add(group[0].edge.id, sharedEndpoint(group, 'end'));
+    const merge = sharedMergePoint(group);
+    if (merge) add(merge.edgeId, merge.point);
   }
   return junctions;
 }

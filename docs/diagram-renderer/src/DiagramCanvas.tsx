@@ -1152,7 +1152,7 @@ function layout(spec: GraphSpec): {
         strokeWidth: 1.8,
         strokeDasharray: r.e.dashed || isRevision ? '6 5' : undefined,
       },
-      markerEnd: r.e.undirected
+      markerEnd: r.e.undirected || isRevision
         ? undefined
         : { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     });

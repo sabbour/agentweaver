@@ -22,6 +22,25 @@ const rendererPublicSpecsDir = path.join(rendererDir, 'public', 'specs');
 const rendererDistDir = path.join(rendererDir, 'dist');
 
 const DPR = 2; // export at 2x for crisp embeds on high-DPI displays
+const SCREENSHOT_WRITE_ATTEMPTS = 4;
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function captureScreenshot(element, outPath) {
+  for (let attempt = 1; attempt <= SCREENSHOT_WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      await element.screenshot({ path: outPath });
+      return;
+    } catch (error) {
+      const canRetry = error?.code === 'UNKNOWN' && error?.syscall === 'open';
+      if (!canRetry || attempt === SCREENSHOT_WRITE_ATTEMPTS) throw error;
+      console.warn(`Retrying ${path.basename(outPath)} after transient screenshot write failure (${attempt}/${SCREENSHOT_WRITE_ATTEMPTS})`);
+      await delay(attempt * 250);
+    }
+  }
+}
 
 async function listSpecNames() {
   const entries = await readdir(specsDir);
@@ -94,7 +113,7 @@ async function captureAll(specNames) {
       await page.waitForSelector('#diagram-root[data-diagram-ready="true"]', { timeout: 60000 });
       const el = await page.$('#diagram-root');
       const outPath = path.join(outDir, `${name}.png`);
-      await el.screenshot({ path: outPath });
+      await captureScreenshot(el, outPath);
       console.log(`Rendered ${name}.png`);
     }
   } finally {

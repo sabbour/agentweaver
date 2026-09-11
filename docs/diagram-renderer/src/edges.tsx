@@ -118,20 +118,52 @@ function samePoint(left: Point, right: Point): boolean {
   return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
 }
 
-function sharedEndpoint(
+function sharedSourcePoint(
   routes: Array<{ points: Point[] }>,
-  endpoint: 'start' | 'end',
 ): Point | undefined {
-  const candidate = endpoint === 'start'
-    ? routes[0]?.points[0]
-    : routes[0]?.points.at(-1);
+  const candidate = routes[0]?.points[0];
   if (!candidate) return undefined;
   return routes.every((route) => {
-    const point = endpoint === 'start' ? route.points[0] : route.points.at(-1);
+    const point = route.points[0];
     return point !== undefined && samePoint(candidate, point);
   })
     ? candidate
     : undefined;
+}
+
+function pointOnTerminalSegment(point: Point, points: Point[]): boolean {
+  const from = points.at(-2);
+  const to = points.at(-1);
+  if (!from || !to || samePoint(from, to)) return false;
+  return (
+    (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
+      point.y >= Math.min(from.y, to.y) - 0.5 && point.y <= Math.max(from.y, to.y) + 0.5) ||
+    (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
+      point.x >= Math.min(from.x, to.x) - 0.5 && point.x <= Math.max(from.x, to.x) + 0.5)
+  );
+}
+
+function sharedMergePoint(
+  routes: Array<{ id: string; points: Point[] }>,
+): { edgeId: string; point: Point } | undefined {
+  const terminal = routes[0]?.points.at(-1);
+  if (!terminal || !routes.every((route) => {
+    const point = route.points.at(-1);
+    return point !== undefined && samePoint(terminal, point);
+  })) {
+    return undefined;
+  }
+
+  const candidates = routes.flatMap((route) => {
+    const point = route.points.at(-2);
+    return point && !samePoint(point, terminal) ? [{ edgeId: route.id, point }] : [];
+  }).filter((candidate) => routes.every((route) => pointOnTerminalSegment(candidate.point, route.points)));
+  if (candidates.length === 0) return undefined;
+  candidates.sort((left, right) =>
+    Math.hypot(left.point.x - terminal.x, left.point.y - terminal.y) -
+      Math.hypot(right.point.x - terminal.x, right.point.y - terminal.y) ||
+    left.edgeId.localeCompare(right.edgeId));
+  return candidates[0];
 }
 
 function pointLiesOnRoute(point: Point, points: Point[]): boolean {
@@ -153,9 +185,10 @@ function pointLiesOnRoute(point: Point, points: Point[]): boolean {
 }
 
 /**
- * Marks only routed points shared by two semantically related graph edges.
- * Generic geometric crossings, elbows, and container boundaries are never
- * junctions.
+ * Marks only nonterminal routed points shared by two semantically related
+ * graph edges. A merge marker belongs at a shared terminal trunk before the
+ * card-entry arrowhead; generic crossings, elbows, and container boundaries
+ * are never junctions.
  */
 export function findConnectorJunctions(
   routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
@@ -166,9 +199,11 @@ export function findConnectorJunctions(
     const source = bySource.get(route.source) ?? [];
     source.push(route);
     bySource.set(route.source, source);
-    const target = byTarget.get(route.target) ?? [];
-    target.push(route);
-    byTarget.set(route.target, target);
+    if (!route.loopback) {
+      const target = byTarget.get(route.target) ?? [];
+      target.push(route);
+      byTarget.set(route.target, target);
+    }
   }
 
   const junctions = new Map<string, Point[]>();
@@ -186,12 +221,12 @@ export function findConnectorJunctions(
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
     const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
-    add(ordered[0].id, sharedEndpoint(ordered, 'start'));
+    add(ordered[0].id, sharedSourcePoint(ordered));
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
-    const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
-    add(ordered[0].id, sharedEndpoint(ordered, 'end'));
+    const merge = sharedMergePoint(group);
+    if (merge) add(merge.edgeId, merge.point);
   }
   for (const route of routes.filter((route) => route.loopback)) {
     const join = route.points.at(-1);

@@ -31,6 +31,35 @@ describe('diagram connector geometry', () => {
     expect(junctions.has('edge-b')).toBe(false);
   });
 
+  it('does not mark an ordinary arrowhead endpoint, including a shared card-entry target', () => {
+    const junctions = findConnectorJunctions([
+      { id: 'edge-a', source: 'left', target: 'terminal', points: [{ x: 0, y: 20 }, { x: 100, y: 20 }] },
+      { id: 'edge-b', source: 'right', target: 'terminal', points: [{ x: 0, y: 80 }, { x: 100, y: 20 }] },
+    ]);
+
+    expect(junctions).toEqual(new Map());
+  });
+
+  it('marks an incoming merge at its shared trunk before the arrowhead', () => {
+    const junctions = findConnectorJunctions([
+      {
+        id: 'edge-a',
+        source: 'left',
+        target: 'terminal',
+        points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }],
+      },
+      {
+        id: 'edge-b',
+        source: 'right',
+        target: 'terminal',
+        points: [{ x: 200, y: 0 }, { x: 100, y: 20 }, { x: 100, y: 100 }],
+      },
+    ]);
+
+    expect(junctions.get('edge-b')).toEqual([{ x: 100, y: 20 }]);
+    expect([...junctions.values()].flat()).not.toContainEqual({ x: 100, y: 100 });
+  });
+
   it('does not mark container-border-style crossings or differently routed edges from one source', () => {
     const junctions = findConnectorJunctions([
       { id: 'edge-a', source: 'first', target: 'right', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },

@@ -491,7 +491,7 @@ describe('layoutDagStaircase', () => {
     expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);
   });
 
-  it('marks only exact shared split and merge endpoints, not elbows or crossings', () => {
+  it('marks only exact shared source splits and merge trunks, not terminal arrowheads, elbows, or crossings', () => {
     const nodes: Node[] = [
       { ...makeNode('split'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
       { ...makeNode('upper'), position: { x: 300, y: -80 }, initialWidth: 100, initialHeight: 100 },
@@ -518,7 +518,8 @@ describe('layoutDagStaircase', () => {
 
     expect(points).toHaveLength(2);
     expect(points).toContainEqual({ x: 100, y: 50 });
-    expect(points).toContainEqual({ x: 400, y: 450 });
+    expect(junctions.get('merge-right')).toEqual([{ x: 267, y: 450 }]);
+    expect(points).not.toContainEqual({ x: 400, y: 450 });
     expect(junctions.has('cross-horizontal')).toBe(false);
     expect(junctions.has('cross-vertical')).toBe(false);
   });

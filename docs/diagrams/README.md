@@ -57,9 +57,10 @@ renderer use the same visual convention while keeping their native layouts:
   the destination's clear continuation junction.
 - At an unavoidable perpendicular connector crossing, the later stable connector has a
   true path interruption with a rounded overpass arc. It never draws a background mask.
-- Small solid junction dots identify only the exact routed coordinate shared by a true
-  source split, target merge, or loopback return/join. Ordinary elbows, container borders,
-  card anchors with one edge, and geometric crossings never create a junction dot.
+- Small solid junction dots identify only a nonterminal routed coordinate shared by a true
+  source split, incoming merge trunk, or loopback return/join. Ordinary arrowheads and
+  card-entry targets, elbows, container borders, anchors with one edge, and geometric crossings
+  never create a junction dot.
 
 The diagram renderer keeps its independent band/gutter router and card geometry. The
 web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
