@@ -6,6 +6,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentType, ReactNode } from 'react';
 
+const flowCapture = vi.hoisted(() => ({
+  edges: [] as Array<{ type?: string }>,
+  edgeTypes: {} as Record<string, unknown>,
+}));
+
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunTraces: vi.fn(),
@@ -22,21 +27,29 @@ vi.mock('@xyflow/react', async (importActual) => {
     Panel: ({ children }: { children: ReactNode }) => <>{children}</>,
     ReactFlow: ({
       nodes,
+      edges = [],
       nodeTypes,
+      edgeTypes = {},
       children,
     }: {
       nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>;
+      edges?: Array<{ type?: string }>;
       nodeTypes: Record<string, ComponentType<{ data: Record<string, unknown> }>>;
+      edgeTypes?: Record<string, unknown>;
       children: ReactNode;
-    }) => (
-      <div>
-        {nodes.map((node) => {
-          const NodeComponent = nodeTypes[node.type ?? ''];
-          return <NodeComponent key={node.id} data={node.data} />;
-        })}
-        {children}
-      </div>
-    ),
+    }) => {
+      flowCapture.edges = edges;
+      flowCapture.edgeTypes = edgeTypes;
+      return (
+        <div>
+          {nodes.map((node) => {
+            const NodeComponent = nodeTypes[node.type ?? ''];
+            return <NodeComponent key={node.id} data={node.data} />;
+          })}
+          {children}
+        </div>
+      );
+    },
     useReactFlow: () => ({
       fitView: vi.fn(),
       getNode: vi.fn(),
@@ -69,7 +82,7 @@ describe('capture instrumentation markup', () => {
             { id: 'coordinator', kind: 'coordinator', title: 'Coordinator', status: 'running' },
             { id: 'task-1', kind: 'subtask', title: 'Build preview', status: 'completed' },
           ]}
-          edges={[]}
+          edges={[{ from: 'coordinator', to: 'task-1' }]}
         />
       </Wrapper>,
     );
@@ -80,6 +93,9 @@ describe('capture instrumentation markup', () => {
     expect(nodes[0].getAttribute('data-node-kind')).toBe('coordinator');
     expect(nodes[0].getAttribute('data-node-status')).toBe('running');
     expect(nodes[1].getAttribute('data-node-status')).toBe('completed');
+    expect(flowCapture.edges).toHaveLength(1);
+    expect(flowCapture.edges[0].type).toBe('spine');
+    expect(flowCapture.edgeTypes.spine).toBeTypeOf('function');
   });
 
   it('exposes stable trace tree/span attributes and selected state', async () => {

@@ -20,8 +20,10 @@ import {
 import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
+  buildBridgedOrthogonalPath,
   COMPACT_CARD_H,
   findConnectorBridges,
+  findConnectorJunctions,
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
@@ -36,7 +38,6 @@ import {
   workflowDefinitionViewportHeight,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
-import type { ConnectorBridge } from '../utils/dagLayout';
 import { AiCredits } from './AiCredits';
 import { PodIndicator } from './PodIndicator';
 import {
@@ -1332,46 +1333,6 @@ export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
 
 const SPINE_STROKE = 'var(--colorNeutralStroke1)';
 
-function ConnectorBridgeMarks({
-  bridges,
-  stroke,
-  strokeWidth,
-}: {
-  bridges: ConnectorBridge[];
-  stroke: string;
-  strokeWidth: number;
-}) {
-  const radius = 7;
-  return bridges.map((bridge, index) => {
-    const start = bridge.orientation === 'horizontal'
-      ? { x: bridge.x - radius, y: bridge.y }
-      : { x: bridge.x, y: bridge.y - radius };
-    const end = bridge.orientation === 'horizontal'
-      ? { x: bridge.x + radius, y: bridge.y }
-      : { x: bridge.x, y: bridge.y + radius };
-    const arc = bridge.orientation === 'horizontal'
-      ? `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`
-      : `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`;
-    return (
-      <g key={`${bridge.x}-${bridge.y}-${index}`} data-testid="workflow-connector-bridge">
-        <path
-          d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
-          fill="none"
-          stroke="var(--colorNeutralBackground1)"
-          strokeWidth={strokeWidth + 5}
-        />
-        <path
-          d={arc}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-        />
-      </g>
-    );
-  });
-}
-
 export function SpineEdge({
   id,
   sourceX,
@@ -1397,6 +1358,8 @@ export function SpineEdge({
   });
   const markerIdValue = markerId('spine-arrow', id);
   const bridges = findConnectorBridges(allEdges, allNodes).get(id) ?? [];
+  const junctions = findConnectorJunctions(allEdges, allNodes).get(id) ?? [];
+  const edgePath = buildBridgedOrthogonalPath(route.points, bridges);
 
   return (
     <>
@@ -1408,7 +1371,7 @@ export function SpineEdge({
       <path
         id={id}
         data-testid="workflow-spine-edge"
-        d={route.path}
+        d={edgePath}
         fill="none"
         stroke={SPINE_STROKE}
         strokeWidth={1.4}
@@ -1416,7 +1379,18 @@ export function SpineEdge({
         strokeLinejoin="round"
         markerEnd={`url(#${markerIdValue})`}
       />
-      <ConnectorBridgeMarks bridges={bridges} stroke={SPINE_STROKE} strokeWidth={1.4} />
+      {junctions.map((junction, index) => (
+        <circle
+          key={`${junction.x}-${junction.y}-${index}`}
+          data-testid="workflow-connector-junction"
+          cx={junction.x}
+          cy={junction.y}
+          r={4}
+          fill="var(--colorNeutralBackground1)"
+          stroke={SPINE_STROKE}
+          strokeWidth={1.4}
+        />
+      ))}
       {label != null && label !== '' && (
         <EdgeLabelRenderer>
           <div
