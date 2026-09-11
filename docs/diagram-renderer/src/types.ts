@@ -35,6 +35,8 @@ export interface GraphEdge {
   dashed?: boolean;
   /** Semantic revision/return connector. Rendered on a distinct loopback rail. */
   loopback?: boolean;
+  /** Optional documentation-only continuation node where a semantic return rejoins normal flow. */
+  returnJoin?: string;
   undirected?: boolean;
 }
 
