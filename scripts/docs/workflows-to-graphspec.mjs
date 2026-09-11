@@ -43,21 +43,6 @@ const GATE_LABEL = {
   'human-review': 'Human gate',
 };
 
-const DOCUMENTED_RETURN_JOINS = {
-  // Review-driven rework cycles share the RAI decision's downstream
-  // continuation in the workflow diagram. The runtime target remains
-  // Implement; this metadata only supplies a clear visual return junction.
-  'software-delivery': {
-    revise: 'rai-check',
-    'request-changes': 'rai-check',
-  },
-};
-
-function documentedReturnJoin(workflowId, edge, isLoopback) {
-  if (!isLoopback) return undefined;
-  return DOCUMENTED_RETURN_JOINS[workflowId]?.[edge.when];
-}
-
 function describe(node) {
   const base = BY_TYPE[node.type] ?? { icon: 'box', badge: { text: 'Step', tone: 'neutral' } };
   if (node.type === 'check' && node.gate_kind) {
@@ -96,13 +81,11 @@ export function toSpec(wf) {
 
   const edges = (wf.edges ?? []).map((e) => {
     const isLoopback = (nodeOrder.get(e.to) ?? 0) <= (nodeOrder.get(e.from) ?? 0);
-    const returnJoin = documentedReturnJoin(wf.id, e, isLoopback);
     return {
       from: e.from,
       to: e.to,
       ...(e.when ? { label: e.when } : {}),
       ...(isLoopback ? { loopback: true } : {}),
-      ...(returnJoin ? { returnJoin } : {}),
     };
   });
 

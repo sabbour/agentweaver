@@ -136,8 +136,7 @@
       "from": "rai-check",
       "to": "implement",
       "label": "revise",
-      "loopback": true,
-      "returnJoin": "rai-check"
+      "loopback": true
     },
     {
       "from": "rai-check",
@@ -163,8 +162,7 @@
       "from": "rubberduck",
       "to": "implement",
       "label": "revise",
-      "loopback": true,
-      "returnJoin": "rai-check"
+      "loopback": true
     },
     {
       "from": "code-review",
@@ -179,8 +177,7 @@
       "from": "build-test",
       "to": "implement",
       "label": "request-changes",
-      "loopback": true,
-      "returnJoin": "rai-check"
+      "loopback": true
     },
     {
       "from": "build-test",
@@ -196,8 +193,7 @@
       "from": "review-gate",
       "to": "implement",
       "label": "request-changes",
-      "loopback": true,
-      "returnJoin": "rai-check"
+      "loopback": true
     },
     {
       "from": "review-gate",
