@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.1
+
+### Patch Changes
+
+- 5113db1: Allow Platform Admins to leave required setup after a platform GitHub Copilot or custom-key provider becomes active, while preserving the page they originally requested.
+
 ## 0.29.0
 
 ### Minor Changes
