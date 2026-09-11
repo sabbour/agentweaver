@@ -33,6 +33,8 @@ export interface GraphEdge {
   to: string;
   label?: string;
   dashed?: boolean;
+  /** Semantic revision/return connector. Rendered on a distinct loopback rail. */
+  loopback?: boolean;
   undirected?: boolean;
 }
 

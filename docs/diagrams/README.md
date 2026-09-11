@@ -46,6 +46,23 @@ each label remains centred on its own connector while avoiding other labels
 and crossing lines. This is a generic pipeline fix -- every current and future
 graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
 
+## Shared connector convention
+
+The workflow editor, workflow viewer, orchestration topology, and this documentation
+renderer use the same visual convention while keeping their native layouts:
+
+- Normal flow connectors use the neutral graph stroke.
+- Semantic revision and return connectors use a dashed marigold stroke and a dedicated
+  outer loop rail.
+- At an unavoidable perpendicular connector crossing, the later stable connector masks
+  the lower line briefly and draws a rounded bridge arc over it.
+
+The diagram renderer keeps its independent band/gutter router and card geometry. The
+web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
+existing `routeGridEdges` helper. No cross-package graph model or layout-contract
+dependency is required. Set `loopback: true` on a graph-spec edge when it represents a
+semantic revision/return path; generated workflow specs mark backward edges this way.
+
 ## How it works
 
 ```

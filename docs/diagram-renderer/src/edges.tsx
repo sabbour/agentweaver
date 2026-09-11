@@ -11,6 +11,12 @@ export interface Point {
   y: number;
 }
 
+export interface ConnectorBridge {
+  x: number;
+  y: number;
+  orientation: 'horizontal' | 'vertical';
+}
+
 export interface RoutedEdgeData extends Record<string, unknown> {
   /** Orthogonal poly-line waypoints the layout router computed for this edge,
    * in flow coordinates, already routed through the gutters between bands so
@@ -21,6 +27,8 @@ export interface RoutedEdgeData extends Record<string, unknown> {
   labelPos?: Point;
   /** Reserved nudge applied on top of labelPos. */
   labelOffset?: LabelOffset;
+  /** Interior crossings where this connector visibly passes over an earlier route. */
+  bridges?: ConnectorBridge[];
 }
 
 /** Corner radius used to round the orthogonal joints of a routed edge so it
@@ -29,6 +37,79 @@ const CORNER_RADIUS = 10;
 
 function dist(a: Point, b: Point): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+interface OrthogonalSegment {
+  orientation: ConnectorBridge['orientation'];
+  constant: number;
+  start: number;
+  end: number;
+}
+
+function segments(points: Point[]): OrthogonalSegment[] {
+  const result: OrthogonalSegment[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+      result.push({
+        orientation: 'vertical',
+        constant: from.x,
+        start: Math.min(from.y, to.y),
+        end: Math.max(from.y, to.y),
+      });
+    } else if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+      result.push({
+        orientation: 'horizontal',
+        constant: from.y,
+        start: Math.min(from.x, to.x),
+        end: Math.max(from.x, to.x),
+      });
+    }
+  }
+  return result;
+}
+
+/**
+ * Assigns each perpendicular crossing to the later stable edge. The router
+ * already prevents card collisions; this makes an unavoidable connector
+ * crossing explicit instead of visually merging both routes.
+ */
+export function findConnectorBridges(
+  routes: Array<{ id: string; points: Point[] }>,
+): Map<string, ConnectorBridge[]> {
+  const ordered = routes
+    .map((route) => ({ ...route, segments: segments(route.points) }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const bridges = new Map<string, ConnectorBridge[]>();
+
+  for (let current = 1; current < ordered.length; current += 1) {
+    for (let prior = 0; prior < current; prior += 1) {
+      for (const currentSegment of ordered[current].segments) {
+        for (const priorSegment of ordered[prior].segments) {
+          if (currentSegment.orientation === priorSegment.orientation) continue;
+          const horizontal = currentSegment.orientation === 'horizontal' ? currentSegment : priorSegment;
+          const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
+          const x = vertical.constant;
+          const y = horizontal.constant;
+          const inset = 8;
+          if (
+            x <= horizontal.start + inset || x >= horizontal.end - inset ||
+            y <= vertical.start + inset || y >= vertical.end - inset
+          ) {
+            continue;
+          }
+          const edgeBridges = bridges.get(ordered[current].id) ?? [];
+          if (!edgeBridges.some((bridge) => Math.abs(bridge.x - x) < 0.5 && Math.abs(bridge.y - y) < 0.5)) {
+            edgeBridges.push({ x, y, orientation: currentSegment.orientation });
+            bridges.set(ordered[current].id, edgeBridges);
+          }
+        }
+      }
+    }
+  }
+
+  return bridges;
 }
 
 /**
@@ -86,15 +167,44 @@ export function buildRoundedPath(points: Point[], radius = CORNER_RADIUS): strin
  * clear of crossing connectors, other labels, and cards.
  */
 export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
-  const { points, labelPos, labelOffset } = (data as RoutedEdgeData | undefined) ?? {
+  const { points, labelPos, labelOffset, bridges = [] } = (data as RoutedEdgeData | undefined) ?? {
     points: [],
   };
   const edgePath = buildRoundedPath(points ?? []);
   const offset = labelOffset ?? { dx: 0, dy: 0 };
+  const stroke = typeof style?.stroke === 'string' ? style.stroke : neutral.foreground4;
+  const strokeWidth = typeof style?.strokeWidth === 'number' ? style.strokeWidth : 1.8;
 
   return (
     <>
       <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
+      {bridges.map((bridge, index) => {
+        const radius = 7;
+        const start = bridge.orientation === 'horizontal'
+          ? { x: bridge.x - radius, y: bridge.y }
+          : { x: bridge.x, y: bridge.y - radius };
+        const end = bridge.orientation === 'horizontal'
+          ? { x: bridge.x + radius, y: bridge.y }
+          : { x: bridge.x, y: bridge.y + radius };
+        const arc = `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`;
+        return (
+          <g key={`${bridge.x}-${bridge.y}-${index}`} data-testid="diagram-connector-bridge">
+            <path
+              d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
+              fill="none"
+              stroke={neutral.background1}
+              strokeWidth={strokeWidth + 5}
+            />
+            <path
+              d={arc}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      })}
       {label && labelPos ? (
         <EdgeLabelRenderer>
           <div

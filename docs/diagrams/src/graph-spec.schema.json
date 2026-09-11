@@ -56,6 +56,7 @@
           "to": { "type": "string" },
           "label": { "type": "string" },
           "dashed": { "type": "boolean", "default": false },
+          "loopback": { "type": "boolean", "default": false, "description": "Semantic revision or return connector. Rendered in the revision color with a dedicated loop rail." },
           "undirected": { "type": "boolean", "default": false, "description": "Render without an arrowhead (association, e.g. shared volume mount)" }
         }
       }

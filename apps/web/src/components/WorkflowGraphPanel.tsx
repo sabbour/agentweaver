@@ -21,6 +21,7 @@ import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
   COMPACT_CARD_H,
+  findConnectorBridges,
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
@@ -35,6 +36,7 @@ import {
   workflowDefinitionViewportHeight,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
+import type { ConnectorBridge } from '../utils/dagLayout';
 import { AiCredits } from './AiCredits';
 import { PodIndicator } from './PodIndicator';
 import {
@@ -64,6 +66,7 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useEdges,
   useNodes,
   type Edge,
   type EdgeProps,
@@ -173,7 +176,7 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 /** Open the execution detail modal for a given executionId. */
 export const ExecutionModalContext = createContext<((executionId: string) => void) | undefined>(undefined);
 
-/** Id of the active loopback edge (highlighted in blue). */
+/** Id of the active semantic revision/return edge. */
 export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 
 /** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
@@ -1221,9 +1224,10 @@ export const workflowNodeTypes = { workflow: WorkflowNode };
 // Routed edges — quiet orthogonal paths with rounded corners
 // ---------------------------------------------------------------------------
 
-const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
-const LOOPBACK_STROKE_ACTIVE = 'var(--colorNeutralForeground1)';
-const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
+export const REVISION_EDGE_STROKE = 'var(--colorPaletteMarigoldForeground2)';
+const LOOPBACK_STROKE        = REVISION_EDGE_STROKE;
+const LOOPBACK_STROKE_ACTIVE = REVISION_EDGE_STROKE;
+const LOOPBACK_TEXT_COLOR    = REVISION_EDGE_STROKE;
 const RETURN_RAIL_GAP        = 36;
 
 function markerId(prefix: string, id: string): string {
@@ -1328,7 +1332,47 @@ export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
 
 const SPINE_STROKE = 'var(--colorNeutralStroke1)';
 
-function SpineEdge({
+function ConnectorBridgeMarks({
+  bridges,
+  stroke,
+  strokeWidth,
+}: {
+  bridges: ConnectorBridge[];
+  stroke: string;
+  strokeWidth: number;
+}) {
+  const radius = 7;
+  return bridges.map((bridge, index) => {
+    const start = bridge.orientation === 'horizontal'
+      ? { x: bridge.x - radius, y: bridge.y }
+      : { x: bridge.x, y: bridge.y - radius };
+    const end = bridge.orientation === 'horizontal'
+      ? { x: bridge.x + radius, y: bridge.y }
+      : { x: bridge.x, y: bridge.y + radius };
+    const arc = bridge.orientation === 'horizontal'
+      ? `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`
+      : `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`;
+    return (
+      <g key={`${bridge.x}-${bridge.y}-${index}`} data-testid="workflow-connector-bridge">
+        <path
+          d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
+          fill="none"
+          stroke="var(--colorNeutralBackground1)"
+          strokeWidth={strokeWidth + 5}
+        />
+        <path
+          d={arc}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+        />
+      </g>
+    );
+  });
+}
+
+export function SpineEdge({
   id,
   sourceX,
   sourceY,
@@ -1337,6 +1381,8 @@ function SpineEdge({
   label,
   data,
 }: EdgeProps) {
+  const allNodes = useNodes();
+  const allEdges = useEdges();
   const spineData = data as {
     flowDirection?: 'horizontal' | 'vertical';
     gutterLaneOffset?: number;
@@ -1350,6 +1396,7 @@ function SpineEdge({
     laneOffset: spineData?.gutterLaneOffset,
   });
   const markerIdValue = markerId('spine-arrow', id);
+  const bridges = findConnectorBridges(allEdges, allNodes).get(id) ?? [];
 
   return (
     <>
@@ -1369,6 +1416,7 @@ function SpineEdge({
         strokeLinejoin="round"
         markerEnd={`url(#${markerIdValue})`}
       />
+      <ConnectorBridgeMarks bridges={bridges} stroke={SPINE_STROKE} strokeWidth={1.4} />
       {label != null && label !== '' && (
         <EdgeLabelRenderer>
           <div
