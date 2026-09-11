@@ -103,7 +103,7 @@ PRIMARY: discover listening ports by reading /proc/net/tcp AND /proc/net/tcp6 (s
 
 **Logged**: 2026-07-09T20:55:00Z
 **Priority**: high
-**Status**: pending
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -450,5 +450,119 @@ integration branch rebuild.
   (ResolveChildBaseBranchAsync, RebuildDependencyBaseBranchAsync, ApplyChildResultAsync,
   ObserveChildAsync), apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs (frontier is correct)
 - See Also: ERR-20260709-TLS, memory "coordinator propagation" (issue #197)
+
+---
+
+## [ERR-20260911-001] deps-ensure-web-binaries
+
+**Logged**: 2026-09-11T17:14:15Z
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+`npm run deps:ensure` reported the web dependency tree current, but the isolated worktree had no web package binaries.
+
+### Error
+```
+'vitest' is not recognized as an internal or external command
+'eslint' is not recognized as an internal or external command
+```
+
+### Context
+- Commands: `npm --prefix apps/web run test` and `npm --prefix apps/web run lint`
+- Worktree: `.worktrees/feat-trace-detail-observability`
+
+### Resolution
+- **Resolved**: 2026-09-11T17:14:15Z
+- **Notes**: Reinstall the worktree-local web dependencies with `npm --prefix apps/web ci` before retrying validation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/package-lock.json
+
+---
+
+## [ERR-20260911-002] transaction-trace-panel-lint
+
+**Logged**: 2026-09-11T17:24:59Z
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The initial trace-detail implementation included an unused import and synchronously reset derived UI state in an effect.
+
+### Error
+```
+@typescript-eslint/no-unused-vars
+react-hooks/set-state-in-effect
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T17:24:59Z
+- **Notes**: Removed the unused import and derive the initial expanded/selected state in the asynchronous trace load callback.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/components/runs/TransactionTracePanel.tsx
+
+---
+
+## [ERR-20260911-003] deps-ensure-docs-binaries
+
+**Logged**: 2026-09-11T17:28:12Z
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+The isolated worktree's docs package was also missing its local executable after `npm run deps:ensure`.
+
+### Error
+```
+'vitepress' is not recognized as an internal or external command
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T17:28:12Z
+- **Notes**: Reinstall the worktree-local docs dependencies with `npm --prefix docs ci` before validating documentation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: docs/package-lock.json
+
+---
+
+## [ERR-20260911-004] validate-layer-unrelated-web-tests
+
+**Logged**: 2026-09-11T17:30:27Z
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+The full layer validation failed in existing SkillsPage timing-sensitive tests outside the trace-detail change.
+
+### Error
+```
+src/__tests__/SkillsPage.test.tsx: 5 failed tests
+```
+
+### Context
+- Command: `npm run validate:layer`
+- Affected validation areas: web, docs
+- Focused trace-detail tests passed; web lint and production build passed before the layer run.
+
+### Suggested Fix
+Stabilize the delayed-dialog interactions in the SkillsPage tests, then rerun layer validation.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: apps/web/src/__tests__/SkillsPage.test.tsx
+
+### Resolution
+- **Resolved**: 2026-09-11T17:54:44Z
+- **Notes**: The affected file passed all 35 tests when run independently. The layer failure was timing-related under concurrent validation, not caused by the trace-detail change.
 
 ---

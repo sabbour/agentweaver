@@ -7,6 +7,17 @@ title: Transaction traces
 The Observability area includes a hierarchical transaction trace panel for recent coordinator runs.
 Open a project, go to **Observability** then **Traces**, and choose **Preview trace** on a run.
 
+The trace detail opens on the **Timeline** tab. Its summary row shows the agent, run ID,
+measured trace-window duration, recorded input/output tokens when they exist, and the
+aggregate trace status. Agentweaver does not currently return a session identifier in its
+trace DTO, so the UI deliberately shows the run ID rather than presenting invented session
+telemetry.
+
+The timeline reconstructs hierarchy from parent/child relationships, shows each span against
+the measured trace window, and uses distinct agent, model, and tool visuals. Failed spans use
+error styling. Select a span to inspect its status, timing, correlation IDs, operation, model
+usage, and tool-call context.
+
 The trace tree is organized by span relationships:
 
 1. **Invoke Agent** nodes represent agent turns.
@@ -17,6 +28,13 @@ The trace tree is organized by span relationships:
 Expand or collapse rows to follow the transaction. Select a span to inspect event time, duration,
 status, operation name, model, token usage, or tool name. If Application Insights has not produced
 trace data for the run yet, the panel shows an empty state.
+
+The **Attributes** tab lists the normalized fields returned by the run-traces API for the selected
+span. The API currently does not return arbitrary OpenTelemetry custom dimensions, so those are not
+shown as if they were available. The **Events** tab lists persisted run events using their actual
+sequence number and type. When the server-stamped `timestamp_utc` field is present in the event
+payload, the view shows that recorded time; otherwise it shows the sequence without synthesizing a
+time. Expand a payload only when its recorded fields are needed.
 
 For an **Execute Tool** span, the detail panel also shows the tool's **arguments** and **output**.
 These come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the

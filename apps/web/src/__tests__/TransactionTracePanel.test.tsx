@@ -1,4 +1,10 @@
-import { aggregateNanoAiu, buildToolCallIndex, buildTraceTree, totalNanoAiu } from '../components/runs/traceTree';
+import {
+  aggregateNanoAiu,
+  buildToolCallIndex,
+  buildTraceTree,
+  getTraceTimeline,
+  totalNanoAiu,
+} from '../components/runs/traceTree';
 import { describe, expect, it } from 'vitest';
 import type { PersistedRunEvent, RunTraceSpanDto } from '../api/types';
 function span(partial: Partial<RunTraceSpanDto> & { id: string }): RunTraceSpanDto {
@@ -48,6 +54,28 @@ describe('buildTraceTree', () => {
 
   it('returns an empty forest for no spans', () => {
     expect(buildTraceTree([])).toEqual([]);
+  });
+});
+
+describe('getTraceTimeline', () => {
+  it('uses the earliest span start and latest span end as the trace window', () => {
+    const timeline = getTraceTimeline([
+      span({ id: 'first', timestamp: '2026-07-06T00:00:01.000Z', durationMs: 800 }),
+      span({ id: 'last', timestamp: '2026-07-06T00:00:02.000Z', durationMs: 2_500 }),
+    ]);
+
+    expect(timeline?.startedAtMs).toBe(new Date('2026-07-06T00:00:01.000Z').getTime());
+    expect(timeline?.endedAtMs).toBe(new Date('2026-07-06T00:00:04.500Z').getTime());
+    expect(timeline?.durationMs).toBe(3_500);
+  });
+
+  it('ignores invalid timestamps rather than corrupting the entire waterfall range', () => {
+    const timeline = getTraceTimeline([
+      span({ id: 'invalid', timestamp: 'not-a-date', durationMs: 100 }),
+      span({ id: 'valid', timestamp: '2026-07-06T00:00:01.000Z', durationMs: 100 }),
+    ]);
+
+    expect(timeline?.durationMs).toBe(100);
   });
 });
 

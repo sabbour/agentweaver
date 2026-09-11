@@ -9,6 +9,7 @@ import type { ComponentType, ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunTraces: vi.fn(),
+    getRunEvents: vi.fn().mockResolvedValue([]),
     steerCoordinator: vi.fn(),
   },
 }));
@@ -110,7 +111,7 @@ describe('capture instrumentation markup', () => {
     const span = screen.getByTestId('trace-span');
     expect(span.getAttribute('data-span-key')).toBe('span-1');
     expect(span.getAttribute('data-span-type')).toBe('invoke-agent');
-    expect(span.getAttribute('data-selected')).toBe('false');
+    expect(span.getAttribute('data-selected')).toBe('true');
 
     fireEvent.click(span);
     expect(span.getAttribute('data-selected')).toBe('true');
