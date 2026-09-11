@@ -1072,9 +1072,9 @@ public sealed record StartOrchestrationRequest
     /// <summary>Backward-compatible alias for pre-UI clients; new clients should send start_mode.</summary>
     [JsonPropertyName("mode")] public string? Mode { get; init; }
 
-    /// <summary>When true, the coordinator run and its children auto-grant only repository-defined
-    /// safe tools at the HITL gate. Preview, destructive, privileged, secret-bearing, and network
-    /// tools outside that safe list remain gated unless a separate existing policy allows them.</summary>
+    /// <summary>When true, the coordinator run and its children auto-grant only
+    /// <c>web_fetch</c> and <c>start_preview</c> at the HITL gate. Preview validation and all
+    /// destructive, privileged, secret-bearing, and other network operations remain gated.</summary>
     [JsonPropertyName("auto_approve_tools")] public bool? AutoApproveTools { get; init; }
 
     /// <summary>Backward-compatible alias for clients that used the original camelCase field.</summary>
