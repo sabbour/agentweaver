@@ -166,6 +166,41 @@ function sharedMergePoint(
   return candidates[0];
 }
 
+function isElbow(points: Point[], index: number): boolean {
+  const previous = points[index - 1];
+  const current = points[index];
+  const next = points[index + 1];
+  if (!previous || !current || !next) return false;
+  const verticalBefore = Math.abs(previous.x - current.x) < 0.5;
+  const verticalAfter = Math.abs(current.x - next.x) < 0.5;
+  const horizontalBefore = Math.abs(previous.y - current.y) < 0.5;
+  const horizontalAfter = Math.abs(current.y - next.y) < 0.5;
+  return (verticalBefore && horizontalAfter) || (horizontalBefore && verticalAfter);
+}
+
+function sharedElbowPoints(
+  routes: Array<{ id: string; points: Point[] }>,
+): Array<{ edgeId: string; point: Point }> {
+  const shared = new Map<string, { edgeId: string; point: Point }>();
+  for (const route of routes) {
+    for (let index = 1; index < route.points.length - 1; index += 1) {
+      const point = route.points[index];
+      if (!isElbow(route.points, index) || routes.some((candidate) => {
+        const terminal = candidate.points.at(-1);
+        return terminal !== undefined && samePoint(point, terminal);
+      })) {
+        continue;
+      }
+      const peers = routes.filter((candidate) => candidate.points.some((candidatePoint) => samePoint(point, candidatePoint)));
+      if (peers.length < 2) continue;
+      const edgeId = peers.map((peer) => peer.id).sort((left, right) => left.localeCompare(right))[0];
+      const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+      shared.set(key, { edgeId, point });
+    }
+  }
+  return [...shared.values()];
+}
+
 function pointLiesOnRoute(point: Point, points: Point[]): boolean {
   for (let index = 1; index < points.length; index += 1) {
     const from = points[index - 1];
@@ -187,8 +222,8 @@ function pointLiesOnRoute(point: Point, points: Point[]): boolean {
 /**
  * Marks only nonterminal routed points shared by two semantically related
  * graph edges. A merge marker belongs at a shared terminal trunk before the
- * card-entry arrowhead; generic crossings, elbows, and container boundaries
- * are never junctions.
+ * card-entry arrowhead. A shared semantic elbow is marked, while generic
+ * crossings, isolated elbows, and container boundaries are never junctions.
  */
 export function findConnectorJunctions(
   routes: Array<{ id: string; source: string; target: string; points: Point[]; loopback?: boolean }>,
@@ -222,11 +257,13 @@ export function findConnectorJunctions(
     if (group.length < 2) continue;
     const ordered = [...group].sort((left, right) => left.id.localeCompare(right.id));
     add(ordered[0].id, sharedSourcePoint(ordered));
+    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
     const merge = sharedMergePoint(group);
     if (merge) add(merge.edgeId, merge.point);
+    for (const elbow of sharedElbowPoints(group)) add(elbow.edgeId, elbow.point);
   }
   for (const route of routes.filter((route) => route.loopback)) {
     const join = route.points.at(-1);
