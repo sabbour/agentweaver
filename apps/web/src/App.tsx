@@ -237,9 +237,14 @@ function AuthGate() {
       setHasPlatformAccess(roles.length > 0);
       setIsPlatformAdmin(platformAdmin);
       setAiConfigured(session.ai_configured);
-      setRequiredSetupPending(
-        platformAdmin && (!session.ai_configured || hasRequiredSetupPending()),
-      );
+      if (session.ai_configured) {
+        // A completed OAuth handoff can leave the setup marker in sessionStorage.
+        // Backend readiness is authoritative; do not force the setup page again.
+        clearRequiredSetupPending();
+        setRequiredSetupPending(false);
+      } else {
+        setRequiredSetupPending(platformAdmin && hasRequiredSetupPending());
+      }
       setTourUserKey(session.entra_object_id ?? session.login);
       setSignedIn(true);
       setAuthChecked(true);
@@ -264,6 +269,10 @@ function AuthGate() {
     const session = await apiClient.getAuthSession();
     if (!session.authenticated || !session.platform_roles.includes('PlatformAdmin')) return;
     setAiConfigured(session.ai_configured);
+    if (session.ai_configured) {
+      clearRequiredSetupPending();
+      setRequiredSetupPending(false);
+    }
   }, []);
 
   const completeRequiredSetup = useCallback(async () => {
