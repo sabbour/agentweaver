@@ -279,6 +279,34 @@ export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, 
   return bridges;
 }
 
+export interface ConnectorJunction {
+  x: number;
+  y: number;
+}
+
+/** Assigns a single visible connector circle to a shared source trunk. */
+export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const starts = new Map<string, Array<{ id: string; point: ConnectorPoint }>>();
+  for (const edge of edges.filter((edge) => edge.type === 'spine')) {
+    const points = spineRoutePoints(edge, byId);
+    const point = points?.[0];
+    if (!point) continue;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    const group = starts.get(key) ?? [];
+    group.push({ id: edge.id, point });
+    starts.set(key, group);
+  }
+
+  const junctions = new Map<string, ConnectorJunction[]>();
+  for (const group of starts.values()) {
+    if (group.length < 2) continue;
+    group.sort((left, right) => left.id.localeCompare(right.id));
+    junctions.set(group[0].id, [group[0].point]);
+  }
+  return junctions;
+}
+
 export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): string {
   const clean = dedupePoints(points);
   if (clean.length === 0) return '';
@@ -307,6 +335,57 @@ export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): str
     commands.push(`Q ${pointCommand(cur)} ${pointCommand(after)}`);
   }
   commands.push(`L ${pointCommand(clean[clean.length - 1])}`);
+  return commands.join(' ');
+}
+
+/**
+ * Uses path interruption rather than a background mask at crossings. The
+ * connector itself leaves a gap and draws the rounded overpass arc, so bridge
+ * geometry remains correct in every theme and print/export surface.
+ */
+export function buildBridgedOrthogonalPath(
+  points: ConnectorPoint[],
+  bridges: ConnectorBridge[],
+  radius = 7,
+): string {
+  if (bridges.length === 0) return roundedOrthogonalPath(points);
+  const clean = dedupePoints(points);
+  if (clean.length < 2) return roundedOrthogonalPath(clean);
+
+  const commands = [`M ${pointCommand(clean[0])}`];
+  for (let index = 0; index < clean.length - 1; index += 1) {
+    const from = clean[index];
+    const to = clean[index + 1];
+    const horizontal = Math.abs(from.y - to.y) < 0.5;
+    const vertical = Math.abs(from.x - to.x) < 0.5;
+    const segmentBridges = bridges
+      .filter((bridge) =>
+        (horizontal && bridge.orientation === 'horizontal' && Math.abs(bridge.y - from.y) < 0.5 &&
+          bridge.x > Math.min(from.x, to.x) + radius && bridge.x < Math.max(from.x, to.x) - radius) ||
+        (vertical && bridge.orientation === 'vertical' && Math.abs(bridge.x - from.x) < 0.5 &&
+          bridge.y > Math.min(from.y, to.y) + radius && bridge.y < Math.max(from.y, to.y) - radius))
+      .sort((left, right) => horizontal
+        ? (to.x >= from.x ? left.x - right.x : right.x - left.x)
+        : vertical
+          ? (to.y >= from.y ? left.y - right.y : right.y - left.y)
+          : 0);
+    if (segmentBridges.length === 0) {
+      commands.push(`L ${pointCommand(to)}`);
+      continue;
+    }
+    for (const bridge of segmentBridges) {
+      const forward = horizontal ? Math.sign(to.x - from.x) : Math.sign(to.y - from.y);
+      const start = horizontal
+        ? { x: bridge.x - radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y - radius * forward };
+      const end = horizontal
+        ? { x: bridge.x + radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y + radius * forward };
+      const sweep = horizontal ? (forward > 0 ? 0 : 1) : (forward > 0 ? 1 : 0);
+      commands.push(`L ${pointCommand(start)} A ${radius},${radius} 0 0 ${sweep} ${pointCommand(end)}`);
+    }
+    commands.push(`L ${pointCommand(to)}`);
+  }
   return commands.join(' ');
 }
 

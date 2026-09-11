@@ -58,8 +58,12 @@ describe('LoopbackEdge — return arc rendering', () => {
       </AzureFluentProvider>,
     );
 
-    // The dashed return path is drawn...
-    expect(container.querySelector(`path[stroke="${REVISION_EDGE_STROKE}"][stroke-dasharray]`)).toBeTruthy();
+    // The dashed return path starts and ends on its supplied anchors, then
+    // uses the outer rail rather than a detached horizontal span.
+    const loopbackPath = container.querySelector(`path[stroke="${REVISION_EDGE_STROKE}"][stroke-dasharray]`);
+    expect(loopbackPath).toBeTruthy();
+    expect(loopbackPath?.getAttribute('d')).toContain('M 610,29');
+    expect(loopbackPath?.getAttribute('d')).toContain('L 0,29');
     // ...and its revision label is rendered as SVG text.
     expect(container.textContent).toContain('RAI flags');
   });
@@ -110,6 +114,56 @@ describe('LoopbackEdge — return arc rendering', () => {
       </AzureFluentProvider>,
     );
 
-    expect(container.querySelector('[data-testid="workflow-connector-bridge"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="workflow-spine-edge"]')?.getAttribute('d'))
+      .toContain('A 7,7');
+    expect(container.querySelector('path[stroke="var(--colorNeutralBackground1)"]')).toBeNull();
+  });
+
+  it('marks a shared connector origin with an explicit junction circle', () => {
+    fixtures.nodes = [
+      { id: 'origin', type: 'workflow', position: { x: 0, y: 0 }, data: {}, measured: { width: 100, height: 100 } },
+      { id: 'upper', type: 'workflow', position: { x: 200, y: -100 }, data: {}, measured: { width: 100, height: 100 } },
+      { id: 'lower', type: 'workflow', position: { x: 200, y: 100 }, data: {}, measured: { width: 100, height: 100 } },
+    ];
+    fixtures.edges = [
+      {
+        id: 'edge-a',
+        source: 'origin',
+        target: 'upper',
+        type: 'spine',
+        sourceHandle: 'source-right',
+        targetHandle: 'target-left',
+        data: { flowDirection: 'horizontal' },
+      },
+      {
+        id: 'edge-b',
+        source: 'origin',
+        target: 'lower',
+        type: 'spine',
+        sourceHandle: 'source-right',
+        targetHandle: 'target-left',
+        data: { flowDirection: 'horizontal' },
+      },
+    ];
+    const props = {
+      id: 'edge-a',
+      source: 'origin',
+      target: 'upper',
+      sourceX: 100,
+      sourceY: 50,
+      targetX: 200,
+      targetY: -50,
+      data: { flowDirection: 'horizontal' },
+    } as unknown as EdgeProps;
+
+    const { container } = render(
+      <AzureFluentProvider density="compact">
+        <svg width={400} height={300}>
+          <SpineEdge {...props} />
+        </svg>
+      </AzureFluentProvider>,
+    );
+
+    expect(container.querySelector('[data-testid="workflow-connector-junction"]')).toBeTruthy();
   });
 });

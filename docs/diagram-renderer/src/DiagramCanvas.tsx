@@ -8,7 +8,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, GroupLabelNode, CARD_WIDTH, CARD_HEIGHT_2, CARD_HEIGHT_3 } from './nodes';
-import { findConnectorBridges, RoutedEdge, type Point } from './edges';
+import {
+  findConnectorBridges,
+  findConnectorJunctions,
+  RoutedEdge,
+  type Point,
+} from './edges';
 import { badgeTones, neutral, radius } from './theme';
 import type { GraphSpec, GraphNode } from './types';
 
@@ -1156,11 +1161,17 @@ function layout(spec: GraphSpec): {
     id: edge.id,
     points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
   })));
+  const junctionsByEdge = findConnectorJunctions(rfEdges.map((edge) => ({
+    id: edge.id,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
   for (const edge of rfEdges) {
     const bridges = bridgesByEdge.get(edge.id);
-    if (!bridges) continue;
-    const data = edge.data as { bridges?: unknown };
-    data.bridges = bridges;
+    const junctions = junctionsByEdge.get(edge.id);
+    if (!bridges && !junctions) continue;
+    const data = edge.data as { bridges?: unknown; junctions?: unknown };
+    if (bridges) data.bridges = bridges;
+    if (junctions) data.junctions = junctions;
   }
 
   // A label is always drawn centred on its edge's run -- that is what makes it

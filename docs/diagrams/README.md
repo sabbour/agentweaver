@@ -54,8 +54,10 @@ renderer use the same visual convention while keeping their native layouts:
 - Normal flow connectors use the neutral graph stroke.
 - Semantic revision and return connectors use a dashed marigold stroke and a dedicated
   outer loop rail.
-- At an unavoidable perpendicular connector crossing, the later stable connector masks
-  the lower line briefly and draws a rounded bridge arc over it.
+- At an unavoidable perpendicular connector crossing, the later stable connector has a
+  true path interruption with a rounded overpass arc. It never draws a background mask.
+- When several connectors share one logical origin, one explicit small outlined junction
+  circle identifies the shared trunk.
 
 The diagram renderer keeps its independent band/gutter router and card geometry. The
 web surfaces reuse the same orthogonal-routing and stable-lane ideas through their

@@ -29,6 +29,8 @@ export interface RoutedEdgeData extends Record<string, unknown> {
   labelOffset?: LabelOffset;
   /** Interior crossings where this connector visibly passes over an earlier route. */
   bridges?: ConnectorBridge[];
+  /** Shared source ports rendered as explicit junction circles. */
+  junctions?: Point[];
 }
 
 /** Corner radius used to round the orthogonal joints of a routed edge so it
@@ -112,6 +114,29 @@ export function findConnectorBridges(
   return bridges;
 }
 
+/** Assigns one explicit origin circle to each shared connector trunk. */
+export function findConnectorJunctions(
+  routes: Array<{ id: string; points: Point[] }>,
+): Map<string, Point[]> {
+  const starts = new Map<string, Array<{ id: string; point: Point }>>();
+  for (const route of routes) {
+    const point = route.points[0];
+    if (!point) continue;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    const group = starts.get(key) ?? [];
+    group.push({ id: route.id, point });
+    starts.set(key, group);
+  }
+
+  const junctions = new Map<string, Point[]>();
+  for (const group of starts.values()) {
+    if (group.length < 2) continue;
+    group.sort((left, right) => left.id.localeCompare(right.id));
+    junctions.set(group[0].id, [group[0].point]);
+  }
+  return junctions;
+}
+
 /**
  * Builds an SVG path that follows `points` exactly but replaces each interior
  * vertex with a short quadratic-bezier fillet, so the router's orthogonal
@@ -157,6 +182,56 @@ export function buildRoundedPath(points: Point[], radius = CORNER_RADIUS): strin
 }
 
 /**
+ * Builds a true bridge path: the lower connector is interrupted around the
+ * crossing and the same stroke draws a short overpass arc. No background mask
+ * is used, so the interruption remains correct on any canvas color.
+ */
+export function buildBridgedPath(
+  points: Point[],
+  bridges: ConnectorBridge[],
+  radius = 7,
+): string {
+  if (bridges.length === 0) return buildRoundedPath(points);
+  if (points.length < 2) return buildRoundedPath(points);
+
+  let d = `M ${points[0].x},${points[0].y}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    const horizontal = Math.abs(from.y - to.y) < 0.5;
+    const vertical = Math.abs(from.x - to.x) < 0.5;
+    const segmentBridges = bridges
+      .filter((bridge) =>
+        (horizontal && bridge.orientation === 'horizontal' && Math.abs(bridge.y - from.y) < 0.5 &&
+          bridge.x > Math.min(from.x, to.x) + radius && bridge.x < Math.max(from.x, to.x) - radius) ||
+        (vertical && bridge.orientation === 'vertical' && Math.abs(bridge.x - from.x) < 0.5 &&
+          bridge.y > Math.min(from.y, to.y) + radius && bridge.y < Math.max(from.y, to.y) - radius))
+      .sort((left, right) => horizontal
+        ? (to.x >= from.x ? left.x - right.x : right.x - left.x)
+        : vertical
+          ? (to.y >= from.y ? left.y - right.y : right.y - left.y)
+          : 0);
+    if (segmentBridges.length === 0) {
+      d += ` L ${to.x},${to.y}`;
+      continue;
+    }
+    for (const bridge of segmentBridges) {
+      const forward = horizontal ? Math.sign(to.x - from.x) : Math.sign(to.y - from.y);
+      const start = horizontal
+        ? { x: bridge.x - radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y - radius * forward };
+      const end = horizontal
+        ? { x: bridge.x + radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y + radius * forward };
+      const sweep = horizontal ? (forward > 0 ? 0 : 1) : (forward > 0 ? 1 : 0);
+      d += ` L ${start.x},${start.y} A ${radius},${radius} 0 0 ${sweep} ${end.x},${end.y}`;
+    }
+    d += ` L ${to.x},${to.y}`;
+  }
+  return d;
+}
+
+/**
  * An edge that draws the exact orthogonal poly-line the layout router computed
  * for it (see `layout()` in DiagramCanvas.tsx) instead of a handle-to-handle
  * smoothstep path. The router gives every horizontal run its own lane inside
@@ -167,10 +242,10 @@ export function buildRoundedPath(points: Point[], radius = CORNER_RADIUS): strin
  * clear of crossing connectors, other labels, and cards.
  */
 export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
-  const { points, labelPos, labelOffset, bridges = [] } = (data as RoutedEdgeData | undefined) ?? {
+  const { points, labelPos, labelOffset, bridges = [], junctions = [] } = (data as RoutedEdgeData | undefined) ?? {
     points: [],
   };
-  const edgePath = buildRoundedPath(points ?? []);
+  const edgePath = buildBridgedPath(points ?? [], bridges);
   const offset = labelOffset ?? { dx: 0, dy: 0 };
   const stroke = typeof style?.stroke === 'string' ? style.stroke : neutral.foreground4;
   const strokeWidth = typeof style?.strokeWidth === 'number' ? style.strokeWidth : 1.8;
@@ -178,33 +253,18 @@ export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
   return (
     <>
       <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
-      {bridges.map((bridge, index) => {
-        const radius = 7;
-        const start = bridge.orientation === 'horizontal'
-          ? { x: bridge.x - radius, y: bridge.y }
-          : { x: bridge.x, y: bridge.y - radius };
-        const end = bridge.orientation === 'horizontal'
-          ? { x: bridge.x + radius, y: bridge.y }
-          : { x: bridge.x, y: bridge.y + radius };
-        const arc = `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`;
-        return (
-          <g key={`${bridge.x}-${bridge.y}-${index}`} data-testid="diagram-connector-bridge">
-            <path
-              d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
-              fill="none"
-              stroke={neutral.background1}
-              strokeWidth={strokeWidth + 5}
-            />
-            <path
-              d={arc}
-              fill="none"
-              stroke={stroke}
-              strokeWidth={strokeWidth}
-              strokeLinecap="round"
-            />
-          </g>
-        );
-      })}
+      {junctions.map((junction, index) => (
+        <circle
+          key={`${junction.x}-${junction.y}-${index}`}
+          data-testid="diagram-connector-junction"
+          cx={junction.x}
+          cy={junction.y}
+          r={4}
+          fill={neutral.background1}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
+      ))}
       {label && labelPos ? (
         <EdgeLabelRenderer>
           <div
