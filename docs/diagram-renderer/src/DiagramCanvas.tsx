@@ -1389,6 +1389,12 @@ export function layout(spec: GraphSpec): {
     }
     return false;
   };
+  // Multiple transit edges can need to bypass the same expanded group. They
+  // must retain distinct exterior rails: collapsing every bypass to `left` or
+  // `right` recreates the nearly coincident vertical lines the router avoids
+  // everywhere else.
+  const bypassLanes = new Map<string, number>();
+  const bypassLaneByEdge = new Map<string, number>();
   for (const edge of rfEdges) {
     const data = edge.data as { points?: Point[] };
     const points = data.points;
@@ -1412,7 +1418,16 @@ export function layout(spec: GraphSpec): {
       if (crossed.length === 0) continue;
       const left = Math.min(...crossed.map((box) => box.x)) - 24;
       const right = Math.max(...crossed.map((box) => box.x + box.w)) + 24;
-      const bypassX = from.x <= (left + right) / 2 ? left : right;
+      const side = from.x <= (left + right) / 2 ? 'left' : 'right';
+      let lane = bypassLaneByEdge.get(edge.id);
+      if (lane === undefined) {
+        lane = bypassLanes.get(side) ?? 0;
+        bypassLanes.set(side, lane + 1);
+        bypassLaneByEdge.set(edge.id, lane);
+      }
+      const bypassX = side === 'left'
+        ? left - lane * LANE_STEP
+        : right + lane * LANE_STEP;
       from.x = bypassX;
       to.x = bypassX;
     }

@@ -58,10 +58,12 @@ export function CardNode({ data }: NodeProps) {
             style={{
               fontWeight: 600,
               fontSize: 20,
+              lineHeight: 1.15,
               color: neutral.foreground1,
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
               overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
             }}
           >
             {node.label}
