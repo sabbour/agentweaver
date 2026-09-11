@@ -5,6 +5,7 @@ import {
   SUBTASK_NODE_W,
   analyzeWorkflowLayout,
   findConnectorJunctions,
+  findRoutedConnectorJunctions,
   layoutDagBalancedGrid,
   layoutDagColumns,
   layoutDagStaircase,
@@ -22,6 +23,57 @@ import type { Edge, Node } from '@xyflow/react';
 function makeNode(id: string): Node {
   return { id, position: { x: 0, y: 0 }, data: {} };
 }
+
+const cardinalTeeRoutes = [
+  {
+    orientation: 'top',
+    continuation: [{ x: 0, y: 100 }, { x: 0, y: -100 }],
+    branch: [{ x: 0, y: 100 }, { x: 0, y: 0 }, { x: -100, y: 0 }],
+  },
+  {
+    orientation: 'right',
+    continuation: [{ x: -100, y: 0 }, { x: 100, y: 0 }],
+    branch: [{ x: -100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: -100 }],
+  },
+  {
+    orientation: 'bottom',
+    continuation: [{ x: 0, y: -100 }, { x: 0, y: 100 }],
+    branch: [{ x: 0, y: -100 }, { x: 0, y: 0 }, { x: 100, y: 0 }],
+  },
+  {
+    orientation: 'left',
+    continuation: [{ x: 100, y: 0 }, { x: -100, y: 0 }],
+    branch: [{ x: 100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }],
+  },
+] as const;
+
+function teeMarkers(
+  kind: 'split' | 'merge',
+  continuation: ReadonlyArray<{ x: number; y: number }>,
+  branch: ReadonlyArray<{ x: number; y: number }>,
+) {
+  const routes = kind === 'split'
+    ? [
+        { id: 'continue', source: 'decision', target: 'through', points: [...continuation] },
+        { id: 'branch', source: 'decision', target: 'branch', points: [...branch] },
+      ]
+    : [
+        { id: 'continue', source: 'through', target: 'decision', points: [...continuation] },
+        { id: 'branch', source: 'branch', target: 'decision', points: [...branch] },
+      ];
+  return [...findRoutedConnectorJunctions(routes).values()].flat()
+    .filter((point) => point.x === 0 && point.y === 0);
+}
+
+describe('cardinal connector junctions', () => {
+  it.each(cardinalTeeRoutes)('marks a $orientation fan-out tee exactly once', ({ continuation, branch }) => {
+    expect(teeMarkers('split', continuation, branch)).toEqual([{ x: 0, y: 0 }]);
+  });
+
+  it.each(cardinalTeeRoutes)('marks a $orientation fan-in tee exactly once', ({ continuation, branch }) => {
+    expect(teeMarkers('merge', continuation, branch)).toEqual([{ x: 0, y: 0 }]);
+  });
+});
 
 function centerX(node: Node, width = NODE_W): number {
   return node.position.x + width / 2;

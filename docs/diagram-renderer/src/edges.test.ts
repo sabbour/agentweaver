@@ -6,6 +6,73 @@ import {
   findConnectorJunctions,
 } from './edges';
 
+type Point = { x: number; y: number };
+
+const cardinalTeeCases: Array<{
+  name: string;
+  kind: 'split' | 'merge';
+  continuation: Point[];
+  branch: Point[];
+  tee: Point;
+}> = [
+  {
+    name: 'top',
+    kind: 'split',
+    continuation: [{ x: 0, y: 100 }, { x: 0, y: -100 }],
+    branch: [{ x: 0, y: 100 }, { x: 0, y: 0 }, { x: -100, y: 0 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'right',
+    kind: 'split',
+    continuation: [{ x: -100, y: 0 }, { x: 100, y: 0 }],
+    branch: [{ x: -100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: -100 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'bottom',
+    kind: 'split',
+    continuation: [{ x: 0, y: -100 }, { x: 0, y: 100 }],
+    branch: [{ x: 0, y: -100 }, { x: 0, y: 0 }, { x: 100, y: 0 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'left',
+    kind: 'split',
+    continuation: [{ x: 100, y: 0 }, { x: -100, y: 0 }],
+    branch: [{ x: 100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'top',
+    kind: 'merge',
+    continuation: [{ x: 0, y: 100 }, { x: 0, y: -100 }],
+    branch: [{ x: -100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: -100 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'right',
+    kind: 'merge',
+    continuation: [{ x: -100, y: 0 }, { x: 100, y: 0 }],
+    branch: [{ x: 0, y: -100 }, { x: 0, y: 0 }, { x: 100, y: 0 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'bottom',
+    kind: 'merge',
+    continuation: [{ x: 0, y: -100 }, { x: 0, y: 100 }],
+    branch: [{ x: 100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }],
+    tee: { x: 0, y: 0 },
+  },
+  {
+    name: 'left',
+    kind: 'merge',
+    continuation: [{ x: 100, y: 0 }, { x: -100, y: 0 }],
+    branch: [{ x: 0, y: 100 }, { x: 0, y: 0 }, { x: -100, y: 0 }],
+    tee: { x: 0, y: 0 },
+  },
+];
+
 describe('diagram connector geometry', () => {
   it('interrupts a crossing path with an overpass arc instead of a background mask', () => {
     const routes = [
@@ -52,12 +119,29 @@ describe('diagram connector geometry', () => {
         id: 'edge-b',
         source: 'right',
         target: 'terminal',
-        points: [{ x: 200, y: 0 }, { x: 100, y: 20 }, { x: 100, y: 100 }],
+        points: [{ x: 200, y: 20 }, { x: 100, y: 20 }, { x: 100, y: 100 }],
       },
     ]);
 
     expect(junctions.get('edge-b')).toEqual([{ x: 100, y: 20 }]);
     expect([...junctions.values()].flat()).not.toContainEqual({ x: 100, y: 100 });
+  });
+
+  it.each(cardinalTeeCases)('marks a $kind $name tee exactly once', ({ kind, continuation, branch, tee }) => {
+    const routes = kind === 'split'
+      ? [
+          { id: 'continue', source: 'decision', target: 'through', points: continuation },
+          { id: 'branch', source: 'decision', target: 'branch', points: branch },
+        ]
+      : [
+          { id: 'continue', source: 'through', target: 'decision', points: continuation },
+          { id: 'branch', source: 'branch', target: 'decision', points: branch },
+        ];
+
+    const markers = [...findConnectorJunctions(routes).values()].flat()
+      .filter((point) => point.x === tee.x && point.y === tee.y);
+
+    expect(markers).toEqual([tee]);
   });
 
   it('does not mark container-border-style crossings or differently routed edges from one source', () => {

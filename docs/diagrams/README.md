@@ -61,7 +61,8 @@ renderer use the same visual convention while keeping their native layouts:
   source split, incoming merge trunk, or loopback return/join. Ordinary arrowheads and
   card-entry targets, isolated elbows, container borders, anchors with one edge, and geometric
   crossings never create a junction dot. Orthogonal elbows remain part of every route; a shared
-  semantic elbow or degree-three tee receives one centered dot.
+  semantic elbow or degree-three tee receives one centered dot in every cardinal orientation,
+  for both fan-out and fan-in.
 
 The diagram renderer keeps its independent band/gutter router and card geometry. The
 web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
