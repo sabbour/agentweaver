@@ -94,7 +94,8 @@
     {
       "from": "review-gate",
       "to": "mitigate",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "review-gate",
