@@ -3,7 +3,7 @@ import { badgeTones, fontFamily, fontFamilyMonospace, neutral, radius } from './
 import { iconRegistry } from './icons';
 import type { GraphNode } from './types';
 
-export const CARD_WIDTH = 340;
+export const CARD_WIDTH = 400;
 
 // The layout math places connector endpoints at `y` and `y + cardHeight(n)`.
 // If the card auto-sizes from its content instead, the rendered border sits
@@ -11,11 +11,11 @@ export const CARD_WIDTH = 340;
 // in empty space. Fixing the height here is what keeps geometry and pixels in
 // agreement -- these two values are the single source of truth, and
 // DiagramCanvas imports them rather than redeclaring its own copies.
-export const CARD_HEIGHT_2 = 104;
-export const CARD_HEIGHT_3 = 132;
+export const CARD_HEIGHT_2 = 116;
+export const CARD_HEIGHT_3 = 148;
 
-const TITLE_CHARS_PER_LINE = 20;
-const SUBTITLE_CHARS_PER_LINE = 27;
+const TITLE_CHARS_PER_LINE = 18;
+const SUBTITLE_CHARS_PER_LINE = 24;
 
 function wrappedLines(text: string | undefined, charsPerLine: number): number {
   if (!text) return 0;
@@ -23,9 +23,9 @@ function wrappedLines(text: string | undefined, charsPerLine: number): number {
 }
 
 export function cardHeightFor(node: Pick<GraphNode, 'label' | 'subLabel' | 'meta'>): number {
-  const titleHeight = wrappedLines(node.label, TITLE_CHARS_PER_LINE) * 28;
-  const subtitleHeight = wrappedLines(node.subLabel, SUBTITLE_CHARS_PER_LINE) * 22;
-  const metaHeight = node.meta ? 17 : 0;
+  const titleHeight = wrappedLines(node.label, TITLE_CHARS_PER_LINE) * 33;
+  const subtitleHeight = wrappedLines(node.subLabel, SUBTITLE_CHARS_PER_LINE) * 24;
+  const metaHeight = node.meta ? 20 : 0;
   const contentHeight = titleHeight + subtitleHeight + metaHeight + (node.subLabel ? 2 : 0) + (node.meta ? 2 : 0);
   return Math.max(CARD_HEIGHT_2, Math.ceil(contentHeight + 44));
 }
@@ -63,13 +63,13 @@ export function CardNode({ data }: NodeProps) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <span style={{ display: 'flex', flexShrink: 0, color: tone.fg }} aria-hidden="true">
-          <Icon fontSize={34} />
+          <Icon fontSize={38} />
         </span>
         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <span
             style={{
               fontWeight: 600,
-              fontSize: 24,
+              fontSize: 28,
               lineHeight: 1.15,
               color: neutral.foreground1,
               display: '-webkit-box',
@@ -83,7 +83,7 @@ export function CardNode({ data }: NodeProps) {
           {node.subLabel && (
             <span
               style={{
-                fontSize: 18,
+                fontSize: 20,
                 lineHeight: 1.2,
                 color: neutral.foreground3,
                 marginTop: 2,
@@ -99,7 +99,7 @@ export function CardNode({ data }: NodeProps) {
           {node.meta && (
             <span
               style={{
-                fontSize: 15,
+                fontSize: 16,
                 color: neutral.foreground4,
                 fontFamily: fontFamilyMonospace,
                 marginTop: 2,
@@ -145,27 +145,56 @@ export function GroupNode({ data }: NodeProps) {
 // own node lets it sit above the edge layer while the tinted surface stays
 // below it.
 export function GroupLabelNode({ data }: NodeProps) {
-  const { label, tier } = data as unknown as { label: string; tier: number };
+  const { label, subLabel, tier, width, compact } = data as unknown as {
+    label: string;
+    subLabel?: string;
+    tier: number;
+    width?: number;
+    compact?: boolean;
+  };
   return (
-    <span
+    <div
       style={{
-        display: 'inline-block',
+        display: 'inline-flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        width,
+        maxWidth: width,
         fontFamily,
-        fontSize: 23,
-        fontWeight: 700,
-        letterSpacing: '0.02em',
         color: neutral.foreground2,
         // Matches the band surface underneath, so the chip reads as a hole
         // punched in the connectors rather than a floating tag.
         backgroundColor: tier <= 1 ? neutral.background1 : neutral.background2,
-        padding: '2px 10px',
-        margin: '-2px -10px',
+        padding: '2px 10px 4px',
+        margin: '-2px -10px -4px',
         borderRadius: 6,
-        whiteSpace: 'nowrap',
         pointerEvents: 'none',
       }}
     >
-      {label}
-    </span>
+      <span
+        style={{
+          fontSize: compact ? 20 : 32,
+          fontWeight: 700,
+          letterSpacing: '0.02em',
+          whiteSpace: width ? 'normal' : 'nowrap',
+        }}
+      >
+        {label}
+      </span>
+      {subLabel && (
+        <span
+          style={{
+            marginTop: 4,
+            fontSize: compact ? 14 : 22,
+            fontWeight: 400,
+            letterSpacing: 0,
+            color: neutral.foreground3,
+            whiteSpace: width ? 'normal' : 'nowrap',
+          }}
+        >
+          {subLabel}
+        </span>
+      )}
+    </div>
   );
 }
