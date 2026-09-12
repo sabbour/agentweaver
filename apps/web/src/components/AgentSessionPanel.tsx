@@ -24,7 +24,7 @@ import {
 import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
-import type { EventType, RunStreamEvent } from '../api/sse';
+import type { EventType, RunStreamEvent, StreamStatus } from '../api/sse';
 import type { PendingApprovalDto, RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -818,6 +818,29 @@ export interface AgentSessionPanelProps {
   onRetryPendingApprovals?: () => void;
 }
 
+function steeringAcknowledgement(
+  status: string,
+  target: string,
+  hasSeparateChildApproval: boolean,
+  streamStatus: StreamStatus,
+): string {
+  const normalizedStatus = status.toLowerCase();
+  const outcome = normalizedStatus === 'queued'
+    ? 'queued for a future coordinator step'
+    : normalizedStatus === 'applied'
+      ? 'accepted by the coordinator'
+      : `acknowledged with status “${status}”`;
+  const approvalNote = hasSeparateChildApproval
+    ? ' This child is still waiting for separate approval; guidance did not approve it or advance its execution.'
+    : '';
+  const streamNote = streamStatus === 'connecting'
+    ? ' Live updates are reconnecting, so the displayed state may be stale.'
+    : streamStatus === 'error'
+      ? ' Live updates are disconnected, so the displayed state may be stale until reconnected.'
+      : '';
+  return `Steering ${outcome}. Target and scope: ${target}. This acknowledgement is saved in coordinator history; wait for an explicit progress event before treating work as advanced.${approvalNote}${streamNote}`;
+}
+
 interface ConversationRow {
   key: string;
   role: 'system' | 'user' | 'agent' | 'activity';
@@ -1477,8 +1500,18 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       return subtasksCount != null ? `Coordinator created a work plan with ${subtasksCount} subtasks.` : 'Coordinator created a work plan.';
     }
     case 'coordinator.steering': {
-      const instruction = readString(p, ['instruction', 'message', 'kind']);
-      return instruction ? `Coordinator steering applied: ${instruction}` : 'Coordinator steering applied.';
+      const instruction = readString(p, ['instruction', 'message']);
+      const status = (readString(p, ['status']) ?? 'acknowledged').toLowerCase();
+      const targetChildRunId = readString(p, ['targetChildRunId', 'target_child_run_id']);
+      const targetScope = targetChildRunId
+        ? `target child ${targetChildRunId}`
+        : 'the coordinator and all active subtasks';
+      const outcome = status === 'queued'
+        ? 'queued for a future coordinator step'
+        : status === 'applied'
+          ? 'accepted by the coordinator'
+          : `acknowledged with status “${status}”`;
+      return `Steering ${outcome}. Target and scope: ${targetScope}. Await explicit progress before treating work as advanced.${instruction ? ` Guidance: ${instruction}` : ''}`;
     }
     case 'coordinator.child_stall_detected':
       return `Child stalled; redispatching ${subtaskDescription(p, subtasks)}.`;
@@ -1970,7 +2003,10 @@ export function AgentSessionPanel({
     ? 'Retry from the run header above to relaunch this work.'
     : "This step can't be retried on its own — retrying the coordinator run will relaunch it.";
 
-  const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
+  const {
+    events: liveEvents,
+    status: selectedStreamStatus,
+  } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const artifactLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
@@ -2260,6 +2296,12 @@ export function AgentSessionPanel({
     const instruction = followUp.trim();
     if (!instruction || followUpInFlightRef.current) return;
     const isOutcomePlanClarification = selectedItem?.nodeId === 'outcome-plan';
+    const targetChildRunId = selectedItem && !selectedItem.isCoordinator
+      ? selectedItem.childRunId
+      : undefined;
+    const targetScope = targetChildRunId
+      ? `${selectedItem?.label ?? 'Selected child'} (child run ${targetChildRunId})`
+      : 'the coordinator and all active subtasks';
     const preSubmitPlanSequence = isOutcomePlanClarification
       ? events.reduce<number | undefined>(
         (latest, event) => event.type === 'coordinator.outcome_spec' && (latest == null || event.sequence > latest)
@@ -2274,11 +2316,11 @@ export function AgentSessionPanel({
     setFollowUpNotice(isOutcomePlanClarification ? 'Sending clarification to coordinator…' : null);
     providerContext.setPhase('active');
     try {
-      await apiClient.steerCoordinator(coordinatorRunId, {
+      const response = await apiClient.steerCoordinator(coordinatorRunId, {
         kind: 'send',
         instruction,
-        ...(selectedItem && !selectedItem.isCoordinator && selectedItem.childRunId
-          ? { target_child_run_id: selectedItem.childRunId }
+        ...(targetChildRunId
+          ? { target_child_run_id: targetChildRunId }
           : {}),
       }, providerContext.providerKey);
       providerContext.setPhase('completed');
@@ -2286,12 +2328,14 @@ export function AgentSessionPanel({
         onOutcomePlanClarificationPendingChange?.(true, preSubmitPlanSequence);
       }
       try {
-        const persisted = await apiClient.getRunEvents(selectedRunId || coordinatorRunId);
-        setSeedEvents(persisted.map((event) => ({
-          sequence: event.sequence,
-          type: event.type as EventType,
-          payload: event.payload,
-        })));
+        const persisted = await apiClient.getRunEvents(coordinatorRunId);
+        if (selectedRunId === coordinatorRunId) {
+          setSeedEvents(persisted.map((event) => ({
+            sequence: event.sequence,
+            type: event.type as EventType,
+            payload: event.payload,
+          })));
+        }
       } catch {
         // Best-effort: the live SSE stream may still surface the message even if the durable
         // events endpoint is briefly unavailable.
@@ -2299,7 +2343,12 @@ export function AgentSessionPanel({
       setFollowUp('');
       setFollowUpNotice(isOutcomePlanClarification
         ? 'Clarification sent — the coordinator is revising the Outcome plan.'
-        : 'Message sent to coordinator.');
+        : steeringAcknowledgement(
+          response.status,
+          targetScope,
+          timelineApprovals.some((approval) => !approval.isResolved),
+          selectedStreamStatus,
+        ));
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
       setFollowUpNotice(null);
@@ -2310,7 +2359,7 @@ export function AgentSessionPanel({
       followUpInFlightRef.current = false;
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, events, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, providerContext, selectedItem, selectedRunId]);
+  }, [coordinatorRunId, events, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, providerContext, selectedItem, selectedRunId, selectedStreamStatus, timelineApprovals]);
 
   if (!selectedItem || !isVisible) return null;
 
@@ -2615,7 +2664,6 @@ export function AgentSessionPanel({
                   onChange={(value) => {
                     setFollowUp(value);
                     setFollowUpError(null);
-                    setFollowUpNotice(null);
                   }}
                   onSubmit={(_, data) => {
                     if (data.value.trim()) void handleSendFollowUp();
@@ -2682,9 +2730,9 @@ export function AgentSessionPanel({
                   </Text>
                 )}
                 {followUpNotice && (
-                  <Text className={mergeClasses(styles.composerStatus, styles.composerStatusSuccess)}>
-                    {followUpNotice}
-                  </Text>
+                  <MessageBar intent="success" data-testid="steering-acknowledgement">
+                    <MessageBarBody>{followUpNotice}</MessageBarBody>
+                  </MessageBar>
                 )}
               </div>
             </div>

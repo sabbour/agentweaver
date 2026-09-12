@@ -17,6 +17,7 @@ import type { RunDetail } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import { useState, type ReactNode } from 'react';
 let currentEvents: RunStreamEvent[] = [];
+let currentStreamStatus: 'connecting' | 'streaming' | 'done' | 'error' = 'done';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -65,7 +66,7 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 vi.mock('../api/sse', () => ({
-  useRunStream: () => ({ events: currentEvents, status: 'done', error: null, reconnect: vi.fn() }),
+  useRunStream: () => ({ events: currentEvents, status: currentStreamStatus, error: null, reconnect: vi.fn() }),
 }));
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -132,6 +133,7 @@ function OutcomePlanClarificationHarness() {
 beforeEach(() => {
   vi.clearAllMocks();
   currentEvents = [];
+  currentStreamStatus = 'done';
 });
 
 afterEach(() => cleanup());
@@ -1607,7 +1609,10 @@ describe('AgentSessionPanel', () => {
       }),
       'signed-provider-key',
     ));
-    expect(await screen.findByText('Message sent to coordinator.')).toBeDefined();
+    const acknowledgement = await screen.findByTestId('steering-acknowledgement');
+    expect(acknowledgement.textContent).toContain('Steering accepted by the coordinator.');
+    expect(acknowledgement.textContent).toContain('Target and scope: the coordinator and all active subtasks.');
+    expect(acknowledgement.textContent).toContain('wait for an explicit progress event before treating work as advanced');
 
     vi.mocked(apiClient.steerCoordinator).mockRejectedValueOnce(new Error('message bus unavailable'));
     await user.type(input, 'Try again');
@@ -1633,6 +1638,45 @@ describe('AgentSessionPanel', () => {
 
     expect(await screen.findByText('Messaging is unavailable because this coordinator run is not active.')).toBeDefined();
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('keeps a queued acknowledgement explicit when a child approval is pending and updates are reconnecting', async () => {
+    const user = userEvent.setup();
+    currentStreamStatus = 'connecting';
+    currentEvents = [{
+      sequence: 1,
+      type: 'coordinator.child_approval_required',
+      payload: {
+        childRunId: 'child-run-1',
+        requestId: 'approval-1',
+        toolName: 'web_fetch',
+      },
+    }];
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValueOnce({ status: 'queued' });
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          coordinatorActive
+        />
+      </Wrapper>,
+    );
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
+    await user.type(input, 'Wait for the approval before continuing.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const acknowledgement = await screen.findByTestId('steering-acknowledgement');
+    expect(acknowledgement.textContent).toContain('Steering queued for a future coordinator step.');
+    expect(acknowledgement.textContent).toContain('This child is still waiting for separate approval');
+    expect(acknowledgement.textContent).toContain('Live updates are reconnecting');
   });
 
   it('shows immediate sending feedback then marks an acknowledged outcome-plan clarification as processing', async () => {
@@ -1677,7 +1721,7 @@ describe('AgentSessionPanel', () => {
       {
         sequence: 1,
         type: 'coordinator.steering',
-        payload: { instruction: 'Seeded before the panel mounted.' },
+        payload: { status: 'queued', instruction: 'Seeded before the panel mounted.' },
       },
     ];
     vi.mocked(apiClient.getRunEvents).mockImplementation(() => Promise.resolve(persistedEvents));
@@ -1687,7 +1731,7 @@ describe('AgentSessionPanel', () => {
         {
           sequence: 2,
           type: 'coordinator.steering',
-          payload: { instruction: 'Refresh from durable events after send.' },
+          payload: { status: 'applied', instruction: 'Refresh from durable events after send.' },
         },
       ];
       return { status: 'applied' };
@@ -1708,13 +1752,13 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('Coordinator steering applied: Seeded before the panel mounted.')).toBeDefined();
+    expect(await screen.findByText(/Steering queued for a future coordinator step/)).toBeDefined();
 
     const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
     await user.type(input, 'Refresh from durable events after send.');
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(await screen.findByText('Coordinator steering applied: Refresh from durable events after send.')).toBeDefined();
+    expect(await screen.findByText(/Steering accepted by the coordinator.*Guidance: Refresh from durable events after send\./)).toBeDefined();
   });
 
   it('makes the composer read-only when viewing a non-coordinator agent (steer via the Coordinator)', async () => {
