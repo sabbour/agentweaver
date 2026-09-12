@@ -116,6 +116,19 @@ afterEach(() => {
 });
 
 describe('TransactionTracePanel trace detail', () => {
+  it('does not imply an absent trace when the telemetry source is temporarily unavailable', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [],
+      queryError: 'Application Insights trace telemetry is temporarily unavailable. Retry shortly.',
+    });
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy());
+    expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
+    expect(screen.queryByText('No trace data available for this run yet.')).toBeNull();
+  });
+
   it('loads trace pages incrementally without replacing already-loaded spans', async () => {
     vi.mocked(apiClient.getRunTraces)
       .mockResolvedValueOnce({

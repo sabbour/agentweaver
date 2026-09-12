@@ -1160,7 +1160,14 @@ export function TransactionTracePanel({
       {loading ? (
         <Spinner label="Loading transaction trace" />
       ) : tree.length === 0 ? (
-        <EmptyState title="No trace data available for this run yet." />
+        <EmptyState
+          title={trace.queryError
+            ? 'Trace spans are temporarily unavailable.'
+            : 'No trace data available for this run yet.'}
+          description={trace.queryError
+            ? 'The telemetry source did not return a trace page. This does not mean the run produced no trace data; retry shortly.'
+            : undefined}
+        />
       ) : (
         <>
           {trace.hasMore && (

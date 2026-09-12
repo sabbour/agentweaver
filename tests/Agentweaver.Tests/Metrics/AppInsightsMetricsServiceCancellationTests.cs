@@ -114,6 +114,25 @@ public class AppInsightsMetricsServiceCancellationTests
     }
 
     [Fact]
+    public async Task GetRunTracesAsync_WhenEquivalentRequestsOverlap_CoalescesTheWorkspaceQuery()
+    {
+        var fakeClient = new WaitingLogsQueryClient();
+        var logger = new CapturingLogger();
+        var service = CreateService(fakeClient, logger);
+
+        var responses = await Task.WhenAll(
+            service.GetRunTracesAsync("run-1"),
+            service.GetRunTracesAsync("run-1"));
+
+        Assert.Equal(1, fakeClient.QueryCount);
+        Assert.All(responses, response =>
+        {
+            Assert.Empty(response.Spans);
+            Assert.Contains("did not respond within 3 seconds", response.QueryError, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void TraceCursor_RoundTripsAndRejectsMalformedContinuations()
     {
         var timestamp = new DateTimeOffset(2026, 9, 12, 10, 30, 0, TimeSpan.Zero);
