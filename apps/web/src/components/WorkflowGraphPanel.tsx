@@ -20,7 +20,11 @@ import {
 import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
+  buildBridgedOrthogonalPath,
   COMPACT_CARD_H,
+  findConnectorBridges,
+  findConnectorJunctions,
+  findLoopbackContinuationJoin,
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
@@ -64,6 +68,7 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useEdges,
   useNodes,
   type Edge,
   type EdgeProps,
@@ -173,7 +178,7 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 /** Open the execution detail modal for a given executionId. */
 export const ExecutionModalContext = createContext<((executionId: string) => void) | undefined>(undefined);
 
-/** Id of the active loopback edge (highlighted in blue). */
+/** Id of the active semantic revision/return edge. */
 export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 
 /** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
@@ -1221,9 +1226,10 @@ export const workflowNodeTypes = { workflow: WorkflowNode };
 // Routed edges — quiet orthogonal paths with rounded corners
 // ---------------------------------------------------------------------------
 
-const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
-const LOOPBACK_STROKE_ACTIVE = 'var(--colorNeutralForeground1)';
-const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
+export const REVISION_EDGE_STROKE = 'var(--colorPaletteMarigoldForeground2)';
+const LOOPBACK_STROKE        = REVISION_EDGE_STROKE;
+const LOOPBACK_STROKE_ACTIVE = REVISION_EDGE_STROKE;
+const LOOPBACK_TEXT_COLOR    = REVISION_EDGE_STROKE;
 const RETURN_RAIL_GAP        = 36;
 
 function markerId(prefix: string, id: string): string {
@@ -1232,6 +1238,7 @@ function markerId(prefix: string, id: string): string {
 
 export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allNodes = useNodes();
+  const allEdges = useEdges();
   const activeEdgeId = useContext(ActiveEdgeContext);
 
   const loopbackData = data as {
@@ -1239,6 +1246,22 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
     returnLaneOffset?: number;
   } | undefined;
 
+  const edge = allEdges.find((candidate) => candidate.id === id);
+  const continuationJoin = edge
+    ? findLoopbackContinuationJoin(edge, allEdges, allNodes)
+    : undefined;
+  const preferredSide = loopbackData?.returnSide ?? 'top';
+  const side = continuationJoin
+    ? (continuationJoin.direction === 'top' || continuationJoin.direction === 'bottom'
+      ? (preferredSide === 'left' || preferredSide === 'right'
+        ? preferredSide
+        : sourceX <= targetX ? 'left' : 'right')
+      : (preferredSide === 'top' || preferredSide === 'bottom'
+        ? preferredSide
+        : sourceY <= targetY ? 'top' : 'bottom'))
+    : preferredSide;
+  const joinX = continuationJoin?.point.x ?? targetX;
+  const joinY = continuationJoin?.point.y ?? targetY;
   const nodeBounds = allNodes.reduce(
     (bounds, node) => {
       const { width, height } = graphNodeSize(node);
@@ -1250,13 +1273,12 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
       };
     },
     {
-      minX: Math.min(sourceX, targetX),
-      maxX: Math.max(sourceX, targetX),
-      minY: Math.min(sourceY, targetY),
-      maxY: Math.max(sourceY, targetY),
+      minX: Math.min(sourceX, joinX),
+      maxX: Math.max(sourceX, joinX),
+      minY: Math.min(sourceY, joinY),
+      maxY: Math.max(sourceY, joinY),
     },
   );
-  const side = loopbackData?.returnSide ?? 'top';
   const laneOffset = loopbackData?.returnLaneOffset ?? 0;
   const horizontalRail = side === 'top' || side === 'bottom';
   const rail = side === 'top'
@@ -1266,42 +1288,47 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
       : side === 'left'
         ? nodeBounds.minX - RETURN_RAIL_GAP - laneOffset
         : nodeBounds.maxX + RETURN_RAIL_GAP + laneOffset;
-  const route = roundedOrthogonalPath(horizontalRail
+  const routePoints = horizontalRail
     ? [
         { x: sourceX, y: sourceY },
         { x: sourceX, y: rail },
-        { x: targetX, y: rail },
-        { x: targetX, y: targetY },
+        { x: joinX, y: rail },
+        { x: joinX, y: joinY },
       ]
     : [
         { x: sourceX, y: sourceY },
         { x: rail, y: sourceY },
-        { x: rail, y: targetY },
-        { x: targetX, y: targetY },
-      ], 10);
-  const labelX = horizontalRail ? (sourceX + targetX) / 2 : rail;
-  const labelY = horizontalRail ? rail : (sourceY + targetY) / 2;
-  const markerIdValue = markerId('lb-arrow', id);
+        { x: rail, y: joinY },
+        { x: joinX, y: joinY },
+      ];
+  const route = roundedOrthogonalPath(routePoints, 10);
+  const returnJunctions = continuationJoin ? [continuationJoin.point] : [];
+  const labelX = horizontalRail ? (sourceX + joinX) / 2 : rail;
+  const labelY = horizontalRail ? rail : (sourceY + joinY) / 2;
   const isActive = id === activeEdgeId;
   const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
 
   return (
     <>
-      <defs>
-        <marker id={markerIdValue} markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
-          <path d="M 0 0 L 6 3 L 0 6 Z" fill={stroke} />
-        </marker>
-      </defs>
       <path
         d={route}
         fill="none"
         stroke={stroke}
         strokeWidth={isActive ? 2 : 1.5}
-        strokeDasharray={isActive ? undefined : '5 3'}
+        strokeDasharray="5 3"
         strokeLinecap="round"
         strokeLinejoin="round"
-        markerEnd={`url(#${markerIdValue})`}
       />
+      {returnJunctions.map((junction, index) => (
+        <circle
+          key={`${junction.x}-${junction.y}-${index}`}
+          data-testid="workflow-loopback-junction"
+          cx={junction.x}
+          cy={junction.y}
+          r={2.5}
+          fill={stroke}
+        />
+      ))}
       {label != null && (
         <text
           x={labelX}
@@ -1328,7 +1355,7 @@ export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
 
 const SPINE_STROKE = 'var(--colorNeutralStroke1)';
 
-function SpineEdge({
+export function SpineEdge({
   id,
   sourceX,
   sourceY,
@@ -1337,6 +1364,8 @@ function SpineEdge({
   label,
   data,
 }: EdgeProps) {
+  const allNodes = useNodes();
+  const allEdges = useEdges();
   const spineData = data as {
     flowDirection?: 'horizontal' | 'vertical';
     gutterLaneOffset?: number;
@@ -1350,6 +1379,9 @@ function SpineEdge({
     laneOffset: spineData?.gutterLaneOffset,
   });
   const markerIdValue = markerId('spine-arrow', id);
+  const bridges = findConnectorBridges(allEdges, allNodes).get(id) ?? [];
+  const junctions = findConnectorJunctions(allEdges, allNodes).get(id) ?? [];
+  const edgePath = buildBridgedOrthogonalPath(route.points, bridges);
 
   return (
     <>
@@ -1361,7 +1393,7 @@ function SpineEdge({
       <path
         id={id}
         data-testid="workflow-spine-edge"
-        d={route.path}
+        d={edgePath}
         fill="none"
         stroke={SPINE_STROKE}
         strokeWidth={1.4}
@@ -1369,6 +1401,16 @@ function SpineEdge({
         strokeLinejoin="round"
         markerEnd={`url(#${markerIdValue})`}
       />
+      {junctions.map((junction, index) => (
+        <circle
+          key={`${junction.x}-${junction.y}-${index}`}
+          data-testid="workflow-connector-junction"
+          cx={junction.x}
+          cy={junction.y}
+          r={2.5}
+          fill={SPINE_STROKE}
+        />
+      ))}
       {label != null && label !== '' && (
         <EdgeLabelRenderer>
           <div

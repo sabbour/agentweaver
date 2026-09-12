@@ -109,12 +109,14 @@
     {
       "from": "validate-gate",
       "to": "implement",
-      "label": "fail"
+      "label": "fail",
+      "loopback": true
     },
     {
       "from": "rai-check",
       "to": "implement",
-      "label": "revise"
+      "label": "revise",
+      "loopback": true
     },
     {
       "from": "rai-check",
@@ -139,7 +141,8 @@
     {
       "from": "infra-review",
       "to": "implement",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "infra-review",
@@ -154,7 +157,8 @@
     {
       "from": "human-review",
       "to": "implement",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "human-review",

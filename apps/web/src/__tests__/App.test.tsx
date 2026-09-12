@@ -191,7 +191,7 @@ describe('App auth gate', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/platform-settings'));
   });
 
-  it('lets a platform admin retry the AI configuration check after fixing setup', async () => {
+  it('leaves the forced setup gate after provider state becomes ready', async () => {
     vi.mocked(apiClient.getAuthSession)
       .mockResolvedValueOnce({
         authenticated: true,
@@ -230,12 +230,8 @@ describe('App auth gate', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Provider state changed' }));
-    expect(await screen.findByText('Setup required')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Agentweaver' }));
-
-    await waitFor(() => expect(retrySpy).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
-    expect(window.location.pathname).toBe('/projects/proj-1');
+    expect(window.location.pathname).toBe('/platform-settings');
   });
 
   it('does not start the tour during a normal configured sign-in', async () => {
@@ -257,7 +253,7 @@ describe('App auth gate', () => {
     expect(screen.queryByText(/Product tour requested/)).toBeNull();
   });
 
-  it('keeps the OAuth return in setup until the admin continues', async () => {
+  it('clears the OAuth setup marker when the backend confirms configuration', async () => {
     sessionStorage.setItem('agentweaver.requiredSetup.pending', '1');
     window.history.pushState({}, '', '/platform-settings?copilot_app_auth=success');
     vi.mocked(apiClient.getAuthSession)
@@ -286,13 +282,7 @@ describe('App auth gate', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('Setup required')).toBeDefined();
-    expect(screen.queryByTestId('app-shell')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Agentweaver' }));
-
     await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
-    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
     expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
   });
 

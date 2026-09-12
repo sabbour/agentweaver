@@ -4,6 +4,10 @@ import {
   SUBTASK_NODE_H,
   SUBTASK_NODE_W,
   analyzeWorkflowLayout,
+  findConnectorJunctions,
+  findConnectorBridges,
+  findLoopbackReturnJoinNode,
+  findRoutedConnectorJunctions,
   layoutDagBalancedGrid,
   layoutDagColumns,
   layoutDagStaircase,
@@ -21,6 +25,92 @@ import type { Edge, Node } from '@xyflow/react';
 function makeNode(id: string): Node {
   return { id, position: { x: 0, y: 0 }, data: {} };
 }
+
+const cardinalTeeRoutes = [
+  {
+    orientation: 'top',
+    continuation: [{ x: 0, y: 100 }, { x: 0, y: -100 }],
+    branch: [{ x: 0, y: 100 }, { x: 0, y: 0 }, { x: -100, y: 0 }],
+  },
+  {
+    orientation: 'right',
+    continuation: [{ x: -100, y: 0 }, { x: 100, y: 0 }],
+    branch: [{ x: -100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: -100 }],
+  },
+  {
+    orientation: 'bottom',
+    continuation: [{ x: 0, y: -100 }, { x: 0, y: 100 }],
+    branch: [{ x: 0, y: -100 }, { x: 0, y: 0 }, { x: 100, y: 0 }],
+  },
+  {
+    orientation: 'left',
+    continuation: [{ x: 100, y: 0 }, { x: -100, y: 0 }],
+    branch: [{ x: 100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }],
+  },
+] as const;
+
+function teeMarkers(
+  kind: 'split' | 'merge',
+  continuation: ReadonlyArray<{ x: number; y: number }>,
+  branch: ReadonlyArray<{ x: number; y: number }>,
+) {
+  const routes = kind === 'split'
+    ? [
+        { id: 'continue', source: 'decision', target: 'through', points: [...continuation] },
+        { id: 'branch', source: 'decision', target: 'branch', points: [...branch] },
+      ]
+    : [
+        { id: 'continue', source: 'through', target: 'decision', points: [...continuation] },
+        { id: 'branch', source: 'branch', target: 'decision', points: [...branch] },
+      ];
+  return [...findRoutedConnectorJunctions(routes).values()].flat()
+    .filter((point) => point.x === 0 && point.y === 0);
+}
+
+describe('cardinal connector junctions', () => {
+  it.each(cardinalTeeRoutes)('marks a $orientation fan-out tee exactly once', ({ continuation, branch }) => {
+    expect(teeMarkers('split', continuation, branch)).toEqual([{ x: 0, y: 0 }]);
+  });
+
+  it.each(cardinalTeeRoutes)('marks a $orientation fan-in tee exactly once', ({ continuation, branch }) => {
+    expect(teeMarkers('merge', continuation, branch)).toEqual([{ x: 0, y: 0 }]);
+  });
+});
+
+describe('connector bridge endpoint clearance', () => {
+  const bridgeNodes = (x: number): Node[] => [
+    { ...makeNode('left'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('right'), position: { x: 200, y: 0 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('top'), position: { x: x - 50, y: -100 }, initialWidth: 100, initialHeight: 100 },
+    { ...makeNode('bottom'), position: { x: x - 50, y: 200 }, initialWidth: 100, initialHeight: 100 },
+  ];
+  const bridgeEdges: Edge[] = [
+    {
+      id: 'horizontal',
+      source: 'left',
+      target: 'right',
+      type: 'spine',
+      sourceHandle: 'source-right',
+      targetHandle: 'target-left',
+      data: { flowDirection: 'horizontal' },
+    },
+    {
+      id: 'vertical',
+      source: 'top',
+      target: 'bottom',
+      type: 'spine',
+      sourceHandle: 'source-bottom',
+      targetHandle: 'target-top',
+      data: { flowDirection: 'vertical' },
+    },
+  ];
+
+  it('does not bridge within 18px of a rounded endpoint, but bridges after that clearance', () => {
+    expect(findConnectorBridges(bridgeEdges, bridgeNodes(117)).has('vertical')).toBe(false);
+    expect(findConnectorBridges(bridgeEdges, bridgeNodes(119)).get('vertical'))
+      .toEqual([{ x: 119, y: 50, orientation: 'vertical' }]);
+  });
+});
 
 function centerX(node: Node, width = NODE_W): number {
   return node.position.x + width / 2;
@@ -483,11 +573,97 @@ describe('layoutDagStaircase', () => {
     const offsets = routed.map((edge) =>
       (edge.data as { returnLaneOffset: number }).returnLaneOffset);
 
-    expect(routed.every((edge) => edge.sourceHandle === 'source-top')).toBe(true);
-    expect(routed.every((edge) => edge.targetHandle === 'target-top')).toBe(true);
-    expect(new Set(offsets).size).toBe(edges.length);
+    expect(routed.every((edge) => edge.sourceHandle === 'source-left')).toBe(true);
+    expect(routed.every((edge) => edge.targetHandle === 'target-left')).toBe(true);
+    expect(offsets.filter((offset) => offset === 0)).toHaveLength(2);
+    expect(new Set(offsets).size).toBe(2);
     expect(Math.min(...offsets)).toBe(0);
-    expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);
+    expect(Math.max(...offsets)).toBeGreaterThanOrEqual(34);
+  });
+
+  it.each([
+    ['top', { x: 0, y: 300 }, { x: 0, y: 100 }],
+    ['right', { x: -300, y: 0 }, { x: 100, y: 0 }],
+    ['bottom', { x: 0, y: -300 }, { x: 0, y: 100 }],
+    ['left', { x: 300, y: 0 }, { x: 100, y: 0 }],
+  ] as const)('routes a $0 semantic return through the downstream decision join', (side, sourcePosition, gatePosition) => {
+    const nodes: Node[] = [
+      { ...makeNode('implement'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('review-gate'), position: gatePosition, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('approved'), position: { x: gatePosition.x + 180, y: gatePosition.y + 180 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('declined'), position: { x: gatePosition.x - 180, y: gatePosition.y + 180 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('rework'), position: sourcePosition, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges: Edge[] = [
+      { id: 'implement-review', source: 'implement', target: 'review-gate', type: 'spine' },
+      { id: 'review-approved', source: 'review-gate', target: 'approved', type: 'spine' },
+      { id: 'review-declined', source: 'review-gate', target: 'declined', type: 'spine' },
+      { id: 'return', source: 'rework', target: 'implement', type: 'loopback' },
+    ];
+
+    expect(findLoopbackReturnJoinNode(edges[3], edges)).toBe('review-gate');
+    const routedReturn = routeGridEdges(edges, nodes).find((edge) => edge.id === 'return')!;
+    expect((routedReturn.data as { returnJoin: string; returnSide: string }).returnJoin).toBe('review-gate');
+    expect((routedReturn.data as { returnSide: string }).returnSide).toBe(side);
+  });
+
+  it('groups multiple returns to one downstream decision on one external lane', () => {
+    const nodes: Node[] = [
+      { ...makeNode('implement'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('review-gate'), position: { x: 200, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('approved'), position: { x: 400, y: 100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('declined'), position: { x: 400, y: -100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('qa-review'), position: { x: 600, y: -100 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('human-review'), position: { x: 600, y: 100 }, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges: Edge[] = [
+      { id: 'implement-review', source: 'implement', target: 'review-gate', type: 'spine' },
+      { id: 'review-approved', source: 'review-gate', target: 'approved', type: 'spine' },
+      { id: 'review-declined', source: 'review-gate', target: 'declined', type: 'spine' },
+      { id: 'qa-return', source: 'qa-review', target: 'implement', type: 'loopback' },
+      { id: 'human-return', source: 'human-review', target: 'implement', type: 'loopback' },
+    ];
+
+    const returns = routeGridEdges(edges, nodes).filter((edge) => edge.type === 'loopback');
+    expect(returns.map((edge) => (edge.data as { returnJoin: string }).returnJoin)).toEqual([
+      'review-gate',
+      'review-gate',
+    ]);
+    expect(new Set(returns.map((edge) => (edge.data as { returnLaneOffset: number }).returnLaneOffset)).size).toBe(1);
+  });
+
+  it('marks exact source splits, shared tees, and merge trunks, not terminal arrowheads, plain elbows, or crossings', () => {
+    const nodes: Node[] = [
+      { ...makeNode('split'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('upper'), position: { x: 300, y: -80 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('lower'), position: { x: 300, y: 120 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merge-left'), position: { x: 0, y: 300 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merge-right'), position: { x: 0, y: 500 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('merged'), position: { x: 400, y: 400 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-top'), position: { x: 700, y: 250 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-bottom'), position: { x: 700, y: 550 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-left'), position: { x: 550, y: 400 }, initialWidth: 100, initialHeight: 100 },
+      { ...makeNode('cross-right'), position: { x: 850, y: 400 }, initialWidth: 100, initialHeight: 100 },
+    ];
+    const edges = routeGridEdges([
+      { id: 'split-upper', source: 'split', target: 'upper', type: 'spine' },
+      { id: 'split-lower', source: 'split', target: 'lower', type: 'spine' },
+      { id: 'merge-left', source: 'merge-left', target: 'merged', type: 'spine' },
+      { id: 'merge-right', source: 'merge-right', target: 'merged', type: 'spine' },
+      { id: 'cross-vertical', source: 'cross-top', target: 'cross-bottom', type: 'spine' },
+      { id: 'cross-horizontal', source: 'cross-left', target: 'cross-right', type: 'spine' },
+    ], nodes);
+
+    const junctions = findConnectorJunctions(edges, nodes);
+    const points = [...junctions.values()].flat();
+
+    expect(points).toHaveLength(3);
+    expect(points).toContainEqual({ x: 100, y: 50 });
+    expect(points).toContainEqual({ x: 183, y: 50 });
+    expect(junctions.get('merge-right')).toEqual([{ x: 267, y: 450 }]);
+    expect(points).not.toContainEqual({ x: 400, y: 450 });
+    expect(junctions.has('cross-horizontal')).toBe(false);
+    expect(junctions.has('cross-vertical')).toBe(false);
   });
 });
 

@@ -1,10 +1,19 @@
 # Changelog
 
-## 0.29.1
+## 0.30.0
+
+### Minor Changes
+
+- 419d513: Group the Cluster resource topology by Agentweaver functions, with concise sandbox lifecycle,
+  traffic policy, persistence, workload, and capacity views.
+- eeaf105: Add an interactive transaction trace detail with a span timeline, safe normalized attributes, and timestamped persisted run events.
 
 ### Patch Changes
 
+- de3e215: Render workflow and documentation connectors with true overpass bridges, clear shared-origin junctions, and aligned marigold revision loops.
 - 5113db1: Allow Platform Admins to leave required setup after a platform GitHub Copilot or custom-key provider becomes active, while preserving the page they originally requested.
+- 3567daa: Make workflow and topology connector bridges, shared branch junctions, and revision loop rails clear and geometrically aligned.
+- 98b3f6a: Clear stale required-setup session state when the backend confirms platform AI configuration is ready.
 
 ## 0.29.0
 

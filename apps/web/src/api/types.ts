@@ -174,10 +174,23 @@ export function safeTerminalFailureMessage(_message: string, code: string, retry
 // GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
 // the execution timeline for terminal/parked runs whose live SSE stream is closed.
 // Shape mirrors the SSE frame: per-run sequence, event type, and JSON payload.
+export interface PersistedRunEventPayload extends Record<string, unknown> {
+  /** Server-stamped event time, when the persisted event did not carry its own time. */
+  timestamp_utc?: string;
+  timestampUtc?: string;
+  timestamp?: string;
+}
+
 export interface PersistedRunEvent {
   sequence: number;
   type: string;
-  payload: Record<string, unknown>;
+  /** The server-side UTC append time. Null only for legacy rows without a trustworthy time. */
+  timestamp_utc?: string | null;
+  /** Explicit only when the event payload recorded a non-negative duration. */
+  duration_ms?: number | null;
+  /** Event-type-derived state when its meaning is unambiguous; otherwise absent. */
+  status?: string | null;
+  payload: PersistedRunEventPayload;
 }
 
 export interface ReviewRequest {
@@ -1767,11 +1780,49 @@ export interface RunTraceSpanDto {
   outputTokens?: number | null;
   totalNanoAiu?: number | null;
   operationName?: string | null;
+  attributes?: TraceSpanAttributesDto | null;
+}
+
+/** Fixed, privacy-safe trace attributes projected by the API. Null means not recorded. */
+export interface TraceSpanAttributesDto {
+  sessionId?: string | null;
+  runId?: string | null;
+  parentRunId?: string | null;
+  projectId?: string | null;
+  agentName?: string | null;
+  workflowRunId?: string | null;
+  operationName?: string | null;
+  modelId?: string | null;
+  providerSource?: string | null;
+  providerKind?: string | null;
+  providerType?: string | null;
+  providerScope?: string | null;
+  routingDecision?: string | null;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  toolSuccess?: boolean | null;
+  policyDecision?: string | null;
+  authorizationDecision?: string | null;
+  policyShellEnabled?: boolean | null;
+  policyNetworkEnabled?: boolean | null;
+  policyAutoApproveTools?: boolean | null;
+  runStatus?: string | null;
+  sandboxBackend?: string | null;
+  sandboxIsolated?: boolean | null;
+  runtimePurpose?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  totalNanoAiu?: number | null;
+  status?: string | null;
+  errorType?: string | null;
 }
 
 export interface RunTraceDto {
   runId: string;
   spans: RunTraceSpanDto[];
+  /** Present when Application Insights could not complete the trace query. */
+  queryError?: string | null;
 }
 
 // Global overview "at a glance" counters.

@@ -181,7 +181,8 @@ describe('ClusterPage', () => {
     expect(screen.getByText('Resource topology')).toBeDefined();
     expect(screen.getByTestId('cluster-topology-graph')).toBeDefined();
     expect(screen.getByTestId('cluster-topology-viewport')).toBeDefined();
-    expect(screen.getByLabelText('agent-abc123: Pod · Running')).toBeDefined();
+    expect(screen.getByTestId('cluster-topology-node-agent-execution')).toBeDefined();
+    expect(screen.queryByText('agent-abc123')).toBeNull();
     expect((screen.getByRole('checkbox', { name: 'Runtime' }) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole('checkbox', { name: 'Networking' }) as HTMLInputElement).checked).toBe(false);
 

@@ -20,7 +20,7 @@
 //   node run-persona.mjs --scenario generated-artifacts-seam \
 //     --base-url https://agentweaver.example.com
 //
-//   Remote bearer authentication comes only from $AGENTWEAVER_TOKEN.
+//   Authentication comes from the protected managed-browser recorder session.
 //   Base URL: --base-url  >  $AGENTWEAVER_BASE_URL.
 //
 // Exit code 0 = driver drove + captured evidence cleanly (P0 platform-correctness
@@ -89,16 +89,25 @@ export function parseArgs(argv) {
   return out;
 }
 
-export function resolveToken(env = process.env) {
-  return env.AGENTWEAVER_TOKEN || null;
+export function resolveTargetRevision(explicitTargetRevision, deployment) {
+  if (typeof explicitTargetRevision === 'string' && explicitTargetRevision.trim()) {
+    return explicitTargetRevision;
+  }
+  if (typeof deployment?.version === 'string' && deployment.version.trim()) {
+    return deployment.version;
+  }
+  if (typeof deployment?.gitSha === 'string' && deployment.gitSha.trim()) {
+    return deployment.gitSha;
+  }
+  return 'unknown';
 }
 
-function resolveAuthProvider(args) {
-  if (!args.authProvider) return null;
-  if (args.authProvider !== RECORDER_SESSION_AUTH_PROVIDER) {
-    throw new Error(`Unsupported auth provider "${args.authProvider}".`);
+export function resolveAuthProvider(args = {}, baseUrl) {
+  const providerName = args.authProvider ?? RECORDER_SESSION_AUTH_PROVIDER;
+  if (providerName !== RECORDER_SESSION_AUTH_PROVIDER) {
+    throw new Error(`Unsupported auth provider "${providerName}".`);
   }
-  return createRecorderSessionAuthProvider({ authRoot: args.recorderAuthRoot });
+  return createRecorderSessionAuthProvider({ authRoot: args.recorderAuthRoot, baseUrl });
 }
 
 async function listScenarios() {
@@ -137,17 +146,11 @@ async function main() {
 
   let authProvider;
   try {
-    authProvider = resolveAuthProvider(args);
+    authProvider = resolveAuthProvider(args, baseUrl);
   } catch (err) {
     console.error(`error: ${err.message}`);
     return 2;
   }
-  const token = authProvider ? null : resolveToken();
-  if (!authProvider && !token) {
-    console.error('error: no token (set $AGENTWEAVER_TOKEN or select a secure auth provider)');
-    return 2;
-  }
-
   let scenario;
   try {
     scenario = (await import(`./scenarios/${args.scenario}.mjs`)).default;
@@ -178,7 +181,7 @@ async function main() {
   console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
-    baseUrl, token, authProvider,
+    baseUrl, authProvider,
   });
 
   let result;
@@ -225,7 +228,7 @@ async function main() {
     preflight: {
       ...networkTargetEvidence(baseUrl, {
         surface: 'api',
-        authSource: authProvider ? `provider:${args.authProvider}` : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
+        authSource: `provider:${authProvider.name ?? RECORDER_SESSION_AUTH_PROVIDER}`,
       }),
       projectId: evidence.projectId ?? null,
       runId: evidence.runId ?? null,
@@ -303,7 +306,10 @@ async function main() {
     // (required by REQUIRED_JOIN_KEY_FIELDS) without inventing a fake version.
     adapterVersion: sharedPersona?.adapter?.version ?? NO_PERSONA_VERSION_SENTINEL,
     personaCoreVersion: sharedPersona?.version ?? NO_PERSONA_VERSION_SENTINEL,
-    targetRevision: redact(args.targetRevision ?? persistedTarget),
+    // An explicit revision supports controlled comparison reruns. Otherwise bind
+    // evidence to the version reported by this deployment, never to a stale label
+    // or merely the target URL.
+    targetRevision: redact(resolveTargetRevision(args.targetRevision, result.evidence.deployment)),
     runId: result.evidence.runId ?? `harness-${stamp}`,
     timestamp: finding.generatedAt,
     persona: sharedPersona?.name ?? personaTitle,

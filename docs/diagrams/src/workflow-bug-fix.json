@@ -109,7 +109,8 @@
     {
       "from": "verify",
       "to": "fix",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "verify",
@@ -119,7 +120,8 @@
     {
       "from": "rai-check",
       "to": "fix",
-      "label": "revise"
+      "label": "revise",
+      "loopback": true
     },
     {
       "from": "rai-check",
@@ -144,7 +146,8 @@
     {
       "from": "build-test",
       "to": "fix",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "build-test",
@@ -159,7 +162,8 @@
     {
       "from": "human-review",
       "to": "fix",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "human-review",

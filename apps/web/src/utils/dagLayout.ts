@@ -167,6 +167,345 @@ function dedupePoints(points: ConnectorPoint[]): ConnectorPoint[] {
   });
 }
 
+export interface ConnectorBridge {
+  x: number;
+  y: number;
+  orientation: 'horizontal' | 'vertical';
+}
+
+const BRIDGE_ENDPOINT_CLEARANCE = 18;
+
+interface OrthogonalSegment {
+  orientation: 'horizontal' | 'vertical';
+  constant: number;
+  start: number;
+  end: number;
+}
+
+function handlePoint(node: Node, handle: string | null | undefined): ConnectorPoint {
+  const { width, height } = graphNodeSize(node);
+  const side = handle?.split('-').at(-1);
+  if (side === 'left') return { x: node.position.x, y: node.position.y + height / 2 };
+  if (side === 'right') return { x: node.position.x + width, y: node.position.y + height / 2 };
+  if (side === 'top') return { x: node.position.x + width / 2, y: node.position.y };
+  if (side === 'bottom') return { x: node.position.x + width / 2, y: node.position.y + height };
+  return { x: node.position.x + width / 2, y: node.position.y + height / 2 };
+}
+
+function spineRoutePoints(edge: Edge, nodes: Map<string, Node>): ConnectorPoint[] | null {
+  const source = nodes.get(edge.source);
+  const target = nodes.get(edge.target);
+  if (!source || !target || edge.type !== 'spine') return null;
+  const data = edge.data as {
+    flowDirection?: 'horizontal' | 'vertical';
+    gutterLaneOffset?: number;
+  } | undefined;
+  const from = handlePoint(source, edge.sourceHandle);
+  const to = handlePoint(target, edge.targetHandle);
+  return buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: data?.flowDirection,
+    laneOffset: data?.gutterLaneOffset,
+  }).points;
+}
+
+function orthogonalSegments(points: ConnectorPoint[]): OrthogonalSegment[] {
+  const segments: OrthogonalSegment[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+      segments.push({
+        orientation: 'vertical',
+        constant: from.x,
+        start: Math.min(from.y, to.y),
+        end: Math.max(from.y, to.y),
+      });
+    } else if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+      segments.push({
+        orientation: 'horizontal',
+        constant: from.y,
+        start: Math.min(from.x, to.x),
+        end: Math.max(from.x, to.x),
+      });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Finds right-angle connector crossings after `routeGridEdges` has assigned
+ * lanes and handles. The later stable edge receives a visible bridge at an
+ * interior crossing rather than visually merging with the lower connector.
+ */
+export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, ConnectorBridge[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ edge, segments: orthogonalSegments(points) }] : [];
+    });
+  const bridges = new Map<string, ConnectorBridge[]>();
+
+  for (let current = 1; current < routes.length; current += 1) {
+    for (let prior = 0; prior < current; prior += 1) {
+      for (const currentSegment of routes[current].segments) {
+        for (const priorSegment of routes[prior].segments) {
+          if (currentSegment.orientation === priorSegment.orientation) continue;
+          const horizontal = currentSegment.orientation === 'horizontal' ? currentSegment : priorSegment;
+          const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
+          const x = vertical.constant;
+          const y = horizontal.constant;
+          const inset = BRIDGE_ENDPOINT_CLEARANCE;
+          if (
+            x <= horizontal.start + inset || x >= horizontal.end - inset ||
+            y <= vertical.start + inset || y >= vertical.end - inset
+          ) {
+            continue;
+          }
+          const edgeBridges = bridges.get(routes[current].edge.id) ?? [];
+          if (!edgeBridges.some((bridge) => Math.abs(bridge.x - x) < 0.5 && Math.abs(bridge.y - y) < 0.5)) {
+            edgeBridges.push({ x, y, orientation: currentSegment.orientation });
+            bridges.set(routes[current].edge.id, edgeBridges);
+          }
+        }
+      }
+    }
+  }
+
+  return bridges;
+}
+
+export interface ConnectorJunction {
+  x: number;
+  y: number;
+}
+
+export interface RoutedConnector {
+  id: string;
+  source: string;
+  target: string;
+  points: ConnectorPoint[];
+}
+
+export interface ConnectorContinuationJoin {
+  point: ConnectorPoint;
+  direction: 'left' | 'right' | 'top' | 'bottom';
+}
+
+/**
+ * Follows a return edge's normal forward path to the first decision or
+ * convergence. Linear paths retain the original return target; returns that
+ * reach a decision rejoin that decision's downstream continuation.
+ */
+export function findLoopbackReturnJoinNode(loopback: Edge, edges: Edge[]): string {
+  const forwardEdges = edges.filter((edge) => edge.type === 'spine');
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of forwardEdges) {
+    const next = outgoing.get(edge.source) ?? [];
+    next.push(edge);
+    outgoing.set(edge.source, next);
+    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1);
+  }
+
+  const fallback = loopback.target;
+  const visited = new Set<string>();
+  let current = fallback;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const next = outgoing.get(current) ?? [];
+    if (next.length > 1 || (current !== fallback && (incoming.get(current) ?? 0) > 1)) {
+      return current;
+    }
+    if (next.length !== 1) return fallback;
+    current = next[0].target;
+  }
+  return fallback;
+}
+
+function samePoint(left: ConnectorPoint, right: ConnectorPoint): boolean {
+  return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
+}
+
+function sharedSourcePoint(
+  routes: Array<{ points: ConnectorPoint[] }>,
+): ConnectorPoint | undefined {
+  const candidate = routes[0]?.points[0];
+  if (!candidate) return undefined;
+  return routes.every((route) => {
+    const point = route.points[0];
+    return point !== undefined && samePoint(candidate, point);
+  })
+    ? candidate
+    : undefined;
+}
+
+type CardinalDirection = 'top' | 'right' | 'bottom' | 'left';
+
+function directionFrom(from: ConnectorPoint, to: ConnectorPoint): CardinalDirection | undefined {
+  if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+    return to.x > from.x ? 'right' : 'left';
+  }
+  if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+    return to.y > from.y ? 'bottom' : 'top';
+  }
+  return undefined;
+}
+
+function routeDirectionsAt(point: ConnectorPoint, points: ConnectorPoint[]): Set<CardinalDirection> {
+  const directions = new Set<CardinalDirection>();
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const forward = directionFrom(from, to);
+    if (!forward) continue;
+    const reverse = directionFrom(to, from)!;
+    if (samePoint(point, from)) {
+      directions.add(forward);
+    } else if (samePoint(point, to)) {
+      directions.add(reverse);
+    } else if (
+      (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
+        point.y > Math.min(from.y, to.y) + 0.5 && point.y < Math.max(from.y, to.y) - 0.5) ||
+      (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
+        point.x > Math.min(from.x, to.x) + 0.5 && point.x < Math.max(from.x, to.x) - 0.5)
+    ) {
+      directions.add(forward);
+      directions.add(reverse);
+    }
+  }
+  return directions;
+}
+
+function logicalTeePoints(
+  routes: RoutedConnector[],
+): Array<{ edgeId: string; point: ConnectorPoint }> {
+  const tees = new Map<string, { edgeId: string; point: ConnectorPoint }>();
+  for (const route of routes) {
+    for (let index = 1; index < route.points.length - 1; index += 1) {
+      const point = route.points[index];
+      if (routes.some((candidate) => {
+        const terminal = candidate.points.at(-1);
+        return terminal !== undefined && samePoint(point, terminal);
+      })) continue;
+      const related = routes.filter((candidate) => routeDirectionsAt(point, candidate.points).size > 0);
+      if (related.length < 2) continue;
+      const directions = new Set(related.flatMap((candidate) => [...routeDirectionsAt(point, candidate.points)]));
+      if (directions.size < 3) continue;
+      const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+      const existing = tees.get(key);
+      if (!existing || route.id.localeCompare(existing.edgeId) < 0) {
+        tees.set(key, { edgeId: route.id, point });
+      }
+    }
+  }
+  return [...tees.values()];
+}
+
+/**
+ * Finds the point where a semantic return can safely join the target's actual
+ * continuation route. A marker is valid only when the two graph edges share
+ * this exact point; an isolated return rail corner is never a junction.
+ */
+export function findLoopbackContinuationJoin(
+  loopback: Edge,
+  edges: Edge[],
+  nodes: Node[],
+  clearance = 18,
+): ConnectorContinuationJoin | undefined {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const returnJoin = findLoopbackReturnJoinNode(loopback, edges);
+  const continuation = edges
+    .filter((edge) => edge.type === 'spine' && edge.source === returnJoin)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .at(0);
+  if (!continuation) return undefined;
+  const points = spineRoutePoints(continuation, byId);
+  if (!points || points.length < 2) return undefined;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    if (distance < 0.5) continue;
+    const dx = (to.x - from.x) / distance;
+    const dy = (to.y - from.y) / distance;
+    return {
+      point: {
+        x: from.x + dx * Math.min(clearance, distance / 2),
+        y: from.y + dy * Math.min(clearance, distance / 2),
+      },
+      direction: Math.abs(dx) >= Math.abs(dy)
+        ? (dx >= 0 ? 'right' : 'left')
+        : (dy >= 0 ? 'bottom' : 'top'),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Marks only nonterminal shared split and merge points. The endpoints must be
+ * identical in the routed geometry as well as related by the graph. A merge must share
+ * an incoming terminal trunk before its card entry. Shared route vertices are
+ * marked only when related paths form degree-three topology, independent of
+ * cardinal direction; card-entry targets, isolated elbows, layer bounds, and
+ * incidental path crossings never create a marker.
+ */
+export function findRoutedConnectorJunctions(routes: RoutedConnector[]): Map<string, ConnectorJunction[]> {
+  const ordered = [...routes].sort((left, right) => left.id.localeCompare(right.id));
+  const bySource = new Map<string, typeof routes>();
+  const byTarget = new Map<string, typeof routes>();
+  for (const route of ordered) {
+    const source = bySource.get(route.source) ?? [];
+    source.push(route);
+    bySource.set(route.source, source);
+    const target = byTarget.get(route.target) ?? [];
+    target.push(route);
+    byTarget.set(route.target, target);
+  }
+
+  const junctions = new Map<string, ConnectorJunction[]>();
+  const claimed = new Set<string>();
+  const add = (edgeId: string, point: ConnectorPoint | undefined) => {
+    if (!point) return;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    const markers = junctions.get(edgeId) ?? [];
+    markers.push({ x: point.x, y: point.y });
+    junctions.set(edgeId, markers);
+  };
+
+  for (const group of bySource.values()) {
+    if (group.length < 2) continue;
+    add(group[0].id, sharedSourcePoint(group));
+    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
+  }
+  for (const group of byTarget.values()) {
+    if (group.length < 2) continue;
+    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
+  }
+  return junctions;
+}
+
+export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ id: edge.id, source: edge.source, target: edge.target, points }] : [];
+    });
+  return findRoutedConnectorJunctions(routes);
+}
+
 export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): string {
   const clean = dedupePoints(points);
   if (clean.length === 0) return '';
@@ -195,6 +534,57 @@ export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): str
     commands.push(`Q ${pointCommand(cur)} ${pointCommand(after)}`);
   }
   commands.push(`L ${pointCommand(clean[clean.length - 1])}`);
+  return commands.join(' ');
+}
+
+/**
+ * Uses path interruption rather than a background mask at crossings. The
+ * connector itself leaves a gap and draws the rounded overpass arc, so bridge
+ * geometry remains correct in every theme and print/export surface.
+ */
+export function buildBridgedOrthogonalPath(
+  points: ConnectorPoint[],
+  bridges: ConnectorBridge[],
+  radius = 7,
+): string {
+  if (bridges.length === 0) return roundedOrthogonalPath(points);
+  const clean = dedupePoints(points);
+  if (clean.length < 2) return roundedOrthogonalPath(clean);
+
+  const commands = [`M ${pointCommand(clean[0])}`];
+  for (let index = 0; index < clean.length - 1; index += 1) {
+    const from = clean[index];
+    const to = clean[index + 1];
+    const horizontal = Math.abs(from.y - to.y) < 0.5;
+    const vertical = Math.abs(from.x - to.x) < 0.5;
+    const segmentBridges = bridges
+      .filter((bridge) =>
+        (horizontal && bridge.orientation === 'horizontal' && Math.abs(bridge.y - from.y) < 0.5 &&
+          bridge.x > Math.min(from.x, to.x) + radius && bridge.x < Math.max(from.x, to.x) - radius) ||
+        (vertical && bridge.orientation === 'vertical' && Math.abs(bridge.x - from.x) < 0.5 &&
+          bridge.y > Math.min(from.y, to.y) + radius && bridge.y < Math.max(from.y, to.y) - radius))
+      .sort((left, right) => horizontal
+        ? (to.x >= from.x ? left.x - right.x : right.x - left.x)
+        : vertical
+          ? (to.y >= from.y ? left.y - right.y : right.y - left.y)
+          : 0);
+    if (segmentBridges.length === 0) {
+      commands.push(`L ${pointCommand(to)}`);
+      continue;
+    }
+    for (const bridge of segmentBridges) {
+      const forward = horizontal ? Math.sign(to.x - from.x) : Math.sign(to.y - from.y);
+      const start = horizontal
+        ? { x: bridge.x - radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y - radius * forward };
+      const end = horizontal
+        ? { x: bridge.x + radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y + radius * forward };
+      const sweep = horizontal ? (forward > 0 ? 0 : 1) : (forward > 0 ? 1 : 0);
+      commands.push(`L ${pointCommand(start)} A ${radius},${radius} 0 0 ${sweep} ${pointCommand(end)}`);
+    }
+    commands.push(`L ${pointCommand(to)}`);
+  }
   return commands.join(' ');
 }
 
@@ -1182,7 +1572,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
   const laneOffsets = new Map<string, number>();
   const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
   const loopbackSides = new Map<string, 'left' | 'right' | 'top' | 'bottom'>();
-  const loopbackGroups = new Map<string, Array<{ edge: Edge; span: number }>>();
+  const loopbackGroups = new Map<string, Edge[]>();
   for (const edge of edges) {
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
@@ -1190,34 +1580,21 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const sourceCenter = center(source);
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
-      const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
-        >= Math.abs(targetCenter.y - sourceCenter.y);
-      const peerCenters = nodes
-        .filter((peer) => peer.id !== edge.source && peer.id !== edge.target)
-        .map((peer) => center(peer));
+      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
+      const joinNode = byId.get(returnJoin);
+      const joinCenter = joinNode ? center(joinNode) : targetCenter;
+      const horizontal = Math.abs(joinCenter.x - sourceCenter.x)
+        >= Math.abs(joinCenter.y - sourceCenter.y);
       let side: 'left' | 'right' | 'top' | 'bottom';
       if (horizontal) {
-        const above = peerCenters.filter((peer) =>
-          peer.y < Math.min(sourceCenter.y, targetCenter.y)).length;
-        const below = peerCenters.filter((peer) =>
-          peer.y > Math.max(sourceCenter.y, targetCenter.y)).length;
-        side = above <= below ? 'top' : 'bottom';
+        side = joinCenter.x <= sourceCenter.x ? 'left' : 'right';
       } else {
-        const left = peerCenters.filter((peer) =>
-          peer.x < Math.min(sourceCenter.x, targetCenter.x)).length;
-        const right = peerCenters.filter((peer) =>
-          peer.x > Math.max(sourceCenter.x, targetCenter.x)).length;
-        side = left <= right ? 'left' : 'right';
+        side = joinCenter.y <= sourceCenter.y ? 'top' : 'bottom';
       }
       loopbackSides.set(edge.id, side);
-      const key = `loopback:${side}`;
+      const key = `loopback:${side}:${returnJoin}`;
       if (!loopbackGroups.has(key)) loopbackGroups.set(key, []);
-      loopbackGroups.get(key)!.push({
-        edge,
-        span: horizontal
-          ? Math.abs(targetCenter.x - sourceCenter.x)
-          : Math.abs(targetCenter.y - sourceCenter.y),
-      });
+      loopbackGroups.get(key)!.push(edge);
       continue;
     }
     if (edge.type !== 'spine') continue;
@@ -1239,10 +1616,14 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
     });
   }
+
+  const loopbackLanes = new Map<'left' | 'right' | 'top' | 'bottom', number>();
   for (const group of loopbackGroups.values()) {
-    group.sort((a, b) => a.span - b.span || a.edge.id.localeCompare(b.edge.id));
-    group.forEach(({ edge }, index) => {
-      laneOffsets.set(edge.id, index * BANDED_LANE_STEP);
+    const side = loopbackSides.get(group[0].id)!;
+    const lane = loopbackLanes.get(side) ?? 0;
+    loopbackLanes.set(side, lane + 1);
+    group.forEach((edge) => {
+      laneOffsets.set(edge.id, lane * BANDED_LANE_STEP);
     });
   }
 
@@ -1254,6 +1635,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
       const side = loopbackSides.get(edge.id) ?? 'top';
+      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
       return {
         ...edge,
         sourceHandle: `source-${side}`,
@@ -1262,6 +1644,7 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
           ...(edge.data ?? {}),
           returnSide: side,
           returnLaneOffset: laneOffsets.get(edge.id) ?? 0,
+          returnJoin,
         },
       };
     }

@@ -70,6 +70,8 @@ public sealed class SqliteRunEventStreamTests : IDisposable
 
         replayed.Select(e => e.Sequence).Should().Equal(1, 2, 3);
         replayed[^1].Type.Should().Be(EventTypes.RunCompleted);
+        replayed.Should().OnlyContain(e => e.TimestampUtc != default && e.TimestampUtc.Offset == TimeSpan.Zero,
+            "direct durable appends must stamp every event with a UTC capture time");
     }
 
     [Fact]

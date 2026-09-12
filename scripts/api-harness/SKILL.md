@@ -6,30 +6,36 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. It requires an access token from the transient `AGENTWEAVER_TOKEN`
-environment or the explicit recorder-session provider. It never accepts bearer
-material in process arguments and never borrows `gh auth token` or
-`GITHUB_TOKEN` for a remote target.
+newer. At its first authenticated call, it starts or restores the managed-browser
+recording session. It obtains the bearer only through the recorder-session provider,
+in memory, and never accepts bearer material in process arguments or borrows
+`gh auth token` or `GITHUB_TOKEN` for a remote target.
 
-### Token acquisition for staging (Entra Conditional Access)
+### Browser-managed authentication for staging (Entra Conditional Access)
 
-Agentweaver staging uses Entra Conditional Access. The token cannot be retrieved via
-device-code flow or plain browser. With an already authenticated demo-recording
-session, use the recorder-session provider. It reads the protected session token only
-in memory for each request; never export it to an environment variable, CLI argument,
-transcript, finding, verdict, or log:
+Agentweaver staging uses Entra Conditional Access. The API harness automatically
+uses the managed Chrome recorder session at its first authenticated request. If the
+session is closed, it restores protected recorder state; if state is absent or
+expired, it launches the documented Chrome Default-profile flow, clicks
+Agentweaver's own Entra sign-in button, and waits for session readiness. It reads
+the protected token only in memory and never exports it to an environment variable,
+CLI argument, transcript, finding, verdict, or log:
 
 ```powershell
 node scripts/api-harness/run-persona.mjs `
   --scenario generated-artifacts-seam `
-  --target https://<host>.staging.<domain> `
-  --auth-provider recorder-session
+  --target https://<host>.staging.<domain>
 ```
 
 The provider uses `scripts/demo-recording/.auth/` by default; use
-`--recorder-auth-root` only for an existing protected recording-auth root. Verify the
-recording session first with `npm run demo:record -- status`. If its bearer is expired,
-the human-only recording sign-in flow must refresh it.
+`--recorder-auth-root` only for an existing protected recording-auth root.
+`--auth-provider recorder-session` remains accepted for clarity but is the default.
+The harness does not fail merely because the recorder session is closed. It pauses
+only when Microsoft Entra displays account selection, credentials, MFA, or consent;
+that genuine IdP interaction remains human-only.
+If a verified recorder session is already open but the current worktree lacks its
+protected handoff sidecar, the harness refreshes and restores the managed session
+once before it reports authentication failure.
 
 Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/session` endpoint and requires `authenticated: true`. It uses public
@@ -59,8 +65,10 @@ $env:AGENTWEAVER_BASE_URL = "https://agentweaver.example.staging.example"
 $transcript = "scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl"
 
 @'
+import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
+const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}` },
+  headers: { Authorization: `Bearer ${authorization}` },
   redirect: 'error',
 });
 console.log(await response.text());
@@ -105,6 +113,23 @@ node scripts/api-harness/run-persona.mjs `
 (or `--out`) and prints both paths. Read the verdict JSON and report its verdict
 and evidence references; do not treat a zero driver exit as a subjective quality
 pass.
+
+Before generation, the driver verifies the deployed API with `GET /api/version`,
+then performs Entra preflight through `GET /api/auth/config` and authenticated
+`GET /api/auth/session`. The finding records the reported version and Git SHA. That
+reported version becomes `targetRevision` unless `--target-revision` explicitly
+supplies a comparison revision. Do not use the retired `/api/auth/github` endpoint
+or treat a historical release label as the current Preview revision.
+
+Before each guarded generator call, the seam obtains operation-scoped context from
+`POST /api/ai/execution-context` (`blueprint_generation` or
+`workflow_generation`, with the throwaway `project_id` for the latter). It sends the
+returned short-lived value only as `If-Model-Provider-Key` on the matching request.
+The value is never printed or persisted; evidence records only status, operation,
+phase, provider state, and whether a key was present.
+If the guarded operation returns `model_provider_changed` with a replacement context,
+the seam safely retries that same draft-only operation once with the replacement
+key. It does not retry other failures or repeat resource-creating calls.
 
 ### Re-test from a repro manifest
 

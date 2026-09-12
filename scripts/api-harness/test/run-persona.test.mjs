@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentweaverClient } from '../lib/client.mjs';
-import { parseArgs, resolveToken } from '../run-persona.mjs';
+import { parseArgs, resolveAuthProvider, resolveTargetRevision } from '../run-persona.mjs';
 
-test('remote API auth accepts only an explicit Agentweaver token source', () => {
-  assert.equal(resolveToken({ AGENTWEAVER_TOKEN: 'agentweaver', GITHUB_TOKEN: 'github-canary' }), 'agentweaver');
-  assert.equal(resolveToken({ GITHUB_TOKEN: 'github-canary', GH_TOKEN: 'gh-canary' }), null);
+test('API runner defaults to the managed-browser recorder session', () => {
+  assert.equal(resolveAuthProvider({}, 'https://agentweaver.example.test').name, 'recorder-session');
+  assert.equal(resolveAuthProvider({ authProvider: 'recorder-session' }, 'https://agentweaver.example.test').name, 'recorder-session');
+  assert.throws(() => resolveAuthProvider({ authProvider: 'environment' }), /Unsupported auth provider/);
 });
 
 test('API runner rejects retired credential argv without echoing its value', () => {
@@ -15,6 +16,14 @@ test('API runner rejects retired credential argv without echoing its value', () 
     () => parseArgs([`${retiredOption}=${canary}`]),
     (error) => error.message.includes(retiredOption) && !error.message.includes(canary),
   );
+});
+
+test('API runner uses the reported deployment version unless a comparison revision is explicit', () => {
+  const deployment = { version: 'v0.30.0', gitSha: 'abc123' };
+  assert.equal(resolveTargetRevision(undefined, deployment), 'v0.30.0');
+  assert.equal(resolveTargetRevision('preview-revision-42', deployment), 'preview-revision-42');
+  assert.equal(resolveTargetRevision(undefined, { gitSha: 'abc123' }), 'abc123');
+  assert.equal(resolveTargetRevision(undefined, null), 'unknown');
 });
 
 test('API client accepts an arbitrary HTTPS host and rejects insecure remote transport', () => {

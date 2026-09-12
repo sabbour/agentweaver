@@ -103,7 +103,7 @@ PRIMARY: discover listening ports by reading /proc/net/tcp AND /proc/net/tcp6 (s
 
 **Logged**: 2026-07-09T20:55:00Z
 **Priority**: high
-**Status**: pending
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -450,5 +450,296 @@ integration branch rebuild.
   (ResolveChildBaseBranchAsync, RebuildDependencyBaseBranchAsync, ApplyChildResultAsync,
   ObserveChildAsync), apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs (frontier is correct)
 - See Also: ERR-20260709-TLS, memory "coordinator propagation" (issue #197)
+
+---
+
+## [ERR-20260911-001] deps-ensure-web-binaries
+
+**Logged**: 2026-09-11T17:14:15Z
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+`npm run deps:ensure` reported the web dependency tree current, but the isolated worktree had no web package binaries.
+
+### Error
+```
+'vitest' is not recognized as an internal or external command
+'eslint' is not recognized as an internal or external command
+```
+
+### Context
+- Commands: `npm --prefix apps/web run test` and `npm --prefix apps/web run lint`
+- Worktree: `.worktrees/feat-trace-detail-observability`
+
+### Resolution
+- **Resolved**: 2026-09-11T17:14:15Z
+- **Notes**: Reinstall the worktree-local web dependencies with `npm --prefix apps/web ci` before retrying validation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/package-lock.json
+
+---
+
+## [ERR-20260911-002] transaction-trace-panel-lint
+
+**Logged**: 2026-09-11T17:24:59Z
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The initial trace-detail implementation included an unused import and synchronously reset derived UI state in an effect.
+
+### Error
+```
+@typescript-eslint/no-unused-vars
+react-hooks/set-state-in-effect
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T17:24:59Z
+- **Notes**: Removed the unused import and derive the initial expanded/selected state in the asynchronous trace load callback.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/components/runs/TransactionTracePanel.tsx
+
+---
+
+## [ERR-20260911-003] deps-ensure-docs-binaries
+
+**Logged**: 2026-09-11T17:28:12Z
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+The isolated worktree's docs package was also missing its local executable after `npm run deps:ensure`.
+
+### Error
+```
+'vitepress' is not recognized as an internal or external command
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T17:28:12Z
+- **Notes**: Reinstall the worktree-local docs dependencies with `npm --prefix docs ci` before validating documentation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: docs/package-lock.json
+
+---
+
+## [ERR-20260911-004] validate-layer-unrelated-web-tests
+
+**Logged**: 2026-09-11T17:30:27Z
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+The full layer validation failed in existing SkillsPage timing-sensitive tests outside the trace-detail change.
+
+### Error
+```
+src/__tests__/SkillsPage.test.tsx: 5 failed tests
+```
+
+### Context
+- Command: `npm run validate:layer`
+- Affected validation areas: web, docs
+- Focused trace-detail tests passed; web lint and production build passed before the layer run.
+
+### Suggested Fix
+Stabilize the delayed-dialog interactions in the SkillsPage tests, then rerun layer validation.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: apps/web/src/__tests__/SkillsPage.test.tsx
+
+### Resolution
+- **Resolved**: 2026-09-11T17:54:44Z
+- **Notes**: The affected file passed all 35 tests when run independently. The layer failure was timing-related under concurrent validation, not caused by the trace-detail change.
+
+---
+
+## [ERR-20260911-005] trace-attribute-absence-test
+
+**Logged**: 2026-09-11T18:22:34Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The trace-detail test expected only one explicit absent-value marker, while the typed schema correctly renders one for every unavailable dimension.
+
+### Error
+```
+TestingLibraryElementError: Found multiple elements with the text: Not recorded
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:22:34Z
+- **Notes**: Assert that at least one explicit absence is rendered rather than assuming a single field is absent.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/__tests__/TransactionTraceDetail.test.tsx
+
+---
+
+## [ERR-20260911-006] run-trace-context-accessibility
+
+**Logged**: 2026-09-11T18:23:59Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The new trace-context type was less visible than the public metrics service method that accepts it.
+
+### Error
+```
+CS0051: parameter type RunTraceContext is less accessible than GetRunTracesAsync
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:23:59Z
+- **Notes**: Made the server-side context type public while keeping it out of the serialized trace response contract.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/Agentweaver.Api/Metrics/MetricsDtos.cs
+
+---
+
+## [ERR-20260911-007] trace-projection-build-types
+
+**Logged**: 2026-09-11T18:24:34Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first typed event projection used an implicit nullable conditional and omitted the API run-status extension import.
+
+### Error
+```
+CS0173: no implicit conversion between null and DateTimeOffset
+CS1929: RunStatus does not contain ToApiString
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:24:34Z
+- **Notes**: Made the timestamp local explicitly nullable and imported the existing API status contract extension.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/Agentweaver.Api/Endpoints/RunEndpoints.cs
+
+---
+
+## [ERR-20260911-008] telemetry-test-compile
+
+**Logged**: 2026-09-11T18:25:21Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The new telemetry tests missed the domain namespace import and used unsupported pattern matching in a FluentAssertions expression.
+
+### Error
+```
+CS0103: TraceTelemetry does not exist in the current context
+CS8122: expression tree may not contain an is pattern
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:25:21Z
+- **Notes**: Added the domain import and used the nullable timestamp's HasValue property.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Tests/Observability/TraceInstrumentationTests.cs
+
+---
+
+## [ERR-20260911-009] raw-tool-argument-span-tag
+
+**Logged**: 2026-09-11T18:27:07Z
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first trace-contract hardening removed raw tool results but left the existing tool-argument span tag in place.
+
+### Error
+```
+Expected gen_ai.tool.call.arguments to be null, but found {"query":"hello world"}.
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:27:07Z
+- **Notes**: Removed the Application Insights argument tag. Redacted arguments remain available only through the owner-authorized persisted event stream.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs
+
+---
+
+## [ERR-20260911-010] tool-value-component-placement
+
+**Logged**: 2026-09-11T18:43:05Z
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The tool-value render helper was initially inserted inside span-status JSX, producing a TypeScript parse error.
+
+### Error
+```
+[PARSE_ERROR] Unexpected token in TransactionTracePanel.tsx
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:43:05Z
+- **Notes**: Moved the helper to module scope after the span-status component.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/components/runs/TransactionTracePanel.tsx
+
+---
+
+## [ERR-20260911-011] redaction-text-test-matcher
+
+**Logged**: 2026-09-11T18:44:52Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The redaction UI test used an exact text matcher that did not match the marker nested inside formatted JSON.
+
+### Error
+```
+Expected 2 ***REDACTED*** elements, but received 1
+```
+
+### Resolution
+- **Resolved**: 2026-09-11T18:44:52Z
+- **Notes**: Use a regex matcher so both plain and JSON-formatted redaction markers are asserted.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/__tests__/TransactionTraceDetail.test.tsx
 
 ---

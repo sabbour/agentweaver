@@ -108,7 +108,8 @@
     {
       "from": "rai-check",
       "to": "draft",
-      "label": "revise"
+      "label": "revise",
+      "loopback": true
     },
     {
       "from": "rai-check",
@@ -133,7 +134,8 @@
     {
       "from": "human-review",
       "to": "draft",
-      "label": "request-changes"
+      "label": "request-changes",
+      "loopback": true
     },
     {
       "from": "human-review",

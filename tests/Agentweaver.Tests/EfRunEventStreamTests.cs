@@ -46,6 +46,8 @@ public sealed class EfRunEventStreamTests : IDisposable
         await consume;
         received.Select(e => e.Sequence).Should().Equal(1, 2);
         received.Select(e => e.Type).Should().Equal(EventTypes.CoordinatorStarted, EventTypes.RunCompleted);
+        received.Should().OnlyContain(e => e.TimestampUtc != default && e.TimestampUtc.Offset == TimeSpan.Zero,
+            "direct durable appends must stamp every event with a UTC capture time");
     }
 
     [Fact]

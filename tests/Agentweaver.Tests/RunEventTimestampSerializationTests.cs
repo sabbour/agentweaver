@@ -43,19 +43,15 @@ public sealed class RunEventTimestampSerializationTests
     }
 
     [Fact]
-    public void StampTimestamp_FallsBackToNow_WhenEventHasDefaultTimestamp()
+    public void StampTimestamp_LeavesLegacyMissingTimestampAbsent()
     {
-        // Legacy/direct RunEvent construction without going through RunStreamStore (e.g. the
-        // legacy result-fallback path) still must not surface a missing/blank timestamp to the client.
+        // A serialization-time clock reading is not an event timestamp. Compatibility for legacy
+        // rows is an explicit absence, while every new stream append is stamped centrally.
         var evt = new RunEvent(1, "agent.message", new { content = "hi" });
 
-        var before = DateTimeOffset.UtcNow;
         var node = EndpointHelpers.StampTimestamp(evt);
-        var after = DateTimeOffset.UtcNow;
 
-        var parsed = DateTimeOffset.Parse(node["timestamp_utc"]!.GetValue<string>());
-        parsed.Should().BeOnOrAfter(before);
-        parsed.Should().BeOnOrBefore(after);
+        node.ContainsKey("timestamp_utc").Should().BeFalse();
     }
 
     [Fact]

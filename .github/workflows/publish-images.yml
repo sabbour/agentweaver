@@ -211,6 +211,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A `release: published` event always fires against the exact commit
+      # that `npm run release:publish` just validated as HEAD of `main`
+      # (validateMainSha in scripts/azure/release-publish.mjs) — so its
+      # `sha-<short>` image was, in practice, already built and pushed by the
+      # `push`-to-`main` run moments earlier. Rebuilding from scratch here is
+      # pure waste: GitHub Actions' cache ACL only lets a run read caches from
+      # its own branch, a PR's base branch, or the default branch — a
+      # `refs/tags/vX.Y.Z` ref (what `release` events run on) does not
+      # inherit `main`'s cache, so without this fast path every release
+      # rebuilds cold (observed: ~45-60min on agentweaver-agent-host, whose
+      # build stage compiles `gh`/`buildctl` from source — see its
+      # Dockerfile). Retagging the already-published digest via `imagetools
+      # create` is a manifest-only operation (seconds, no cache needed) and
+      # produces a byte-identical image under the release's version tags.
+      - name: Check for already-published sha image (release retag fast path)
+        id: existing
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          SHA_TAG=$(printf '%s\n' "${{ matrix.tags }}" | grep ':sha-' | head -n1)
+          if [ -z "$SHA_TAG" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$SHA_TAG" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Retag already-published image for this release (skip rebuild)
+        if: github.event_name == 'release' && steps.existing.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && args+=(--tag "$t")
+          done <<< "${{ matrix.tags }}"
+          docker buildx imagetools create "${args[@]}" "${{ steps.existing.outputs.sha_tag }}"
+
       # IMAGE_TAG/GIT_SHA feed the org.opencontainers.image.version/revision
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
@@ -219,11 +260,14 @@ jobs:
       # `matrix` context is available in step-level `if` (not job-level), so
       # the path-filter guard lives here: main/release/dispatch always build;
       # dev/release-branch pushes only build images whose sources changed.
+      # Release events skip the build entirely when the retag fast path above
+      # already found and retagged the matching sha-<short> image.
       - name: Build and push ${{ matrix.name }}
         if: >-
-          github.event_name != 'push' ||
-          github.ref == 'refs/heads/main' ||
-          needs.changes.outputs[matrix.name] == 'true'
+          (github.event_name != 'push' ||
+           github.ref == 'refs/heads/main' ||
+           needs.changes.outputs[matrix.name] == 'true') &&
+          !(github.event_name == 'release' && steps.existing.outputs.found == 'true')
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}

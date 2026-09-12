@@ -8,9 +8,15 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, GroupLabelNode, CARD_WIDTH, CARD_HEIGHT_2, CARD_HEIGHT_3 } from './nodes';
-import { RoutedEdge, type Point } from './edges';
-import { neutral, radius } from './theme';
-import type { GraphSpec, GraphNode } from './types';
+import {
+  alignLoopbackToContinuation,
+  findConnectorBridges,
+  findConnectorJunctions,
+  RoutedEdge,
+  type Point,
+} from './edges';
+import { badgeTones, neutral, radius } from './theme';
+import type { GraphEdge, GraphSpec, GraphNode } from './types';
 
 // Banded-lane layout, mirroring the deterministic column placement in
 // apps/web/src/components/ClusterTopologyGraph.tsx rather than dagre's
@@ -338,7 +344,38 @@ function serpentine(chain: GraphNode[], cols: number): GraphNode[] {
   return out;
 }
 
-function layout(spec: GraphSpec): {
+/**
+ * Follows a semantic return's normal forward path to the first decision or
+ * convergence. Linear paths keep their original return target, while returns
+ * through a workflow decision share that decision's downstream continuation.
+ */
+export function findLoopbackReturnJoinNode(loopback: GraphEdge, edges: GraphEdge[]): string {
+  const forwardEdges = edges.filter((edge) => !edge.loopback);
+  const outgoing = new Map<string, GraphEdge[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of forwardEdges) {
+    const next = outgoing.get(edge.from) ?? [];
+    next.push(edge);
+    outgoing.set(edge.from, next);
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+  }
+
+  const fallback = loopback.to;
+  const visited = new Set<string>();
+  let current = fallback;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const next = outgoing.get(current) ?? [];
+    if (next.length > 1 || (current !== fallback && (incoming.get(current) ?? 0) > 1)) {
+      return current;
+    }
+    if (next.length !== 1) return fallback;
+    current = next[0].to;
+  }
+  return fallback;
+}
+
+export function layout(spec: GraphSpec): {
   nodes: Node[];
   edges: Edge[];
   canvasWidth: number;
@@ -853,7 +890,8 @@ function layout(spec: GraphSpec): {
     if (!s || !t) return;
 
     let kind: Kind;
-    if (s.band === t.band) kind = lateral.has(idx) ? 'lateral' : 'same';
+    if (e.loopback) kind = 'sideUp';
+    else if (s.band === t.band) kind = lateral.has(idx) ? 'lateral' : 'same';
     else if (Math.abs(t.band - s.band) > 1) kind = t.band > s.band ? 'sideDown' : 'sideUp';
     else kind = t.band > s.band ? 'down' : 'up';
 
@@ -966,6 +1004,15 @@ function layout(spec: GraphSpec): {
     const lane = gutterLane.get(`${idx}-${gutter}`) ?? 0;
     return top + (span * (Math.min(lane, total - 1) + 1)) / (total + 1);
   };
+  const loopbackRails = new Map<string, number>();
+  const loopbackRail = (returnJoin: string, side: 'left' | 'right') => {
+    const key = `${side}:${returnJoin}`;
+    const existing = loopbackRails.get(key);
+    if (existing !== undefined) return existing;
+    const lane = takeLane(`loopback-${side}`);
+    loopbackRails.set(key, lane);
+    return lane;
+  };
 
   const rfEdges: Edge[] = [];
   interface LabelBox {
@@ -983,6 +1030,15 @@ function layout(spec: GraphSpec): {
   // also sit on a connector crossing that run, which would read as a junction
   // label; placement below steers around them.
   const verticals: { edgeId: string; x: number; y0: number; y1: number }[] = [];
+  const loopbackLabelOwners = new Set<number>();
+  const labelledReturnFamilies = new Set<string>();
+  for (const route of routed) {
+    if (!route.e.loopback || !route.e.label) continue;
+    const key = `${findLoopbackReturnJoinNode(route.e, spec.edges)}\0${route.e.label}`;
+    if (labelledReturnFamilies.has(key)) continue;
+    labelledReturnFamilies.add(key);
+    loopbackLabelOwners.add(route.idx);
+  }
 
   for (const r of routed) {
     const { s, t, sx, tx, kind } = r;
@@ -1045,6 +1101,26 @@ function layout(spec: GraphSpec): {
         { x: tx, y: runY },
         { x: tx, y: ty },
       ];
+    } else if (r.e.loopback) {
+      // Semantic revision/return edges always travel on their own outer rail.
+      // A backward edge can rank in the same band as its target, so it cannot
+      // safely assume that an inter-band gutter exists.
+      const returnJoin = findLoopbackReturnJoinNode(r.e, spec.edges);
+      const joinNode = posById.get(returnJoin);
+      const goRight = joinNode
+        ? joinNode.x + joinNode.w / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2
+        : (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
+      const lane = loopbackRail(returnJoin, goRight ? 'right' : 'left');
+      const sideX = goRight
+        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + lane * LANE_STEP
+        : CANVAS_MARGIN + SIDE_CHANNEL - 24 - lane * LANE_STEP;
+      runY = sy;
+      points = [
+        { x: sx, y: sy },
+        { x: sideX, y: sy },
+        { x: sideX, y: ty },
+        { x: tx, y: ty },
+      ];
     } else {
       // Spans an intermediate band: run out to a side channel so the line
       // never crosses a band it has nothing to do with. The exit run and the
@@ -1079,7 +1155,8 @@ function layout(spec: GraphSpec): {
     const runEndX =
       kind === 'lateral' ? points[1].x : kind === 'sideDown' || kind === 'sideUp' ? points[2].x : tx;
     const labelX = (runStartX + runEndX) / 2;
-    const geom = labelGeom.get(r.idx);
+    const showLabel = !r.e.loopback || loopbackLabelOwners.has(r.idx);
+    const geom = showLabel ? labelGeom.get(r.idx) : undefined;
     const halfLabel = (geom?.w ?? 0) / 2 + 12;
     const labelPos = {
       x: Math.min(Math.max(labelX, halfLabel), canvasWidth - halfLabel),
@@ -1113,7 +1190,8 @@ function layout(spec: GraphSpec): {
       });
     }
 
-    const stroke = neutral.foreground4;
+    const isRevision = r.e.loopback === true;
+    const stroke = isRevision ? badgeTones.marigold.fg : neutral.foreground4;
     rfEdges.push({
       id: `e${r.idx}`,
       source: r.e.from,
@@ -1122,16 +1200,70 @@ function layout(spec: GraphSpec): {
       // Pre-wrapped so the rendered box matches the size layout reserved.
       label: geom?.lines.join('\n'),
       zIndex: 2,
-      data: { points, labelPos, labelOffset: { dx: 0, dy: 0 } },
+      data: {
+        points,
+        labelPos,
+        labelOffset: { dx: 0, dy: 0 },
+        loopback: isRevision,
+        returnJoin: isRevision ? findLoopbackReturnJoinNode(r.e, spec.edges) : undefined,
+        loopbackLabel: r.e.label,
+      },
       style: {
         stroke,
         strokeWidth: 1.8,
-        strokeDasharray: r.e.dashed ? '6 5' : undefined,
+        strokeDasharray: r.e.dashed || isRevision ? '6 5' : undefined,
       },
-      markerEnd: r.e.undirected
+      markerEnd: r.e.undirected || isRevision
         ? undefined
         : { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     });
+  }
+
+  const outgoingBySource = new Map<string, Edge>();
+  for (const edge of rfEdges) {
+    const data = edge.data as { loopback?: boolean } | undefined;
+    if (data?.loopback || outgoingBySource.has(edge.source)) continue;
+    outgoingBySource.set(edge.source, edge);
+  }
+  for (const edge of rfEdges) {
+    const data = edge.data as {
+      loopback?: boolean;
+      returnJoin?: string;
+      points?: Point[];
+      labelPos?: Point;
+      labelOffset?: { dx: number; dy: number };
+    } | undefined;
+    if (!data?.loopback || !data.points) continue;
+    const returnJoin = data.returnJoin ?? edge.target;
+    const continuation = outgoingBySource.get(returnJoin);
+    const continuationPoints = continuation
+      ? (continuation.data as { points?: Point[] } | undefined)?.points
+      : undefined;
+    const target = posById.get(returnJoin);
+    const points = alignLoopbackToContinuation(
+      data.points,
+      continuationPoints,
+      target
+        ? { x: target.x, y: target.y, width: target.w, height: target.h }
+        : undefined,
+    );
+    data.points = points;
+    const join = points.at(-1);
+    const sourceStub = points[1];
+    if (join && sourceStub && data.labelPos) {
+      data.labelPos = {
+        x: (points[0].x + sourceStub.x) / 2,
+        y: points[0].y,
+      };
+      const labelBox = labelBoxes.find((box) => box.edgeId === edge.id);
+      if (labelBox) {
+        labelBox.x = data.labelPos.x;
+        labelBox.ideal = data.labelPos.x;
+        labelBox.y = data.labelPos.y;
+        labelBox.xmin = Math.min(points[0].x, sourceStub.x);
+        labelBox.xmax = Math.max(points[0].x, sourceStub.x);
+      }
+    }
   }
 
   // A label is always drawn centred on its edge's run -- that is what makes it
@@ -1245,6 +1377,71 @@ function layout(spec: GraphSpec): {
   };
   for (const group of groups) resolveGroupBox(group.id);
 
+  // Nested group bounds expand after side channels are chosen. Move every
+  // vertical transit segment outside unrelated expanded groups it crosses;
+  // direct members (including descendants) retain their in-group route.
+  const nodeGroup = new Map(spec.nodes.map((node) => [node.id, node.group]));
+  const belongsToGroup = (nodeId: string, groupId: string) => {
+    let current = nodeGroup.get(nodeId);
+    while (current) {
+      if (current === groupId) return true;
+      current = groupById.get(current)?.parent;
+    }
+    return false;
+  };
+  for (const edge of rfEdges) {
+    const data = edge.data as { points?: Point[] };
+    const points = data.points;
+    if (!points || points.length < 2) continue;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const from = points[index];
+      const to = points[index + 1];
+      if (Math.abs(from.x - to.x) >= 0.5 || Math.abs(from.y - to.y) < 0.5) continue;
+      const y0 = Math.min(from.y, to.y);
+      const y1 = Math.max(from.y, to.y);
+      const crossed = groups
+        .filter((group) => !belongsToGroup(edge.source, group.id) && !belongsToGroup(edge.target, group.id))
+        .map((group) => groupBoxes.get(group.id))
+        .filter((box): box is Box =>
+          box !== undefined &&
+          from.x > box.x + 0.5 &&
+          from.x < box.x + box.w - 0.5 &&
+          y1 > box.y + 0.5 &&
+          y0 < box.y + box.h - 0.5,
+        );
+      if (crossed.length === 0) continue;
+      const left = Math.min(...crossed.map((box) => box.x)) - 24;
+      const right = Math.max(...crossed.map((box) => box.x + box.w)) + 24;
+      const bypassX = from.x <= (left + right) / 2 ? left : right;
+      from.x = bypassX;
+      to.x = bypassX;
+    }
+  }
+
+  // Decorations must follow the final route after group-boundary bypassing,
+  // rather than a stale pre-expansion side-channel coordinate.
+  const finalBridgesByEdge = findConnectorBridges(rfEdges.map((edge) => ({
+    id: edge.id,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
+  const finalJunctionsByEdge = findConnectorJunctions(rfEdges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    loopback: (edge.data as { loopback?: boolean } | undefined)?.loopback,
+    returnJoin: (edge.data as { returnJoin?: string } | undefined)?.returnJoin,
+    points: ((edge.data as { points?: Point[] } | undefined)?.points ?? []),
+  })));
+  for (const edge of rfEdges) {
+    const data = edge.data as { bridges?: unknown; junctions?: unknown };
+    delete data.bridges;
+    delete data.junctions;
+    const bridges = finalBridgesByEdge.get(edge.id);
+    const junctions = finalJunctionsByEdge.get(edge.id);
+    if (bridges) data.bridges = bridges;
+    if (junctions) data.junctions = junctions;
+  }
+
   // Nested containers may extend beyond the original canvas margin. Shift all
   // rendered geometry together so outer group titles and surfaces are not
   // clipped, then grow the canvas to include their far edges.
@@ -1268,8 +1465,12 @@ function layout(spec: GraphSpec): {
         const data = edge.data as {
           points?: Point[];
           labelPos?: { x: number; y: number };
+          bridges?: Array<{ x: number; y: number }>;
+          junctions?: Point[];
         };
         data.points = data.points?.map((point) => ({ x: point.x + dx, y: point.y + dy }));
+        data.bridges = data.bridges?.map((bridge) => ({ ...bridge, x: bridge.x + dx, y: bridge.y + dy }));
+        data.junctions = data.junctions?.map((junction) => ({ x: junction.x + dx, y: junction.y + dy }));
         if (data.labelPos) {
           data.labelPos = { x: data.labelPos.x + dx, y: data.labelPos.y + dy };
         }

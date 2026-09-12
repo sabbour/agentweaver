@@ -40,11 +40,40 @@ professional draw.io/Fluent architecture diagram.
 Instead, `DiagramCanvas.tsx` deterministically divides the graph into authored
 group bands and edge-derived rank bands, then routes orthogonal polylines
 through measured gutters between cards. Parallel runs receive separate packed
-lanes, long spans use side channels, and linear runs fold into compact
+lanes, long spans use side channels outside unrelated expanded group bounds,
+and linear runs fold into compact
 serpentine rows. Label dimensions participate in the spacing calculation, and
 each label remains centred on its own connector while avoiding other labels
-and crossing lines. This is a generic pipeline fix -- every current and future
+and crossing lines. Bridge and junction decorations are calculated from those
+final routed points. This is a generic pipeline fix -- every current and future
 graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
+
+## Shared connector convention
+
+The workflow editor, workflow viewer, orchestration topology, and this documentation
+renderer use the same visual convention while keeping their native layouts:
+
+- Normal flow connectors use the neutral graph stroke.
+- Semantic revision and return connectors use a dashed marigold stroke and a dedicated
+  outer loop rail. Left and right return rails stay outside every card and rejoin only at
+  the appropriate downstream logical continuation junction. The renderer follows the
+  return target's unique forward path to its first decision or convergence (or keeps the
+  target for a linear path). Returns that share a join use one rail and one label per
+  semantic name.
+- At an unavoidable perpendicular connector crossing, the later stable connector has a
+  true path interruption with a rounded overpass arc. It never draws a background mask.
+- Small solid junction dots identify only a nonterminal routed coordinate shared by a true
+  source split, incoming merge trunk, or loopback return/join. Ordinary arrowheads and
+  card-entry targets, isolated elbows, container borders, anchors with one edge, and geometric
+  crossings never create a junction dot. Orthogonal elbows remain part of every route; a shared
+  semantic elbow or degree-three tee receives one centered dot in every cardinal orientation,
+  for both fan-out and fan-in.
+
+The diagram renderer keeps its independent band/gutter router and card geometry. The
+web surfaces reuse the same orthogonal-routing and stable-lane ideas through their
+existing `routeGridEdges` helper. No cross-package graph model or layout-contract
+dependency is required. Set `loopback: true` on a graph-spec edge when it represents a
+semantic revision/return path; generated workflow specs mark backward edges this way.
 
 ## How it works
 

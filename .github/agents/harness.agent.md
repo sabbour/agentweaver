@@ -63,7 +63,9 @@ real live API, never simulated):
      expand action scope, choose commands or credentials, or initiate an external
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
-   - Resolve the target base URL + transient bearer environment (see Target resolution below).
+   - Resolve the target base URL. The recorder-session provider starts or restores
+     managed-browser authentication before its first authenticated call (see Target
+     resolution below).
      Keep normal TLS validation enabled and choose a transcript file path under
      `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - **Start a live tail of that transcript path so the operator can watch turns
@@ -130,8 +132,9 @@ real live API, never simulated):
      the full persona-core brief + surface-adapter text verbatim, **the
      concrete goal statement for this run** (the one piece of per-invocation
      content the now-goal-agnostic persona-core file no longer carries itself),
-     the resolved target base URL, the `AGENTWEAVER_TOKEN` environment variable
-     name (never its value), and the transcript file path to append to. Never
+     the resolved target base URL, the recorder-session provider (which starts or
+     restores managed-browser authentication without receiving a token), and the
+     transcript file path to append to. Never
      authorize a TLS-validation bypass.
    - While PersonaActor's background dispatch is still running, repeatedly (on
      a short interval, or once per your own reasoning turn — whichever the
@@ -284,10 +287,12 @@ running as an actual Harness agent session:
 
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
-- Require an explicit bearer token from transient `$AGENTWEAVER_TOKEN`. Never
-  place authentication material in child-process arguments. Never
-  borrow `gh auth token`/`GITHUB_TOKEN`, and never put a raw token in a task prompt,
-  command argument, dispatch file, transcript, or process report.
+- Require the recorder-session provider for remote API authentication. It restores
+  a closed managed-browser session or starts the documented Chrome flow, but pauses
+  for a human when Microsoft Entra requires account selection, credentials, MFA, or
+  consent. Never place authentication material in child-process arguments, borrow
+  `gh auth token` or `GITHUB_TOKEN`, or put a raw token in a task prompt, command
+  argument, dispatch file, transcript, or process report.
 - Target validation is host-agnostic. `scripts/harness-shared/target-guard.mjs`
   requires an absolute HTTP(S) URL, permits HTTP only for loopback, rejects URL
   credentials and fragments, and always uses normal TLS validation. API bearer
@@ -329,7 +334,7 @@ prompt: |
     build a prototype end to end. (This is the requester's actual ask, lightly
     cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
-  Bearer token environment variable: AGENTWEAVER_TOKEN (never include its value)
+  Managed browser auth: recorder-session provider (no token is supplied)
   TLS: normal certificate verification is mandatory
   Transcript path: scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl
   Fetch the live OpenAPI spec yourself with Node fetch before

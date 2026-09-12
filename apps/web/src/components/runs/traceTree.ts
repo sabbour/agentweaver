@@ -4,17 +4,91 @@ export type SpanType = 'invoke-agent' | 'llm' | 'tool';
 /** Arguments/output pulled from the persisted tool.call/tool.result/tool.error event log,
  *  keyed by callId, so the trace panel can show what a tool span actually did (issue #850). */
 export interface ToolCallDetail {
-  arguments?: Record<string, unknown>;
-  content?: string;
-  errorMessage?: string;
+  arguments?: unknown;
+  content?: unknown;
+  errorMessage?: unknown;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+export interface SafeToolValue {
+  state: 'available' | 'redacted' | 'unavailable';
+  text?: string;
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
+const REDACTED = '***REDACTED***';
+const maxStringLength = 8_192;
+const maxRenderedLength = 16_384;
+const maxCollectionEntries = 100;
+const maxDepth = 8;
+const sensitiveKey = /(token|authorization|password|secret|credential|connection.?string|api.?key|private.?key|access.?key|bearer|key)/i;
+const sensitiveValue = /(?:\bgh[uspor]_[A-Za-z0-9_-]+\b|\bgithub_pat_[A-Za-z0-9_]+\b|-----BEGIN [A-Z0-9 ]+-----|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?|https?:\/\/[^\s/@:]+:[^\s/@]+@|(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?=[^A-Za-z0-9+/=]|$))/i;
+
+function hasSensitiveValue(value: string): boolean {
+  return sensitiveValue.test(value)
+    || (/(?:^|[?&;])\s*(?:sv|ss|sp|se)\s*=/i.test(value)
+      && /(?:^|[?&;])\s*sig\s*=/i.test(value))
+    || /\b(?:AccountKey|SharedAccessSignature)\s*=/i.test(value);
+}
+
+function parseStructuredText(value: string): unknown {
+  const trimmed = value.trim();
+  if (trimmed.length > 1 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+    try { return JSON.parse(trimmed); } catch { /* Render source text below. */ }
+  }
+  return value;
+}
+
+function normalizeToolValue(value: unknown, depth: number): { value: unknown; redacted: boolean } {
+  if (depth > maxDepth) return { value: '[Nested value omitted]', redacted: false };
+  if (value == null || typeof value === 'boolean' || typeof value === 'number') return { value, redacted: false };
+  if (typeof value === 'string') {
+    if (value === REDACTED || hasSensitiveValue(value)) return { value: REDACTED, redacted: true };
+    if (value.length > maxStringLength) return { value: '[Value omitted: exceeds display limit]', redacted: false };
+    const parsed = parseStructuredText(value);
+    return parsed === value ? { value, redacted: false } : normalizeToolValue(parsed, depth + 1);
+  }
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, maxCollectionEntries).map((entry) => normalizeToolValue(entry, depth + 1));
+    return {
+      value: value.length > maxCollectionEntries
+        ? [...entries.map((entry) => entry.value), `[${value.length - maxCollectionEntries} entries omitted]`]
+        : entries.map((entry) => entry.value),
+      redacted: entries.some((entry) => entry.redacted),
+    };
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, maxCollectionEntries);
+    let redacted = false;
+    const normalized: Record<string, unknown> = {};
+    for (const [key, entry] of entries) {
+      if (sensitiveKey.test(key)) {
+        normalized[key] = REDACTED;
+        redacted = true;
+      } else {
+        const next = normalizeToolValue(entry, depth + 1);
+        normalized[key] = next.value;
+        redacted ||= next.redacted;
+      }
+    }
+    if (Object.keys(value as Record<string, unknown>).length > maxCollectionEntries)
+      normalized._omitted = 'Additional fields omitted.';
+    return { value: normalized, redacted };
+  }
+  return { value: '[Unsupported recorded value]', redacted: false };
+}
+
+/**
+ * Produces a bounded, syntax-readable representation of tool data. This repeats backend
+ * redaction defensively so a malformed or legacy event cannot expose credentials in the trace UI.
+ */
+export function formatSafeToolValue(value: unknown): SafeToolValue {
+  if (value === undefined) return { state: 'unavailable' };
+  const normalized = normalizeToolValue(value, 0);
+  const text = typeof normalized.value === 'string'
+    ? normalized.value
+    : JSON.stringify(normalized.value, null, 2);
+  if (text.length > maxRenderedLength)
+    return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
+  return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
 
 /**
@@ -27,18 +101,15 @@ export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, Too
   const index = new Map<string, ToolCallDetail>();
   for (const event of events) {
     const payload = event.payload;
-    const callId = asString(payload?.['callId']);
+    const callId = typeof payload?.['callId'] === 'string' ? payload['callId'] : undefined;
     if (!callId) continue;
     const entry = index.get(callId) ?? {};
     if (event.type === 'tool.call') {
-      const args = asRecord(payload['arguments']);
-      if (args) entry.arguments = args;
+      if (Object.hasOwn(payload, 'arguments')) entry.arguments = payload['arguments'];
     } else if (event.type === 'tool.result') {
-      const content = asString(payload['content']);
-      if (content !== undefined) entry.content = content;
+      if (Object.hasOwn(payload, 'content')) entry.content = payload['content'];
     } else if (event.type === 'tool.error') {
-      const errorMessage = asString(payload['errorMessage']);
-      if (errorMessage !== undefined) entry.errorMessage = errorMessage;
+      if (Object.hasOwn(payload, 'errorMessage')) entry.errorMessage = payload['errorMessage'];
     } else {
       continue;
     }
@@ -54,6 +125,31 @@ export interface TraceNode {
   /** True when this node is a presentation-only LLM leaf synthesized from an agent span. */
   synthetic: boolean;
   children: TraceNode[];
+}
+
+export interface TraceTimeline {
+  startedAtMs: number;
+  endedAtMs: number;
+  durationMs: number;
+}
+
+/**
+ * Calculates the actual trace window from normalized span timestamps and durations.
+ * Invalid timestamps are ignored so a malformed record cannot make every bar disappear.
+ */
+export function getTraceTimeline(spans: RunTraceSpanDto[]): TraceTimeline | null {
+  const timedSpans = spans
+    .map((span) => ({
+      startedAtMs: new Date(span.timestamp).getTime(),
+      durationMs: Math.max(0, span.durationMs),
+    }))
+    .filter((span) => Number.isFinite(span.startedAtMs));
+
+  if (timedSpans.length === 0) return null;
+
+  const startedAtMs = Math.min(...timedSpans.map((span) => span.startedAtMs));
+  const endedAtMs = Math.max(...timedSpans.map((span) => span.startedAtMs + span.durationMs));
+  return { startedAtMs, endedAtMs, durationMs: Math.max(0, endedAtMs - startedAtMs) };
 }
 
 export function normalizeType(span: RunTraceSpanDto): SpanType {
