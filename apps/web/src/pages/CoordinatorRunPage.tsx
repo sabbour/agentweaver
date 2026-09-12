@@ -65,7 +65,9 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
+import { TopologyLayoutToggle } from '../components/TopologyLayoutToggle';
+import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
   ArrowAutofitHeightRegular,
   ArrowAutofitWidthRegular,
@@ -2178,6 +2180,8 @@ const useTopologyToolbarStyles = makeStyles({
 
 interface TopologyToolbarProps {
   orientation: 'LR' | 'TB';
+  layoutEngine: TopologyLayoutEngine;
+  onLayoutEngineChange: (engine: TopologyLayoutEngine) => void;
   onToggleOrientation: () => void;
   onTidy: () => void;
   fitPadding: number;
@@ -2187,13 +2191,14 @@ interface TopologyToolbarProps {
 // can drive the shared viewport (zoom in/out, fit) natively. Tidy re-runs the dagre layout and
 // re-fits; Switch orientation toggles LR/TB rank direction (both re-fit on next render via the
 // keyed ReactFlow remount + its fitView prop).
-function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
+function TopologyToolbar({ orientation, layoutEngine, onLayoutEngineChange, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
   const toolbarStyles = useTopologyToolbarStyles();
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
   const zoomPct = Math.round((zoom ?? 1) * 100);
   return (
     <div className={toolbarStyles.bar} role="toolbar" aria-label="Topology graph controls" data-testid="topology-toolbar">
+      <TopologyLayoutToggle engine={layoutEngine} onChange={onLayoutEngineChange} />
       <Tooltip content="Zoom out" relationship="label" withArrow>
         <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} onClick={() => zoomOut({ duration: 200 })} />
       </Tooltip>
@@ -2260,6 +2265,7 @@ function TopologyViewportController({
 
 export function CoordinatorRunPage() {
   const styles = useStyles();
+  const [layoutEngine, setLayoutEngine] = useTopologyLayoutEngine();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
   const [previewRetrying, setPreviewRetrying] = useState(false);
@@ -3229,8 +3235,17 @@ export function CoordinatorRunPage() {
     };
     // Lay out BOTH orientations deterministically so we can (a) render the active one and
     // (b) compare their footprints to auto-pick the orientation that fills the panel best.
-    const laidOutLR = layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'LR' }, nodeSizeHints);
-    const laidOutTB = layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'TB' }, nodeSizeHints);
+    const laidOutLR = layoutEngine === 'legacy-staircase'
+      ? layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'LR' }, nodeSizeHints)
+      : layoutDagBalancedGrid(raw, fwdEdges, {
+        rankSep: COORD_GRAPH_RANK_SEP,
+        nodeSep: COORD_GRAPH_NODE_SEP,
+        minColumns: 1,
+        maxColumns: 4,
+      }, nodeSizeHints);
+    const laidOutTB = layoutEngine === 'legacy-staircase'
+      ? layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'TB' }, nodeSizeHints)
+      : laidOutLR;
     const laidOutNodes = graphOrientation === 'TB' ? laidOutTB : laidOutLR;
     return {
       rfNodes:      laidOutNodes,
@@ -3238,7 +3253,7 @@ export function CoordinatorRunPage() {
       bboxLR:       layoutBBox(laidOutLR, nodeSizeHints),
       bboxTB:       layoutBBox(laidOutTB, nodeSizeHints),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, layoutEngine, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
 
   const liveTerminalNow = useTickingNow(viewState.terminal);
   const liveRfNodes = !viewState.terminal
@@ -4343,6 +4358,8 @@ export function CoordinatorRunPage() {
           <ReactFlowProvider>
           <TopologyToolbar
             orientation={graphOrientation}
+            layoutEngine={layoutEngine}
+            onLayoutEngineChange={setLayoutEngine}
             onToggleOrientation={() => {
               setOrientationUserChose(true);
               setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'));
@@ -4362,7 +4379,7 @@ export function CoordinatorRunPage() {
           >
             <div ref={topoContainerRef} data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
               <ReactFlow
-                key={`${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
+                key={`${layoutEngine}:${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
                 nodes={linkedDisplayNodes}
                 edges={displayEdges2}
                 nodeTypes={coordinatorNodeTypes}

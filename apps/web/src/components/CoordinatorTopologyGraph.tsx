@@ -21,7 +21,8 @@ import { Button,
   } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { DAG_NODE_SEP,
-  layoutDagColumns,
+  layoutDagBalancedGrid,
+  layoutDagStaircase,
   NODE_W,
   RENDERED_TOPOLOGY_NODE_H,
   routeGridEdges } from '../utils/dagLayout';
@@ -29,6 +30,8 @@ import { AgentAvatar } from './AgentAvatar';
 import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
 import { PodIndicator } from './PodIndicator';
 import { STEERING_HELP } from './steeringHelp';
+import { TopologyLayoutToggle } from './TopologyLayoutToggle';
+import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import '@xyflow/react/dist/style.css';
 import {
@@ -548,6 +551,7 @@ interface CoordinatorTopologyGraphProps {
 
 export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
   const styles = useStyles();
+  const [layoutEngine, setLayoutEngine] = useTopologyLayoutEngine();
   const providerContext = useAiExecutionContext(
     'orchestration',
     projectId,
@@ -628,8 +632,21 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
     const nodeSizeHints = Object.fromEntries(
       nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
     );
-    return layoutDagColumns(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
-  }, [nodes, rfEdges]);
+    if (layoutEngine === 'legacy-staircase') {
+      return layoutDagStaircase(raw, rfEdges, {
+        rankdir: 'LR',
+        rankSep: 80,
+        nodeSep: DAG_NODE_SEP,
+        targetAspect: 1.35,
+      }, nodeSizeHints);
+    }
+    return layoutDagBalancedGrid(raw, rfEdges, {
+      rankSep: 80,
+      nodeSep: DAG_NODE_SEP,
+      minColumns: 1,
+      maxColumns: 4,
+    }, nodeSizeHints);
+  }, [nodes, rfEdges, layoutEngine]);
   const routedEdges = useMemo(
     () => routeGridEdges(rfEdges, rfNodes),
     [rfEdges, rfNodes],
@@ -672,6 +689,9 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
             panOnDrag
             proOptions={{ hideAttribution: true }}
           >
+            <Panel position="top-left">
+              <TopologyLayoutToggle engine={layoutEngine} onChange={setLayoutEngine} />
+            </Panel>
             <Panel position="top-right">
               <GraphControls orderedNodeIds={orderedNodeIds} />
             </Panel>

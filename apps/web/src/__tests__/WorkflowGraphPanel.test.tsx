@@ -308,7 +308,7 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
     const { rfNodes, layoutMode } = buildWorkflowDefinitionGraph(graph);
     const byId = new Map(rfNodes.map((node) => [node.id, node]));
 
-    expect(layoutMode).toBe('columns');
+    expect(layoutMode).toBe('balanced-grid');
     expect(byId.get('research')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
     expect(byId.get('review')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
     expect(byId.get('done')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
@@ -344,7 +344,7 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
     const { rfNodes, rfEdges, layoutMode } = buildWorkflowDefinitionGraph(graph);
     const nodeIds = new Set(rfNodes.map((node) => node.id));
 
-    expect(layoutMode).toBe('columns');
+    expect(layoutMode).toBe('balanced-grid');
     expect(rfEdges).toHaveLength(graph.edges.length);
     for (const node of rfNodes) {
       expect(node.data.dir).toBe('GRID');
