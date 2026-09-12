@@ -17,8 +17,10 @@ The timeline reconstructs hierarchy from parent/child relationships, shows each 
 the measured trace window, and uses distinct agent, model, and tool visuals. Failed spans use
 error styling. The summary status follows the root agent/coordinator spans, so a failed tool
 attempt that a later retry recovers from remains visible without marking the whole trace failed.
-Select a span to inspect its status, timing, correlation IDs, operation, model usage, and tool-call
-context.
+error styling. Select a span to inspect its status, timing, correlation IDs, operation, model
+usage, and tool-call context. Long timelines scroll inside their own bounded region, keeping the
+selected-span inspector visible beside the rows on wide screens. On narrower screens the layout
+stacks so both the timeline and inspector remain usable.
 
 The trace tree is organized by span relationships:
 

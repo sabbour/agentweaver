@@ -104,15 +104,22 @@ const useStyles = makeStyles({
     display: 'grid',
     gap: tokens.spacingHorizontalL,
     minWidth: 0,
+    alignItems: 'start',
     '@media (min-width: 1100px)': {
       gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 360px)',
     },
   },
   timeline: {
     minWidth: 0,
+    maxHeight: 'min(680px, 70vh)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    overflow: 'hidden',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    scrollbarWidth: 'thin',
+    '@media (max-width: 1099px)': {
+      maxHeight: 'min(560px, 60vh)',
+    },
   },
   axis: {
     display: 'grid',
@@ -124,6 +131,9 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
   },
   axisTitle: {
     fontWeight: tokens.fontWeightSemibold,
@@ -241,6 +251,8 @@ const useStyles = makeStyles({
   inspector: {
     minWidth: 0,
     height: 'fit-content',
+    position: 'sticky',
+    top: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -248,6 +260,9 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    '@media (max-width: 1099px)': {
+      position: 'static',
+    },
   },
   inspectorHeader: {
     display: 'flex',
@@ -1122,7 +1137,14 @@ export function TransactionTracePanel({
 
           {activeTab === 'timeline' && (
             <div className={styles.timelineLayout}>
-              <div className={styles.timeline} data-testid="trace-timeline">
+              <div
+                className={styles.timeline}
+                data-testid="trace-timeline"
+                data-scrollable="true"
+                role="region"
+                aria-label="Trace timeline"
+                tabIndex={0}
+              >
                 <div className={styles.axis}>
                   <Text className={styles.axisTitle}>SPAN</Text>
                   <span className={styles.axisTicks}>

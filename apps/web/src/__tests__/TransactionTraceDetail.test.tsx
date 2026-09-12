@@ -169,6 +169,34 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Trace summary').textContent).toContain('Success');
   });
 
+  it('keeps a long timeline in an accessible internal scroll region beside the inspector', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: Array.from({ length: 40 }, (_, index) => ({
+        id: `tool-${index}`,
+        name: `tool ${index}`,
+        spanType: 'tool' as const,
+        timestamp: `2026-09-11T16:00:${String(index).padStart(2, '0')}.000Z`,
+        durationMs: 100,
+        success: true,
+      })),
+    });
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const timeline = screen.getByRole('region', { name: 'Trace timeline' });
+    expect(timeline).toBe(screen.getByTestId('trace-timeline'));
+    expect(timeline.getAttribute('tabindex')).toBe('0');
+    expect(timeline.getAttribute('data-scrollable')).toBe('true');
+    expect(screen.getAllByTestId('trace-span')).toHaveLength(40);
+    expect(screen.getByLabelText('Span inspector')).toBeTruthy();
+  });
+
   it('renders populated tool input and structured output from persisted events', async () => {
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       {
