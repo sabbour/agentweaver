@@ -1509,7 +1509,7 @@ export function layout(spec: GraphSpec): {
     );
   }
 
-  const brandHeight = spec.brand ? 96 : 0;
+  const brandHeight = spec.brand ? 124 : 0;
   if (brandHeight > 0) {
     for (const p of placed) {
       p.y += brandHeight;
@@ -1615,20 +1615,20 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
       {spec.brand && (
         <div style={{
           position: 'absolute',
-          top: 20,
-          left: 32,
+          top: 26,
+          left: 40,
           zIndex: 5,
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
+          gap: 16,
           fontFamily: '"Segoe UI", ui-sans-serif, system-ui, sans-serif',
           color: neutral.foreground1,
         }}>
-          {spec.brand.logo && <img src={spec.brand.logo} alt="" style={{ width: 42, height: 42, objectFit: 'contain' }} />}
+          {spec.brand.logo && <img src={spec.brand.logo} alt="" style={{ width: 64, height: 64, objectFit: 'contain' }} />}
           <div>
-            <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1 }}>{spec.brand.name}</div>
+            <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.1 }}>{spec.brand.name}</div>
             {spec.brand.subtitle && (
-              <div style={{ fontSize: 14, color: neutral.foreground3, marginTop: 3 }}>{spec.brand.subtitle}</div>
+              <div style={{ fontSize: 17, color: neutral.foreground3, marginTop: 4 }}>{spec.brand.subtitle}</div>
             )}
           </div>
         </div>
