@@ -1817,6 +1817,18 @@ export interface TraceSpanAttributesDto {
   totalNanoAiu?: number | null;
   status?: string | null;
   errorType?: string | null;
+  execution?: ExecutionDiagnosticsDto | null;
+}
+
+/** Fixed execution evidence; missing values are unavailable, not zero. */
+export interface ExecutionDiagnosticsDto {
+  queueEnteredAt?: string | null;
+  dispatchStartedAt?: string | null;
+  processStartedAt?: string | null;
+  processEndedAt?: string | null;
+  hostProcessCpuMs?: number | null;
+  hostProcessWorkingSetBytes?: number | null;
+  hostProcessPeakWorkingSetBytes?: number | null;
 }
 
 export interface RunTraceDto {

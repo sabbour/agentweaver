@@ -50,6 +50,13 @@ beforeEach(() => {
           outputTokens: 45,
           totalTokens: 165,
           status: 'success',
+          execution: {
+            processStartedAt: '2026-09-11T16:00:00.000Z',
+            processEndedAt: '2026-09-11T16:00:03.000Z',
+            hostProcessCpuMs: 750,
+            hostProcessWorkingSetBytes: 1048576,
+            hostProcessPeakWorkingSetBytes: 2097152,
+          },
         },
       },
       {
@@ -72,6 +79,13 @@ beforeEach(() => {
           policyDecision: 'denied',
           status: 'error',
           errorType: 'policy_denied',
+          execution: {
+            processStartedAt: '2026-09-11T16:00:01.000Z',
+            processEndedAt: '2026-09-11T16:00:01.500Z',
+            hostProcessCpuMs: 750,
+            hostProcessWorkingSetBytes: 1048576,
+            hostProcessPeakWorkingSetBytes: 2097152,
+          },
         },
       },
     ],
@@ -168,6 +182,10 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByText('policy.decision')).toBeTruthy();
     expect(screen.getByText('denied')).toBeTruthy();
     expect(screen.getAllByText('Not recorded').length).toBeGreaterThan(0);
+    expect(screen.getByText('Execution diagnostics')).toBeTruthy();
+    expect(screen.getByText('Host-process evidence recorded; bottleneck is not determined from this trace alone.')).toBeTruthy();
+    expect(screen.getByText('750 ms')).toBeTruthy();
+    expect(screen.getByText('1.0 MB')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Events' }));
     await waitFor(() => expect(screen.getByLabelText('Persisted trace events').textContent).toContain('tool.call'));

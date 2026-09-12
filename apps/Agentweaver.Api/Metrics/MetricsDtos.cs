@@ -202,6 +202,22 @@ public sealed record TraceSpanAttributesDto
     [JsonPropertyName("totalNanoAiu")] public long? TotalNanoAiu { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("errorType")] public string? ErrorType { get; init; }
+    [JsonPropertyName("execution")] public ExecutionDiagnosticsDto? Execution { get; init; }
+}
+
+/// <summary>
+/// Fixed-shape execution evidence. A null property means it was not recorded; consumers must not
+/// treat it as zero or infer a CPU, memory, I/O, network, or capacity bottleneck.
+/// </summary>
+public sealed record ExecutionDiagnosticsDto
+{
+    [JsonPropertyName("queueEnteredAt")] public DateTimeOffset? QueueEnteredAt { get; init; }
+    [JsonPropertyName("dispatchStartedAt")] public DateTimeOffset? DispatchStartedAt { get; init; }
+    [JsonPropertyName("processStartedAt")] public DateTimeOffset? ProcessStartedAt { get; init; }
+    [JsonPropertyName("processEndedAt")] public DateTimeOffset? ProcessEndedAt { get; init; }
+    [JsonPropertyName("hostProcessCpuMs")] public long? HostProcessCpuMs { get; init; }
+    [JsonPropertyName("hostProcessWorkingSetBytes")] public long? HostProcessWorkingSetBytes { get; init; }
+    [JsonPropertyName("hostProcessPeakWorkingSetBytes")] public long? HostProcessPeakWorkingSetBytes { get; init; }
 }
 
 /// <summary>

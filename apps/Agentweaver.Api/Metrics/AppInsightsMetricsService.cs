@@ -840,7 +840,32 @@ public sealed class AppInsightsMetricsService
                 ?? (success ? "success" : "error"),
             ErrorType = BoundedDimension(dimensions, TraceTelemetry.ErrorType)
                 ?? (!success ? BoundedValue(resultCode) : null),
+            Execution = ProjectExecutionDiagnostics(dimensions),
         };
+    }
+
+    private static ExecutionDiagnosticsDto? ProjectExecutionDiagnostics(
+        IReadOnlyDictionary<string, string?> dimensions)
+    {
+        var diagnostics = new ExecutionDiagnosticsDto
+        {
+            QueueEnteredAt = ReadBoundedTimestamp(dimensions, "agentweaver.execution.queue.entered_at"),
+            DispatchStartedAt = ReadBoundedTimestamp(dimensions, "agentweaver.execution.dispatch.started_at"),
+            ProcessStartedAt = ReadBoundedTimestamp(dimensions, TraceTelemetry.ProcessStartedAt),
+            ProcessEndedAt = ReadBoundedTimestamp(dimensions, TraceTelemetry.ProcessEndedAt),
+            HostProcessCpuMs = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessCpuMs),
+            HostProcessWorkingSetBytes = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessWorkingSetBytes),
+            HostProcessPeakWorkingSetBytes = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessPeakWorkingSetBytes),
+        };
+        return diagnostics.QueueEnteredAt is null
+            && diagnostics.DispatchStartedAt is null
+            && diagnostics.ProcessStartedAt is null
+            && diagnostics.ProcessEndedAt is null
+            && diagnostics.HostProcessCpuMs is null
+            && diagnostics.HostProcessWorkingSetBytes is null
+            && diagnostics.HostProcessPeakWorkingSetBytes is null
+                ? null
+                : diagnostics;
     }
 
     /// <summary>
@@ -1112,6 +1137,23 @@ public sealed class AppInsightsMetricsService
     {
         var value = ReadDimension(dimensions, key);
         return long.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static long? ReadNonNegativeLong(IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = ReadDimensionLong(dimensions, key);
+        return value is >= 0 ? value : null;
+    }
+
+    private static DateTimeOffset? ReadBoundedTimestamp(
+        IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = BoundedValue(ReadDimension(dimensions, key));
+        return DateTimeOffset.TryParse(value, out var timestamp)
+            && timestamp >= DateTimeOffset.UnixEpoch
+            && timestamp <= DateTimeOffset.UtcNow.AddDays(1)
+                ? timestamp
+                : null;
     }
 
     private static bool? ReadDimensionBoolean(IReadOnlyDictionary<string, string?> dimensions, string key)

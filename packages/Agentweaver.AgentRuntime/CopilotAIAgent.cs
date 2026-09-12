@@ -1222,11 +1222,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         activity.SetTag("model_id", _modelId);
         activity.SetTag(TraceTelemetry.RequestModel, _modelId);
         ApplySafeTraceContext(activity);
+        CaptureHostProcessTelemetryStart(activity);
         return activity;
     }
 
     private void CompleteModelTurnTelemetry(Activity? activity, bool succeeded)
     {
+        if (activity is not null)
+            CaptureHostProcessTelemetry(activity, DateTimeOffset.UtcNow);
         var model = _turnModelId ?? _modelId ?? "unknown";
         var agent = string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName!;
         activity?.SetTag(TraceTelemetry.SpanKind, "agent_turn");
@@ -1718,6 +1721,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             : ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
         if (activity is not null && startTime is { } ts && ts != default)
             activity.SetStartTime(ts.UtcDateTime);
+        if (activity is not null)
+            CaptureHostProcessTelemetryStart(activity);
         return activity;
     }
 
@@ -1774,6 +1779,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime, string? toolResult = null)
     {
+        CaptureHostProcessTelemetry(activity, endTime ?? DateTimeOffset.UtcNow);
         activity.SetTag(TraceTelemetry.ToolSuccess, success);
         activity.SetTag(TraceTelemetry.Status, success ? "success" : "error");
         if (!success)
@@ -1790,6 +1796,37 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    private static void CaptureHostProcessTelemetryStart(Activity activity)
+    {
+        activity.SetTag(TraceTelemetry.ProcessStartedAt, activity.StartTimeUtc.ToString("O"));
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            activity.SetTag("agentweaver.execution.host_process.cpu_start_ms", process.TotalProcessorTime.TotalMilliseconds);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static void CaptureHostProcessTelemetry(Activity activity, DateTimeOffset endedAt)
+    {
+        activity.SetTag(TraceTelemetry.ProcessEndedAt, endedAt.ToString("O"));
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var cpuEndMs = process.TotalProcessorTime.TotalMilliseconds;
+            if (activity.GetTagItem("agentweaver.execution.host_process.cpu_start_ms") is { } cpuStart
+                && double.TryParse(cpuStart.ToString(), out var cpuStartMs))
+                activity.SetTag(TraceTelemetry.HostProcessCpuMs, (long)Math.Round(Math.Max(0, cpuEndMs - cpuStartMs)));
+            activity.SetTag(TraceTelemetry.HostProcessWorkingSetBytes, process.WorkingSet64);
+            activity.SetTag(TraceTelemetry.HostProcessPeakWorkingSetBytes, process.PeakWorkingSet64);
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     /// <summary>

@@ -296,6 +296,20 @@ to that trace's focused view; they are navigation handles, not raw telemetry pay
 The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
 available without repeating the provider or error code in separate status fragments.
 
+### Execution bottleneck evidence
+
+Select a span and open **Attributes** to inspect **Execution diagnostics**. Agentweaver
+records safe process start/end times plus host-process CPU time and memory working-set
+snapshots when the host makes them available. The panel also reserves queue and dispatch
+timestamps for environments that emit them.
+
+This evidence is correlated with the selected agent or tool span, but it is deliberately
+not a bottleneck verdict. Disk and network I/O, sandbox-process resource usage, capacity
+pressure, and unrecorded queue phases display **Not recorded**. When evidence is missing
+or incomplete, the panel says that no bottleneck is inferred rather than attributing a
+delay to CPU, memory, I/O, network, or capacity. No commands, command output, prompts,
+credentials, paths, or arbitrary dependency payloads are added to trace telemetry.
+
 Provider snapshot failures are separate from provider health and authorization:
 
 - `model_provider_snapshot_unavailable` means Agentweaver could not load the immutable
