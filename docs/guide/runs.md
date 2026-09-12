@@ -340,6 +340,8 @@ From the runs list you can also **Abandon** an in-flight run (discards pending c
 
 Each agent runs inside a **dedicated git worktree** branched from the project's working directory. Agents cannot reach outside their worktree unless the sandbox policy explicitly allows it. The originating branch is never modified during a run — only after you approve and the merge step completes.
 
+While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
+
 ![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/canonical-sandbox-experience.png)
 
 <!-- Rendered from ../diagrams/src/canonical-sandbox-experience.json by docs/diagram-renderer +

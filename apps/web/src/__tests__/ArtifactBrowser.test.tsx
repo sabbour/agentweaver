@@ -152,6 +152,27 @@ describe('ArtifactBrowser', () => {
     expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps polling a provisioning workspace and preserves its actionable file-list message', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockRejectedValue(new ApiError(409, JSON.stringify({
+      error: 'workspace_provisioning',
+      message: 'Changes will appear automatically when ready.',
+    })));
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="provisioning-run" runStatus="in_progress" />
+      </Wrapper>,
+    );
+
+    await vi.waitFor(() => expect(getRunFilesMock()).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Changes will appear automatically when ready.');
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(getRunFilesMock()).toHaveBeenCalledTimes(2);
+  });
+
   it('stops artifact polling after bounded retries for a persistent server error', async () => {
     vi.useFakeTimers();
     getRunFilesMock().mockRejectedValue(new ApiError(500, 'persistent server failure'));
@@ -189,6 +210,35 @@ describe('ArtifactBrowser', () => {
     await vi.waitFor(() => expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1));
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling the Files tab while its workspace is provisioning', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockResolvedValue([]);
+    getRunWorkspaceMock().mockRejectedValue(new ApiError(409, JSON.stringify({
+      error: 'workspace_provisioning',
+      message: 'Files will appear automatically when ready.',
+    })));
+
+    const { result } = renderHook(() =>
+      useArtifactBrowser(
+        'provisioning-workspace-run',
+        'in_progress',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'files',
+      ),
+    );
+
+    await vi.waitFor(() => expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(result.current.workspaceError).toContain('Files will appear automatically when ready.');
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(2);
   });
 
   // AB-01b: at a review gate, an empty file list means the run reached review with zero

@@ -55,6 +55,15 @@ function extractErrorMessage(err: unknown): string {
   return formatApiErrorMessage(err);
 }
 
+function isWorkspaceProvisioningError(err: unknown): boolean {
+  return err instanceof ApiError
+    && err.status === 409
+    && typeof err.payload === 'object'
+    && err.payload !== null
+    && 'error' in err.payload
+    && err.payload.error === 'workspace_provisioning';
+}
+
 export interface ArtifactBrowserState {
   runStatus: string;
   commitMessage: string | null;
@@ -203,7 +212,10 @@ export function useArtifactBrowser(
         })
         .catch((err: unknown) => {
           if (active) {
-            if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
+            if (isWorkspaceProvisioningError(err)) {
+              setFilesError(extractErrorMessage(err));
+              setFilesLoading(false);
+            } else if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
               setFilesError(err.status === 409
                 ? 'Workspace files unavailable for this run state.'
                 : extractErrorMessage(err));
@@ -283,7 +295,9 @@ export function useArtifactBrowser(
           if (active) {
             setWorkspaceError(extractErrorMessage(err));
             setWorkspaceLoading(false);
-            if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+            if (isWorkspaceProvisioningError(err)) {
+              // A child can publish worktree metadata after its panel opens.
+            } else if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
               clearInterval(workspaceIntervalId);
               active = false;
             } else if (err instanceof ApiError && err.status >= 500) {

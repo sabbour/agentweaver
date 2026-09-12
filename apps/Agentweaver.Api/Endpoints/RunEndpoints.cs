@@ -1721,9 +1721,14 @@ app.MapGet("/api/runs/{id}/workspace", async (
         return Results.Json(Array.Empty<WorkspaceNode>());
 
     // An active run can become visible before asynchronous worktree provisioning
-    // writes its path. This is an empty workspace, not a missing artifact source.
+    // writes its path. Do not represent that as an empty workspace: it incorrectly
+    // tells an authorized viewer that the child produced no files.
     if (run.Status is RunStatus.InProgress && string.IsNullOrEmpty(run.WorktreePath))
-        return Results.Json(Array.Empty<WorkspaceNode>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Files will appear automatically when it is ready."
+        });
 
     // Merged runs: enumerate the commit tree from git (worktree has been deleted).
     if (run.Status is RunStatus.Merged)
@@ -1758,7 +1763,15 @@ app.MapGet("/api/runs/{id}/workspace", async (
     }
 
     if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+    {
+        if (run.Status is RunStatus.InProgress)
+            return Results.Conflict(new
+            {
+                error = "workspace_provisioning",
+                message = "The child workspace is not available yet. Files will appear automatically when provisioning completes."
+            });
         return Results.NotFound();
+    }
 
     try
     {
@@ -2528,17 +2541,24 @@ app.MapGet("/api/runs/{id}/files", async (
     var hasWorktreeBranch = !string.IsNullOrEmpty(run.WorktreeBranch);
 
     // Worktree provisioning is asynchronous. An active child can be visible before its sandbox
-    // has published either worktree field, which is a valid empty-artifact state.
+    // has published either worktree field. Report that state explicitly rather than returning an
+    // indistinguishable empty change set; the browser continues polling this response.
     if (!hasWorktreePath && !hasWorktreeBranch)
-        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Changes will appear automatically when it is ready."
+        });
 
     if (!hasWorktreePath || !hasWorktreeBranch)
     {
         // Worktree fields are persisted independently while a child run starts.
-        // Treat a partial snapshot as no artifacts yet, not as a server failure that
-        // causes the live artifact browser to retry aggressively.
         logger.LogDebug("Run {RunId} worktree metadata is not ready while retrieving file entries", runId);
-        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Changes will appear automatically when it is ready."
+        });
     }
 
     if (!Directory.Exists(run.WorktreePath!))
