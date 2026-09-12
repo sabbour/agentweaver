@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1
+
+### Patch Changes
+
+- 2a36d9a: Allow the documentation diagram renderer to render or check only named graph specifications with repeated `--spec` options.
+
 ## 0.30.0
 
 ### Minor Changes
