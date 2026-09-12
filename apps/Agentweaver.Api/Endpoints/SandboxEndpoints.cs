@@ -72,6 +72,8 @@ public static class SandboxEndpoints
             RunStreamStore streamStore,
             IRunStore runStore,
             IPreviewRunnerHttpClient previewRunnerClient,
+            Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
+            Agentweaver.Api.Auth.ISecretStore secretStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -150,7 +152,10 @@ public static class SandboxEndpoints
 
                 if (!string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId)
                     && !await IsPreviewProcessHealthyAsync(
-                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId,
+                        runId,
+                        await ResolveRetainedProcessBearerAsync(runId, turnTokens, secretStore, publicationLifetime.Token)
+                            .ConfigureAwait(false),
+                        request.PreviewRunnerSessionId,
                         request.TargetPort, previewRunnerClient, publicationLifetime.Token).ConfigureAwait(false))
                 {
                     const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
