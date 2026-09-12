@@ -1459,6 +1459,7 @@ app.MapPost("/api/runs/{id}/retry", async (
     IProjectStore projectStore,
     AiExecutionPlanService executionPlans,
     AiExecutionPlanAccessor executionPlanAccessor,
+    RunModelProviderSnapshotStore providerSnapshots,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -1542,6 +1543,16 @@ app.MapPost("/api/runs/{id}/retry", async (
                     execution.Plan.ResolutionScope,
                     beforeResume: async resumeCt =>
                     {
+                        // An explicit retry may safely refresh an unreadable private provider
+                        // snapshot from the newly accepted execution plan. This preserves
+                        // completed children and retries only collective assembly.
+                        if (execution.Plan.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                            or EffectiveModelProviderResult.PlatformGitHubCopilot)
+                        {
+                            await providerSnapshots.RefreshUnavailableCopilotSnapshotForRetryAsync(
+                                run, execution.Plan.Provider, resumeCt).ConfigureAwait(false);
+                        }
+
                         // The source snapshot fences only an in-place continuation. A retry that has
                         // no recoverable source work falls through and mints a fresh run against the
                         // accepted current provider instead of being rejected by stale source state.

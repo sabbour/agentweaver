@@ -68,6 +68,15 @@ public static class AssemblyPlanning
         && reason.Contains(BuildTestInfraReasonPrefix, StringComparison.Ordinal);
 
     /// <summary>
+    /// A coordinator retry can replace its unreadable private model-provider snapshot only after
+    /// a new execution plan accepts the same provider. The failure is therefore an assembly-phase
+    /// recovery, not evidence that any already assembled child needs to be regenerated.
+    /// </summary>
+    public static bool IsUnavailableModelProviderSnapshotReason(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason)
+        && reason.Contains("model provider snapshot is unavailable", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Marker substring stamped on <c>AssemblyStatusReason</c> by the D2 eligibility gate (see
     /// <c>CoordinatorAssemblyService</c>'s <c>ineligible_subtasks [id,...]</c> block), e.g.
     /// <c>"ineligible_subtasks [369,370]"</c>.

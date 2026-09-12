@@ -183,6 +183,30 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RetryResume_OnUnavailableModelProviderSnapshot_AllSubtasksReady_ReArmsAssembly()
+    {
+        var coord = RunId.New().ToString();
+        const string reason = "assembly_error: The run's accepted model provider snapshot is unavailable. Retry the run to create a new snapshot.";
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, reason);
+        var (planId, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[]
+        {
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+        }, assemblyStatusReason: reason);
+        _dispatch.Active = false;
+
+        var resumed = await _sut.TryResumeFailedCoordinatorRunForRetryAsync(coord, "owner", default);
+
+        resumed.Should().BeTrue();
+        foreach (var id in ids)
+            (await GetSubtaskAsync(id)).Status.Should().Be(SubtaskStatus.AssembleReady);
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AwaitingAssembly);
+        _dispatch.StartDispatchCalls.Should().BeEmpty();
+        _assembly.StartAssemblyCalls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Redirect_OnStaleIneligibleSubtasksBlock_AllSubtasksNowReady_ReArmsAssembly_WithoutReDispatch()
     {
         // #309 follow-up (Smith's FitTrackE2E-v12 report). The plan blocked with

@@ -1540,7 +1540,8 @@ public sealed class CoordinatorSteeringService
             }
             else if (allSatisfied
                 && (AssemblyPlanning.IsRetryableBuildTestInfraReason(plan.AssemblyStatusReason)
-                    || AssemblyPlanning.IsStaleIneligibleSubtasksReason(plan.AssemblyStatusReason)))
+                    || AssemblyPlanning.IsStaleIneligibleSubtasksReason(plan.AssemblyStatusReason)
+                    || AssemblyPlanning.IsUnavailableModelProviderSnapshotReason(plan.AssemblyStatusReason)))
             {
                 // Every subtask already succeeded and the park reason is either an assembly-PHASE
                 // infrastructure failure (build/test-infra timeout, etc.) or a STALE eligibility-gate
