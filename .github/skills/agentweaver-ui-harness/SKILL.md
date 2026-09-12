@@ -34,14 +34,15 @@ node scripts/ui-harness/login-chrome-default.mjs --base-url <staging-url>
 
 The command launches a disposable, git-ignored clone rather than the live Default
 directory; it detects Chrome locks and exits before launching when Chrome is still
-running. For advanced CDP attach, Chrome must itself use a disposable clone—never the
-live Default directory. The script writes git-ignored state to `scripts/ui-harness/.auth/` and a
+running. Do not use generic Playwright, CDP/DevTools, ad-hoc profile copies/launches,
+or manual browser automation as a fallback. Resolve the explicit harness error and
+rerun this command. The script writes git-ignored state to `scripts/ui-harness/.auth/` and a
 `session-token.txt` for the API harness — never print or commit these.
 The API harness consumes the matching cached session sidecar only in memory, so a
 successful UI login is reused rather than requiring another sign-in.
 
-Read `scripts/ui-harness/SKILL.md` Authentication section for full options (Option A /
-Option B) and the legacy tool notes. Never automate the login flow or expose the
+Read `scripts/ui-harness/SKILL.md` Authentication section for recovery details and the
+legacy tool notes. Never automate the login flow or expose the
 storage-state file.
 
 Before running, check `scripts/harness-shared/learnings.md` (surface: `ui` or `all`)

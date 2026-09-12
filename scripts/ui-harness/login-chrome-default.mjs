@@ -26,6 +26,20 @@ function option(argv, name) {
   return index === -1 ? null : argv[index + 1];
 }
 
+export function parseLoginOptions(argv, environment = process.env) {
+  if (argv.includes('--cdp') || argv.includes('--cdp-url')) {
+    throw new Error(
+      'CDP/DevTools attach is not supported for Chrome Default authentication. '
+      + 'Close Chrome and rerun this command without --cdp so the harness can use its safe disposable-profile flow.',
+    );
+  }
+  const baseUrl = option(argv, '--base-url') ?? environment.AGENTWEAVER_STAGING_URL;
+  if (!baseUrl) throw new Error('Provide --base-url <staging-url> or set AGENTWEAVER_STAGING_URL.');
+  const target = new URL(baseUrl);
+  if (target.protocol !== 'https:') throw new Error('--base-url must use HTTPS.');
+  return { baseUrl: target.toString() };
+}
+
 export async function captureState(page, context, baseUrl) {
   const origin = await page.evaluate(() => window.location.origin);
   const entries = await page.evaluate(() => ({ ...window.sessionStorage }));
@@ -73,33 +87,9 @@ export async function runWithDisposableProfile(baseUrl, dependencies = {}) {
   }
 }
 
-export async function runWithCDP(baseUrl, cdpUrl) {
-  console.log(`Connecting to a user-managed disposable Chrome profile at ${sanitizeUrl(cdpUrl)}.`);
-  const browser = await chromium.connectOverCDP(cdpUrl);
-  try {
-    const context = browser.contexts()[0];
-    if (!context) throw new Error('No browser context was found on the CDP target.');
-    const page = context.pages()[0] ?? await context.newPage();
-    await navigateAndStartAgentweaverSignIn(page, baseUrl);
-    console.log('When the authenticated Agentweaver app is visible, press Resume in the Playwright Inspector.');
-    await page.pause();
-    await captureState(page, context, baseUrl);
-  } finally {
-    await browser.close();
-  }
-}
-
 async function main() {
-  const argv = process.argv.slice(2);
-  const baseUrl = option(argv, '--base-url') ?? process.env.AGENTWEAVER_STAGING_URL;
-  if (!baseUrl) throw new Error('Provide --base-url <staging-url> or set AGENTWEAVER_STAGING_URL.');
-  const target = new URL(baseUrl);
-  if (target.protocol !== 'https:') throw new Error('--base-url must use HTTPS.');
-  if (argv.includes('--cdp')) {
-    await runWithCDP(target.toString(), option(argv, '--cdp-url') ?? 'http://127.0.0.1:9222');
-  } else {
-    await runWithDisposableProfile(target.toString());
-  }
+  const { baseUrl } = parseLoginOptions(process.argv.slice(2));
+  await runWithDisposableProfile(baseUrl);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

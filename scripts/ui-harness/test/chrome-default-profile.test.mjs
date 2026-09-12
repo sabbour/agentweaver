@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertAuthenticatedAgentweaverSession,
   assertChromeProfileIsUnlocked,
   buildChromeLaunchOptions,
   navigateAndStartAgentweaverSignIn,
 } from '../lib/chrome-default-profile.mjs';
+import { parseLoginOptions } from '../login-chrome-default.mjs';
+import { assertSupportedLoginCommand } from '../agent-driver-ui/tools.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 test('Chrome launches from the disposable clone with the Default profile selected', () => {
   const clone = path.resolve('scripts/ui-harness/.auth/chrome-default-automation');
@@ -75,4 +81,31 @@ test('accepts only a real Agentweaver session returned to the configured origin'
     () => assertAuthenticatedAgentweaverSession('https://app.example.test', {}, 'https://app.example.test'),
     /authentication was not completed/i,
   );
+});
+
+test('rejects CDP and DevTools fallback for Chrome Default authentication', () => {
+  assert.throws(
+    () => parseLoginOptions(['--base-url', 'https://app.example.test', '--cdp']),
+    /CDP\/DevTools attach is not supported.*safe disposable-profile flow/i,
+  );
+  assert.throws(
+    () => parseLoginOptions(['--base-url', 'https://app.example.test', '--cdp-url', 'http://127.0.0.1:9222']),
+    /CDP\/DevTools attach is not supported/i,
+  );
+});
+
+test('retires the generic Chrome capture fallback with the supported recovery command', () => {
+  const result = spawnSync(process.execPath, ['login-capture-chrome.mjs'], {
+    cwd: path.join(HERE, '..'),
+    encoding: 'utf8',
+  });
+
+  test('retires the generic tools login fallback with the supported recovery command', () => {
+    assert.throws(
+      () => assertSupportedLoginCommand({ 'base-url': 'https://app.example.test' }),
+      /tools\.mjs login is retired.*login-chrome-default\.mjs/i,
+    );
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /login-chrome-default\.mjs.*Do not use generic Playwright, CDP\/DevTools/i);
 });

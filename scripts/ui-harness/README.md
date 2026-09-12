@@ -6,7 +6,7 @@ judge: it captures deterministic browser facts, then sends normalized evidence t
 
 ```powershell
 npm --prefix scripts/ui-harness install
-node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
+node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain>
 node scripts/ui-harness/agent-driver-ui/tools.mjs init --persona jordan --base-url https://<host>.staging.<domain>
 node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
@@ -27,8 +27,9 @@ node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.stagi
 It navigates to the supplied base URL before checking or clicking Agentweaver's sign-in
 button. It never automates Microsoft Entra account selection, credentials, MFA, or
 consent. If Chrome is locked, it exits with a close-Chrome instruction rather than
-opening an empty tab. `--cdp` is an advanced attach mode only for Chrome launched with
-an independently managed disposable clone; do not use the live Default directory.
+opening an empty tab. Do not fall back to generic Playwright, direct CDP/DevTools,
+ad-hoc profile launches/copies, or manual browser automation. `--cdp` and `--cdp-url`
+are rejected; resolve the reported condition and rerun this command.
 See `scripts/ui-harness/SKILL.md` for full options and what is saved.
 
 The local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops

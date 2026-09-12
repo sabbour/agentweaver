@@ -1,59 +1,9 @@
 /**
- * DEPRECATED: This script uses plain Chromium (channel chrome) WITHOUT the real Chrome
- * Default profile's User Data directory. It will fail Conditional Access on Entra-
- * protected staging deployments.
- *
- * Use scripts/ui-harness/login-chrome-default.mjs instead, which supports:
- *   - launchPersistentContext with a disposable clone of the Default profile (Option A)
- *   - connectOverCDP to an operator-managed disposable Chrome clone (Option B, --cdp)
- *
- * See scripts/ui-harness/SKILL.md → Authentication section.
+ * Retired: generic Chrome automation cannot satisfy the managed Default-profile
+ * authentication contract and must not be used as a fallback.
  */
-import { chromium } from '@playwright/test';
-import { writeFile, mkdir } from 'node:fs/promises';
-import path from 'node:path';
-import { sanitizeUrl } from '../harness-shared/redaction.mjs';
-
-const base = process.argv[2];
-const outDir = process.argv[3];
-
-// Use real Chrome channel — Conditional Access requires managed browser/device.
-const browser = await chromium.launch({
-  headless: false,
-  channel: 'chrome',
-});
-const context = await browser.newContext();
-const page = await context.newPage();
-page.setDefaultTimeout(180000);
-page.setDefaultNavigationTimeout(180000);
-
-console.log('Opening app in Chrome:', base);
-await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 180000 });
-console.log('Complete Entra sign-in in the Chrome window.');
-console.log('When the authenticated app shell is visible, press Resume in the Playwright Inspector.');
-await page.pause();
-
-await mkdir(outDir, { recursive: true });
-const statePath = path.join(outDir, 'staging.storageState.json');
-await context.storageState({ path: statePath });
-const origin = await page.evaluate(() => window.location.origin);
-const entries = await page.evaluate(() => ({ ...window.sessionStorage }));
-const seedPath = `${statePath}.sessionStorage.json`;
-await writeFile(seedPath, JSON.stringify({ origin, entries }, null, 2));
-const token = entries['agentweaver.sessionToken'] || null;
-console.log(JSON.stringify({
-  savedState: statePath,
-  savedSeed: seedPath,
-  hasToken: Boolean(token),
-  tokenLen: token ? String(token).length : 0,
-  keys: Object.keys(entries),
-  url: sanitizeUrl(page.url()),
-}, null, 2));
-if (token) {
-  await writeFile(path.join(outDir, 'session-token.txt'), String(token), 'utf8');
-  console.log('Wrote session-token.txt (do not print contents).');
-} else {
-  console.error('No agentweaver.sessionToken in sessionStorage after login.');
-  process.exitCode = 2;
-}
-await browser.close();
+throw new Error(
+  'login-capture-chrome.mjs is retired. Close Chrome and run '
+  + 'node scripts/ui-harness/login-chrome-default.mjs --base-url <staging-url>. '
+  + 'Do not use generic Playwright, CDP/DevTools, or ad-hoc browser profile automation.',
+);

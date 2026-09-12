@@ -54,24 +54,12 @@ page appears, complete it privately in the Chrome window, then press Resume in t
 Playwright Inspector. The harness never drives account selection, credentials, MFA, or
 consent.
 
-### Option B — advanced CDP attach
+### Required recovery path
 
-Attach only to a Chrome instance that **you already launched with a disposable clone**,
-never `%LOCALAPPDATA%\Google\Chrome\User Data`. Current Chrome rejects remote debugging
-against its default data directory. This mode does not copy, launch, or close Chrome:
-
-```powershell
-chrome.exe --remote-debugging-port=9222 --user-data-dir="<disposable-clone>" --profile-directory=Default --no-first-run
-```
-
-Then connect and capture:
-
-```powershell
-node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain> --cdp
-```
-
-Use Option A unless an operator has an independently managed disposable clone. Do not
-point CDP Chrome at the managed Default directory.
+Do not fall back to generic Playwright, CDP/DevTools attach, ad-hoc profile copying or
+launches, or manual browser automation. `--cdp` and `--cdp-url` are explicitly
+rejected. When this command reports a lock, missing profile, failed copy, or incomplete
+authentication, resolve that stated condition and rerun this UI-harness command.
 
 ### What is saved
 
@@ -95,9 +83,9 @@ rerun this login command.
 Playwright shape before it creates a scenario session. It starts that session's
 headless browser worker, but it does not launch or automate the login flow.
 
-> **Legacy note**: `login-capture-chrome.mjs` and the `tools.mjs login` command use plain
-> Chromium (channel `chrome` without the Default profile user-data-dir). They may fail
-> Conditional Access. Prefer `login-chrome-default.mjs` for Entra-protected staging.
+> **Legacy note**: `login-capture-chrome.mjs` and `tools.mjs login` are retired and
+> explicitly fail with the supported `login-chrome-default.mjs` recovery command. They
+> cannot be used as generic-browser authentication fallbacks.
 
 ## Run a persona flow
 
