@@ -4,8 +4,8 @@
  * protected staging deployments.
  *
  * Use scripts/ui-harness/login-chrome-default.mjs instead, which supports:
- *   - launchPersistentContext with the real Default profile (Option A, preferred)
- *   - connectOverCDP to an already-running Chrome at port 9222 (Option B, --cdp)
+ *   - launchPersistentContext with a disposable clone of the Default profile (Option A)
+ *   - connectOverCDP to an operator-managed disposable Chrome clone (Option B, --cdp)
  *
  * See scripts/ui-harness/SKILL.md → Authentication section.
  */
