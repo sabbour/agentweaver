@@ -68,7 +68,8 @@ real live API, never simulated):
      provider consumes that target-matched cache in memory (see Target resolution
      below). On failure, report its recovery direction—never fall back to generic
      Playwright, CDP/DevTools, ad-hoc profile copies/launches, or manual browser
-     automation.
+     automation. The only supported browser is installed literal Google Chrome
+     (`chrome.exe`) on Playwright's `chrome` channel, never bundled Chromium.
      Keep normal TLS validation enabled and choose a transcript file path under
      `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - **Start a live tail of that transcript path so the operator can watch turns
