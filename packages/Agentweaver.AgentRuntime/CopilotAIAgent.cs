@@ -528,9 +528,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // policy shell enabled); native shell is denied below so this is the only shell path.
             includeControlledRunCommand: true,
             runCapabilityToken: _apiCapabilityToken,
-            // Instrument custom tools around their actual invocation. SDK lifecycle delivery can
-            // be delayed behind tool execution, which must not inflate measured duration.
-            instrumentProviderTool: tool =>
+            // Custom SDK tools only acknowledge ExternalToolCompletedEvent; its result payload is
+            // empty. Wrap every executable custom tool around its actual invocation so the durable
+            // event stream contains the real redacted arguments and terminal result/error under
+            // one callId, with durations unaffected by lifecycle delivery delay.
+            instrumentCustomTool: tool =>
             {
                 _instrumentedToolNames.Add(tool.Name);
                 return new InstrumentedCustomAIFunction(
@@ -2340,7 +2342,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
         bool includeControlledRunCommand = false,
         string? runCapabilityToken = null,
-        Func<AIFunction, AIFunction>? instrumentProviderTool = null)
+        Func<AIFunction, AIFunction>? instrumentCustomTool = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -2357,7 +2359,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (context.QuestionGate is not null)
         {
             var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
-            tools.Add(new CopilotOverrideAIFunction(askFn));
+            tools.Add(InstrumentCustomTool(new CopilotOverrideAIFunction(askFn), instrumentCustomTool));
         }
 
         if (includeControlledRunCommand)
@@ -2369,21 +2371,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // is the correct fail-closed behavior for a shell-disabled run.
             var commandFn = all.FirstOrDefault(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
             if (commandFn is not null)
-                // Measure run_command directly around execution rather than through lifecycle
-                // events that the SDK emits only when the stream consumer catches up.
-                tools.Add(instrumentProviderTool?.Invoke(commandFn) ?? commandFn);
+                tools.Add(InstrumentCustomTool(commandFn, instrumentCustomTool));
         }
 
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
             tools.AddRange(AgentweaverApiTools.Build(
-                projectId,
-                agentName,
-                effectiveBaseUrl,
-                apiKey,
-                runId: context.RunId,
-                runCapabilityToken: runCapabilityToken));
+                    projectId,
+                    agentName,
+                    effectiveBaseUrl,
+                    apiKey,
+                    runId: context.RunId,
+                    runCapabilityToken: runCapabilityToken)
+                .Select(tool => InstrumentCustomTool(tool, instrumentCustomTool)));
         }
 
         if (toolProviders is not null)
@@ -2399,18 +2400,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             {
                 foreach (var providerTool in provider.BuildTools(providerContext))
                 {
-                    // #850 follow-up: tools built by IAgentRuntimeToolProvider implementations
-                    // (start_preview, start_preview_process, observe_bound_port, health_check,
-                    // stop_preview_process) never had any tool.call/tool.result RunEvent or
-                    // execute_tool span instrumentation — see InstrumentedCustomAIFunction for why
-                    // that made start_preview's trace card show "No arguments/output recorded".
-                    tools.Add(instrumentProviderTool?.Invoke(providerTool) ?? providerTool);
+                    tools.Add(InstrumentCustomTool(providerTool, instrumentCustomTool));
                 }
             }
         }
 
         return tools;
     }
+
+    private static AIFunction InstrumentCustomTool(
+        AIFunction tool,
+        Func<AIFunction, AIFunction>? instrumentCustomTool) =>
+        instrumentCustomTool?.Invoke(tool) ?? tool;
 
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.

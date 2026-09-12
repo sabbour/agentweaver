@@ -173,13 +173,11 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
-    public void BuildSessionConfigTools_WrapsProviderTools_WhenInstrumentProviderToolSupplied()
+    public void BuildSessionConfigTools_WrapsEveryExecutableCustomTool_WhenInstrumentationSupplied()
     {
-        // #850 follow-up: PreviewRunnerToolProvider tools (start_preview and its siblings) must be
-        // routed through instrumentProviderTool so their tool.call/tool.result/tool.error and
-        // execute_tool span are recorded directly around invocation. This asserts the plumbing in
-        // BuildSessionConfigTools actually applies the delegate to every provider-built tool,
-        // rather than silently keeping the un-instrumented original.
+        // Custom API tools and provider tools must both be routed through the instrumentation
+        // wrapper: the SDK's external-tool completion is only an acknowledgement and does not
+        // contain the tool's real output.
         using var workspace = new TempWorkspace();
         var context = new SandboxToolContext(
             AgentId: "qa-engineer",
@@ -189,7 +187,7 @@ public sealed class StartPreviewToolTests
             FileTools: new SandboxedFileTools(workspace.Path),
             SearchTools: new SandboxedSearchTools(workspace.Path),
             Redactor: SandboxOutputRedactor.Default,
-            Options: new SandboxToolOptions(ShellEnabled: false),
+            Options: new SandboxToolOptions(ShellEnabled: true),
             Logger: NullLogger.Instance,
             RunId: RunId);
 
@@ -199,16 +197,21 @@ public sealed class StartPreviewToolTests
         var tools = CopilotAIAgent.BuildSessionConfigTools(
             context, ProjectId, AgentName, "http://localhost", apiKey: null,
             toolProviders: [provider],
-            instrumentProviderTool: tool =>
+            includeControlledRunCommand: true,
+            instrumentCustomTool: tool =>
             {
                 wrappedNames.Add(tool.Name);
                 return new MarkerAIFunction(tool);
             });
 
+        wrappedNames.Should().Contain("list_decisions",
+            because: "Agentweaver API tools must persist their real output, not the SDK acknowledgement");
+        wrappedNames.Should().Contain("run_command",
+            because: "the sandboxed shell path is also a custom SDK tool with no result-bearing lifecycle event");
         wrappedNames.Should().Contain("start_preview");
         tools.Should().ContainSingle(t => t.Name == "start_preview")
             .Which.Should().BeOfType<MarkerAIFunction>(
-                because: "provider tools must be routed through instrumentProviderTool, not added raw");
+                because: "provider tools must be routed through the common custom-tool instrumentation");
     }
 
     [Fact]
@@ -351,7 +354,7 @@ internal sealed class FakeToolProvider(AIFunction tool) : Agentweaver.AgentRunti
     }
 }
 
-/// <summary>Marker wrapper used only to assert BuildSessionConfigTools routed a tool through instrumentProviderTool.</summary>
+/// <summary>Marker wrapper used only to assert BuildSessionConfigTools routed a tool through instrumentation.</summary>
 internal sealed class MarkerAIFunction(AIFunction inner) : AIFunction
 {
     public override string Name => inner.Name;
