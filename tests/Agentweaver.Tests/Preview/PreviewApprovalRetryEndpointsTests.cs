@@ -487,8 +487,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         if (!pauseAtPersistence)
             publicationCancelled.Should().Be(completeLocalStream);
         runner.HealthCancellationToken.IsCancellationRequested.Should().Be(completeLocalStream);
-        runner.LastBearer.Should().Be(initialApproval
-            ? ProjectsWebApplicationFactory.TestApiKey : "retained-test-credential");
+        runner.LastBearer.Should().Be("retained-test-credential");
         await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         runner.HealthCalls.Should().Be(1);
         runner.StopCalls.Should().Be(1);
