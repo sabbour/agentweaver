@@ -171,6 +171,37 @@ describe('AgentSessionPanel', () => {
     expect(screen.getByText(/Allow start_preview/)).toBeDefined();
   });
 
+  it('shows the shell command supplied by the canonical pending approval set', async () => {
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          pendingApprovals={[{
+            root_run_id: 'coord-run-1',
+            owning_run_id: 'child-run-1',
+            action_run_id: 'child-run-1',
+            request_id: 'command-hash',
+            tool_name: 'run_command',
+            url: null,
+            command: 'npm run test',
+            message: 'Shell command requires operator approval before execution.',
+            requested_at: new Date().toISOString(),
+            expires_at: null,
+            is_shell: true,
+          }]}
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText(/Allow npm run test/)).toBeDefined();
+  });
+
   it('shows a retryable approval error instead of an empty successful panel', async () => {
     const retry = vi.fn();
     render(

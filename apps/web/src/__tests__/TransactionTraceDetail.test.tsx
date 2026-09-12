@@ -156,6 +156,18 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Pending');
   });
 
+  it('reports a successful trace when its successful root recovered from a failed tool attempt', async () => {
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('Success');
+  });
+
   it('renders populated tool input and structured output from persisted events', async () => {
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       {

@@ -56,6 +56,7 @@ export interface PendingApprovalDto {
   request_id: string;
   tool_name: string | null;
   url: string | null;
+  command?: string | null;
   message: string | null;
   requested_at: string;
   expires_at: string | null;

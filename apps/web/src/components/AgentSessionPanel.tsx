@@ -2097,6 +2097,7 @@ export function AgentSessionPanel({
           commandHash: approval.is_shell ? approval.request_id : undefined,
           toolName: approval.tool_name,
           url: approval.url,
+          command: approval.command,
           message: approval.message,
           actionRunId: approval.action_run_id,
         },

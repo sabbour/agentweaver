@@ -674,6 +674,7 @@ app.MapGet("/api/runs/{id}/pending-approvals", async (
             RequestId = item.RequestId,
             ToolName = item.ToolName,
             Url = item.Url,
+            Command = item.Command,
             Message = item.Message,
             RequestedAt = item.RequestedUtc,
             ExpiresAt = item.ExpiresUtc,

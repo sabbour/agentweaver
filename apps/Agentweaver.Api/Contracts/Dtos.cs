@@ -468,6 +468,7 @@ public sealed record PendingApprovalDto
     [JsonPropertyName("request_id")] public required string RequestId { get; init; }
     [JsonPropertyName("tool_name")] public string? ToolName { get; init; }
     [JsonPropertyName("url")] public string? Url { get; init; }
+    [JsonPropertyName("command")] public string? Command { get; init; }
     [JsonPropertyName("message")] public string? Message { get; init; }
     [JsonPropertyName("requested_at")] public required DateTimeOffset RequestedAt { get; init; }
     [JsonPropertyName("expires_at")] public DateTimeOffset? ExpiresAt { get; init; }
