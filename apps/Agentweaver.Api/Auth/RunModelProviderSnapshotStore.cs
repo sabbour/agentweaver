@@ -86,6 +86,76 @@ public sealed class RunModelProviderSnapshotStore(
         CancellationToken ct)
         => (await CaptureWithOwnershipAsync(run, provider, byokConfiguration, ct).ConfigureAwait(false)).Boundary;
 
+    /// <summary>
+    /// Replaces an unreadable Copilot snapshot only at an explicit retry boundary. A failed
+    /// coordinator may retain completed child work, but its private snapshot secret can have been
+    /// removed independently; a retry has already accepted the current provider through an
+    /// execution plan and is therefore the one safe point to mint a replacement.
+    /// </summary>
+    public async Task<ResolvedRunModelProviderBoundary> RefreshUnavailableCopilotSnapshotForRetryAsync(
+        Run run,
+        EffectiveModelProviderResult provider,
+        CancellationToken ct)
+    {
+        if (provider is not (EffectiveModelProviderResult.ProjectGitHubCopilot
+            or EffectiveModelProviderResult.PlatformGitHubCopilot))
+        {
+            throw SnapshotUnavailable();
+        }
+
+        try
+        {
+            var existing = await TryGetAsync(run, ct).ConfigureAwait(false);
+            if (existing is not null)
+                return existing;
+        }
+        catch (AgentProviderException ex) when (ex.ErrorCode == "model_provider_snapshot_unavailable")
+        {
+            // A retry is allowed to replace only an unreadable owned snapshot.
+        }
+
+        var candidate = new Snapshot(
+            Version,
+            provider.ProviderKind(),
+            provider.ProviderId(),
+            provider.ProviderType(),
+            provider.CredentialVersion(),
+            ByokConfiguration: null);
+        ValidateSnapshot(candidate);
+
+        var replacementReference = CandidateKey(run.Id);
+        await secrets.SetSecretAsync(
+            replacementReference,
+            JsonSerializer.Serialize(candidate),
+            ct: ct).ConfigureAwait(false);
+
+        string? previousReference = null;
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var owner = await db.RunModelProviderSnapshotOwners
+                .SingleOrDefaultAsync(x => x.RunId == run.Id.ToString(), ct).ConfigureAwait(false);
+            if (owner is null)
+                throw SnapshotUnavailable();
+
+            previousReference = owner.SecretReference;
+            owner.SecretReference = replacementReference;
+            owner.CapturedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await secrets.DeleteSecretAsync(replacementReference, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        if (!string.Equals(previousReference, replacementReference, StringComparison.Ordinal))
+            await secrets.DeleteSecretAsync(previousReference!, CancellationToken.None).ConfigureAwait(false);
+
+        return ToBoundary(candidate);
+    }
+
     public async Task<Capture> CaptureWithOwnershipAsync(
         Run run,
         EffectiveModelProviderResult provider,

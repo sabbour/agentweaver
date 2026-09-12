@@ -188,6 +188,29 @@ public sealed class RunModelProviderSnapshotStoreTests
     }
 
     [Fact]
+    public async Task RetryRefresh_ReplacesOnlyAnUnreadableCopilotSnapshot()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var run = Run();
+        var provider = new EffectiveModelProviderResult.PlatformGitHubCopilot("accepted", null, "v1");
+        await fixture.CreateStore().CaptureAsync(run, provider, null, CancellationToken.None);
+
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var owner = await db.RunModelProviderSnapshotOwners.SingleAsync();
+            await fixture.Secrets.DeleteSecretAsync(owner.SecretReference);
+        }
+
+        var refreshed = await fixture.CreateStore()
+            .RefreshUnavailableCopilotSnapshotForRetryAsync(run, provider, CancellationToken.None);
+
+        refreshed.Provider.Should().BeEquivalentTo(provider);
+        (await fixture.CreateStore().TryGetAsync(run, CancellationToken.None))!.Provider
+            .Should().BeEquivalentTo(provider);
+    }
+
+    [Fact]
     public async Task ByokSnapshot_CannotBeReadThroughACopilotRun()
     {
         await using var fixture = await Fixture.CreateAsync();
