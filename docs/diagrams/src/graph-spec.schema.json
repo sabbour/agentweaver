@@ -15,7 +15,8 @@
       "properties": {
         "name": { "type": "string" },
         "subtitle": { "type": "string" },
-        "logo": { "type": "string" }
+        "logo": { "type": "string" },
+        "compact": { "type": "boolean", "default": false, "description": "Use the compact brand treatment for fixed-size overview diagrams." }
       }
     },
     "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },
@@ -28,6 +29,7 @@
         "properties": {
           "id": { "type": "string" },
           "label": { "type": "string" },
+          "subLabel": { "type": "string", "description": "Optional explanatory line beneath the group title." },
           "tier": { "type": "integer", "minimum": 1 },
           "parent": { "type": "string", "description": "id of an enclosing group, for nested clusters" }
         }
