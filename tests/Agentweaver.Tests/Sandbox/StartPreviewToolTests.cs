@@ -233,7 +233,7 @@ public sealed class StartPreviewToolTests
         var tools = CopilotAIAgent.BuildSessionConfigTools(
             context,
             includeControlledRunCommand: true,
-            instrumentProviderTool: tool => new MarkerAIFunction(tool));
+            instrumentCustomTool: tool => new MarkerAIFunction(tool));
 
         tools.Should().ContainSingle(tool => tool.Name == "run_command")
             .Which.Should().BeOfType<MarkerAIFunction>(
