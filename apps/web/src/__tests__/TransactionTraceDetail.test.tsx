@@ -311,7 +311,7 @@ describe('TransactionTracePanel trace detail', () => {
 
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
-    expect(screen.getByLabelText('Trace summary').textContent).toContain('Completed run');
+    await waitFor(() => expect(screen.getByLabelText('Trace summary').textContent).toContain('Completed run'));
     expect(screen.getByLabelText('Trace summary').textContent).toContain('Failed tool attempts');
     expect(screen.getByLabelText('Span inspector').textContent)
       .toContain('Recovered — run completed after this failed attempt');
@@ -332,7 +332,7 @@ describe('TransactionTracePanel trace detail', () => {
 
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
-    expect(screen.getByLabelText('Trace summary').textContent).toContain('Terminal failed run');
+    await waitFor(() => expect(screen.getByLabelText('Trace summary').textContent).toContain('Terminal failed run'));
     expect(screen.getByLabelText('Span inspector').textContent).toContain('Run failed — terminal outcome');
   });
 

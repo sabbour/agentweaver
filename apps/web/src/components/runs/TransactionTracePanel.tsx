@@ -1023,6 +1023,9 @@ export function TransactionTracePanel({
       setTraceError(null);
       setLoading(true);
       setTrace({ runId, spans: [] });
+      setEvents([]);
+      setToolCallIndex(new Map());
+      setEventsAvailability('idle');
       setSelectedKey(null);
       setExpanded(new Set());
       try {
@@ -1048,12 +1051,6 @@ export function TransactionTracePanel({
     return () => { cancelled = true; };
   }, [runId, fullRequested, reloadNonce]);
 
-  useEffect(() => {
-    setEvents([]);
-    setToolCallIndex(new Map());
-    setEventsAvailability('idle');
-  }, [runId]);
-
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
   const selectedNode = findNode(tree, selectedKey);
   const shouldLoadEvents = activeTab === 'events' || selectedNode?.type === 'tool';
@@ -1061,7 +1058,9 @@ export function TransactionTracePanel({
   useEffect(() => {
     if (!shouldLoadEvents || eventsAvailability === 'loading' || eventsAvailability === 'loaded') return;
     let cancelled = false;
-    setEventsAvailability('loading');
+    queueMicrotask(() => {
+      if (!cancelled) setEventsAvailability('loading');
+    });
     void apiClient.getRunEvents(runId)
       .then((nextEvents) => {
         if (cancelled) return;
@@ -1080,6 +1079,7 @@ export function TransactionTracePanel({
   const tokens = useMemo(() => rawTokenTotals(trace.spans), [trace.spans]);
   const agent = useMemo(() => traceAgent(trace.spans), [trace.spans]);
   const sessionId = useMemo(() => traceSessionId(trace.spans), [trace.spans]);
+  const traceIsSuccessful = useMemo(() => traceSucceeded(trace.spans), [trace.spans]);
   const runState = useMemo(() => traceRunState(events), [events]);
   const failedToolAttempts = useMemo(
     () => [...toolCallIndex.values()].filter((detail) => detail.outcome === 'failed').length,
@@ -1170,6 +1170,14 @@ export function TransactionTracePanel({
                   icon={runState === 'failed' ? <ErrorCircleRegular /> : undefined}
                 >
                   {traceRunStateLabel(runState)}
+                </Badge>
+              </dd>
+            </div>
+            <div className={styles.summaryItem}>
+              <dt className={styles.summaryLabel}>Trace status</dt>
+              <dd className={styles.summaryValue}>
+                <Badge appearance="tint" color={traceIsSuccessful ? 'success' : 'danger'}>
+                  {traceIsSuccessful ? 'Success' : 'Failed'}
                 </Badge>
               </dd>
             </div>
