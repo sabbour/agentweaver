@@ -191,7 +191,7 @@ public sealed class RunModelProviderSnapshotStoreTests
     public async Task RetryRefresh_ReplacesOnlyAnUnreadableCopilotSnapshot()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var run = Run();
+        var run = Run() with { ModelSource = ModelSource.GitHubCopilot };
         var provider = new EffectiveModelProviderResult.PlatformGitHubCopilot("accepted", null, "v1");
         await fixture.CreateStore().CaptureAsync(run, provider, null, CancellationToken.None);
 
