@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sanitizeUrl } from '../harness-shared/redaction.mjs';
 import {
+  assertAuthenticatedAgentweaverSession,
   buildChromeLaunchOptions,
   navigateAndStartAgentweaverSignIn,
   refreshDisposableChromeProfile,
@@ -25,12 +26,13 @@ function option(argv, name) {
   return index === -1 ? null : argv[index + 1];
 }
 
-export async function captureState(page, context) {
+export async function captureState(page, context, baseUrl) {
+  const origin = await page.evaluate(() => window.location.origin);
+  const entries = await page.evaluate(() => ({ ...window.sessionStorage }));
+  assertAuthenticatedAgentweaverSession(origin, entries, baseUrl);
   await mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
   await context.storageState({ path: STATE_PATH });
   await chmod(STATE_PATH, 0o600).catch(() => {});
-  const origin = await page.evaluate(() => window.location.origin);
-  const entries = await page.evaluate(() => ({ ...window.sessionStorage }));
   await writeFile(SEED_PATH, JSON.stringify({ origin, entries }, null, 2), { encoding: 'utf8', mode: 0o600 });
   await chmod(SEED_PATH, 0o600).catch(() => {});
   const token = entries['agentweaver.sessionToken'];
@@ -64,7 +66,7 @@ export async function runWithDisposableProfile(baseUrl, dependencies = {}) {
     await navigateAndStartAgentweaverSignIn(page, baseUrl);
     console.log('When the authenticated Agentweaver app is visible, press Resume in the Playwright Inspector.');
     await page.pause();
-    await captureState(page, context);
+    await captureState(page, context, baseUrl);
   } finally {
     await context?.close().catch(() => {});
     await rm(automationUserDataDir, { recursive: true, force: true }).catch(() => {});
@@ -81,7 +83,7 @@ export async function runWithCDP(baseUrl, cdpUrl) {
     await navigateAndStartAgentweaverSignIn(page, baseUrl);
     console.log('When the authenticated Agentweaver app is visible, press Resume in the Playwright Inspector.');
     await page.pause();
-    await captureState(page, context);
+    await captureState(page, context, baseUrl);
   } finally {
     await browser.close();
   }

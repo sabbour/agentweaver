@@ -38,6 +38,11 @@ requests are same-origin; only the explicit headful login flow may visit configu
 identity-provider origins. Storage state is origin-filtered and never logged or attached
 to evidence.
 
+The matching `staging.storageState.json.sessionStorage.json` sidecar is also the sole
+authentication handoff to the API harness. Its `recorder-session` provider validates
+the target origin and uses the bearer only in memory, so a completed Chrome Default SSO
+login is not repeated for an API harness run.
+
 `init` owns one headless browser worker per session. Separate action invocations reuse
 that worker's page, so navigation and browser state survive a documented
 `goto` → `click` → `capture` sequence. Commands are locked per session, different

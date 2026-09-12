@@ -37,6 +37,8 @@ directory; it detects Chrome locks and exits before launching when Chrome is sti
 running. For advanced CDP attach, Chrome must itself use a disposable clone—never the
 live Default directory. The script writes git-ignored state to `scripts/ui-harness/.auth/` and a
 `session-token.txt` for the API harness — never print or commit these.
+The API harness consumes the matching cached session sidecar only in memory, so a
+successful UI login is reused rather than requiring another sign-in.
 
 Read `scripts/ui-harness/SKILL.md` Authentication section for full options (Option A /
 Option B) and the legacy tool notes. Never automate the login flow or expose the
