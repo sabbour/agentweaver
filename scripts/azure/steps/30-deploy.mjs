@@ -210,15 +210,42 @@ export async function ensurePreviewWildcardDnsRecord(zoneSuffix, gatewayIp, opts
     "--name", "*",
   ];
 
-  // `create` is idempotent. `update --set` replaces (rather than appends to)
-  // ARecords so a Gateway IP reallocation cannot leave a stale target live.
+  // `create` is idempotent. Remove all existing addresses before adding the
+  // current Gateway IP so a Gateway reallocation cannot leave stale targets.
   await execRun("az", [...commandArgs, "create", ...recordArgs, "--ttl", "60"]);
+  const { stdout: existingRecordJson } = await execCapture("az", [
+    ...commandArgs, "show", ...recordArgs, "--output", "json",
+  ]);
+  let existingRecord;
+  try {
+    existingRecord = JSON.parse(existingRecordJson);
+  } catch {
+    throw new Error(`Azure returned an unreadable existing wildcard A record for '${zoneSuffix}'.`);
+  }
+  const existingAddresses = existingRecord?.aRecords ?? existingRecord?.ARecords ?? [];
+  if (!Array.isArray(existingAddresses)) {
+    throw new Error(`Azure returned an invalid existing wildcard A record for '${zoneSuffix}'.`);
+  }
+  for (const address of existingAddresses) {
+    if (typeof address?.ipv4Address !== "string" || !address.ipv4Address) {
+      throw new Error(`Azure returned an invalid wildcard A record address for '${zoneSuffix}'.`);
+    }
+    await execRun("az", [
+      ...commandArgs,
+      "remove-record",
+      "--resource-group", resourceGroup,
+      "--zone-name", zoneSuffix,
+      "--record-set-name", "*",
+      "--ipv4-address", address.ipv4Address,
+    ]);
+  }
   await execRun("az", [
     ...commandArgs,
-    "update",
-    ...recordArgs,
-    "--set", `aRecords=[{ipv4Address=${gatewayIp}}]`,
-    "ttl=60",
+    "add-record",
+    "--resource-group", resourceGroup,
+    "--zone-name", zoneSuffix,
+    "--record-set-name", "*",
+    "--ipv4-address", gatewayIp,
   ]);
 
   const { stdout: recordJson } = await execCapture("az", [

@@ -199,9 +199,12 @@ test("run(): both gateways are waited on for condition=Programmed with a 180s ti
 
 test("ensurePreviewWildcardDnsRecord(): replaces the wildcard target and verifies the result", async () => {
   const calls = [];
+  let showCount = 0;
   const capture = async (cmd, args) => {
     calls.push({ type: "capture", cmd, args });
     if (args.join(" ").includes("zone list")) return { stdout: "managed-rg\n", code: 0 };
+    showCount += 1;
+    if (showCount === 1) return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "10.0.0.4" }] }), code: 0 };
     return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "20.1.74.85" }] }), code: 0 };
   };
   const run = async (cmd, args) => {
@@ -225,8 +228,10 @@ test("ensurePreviewWildcardDnsRecord(): replaces the wildcard target and verifie
   assert.ok(updates[0].includes("--name"));
   assert.ok(!updates[0].includes("--record-set-name"));
   assert.deepEqual(updates[0].slice(-2), ["--ttl", "60"]);
-  assert.equal(updates[1][4], "update");
-  assert.deepEqual(updates[1].slice(-3), ["--set", "aRecords=[{ipv4Address=20.1.74.85}]", "ttl=60"]);
+  assert.equal(updates[1][4], "remove-record");
+  assert.deepEqual(updates[1].slice(-2), ["--ipv4-address", "10.0.0.4"]);
+  assert.equal(updates[2][4], "add-record");
+  assert.deepEqual(updates[2].slice(-2), ["--ipv4-address", "20.1.74.85"]);
 });
 
 test("ensurePreviewWildcardDnsRecord(): refuses an ambiguous zone lookup", async () => {
