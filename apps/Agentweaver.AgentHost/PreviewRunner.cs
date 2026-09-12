@@ -91,6 +91,9 @@ internal interface IPreviewRunner
         string sessionId,
         string reason,
         CancellationToken ct = default);
+
+    Task RetainPreviewProcessAsync(string sessionId, CancellationToken ct = default) =>
+        Task.CompletedTask;
 }
 
 internal sealed class PreviewRunnerToolProvider(
@@ -300,9 +303,11 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         process.ErrorDataReceived += (_, e) => CaptureLine(state, "stderr", e.Data);
         process.Exited += (_, _) =>
         {
-            state.MarkExited(process.ExitCode, _clock.GetUtcNow());
+            state.MarkSupervisorExited(process.ExitCode, _clock.GetUtcNow());
             _logger.LogInformation(
-                "PreviewRunner: process exited session={SessionId} pid={Pid} exitCode={ExitCode}",
+                state.HasExited
+                    ? "PreviewRunner: process exited session={SessionId} pid={Pid} exitCode={ExitCode}"
+                    : "PreviewRunner: retained preview relay exited session={SessionId} pid={Pid} exitCode={ExitCode}",
                 sessionId, SafeProcessId(process), process.ExitCode);
         };
 
@@ -604,6 +609,17 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         state.Dispose();
         _logger.LogInformation("PreviewRunner: stopped session={SessionId} reason={Reason}", sessionId, reason);
         return new PreviewStopResult(sessionId, true, reason);
+    }
+
+    public async Task RetainPreviewProcessAsync(string sessionId, CancellationToken ct = default)
+    {
+        var state = GetSession(sessionId);
+        if (state.RemoteHandle is not { Length: > 0 } || _sandboxExecutor is not PodExecSandboxClient executor)
+            throw new InvalidOperationException("Only executor-sidecar preview processes can be retained.");
+
+        await executor.RetainAsync(state.RemoteHandle, ct).ConfigureAwait(false);
+        state.MarkRetained(_clock.GetUtcNow());
+        _logger.LogInformation("PreviewRunner: retained session={SessionId} beyond relay lifetime", sessionId);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1164,10 +1180,9 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         TimeSpan grace,
         CancellationToken ct)
     {
-        if (process.HasExited)
-            return;
-
         var remote = remoteHandle is { Length: > 0 } && _sandboxExecutor is PodExecSandboxClient;
+        if (process.HasExited && !remote)
+            return;
         if (remote)
         {
             // The sandboxed process group lives in the executor sidecar's PID namespace, so the
@@ -1271,6 +1286,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private sealed class PreviewProcessState : IDisposable
     {
         private int _exited;
+        private int _retained;
         private readonly object _forwarderLock = new();
         private readonly object _portsLock = new();
         private TcpPortForwarder? _forwarder;
@@ -1393,11 +1409,19 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 await forwarder.DisposeAsync().ConfigureAwait(false);
         }
 
-        public void MarkExited(int exitCode, DateTimeOffset now)
+        public void MarkRetained(DateTimeOffset now)
+        {
+            LastTouchedAt = now;
+            Volatile.Write(ref _retained, 1);
+            Volatile.Write(ref _exited, 0);
+        }
+
+        public void MarkSupervisorExited(int exitCode, DateTimeOffset now)
         {
             ExitCode = exitCode;
             LastTouchedAt = now;
-            Volatile.Write(ref _exited, 1);
+            if (Volatile.Read(ref _retained) == 0)
+                Volatile.Write(ref _exited, 1);
         }
 
         public void Dispose()

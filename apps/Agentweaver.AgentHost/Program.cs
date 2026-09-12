@@ -552,6 +552,19 @@ app.MapDelete("/preview-runner/processes/{sessionId}", async (
     });
 });
 
+app.MapPost("/preview-runner/processes/{sessionId}/retain", async (
+    HttpContext ctx,
+    string sessionId,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+
+    await previewRunner.RetainPreviewProcessAsync(sessionId, ctx.RequestAborted).ConfigureAwait(false);
+    return Results.Ok();
+});
+
 // ── A2A endpoints ──────────────────────────────────────────────────────────────
 // Mounts:
 //   POST  {A2APath}/v1/message:stream  — streaming agent turn (SSE)

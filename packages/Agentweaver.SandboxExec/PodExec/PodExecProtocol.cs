@@ -19,6 +19,7 @@ public static class PodExecOps
     public const string RegisterHome = "register-home";
     public const string Exec = "exec";
     public const string Spawn = "spawn";
+    public const string Retain = "retain";
     public const string Ports = "ports";
     public const string Stop = "stop";
     public const string Capabilities = "capabilities";

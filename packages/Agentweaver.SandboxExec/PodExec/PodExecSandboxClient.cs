@@ -456,6 +456,19 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         }
     }
 
+    /// <summary>
+    /// Transfers a preview session from its relay to the sidecar's retained-session ownership.
+    /// The session is still stopped explicitly or when the sidecar is disposed.
+    /// </summary>
+    public async Task RetainAsync(string handle, CancellationToken ct = default)
+    {
+        var frame = await SendAsync(
+                new PodExecRequest { Op = PodExecOps.Retain, Handle = handle },
+                ct)
+            .ConfigureAwait(false);
+        frame.ThrowIfFailed();
+    }
+
     private async Task<PodExecFrame> SendAsync(PodExecRequest request, CancellationToken ct)
     {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
