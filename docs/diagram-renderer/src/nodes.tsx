@@ -14,8 +14,8 @@ export const CARD_WIDTH = 340;
 export const CARD_HEIGHT_2 = 104;
 export const CARD_HEIGHT_3 = 132;
 
-const TITLE_CHARS_PER_LINE = 24;
-const SUBTITLE_CHARS_PER_LINE = 32;
+const TITLE_CHARS_PER_LINE = 22;
+const SUBTITLE_CHARS_PER_LINE = 30;
 
 function wrappedLines(text: string | undefined, charsPerLine: number): number {
   if (!text) return 0;
@@ -23,11 +23,11 @@ function wrappedLines(text: string | undefined, charsPerLine: number): number {
 }
 
 export function cardHeightFor(node: Pick<GraphNode, 'label' | 'subLabel' | 'meta'>): number {
-  const titleHeight = wrappedLines(node.label, TITLE_CHARS_PER_LINE) * 23;
-  const subtitleHeight = wrappedLines(node.subLabel, SUBTITLE_CHARS_PER_LINE) * 18;
-  const metaHeight = node.meta ? 15 : 0;
+  const titleHeight = wrappedLines(node.label, TITLE_CHARS_PER_LINE) * 26;
+  const subtitleHeight = wrappedLines(node.subLabel, SUBTITLE_CHARS_PER_LINE) * 20;
+  const metaHeight = node.meta ? 16 : 0;
   const contentHeight = titleHeight + subtitleHeight + metaHeight + (node.subLabel ? 2 : 0) + (node.meta ? 2 : 0);
-  return Math.max(CARD_HEIGHT_2, Math.ceil(contentHeight + 36));
+  return Math.max(CARD_HEIGHT_2, Math.ceil(contentHeight + 40));
 }
 
 // Mirrors apps/web/src/components/CoordinatorTopologyGraph.tsx's `.card` /
@@ -63,13 +63,13 @@ export function CardNode({ data }: NodeProps) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <span style={{ display: 'flex', flexShrink: 0, color: tone.fg }} aria-hidden="true">
-          <Icon fontSize={30} />
+          <Icon fontSize={32} />
         </span>
         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <span
             style={{
               fontWeight: 600,
-              fontSize: 20,
+              fontSize: 22,
               lineHeight: 1.15,
               color: neutral.foreground1,
               display: '-webkit-box',
@@ -83,7 +83,7 @@ export function CardNode({ data }: NodeProps) {
           {node.subLabel && (
             <span
               style={{
-                fontSize: 15,
+                fontSize: 16,
                 lineHeight: 1.2,
                 color: neutral.foreground3,
                 marginTop: 2,
@@ -99,7 +99,7 @@ export function CardNode({ data }: NodeProps) {
           {node.meta && (
             <span
               style={{
-                fontSize: 13,
+                fontSize: 14,
                 color: neutral.foreground4,
                 fontFamily: fontFamilyMonospace,
                 marginTop: 2,
@@ -151,7 +151,7 @@ export function GroupLabelNode({ data }: NodeProps) {
       style={{
         display: 'inline-block',
         fontFamily,
-        fontSize: 19,
+        fontSize: 21,
         fontWeight: 700,
         letterSpacing: '0.02em',
         color: neutral.foreground2,

@@ -51,14 +51,14 @@ const GROUP_PAD_BOTTOM = 44;
 const CANVAS_MARGIN = 80;
 const LANE_STEP = 34;
 
-// Label metrics. These mirror the inline styles in edges.tsx (15px / 600 /
-// 1.1 line-height, 9px horizontal and 5px vertical padding, 1px border) so
+// Label metrics. These mirror the inline styles in edges.tsx (16px / 600 /
+// 1.15 line-height, 9px horizontal and 5px vertical padding, 1px border) so
 // the layout can reserve real space for a label instead of guessing. A label
 // is always drawn centred on its edge's run, which means the run has to be
 // long enough and the gutter tall enough to hold it -- both are sized here.
-const LABEL_CHAR_W = 8.4;
+const LABEL_CHAR_W = 9;
 const LABEL_PAD_X = 20;
-const LABEL_LINE_H = 16.5;
+const LABEL_LINE_H = 18.4;
 const LABEL_PAD_Y = 12;
 // Cap for labels on lateral (card-side-to-card-side) edges. Their run is the
 // column gap, and that gap widens to fit the label, so an unwrapped long
