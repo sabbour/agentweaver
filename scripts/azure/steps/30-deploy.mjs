@@ -168,107 +168,6 @@ export function validateManagedDomain(domain) {
 }
 
 /**
- * Ensures the managed AKS DNS zone directs every one-label preview hostname to
- * the preview Gateway. DefaultDomainCertificate supplies the wildcard
- * certificate only; it does not create this wildcard A record.
- *
- * The record is synchronized before application pods roll out, giving DNS
- * caches time to converge before a preview publication is attempted.
- *
- * @param {string} zoneSuffix Managed DNS zone without the leading wildcard.
- * @param {string} gatewayIp Public IP assigned to agentweaver-preview-gateway.
- * @param {{ run: typeof execDefault.run, capture: typeof execDefault.capture, log?: typeof logDefault }} opts
- */
-export async function ensurePreviewWildcardDnsRecord(zoneSuffix, gatewayIp, opts) {
-  if (!zoneSuffix || !gatewayIp) {
-    throw new Error("Preview wildcard DNS requires both a managed zone suffix and preview Gateway public IP.");
-  }
-
-  const { run: execRun, capture: execCapture, log = logDefault } = opts;
-  const { stdout: resourceGroups } = await execCapture("az", [
-    "network",
-    "dns",
-    "zone",
-    "list",
-    "--query",
-    `[?name=='${zoneSuffix}'].resourceGroup`,
-    "--output",
-    "tsv",
-  ]);
-  const matches = [...new Set(String(resourceGroups).split(/\r?\n/).map((value) => value.trim()).filter(Boolean))];
-  if (matches.length !== 1) {
-    throw new Error(
-      `Expected exactly one Azure DNS zone named '${zoneSuffix}', found ${matches.length}; refusing to change preview DNS.`,
-    );
-  }
-
-  const resourceGroup = matches[0];
-  const commandArgs = ["network", "dns", "record-set", "a"];
-  const recordArgs = [
-    "--resource-group", resourceGroup,
-    "--zone-name", zoneSuffix,
-    "--name", "*",
-  ];
-
-  // `create` is idempotent. Remove all existing addresses before adding the
-  // current Gateway IP so a Gateway reallocation cannot leave stale targets.
-  await execRun("az", [...commandArgs, "create", ...recordArgs, "--ttl", "60"]);
-  const { stdout: existingRecordJson } = await execCapture("az", [
-    ...commandArgs, "show", ...recordArgs, "--output", "json",
-  ]);
-  let existingRecord;
-  try {
-    existingRecord = JSON.parse(existingRecordJson);
-  } catch {
-    throw new Error(`Azure returned an unreadable existing wildcard A record for '${zoneSuffix}'.`);
-  }
-  const existingAddresses = existingRecord?.aRecords ?? existingRecord?.ARecords ?? [];
-  if (!Array.isArray(existingAddresses)) {
-    throw new Error(`Azure returned an invalid existing wildcard A record for '${zoneSuffix}'.`);
-  }
-  for (const address of existingAddresses) {
-    if (typeof address?.ipv4Address !== "string" || !address.ipv4Address) {
-      throw new Error(`Azure returned an invalid wildcard A record address for '${zoneSuffix}'.`);
-    }
-    await execRun("az", [
-      ...commandArgs,
-      "remove-record",
-      "--resource-group", resourceGroup,
-      "--zone-name", zoneSuffix,
-      "--record-set-name", "*",
-      "--ipv4-address", address.ipv4Address,
-    ]);
-  }
-  await execRun("az", [
-    ...commandArgs,
-    "add-record",
-    "--resource-group", resourceGroup,
-    "--zone-name", zoneSuffix,
-    "--record-set-name", "*",
-    "--ipv4-address", gatewayIp,
-  ]);
-
-  const { stdout: recordJson } = await execCapture("az", [
-    ...commandArgs, "show", ...recordArgs, "--output", "json",
-  ]);
-  let record;
-  try {
-    record = JSON.parse(recordJson);
-  } catch {
-    throw new Error(`Azure returned an unreadable wildcard A record for '${zoneSuffix}'.`);
-  }
-  const addresses = record?.aRecords ?? record?.ARecords ?? [];
-  if (!Array.isArray(addresses) || addresses.length !== 1 || addresses[0]?.ipv4Address !== gatewayIp) {
-    throw new Error(
-      `Preview wildcard DNS record for '${zoneSuffix}' did not converge to preview Gateway IP '${gatewayIp}'.`,
-    );
-  }
-
-  log.info(`  Preview wildcard DNS: *.${zoneSuffix} -> ${gatewayIp} (${resourceGroup})`);
-  return { resourceGroup, zoneSuffix, gatewayIp };
-}
-
-/**
  * Builds the full production overlay via `kubectl kustomize` (kubectl's
  * built-in Kustomize support -- no standalone `kustomize` binary required)
  * and splits the combined output back into `{kind, name, text}` docs, ready
@@ -612,20 +511,6 @@ export async function run(cfg, opts = {}) {
       "--output",
       "jsonpath={.status.addresses[0].value}",
     ]);
-    const { stdout: PREVIEW_GATEWAY_IP } = await execCapture("kubectl", [
-      "get",
-      "gateway",
-      "agentweaver-preview-gateway",
-      "--namespace",
-      NAMESPACE,
-      "--output",
-      "jsonpath={.status.addresses[0].value}",
-    ]);
-    await ensurePreviewWildcardDnsRecord(ZONE_SUFFIX, String(PREVIEW_GATEWAY_IP).trim(), {
-      run: execRun,
-      capture: execCapture,
-      log,
-    });
 
     log.info("");
     log.info("Applying deployments after workload identity prerequisites are ready...");
@@ -694,7 +579,7 @@ export async function run(cfg, opts = {}) {
     log.info(`  Gateway IP:          ${GATEWAY_IP}`);
     log.info("");
     log.info(`  Preview gateway:     ${PREVIEW_HOSTNAME} (TLS: ${PREVIEW_TLS_SECRET})`);
-    log.info(`  Preview gateway IP:  ${String(PREVIEW_GATEWAY_IP).trim()} (wildcard DNS synchronized)`);
+    log.info("  Preview DNS:         App Routing creates per-preview records.");
     log.info(`  Preview zone suffix: ${ZONE_SUFFIX}`);
     log.info("  Sandbox__Preview__Enabled:          true");
     log.info(`  Sandbox__Preview__ZoneSuffix:       ${ZONE_SUFFIX}`);

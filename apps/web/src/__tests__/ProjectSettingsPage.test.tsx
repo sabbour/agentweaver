@@ -64,7 +64,8 @@ function githubProject(): Project {
     blueprint_generation_model: null,
     workflow_generation_model: 'claude-sonnet-4.6',
     outcome_spec_generation_model: null,
-    preview_approval_timeout_minutes: 30,
+    preview_approval_timeout_minutes: 1440,
+    preview_lifetime_minutes: 1440,
     available: true,
     state: 'active',
     created_at: '2026-07-07T00:00:00Z',
@@ -110,7 +111,8 @@ beforeEach(() => {
     blueprint_generation_model: null,
     workflow_generation_model: 'claude-sonnet-4.6',
     outcome_spec_generation_model: null,
-    preview_approval_timeout_minutes: 30,
+    preview_approval_timeout_minutes: 1440,
+    preview_lifetime_minutes: 1440,
     available: true,
     state: 'active',
     created_at: '2026-07-07T00:00:00Z',
@@ -119,6 +121,8 @@ beforeEach(() => {
   vi.mocked(apiClient.updateProjectProviderSettings).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.updateProjectPreviewSettings).mockResolvedValue({
     approval_timeout_minutes: 45,
+    lifetime_minutes: 120,
+    dns_convergence_timeout_seconds: 600,
   } as never);
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({
     data_directory: 'C:/data',
@@ -633,7 +637,7 @@ describe('ProjectSettingsPage', () => {
     expect(switches[2].disabled).toBe(false);
   });
 
-  it('saves the project-scoped preview approval timeout', async () => {
+  it('saves all project-scoped preview windows', async () => {
     renderPage('proj-1');
     await screen.findByText('Rename project');
     fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
@@ -641,14 +645,21 @@ describe('ProjectSettingsPage', () => {
     const input = await screen.findByRole('spinbutton', {
       name: 'Preview approval timeout in minutes',
     });
-    expect((input as HTMLInputElement).value).toBe('30');
+    expect((input as HTMLInputElement).value).toBe('1440');
     fireEvent.change(input, { target: { value: '45' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview approval' }));
+    const idleInput = screen.getByRole('spinbutton', {
+      name: 'Preview lifetime in minutes',
+    });
+    expect((idleInput as HTMLInputElement).value).toBe('1440');
+    fireEvent.change(idleInput, { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview settings' }));
 
     await waitFor(() => expect(apiClient.updateProjectPreviewSettings).toHaveBeenCalledWith('proj-1', {
       approval_timeout_minutes: 45,
+      lifetime_minutes: 120,
+      dns_convergence_timeout_seconds: 600,
     }));
-    expect(await screen.findByText('Preview approval timeout saved.')).toBeDefined();
+    expect(await screen.findByText('Preview settings saved.')).toBeDefined();
   });
 
   it('validates the preview approval timeout before calling the API', async () => {
@@ -660,10 +671,45 @@ describe('ProjectSettingsPage', () => {
       name: 'Preview approval timeout in minutes',
     });
     fireEvent.change(input, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview approval' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview settings' }));
 
     expect(await screen.findByText(
       'Approval timeout must be a whole number between 1 and 1440 minutes.',
+    )).toBeDefined();
+    expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
+  });
+
+  it('validates the preview DNS convergence deadline before calling the API', async () => {
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
+
+    const input = await screen.findByRole('spinbutton', {
+      name: 'Preview DNS convergence deadline in seconds',
+    });
+    expect((input as HTMLInputElement).value).toBe('600');
+    fireEvent.change(input, { target: { value: '59' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview settings' }));
+
+    expect(await screen.findByText(
+      'DNS convergence deadline must be a whole number between 60 and 3600 seconds.',
+    )).toBeDefined();
+    expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
+  });
+
+  it('validates the preview lifetime before calling the API', async () => {
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
+
+    const input = await screen.findByRole('spinbutton', {
+      name: 'Preview lifetime in minutes',
+    });
+    fireEvent.change(input, { target: { value: '1441' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview settings' }));
+
+    expect(await screen.findByText(
+      'Preview lifetime must be a whole number between 1 and 1440 minutes.',
     )).toBeDefined();
     expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
   });

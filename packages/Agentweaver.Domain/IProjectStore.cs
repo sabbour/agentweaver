@@ -49,9 +49,11 @@ public interface IProjectStore
         ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default);
 
     /// <summary>Updates the project-scoped live-preview HITL approval window.</summary>
-    Task UpdatePreviewApprovalTimeoutAsync(
+    Task UpdatePreviewSettingsAsync(
         ProjectId id,
-        int timeoutMinutes,
+        int approvalTimeoutMinutes,
+        int lifetimeMinutes,
+        int dnsConvergenceTimeoutSeconds,
         DateTimeOffset updatedAt,
         CancellationToken ct = default) => Task.CompletedTask;
 

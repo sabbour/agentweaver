@@ -828,7 +828,9 @@ builder.Services.AddSingleton<PortForwardService>();
             {
                 TimeoutSeconds = builder.Configuration.GetValue<int?>(
                     "Sandbox:Kubernetes:TimeoutSeconds") ?? 600,
-            });
+            },
+            projectStore: sp.GetRequiredService<IProjectStore>(),
+            runStore: sp.GetRequiredService<IRunStore>());
     });
 
     // Replica-safe annotation-driven reaper. No-ops when preview disabled.

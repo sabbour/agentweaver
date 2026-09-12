@@ -37,7 +37,7 @@ public sealed record PreviewApprovalAttempt(
 /// auto-approve source is on, otherwise a <see cref="EventTypes.ToolApprovalRequired"/> card is
 /// emitted onto the run stream and the call suspends on the shared <see cref="IToolApprovalGate"/>
 /// until an operator grants it (POST /api/runs/{id}/tool-approvals) or the approval window times
-/// out. Each project stores its own approval window (30 minutes by default). The global
+/// out. Each project stores its own approval window (24 hours by default). The global
 /// <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> / <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c>
 /// value remains the fallback for legacy/non-project runs.
 ///
@@ -54,7 +54,7 @@ public sealed class AgentPreviewGate
 {
     /// <summary>The tool name surfaced on HITL cards and approval-policy lookups.</summary>
     public const string ToolName = "start_preview";
-    public const int DefaultApprovalTimeoutMinutes = 30;
+    public const int DefaultApprovalTimeoutMinutes = 1440;
     private const int MinimumApprovalTimeoutMinutes = 1;
     private const int MaximumApprovalTimeoutMinutes = 1440;
 
@@ -397,7 +397,7 @@ public sealed class AgentPreviewGate
     /// <summary>
     /// Resolves the preview approval timeout from <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> or
     /// the <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c> environment variable. Missing or
-    /// invalid values default to 30 minutes; values clamp to the supported project range.
+    /// invalid values default to 24 hours; values clamp to the supported project range.
     /// </summary>
     internal static TimeSpan ResolveApprovalTimeout(IConfiguration configuration) =>
         ResolveApprovalTimeoutMinutes(configuration["Sandbox:Preview:ApprovalTimeoutMinutes"])

@@ -41,9 +41,18 @@ public sealed record Project
 
     /// <summary>
     /// How long an agent-requested live preview waits for operator approval. Existing and new
-    /// projects default to 30 minutes. Valid API values are 1 through 1440 minutes.
+    /// projects default to 24 hours. Valid API values are 1 through 1440 minutes.
     /// </summary>
-    public int PreviewApprovalTimeoutMinutes { get; init; } = 30;
+    public int PreviewApprovalTimeoutMinutes { get; init; } = 1440;
+
+    /// <summary>
+    /// Lifetime of a published preview. Existing and new projects default to 24 hours.
+    /// Valid API values are 1 through 1440 minutes.
+    /// </summary>
+    public int PreviewLifetimeMinutes { get; init; } = 1440;
+
+    /// <summary>Maximum DNS convergence time for a generated preview hostname. Default 10 minutes. Valid API values are 60 through 3600 seconds.</summary>
+    public int PreviewDnsConvergenceTimeoutSeconds { get; init; } = 600;
 
     /// <summary>
     /// The project's default workflow, referenced by workflow id/name (Feature 010, FR-041). Selects

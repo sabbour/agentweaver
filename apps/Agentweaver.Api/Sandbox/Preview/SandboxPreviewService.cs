@@ -3,6 +3,8 @@ using k8s;
 using k8s.Autorest;
 using k8s.Models;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Domain;
+using Agentweaver.Api.Infrastructure;
 
 namespace Agentweaver.Api.Sandbox.Preview;
 
@@ -51,8 +53,9 @@ public interface ISandboxPreviewService
     /// Provisions a preview for <paramref name="runId"/> targeting <paramref name="targetPort"/>
     /// on the bound sandbox pod. The pod is resolved from the run's SandboxClaim status in the
     /// cluster (replica-safe), not from any in-process registry. Returns only after the generated
-    /// HTTPS URL responds successfully through the Gateway within PublicationTimeoutSeconds. Throws
-    /// <see cref="InvalidOperationException"/> when the claim is missing or not yet bound.
+    /// HTTPS URL responds successfully through the Gateway within the configured DNS-convergence and
+    /// publication windows. Throws <see cref="InvalidOperationException"/> when the claim is missing
+    /// or not yet bound.
     /// </summary>
     /// <param name="previewRunnerSessionId">
     /// Optional PreviewRunner PROCESS session id (spec-006 §3.4). When supplied it is persisted in the
@@ -67,7 +70,7 @@ public interface ISandboxPreviewService
     /// </summary>
     Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default);
 
-    /// <summary>Bumps the preview's idle expiry to now + IdleTimeoutMinutes. Idempotent (404 ignored).</summary>
+    /// <summary>Bumps the preview's expiry using its configured preview lifetime. Idempotent (404 ignored).</summary>
     Task KeepAliveAsync(string token, CancellationToken ct = default);
 
     /// <summary>
@@ -122,6 +125,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
     private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan PublicationRetryInitialDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan PublicationRetryMaximumDelay = TimeSpan.FromSeconds(10);
 
     // Separate from authenticated API/AgentHost clients: no bearer, cookies, redirects or TLS bypass.
     private static readonly HttpClient PublicationClient = new(CreatePublicationHandler())
@@ -145,6 +150,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly int _normalClaimTtlSeconds;
     private readonly HttpClient _publicationClient;
+    private readonly IProjectStore? _projectStore;
+    private readonly IRunStore? _runStore;
 
     public SandboxPreviewService(
         IKubernetes? client,
@@ -155,7 +162,9 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         IAgentHostOriginResolver? originResolver = null,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
         KubernetesSandboxOptions? kubernetesOptions = null,
-        HttpClient? publicationClient = null)
+        HttpClient? publicationClient = null,
+        IProjectStore? projectStore = null,
+        IRunStore? runStore = null)
     {
         _client = client;
         _options = options;
@@ -166,6 +175,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         _secretStore = secretStore;
         _normalClaimTtlSeconds = Math.Max(1, kubernetesOptions?.TimeoutSeconds ?? 600);
         _publicationClient = publicationClient ?? PublicationClient;
+        _projectStore = projectStore;
+        _runStore = runStore;
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
@@ -183,7 +194,10 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             throw new ArgumentOutOfRangeException(nameof(targetPort), "targetPort must be between 1 and 65535.");
         if (_options.PublicationTimeoutSeconds <= 0)
             throw new InvalidOperationException("PublicationTimeoutSeconds must be positive.");
+        if (_options.DnsConvergenceTimeoutSeconds <= 0)
+            throw new InvalidOperationException("DnsConvergenceTimeoutSeconds must be positive.");
 
+        var previewSettings = await ResolvePreviewSettingsAsync(runId, ct).ConfigureAwait(false);
         var podName = await ResolveBoundPodNameAsync(runId, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(podName))
             throw new InvalidOperationException(
@@ -255,8 +269,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         await CreateServiceIdempotentAsync(service, ct).ConfigureAwait(false);
 
         // e. HTTPRoute (gateway.networking.k8s.io/v1) attaching to the shared preview Gateway.
-        var expiresAt = now.AddMinutes(_options.IdleTimeoutMinutes);
-        var maxUntil = now.AddHours(_options.MaxLifetimeHours);
+        var expiresAt = now.AddMinutes(previewSettings.LifetimeMinutes);
+        var maxUntil = now.AddMinutes(previewSettings.LifetimeMinutes);
         var httpRoute = BuildHttpRoute(
             token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now, expiresAt, maxUntil,
             runId, previewRunnerSessionId);
@@ -291,7 +305,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             // Retain the sandbox while DNS and Gateway configuration converge.
             await ApplyPreviewLifecycleStateAsync(
                 runId, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
-            await WaitForPublicationAsync(new Uri(previewUrl), ct).ConfigureAwait(false);
+            await WaitForPublicationAsync(new Uri(previewUrl), previewSettings.DnsConvergenceTimeoutSeconds, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             published = true;
         }
@@ -315,20 +329,38 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         return new PreviewSession(token, runId, podName, targetPort, previewUrl, now);
     }
 
-    private async Task WaitForPublicationAsync(Uri previewUrl, CancellationToken ct)
+    private async Task WaitForPublicationAsync(
+        Uri previewUrl, int dnsConvergenceTimeoutSeconds, CancellationToken ct)
     {
-        var started = _clock.GetTimestamp();
         var publicationWindow = TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds);
-        using var timeout = new CancellationTokenSource(
-            publicationWindow, _clock);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        var dnsConvergenceWindow = TimeSpan.FromSeconds(dnsConvergenceTimeoutSeconds);
+        var dnsStarted = _clock.GetTimestamp();
+        using var dnsTimeout = new CancellationTokenSource(dnsConvergenceWindow, _clock);
+        CancellationTokenSource? publicationTimeout = null;
+        var publicationStarted = 0L;
         var lastFailure = "no successful HTTPS response";
+        var retryAttempt = 0;
 
         try
         {
             while (true)
             {
-                deadline.Token.ThrowIfCancellationRequested();
+                var activeTimeout = publicationTimeout ?? dnsTimeout;
+                var activeWindow = publicationTimeout is null ? dnsConvergenceWindow : publicationWindow;
+                var activeStarted = publicationTimeout is null ? dnsStarted : publicationStarted;
+                if (_clock.GetElapsedTime(activeStarted) >= activeWindow)
+                    activeTimeout.Cancel();
+
+                // A lookup that returns NameResolutionError may retry for the longer DNS window,
+                // but one stuck HTTPS operation must still be bounded by normal publication time.
+                using var requestTimeout = publicationTimeout is null
+                    ? new CancellationTokenSource(publicationWindow, _clock)
+                    : null;
+                using var attemptDeadline = requestTimeout is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(ct, activeTimeout.Token)
+                    : CancellationTokenSource.CreateLinkedTokenSource(ct, activeTimeout.Token, requestTimeout.Token);
+                var attemptStarted = _clock.GetTimestamp();
+                attemptDeadline.Token.ThrowIfCancellationRequested();
                 try
                 {
                     var url = previewUrl;
@@ -336,14 +368,21 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                     {
                         using var request = new HttpRequestMessage(HttpMethod.Get, url);
                         using var response = await _publicationClient.SendAsync(
-                            request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+                            request, HttpCompletionOption.ResponseHeadersRead, attemptDeadline.Token).ConfigureAwait(false);
                         // A transport can ignore cancellation, and timer delivery can be delayed.
-                        if (_clock.GetElapsedTime(started) >= publicationWindow)
-                            timeout.Cancel();
-                        deadline.Token.ThrowIfCancellationRequested();
+                        if (_clock.GetElapsedTime(activeStarted) >= activeWindow)
+                            activeTimeout.Cancel();
+                        if (requestTimeout is not null &&
+                            _clock.GetElapsedTime(attemptStarted) >= publicationWindow)
+                            requestTimeout.Cancel();
+                        attemptDeadline.Token.ThrowIfCancellationRequested();
                         if (response.IsSuccessStatusCode)
                             return;
 
+                        StartPublicationWindow();
+                        activeTimeout = publicationTimeout!;
+                        activeWindow = publicationWindow;
+                        activeStarted = publicationStarted;
                         lastFailure = $"HTTP {(int)response.StatusCode}";
                         if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)
                             || response.Headers.Location is not { } location)
@@ -361,23 +400,81 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 }
                 catch (HttpRequestException ex)
                 {
-                    lastFailure = $"HTTPS transport failure ({ex.HttpRequestError})";
+                    if (publicationTimeout is null && ex.HttpRequestError == HttpRequestError.NameResolutionError)
+                    {
+                        lastFailure = "DNS name resolution has not converged";
+                    }
+                    else
+                    {
+                        StartPublicationWindow();
+                        lastFailure = $"HTTPS transport failure ({ex.HttpRequestError})";
+                    }
                 }
-                catch (OperationCanceledException) when (!deadline.IsCancellationRequested)
+                catch (OperationCanceledException) when (
+                    !attemptDeadline.IsCancellationRequested || requestTimeout?.IsCancellationRequested == true)
                 {
+                    StartPublicationWindow();
                     lastFailure = "HTTPS request timed out";
+                    if (requestTimeout?.IsCancellationRequested == true)
+                    {
+                        // A stalled request is not evidence of DNS convergence; fail under the
+                        // normal publication classification rather than spending the DNS budget.
+                        publicationTimeout!.Cancel();
+                        throw;
+                    }
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(2), _clock, deadline.Token).ConfigureAwait(false);
+                var retryTimeout = publicationTimeout ?? dnsTimeout;
+                using var retryDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, retryTimeout.Token);
+                await Task.Delay(PublicationRetryDelay(retryAttempt++), _clock, retryDeadline.Token).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested &&
+            (dnsTimeout.IsCancellationRequested || publicationTimeout?.IsCancellationRequested == true))
         {
+            var timeoutSeconds = publicationTimeout is null
+                ? dnsConvergenceTimeoutSeconds
+                : _options.PublicationTimeoutSeconds;
             throw new PreviewPublicationException(
-                $"Preview publication did not become ready within {_options.PublicationTimeoutSeconds} seconds " +
+                $"Preview publication did not become ready within {timeoutSeconds} seconds " +
                 $"({lastFailure}). Check preview process health and Gateway/DNS availability before retrying.");
         }
+        finally
+        {
+            publicationTimeout?.Dispose();
+        }
+
+        void StartPublicationWindow()
+        {
+            if (publicationTimeout is not null)
+                return;
+
+            publicationStarted = _clock.GetTimestamp();
+            publicationTimeout = new CancellationTokenSource(publicationWindow, _clock);
+        }
     }
+
+    private static TimeSpan PublicationRetryDelay(int retryAttempt) =>
+        TimeSpan.FromSeconds(Math.Min(
+            PublicationRetryMaximumDelay.TotalSeconds,
+            PublicationRetryInitialDelay.TotalSeconds * Math.Pow(2, Math.Min(retryAttempt, 3))));
+
+    private async Task<PreviewSettings> ResolvePreviewSettingsAsync(string runId, CancellationToken ct)
+    {
+        if (_projectStore is null || _runStore is null || !RunId.TryParse(runId, out var parsedRunId))
+            return new(_options.LifetimeMinutes, _options.DnsConvergenceTimeoutSeconds);
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        if (run?.ProjectId is not { } projectId)
+            return new(_options.LifetimeMinutes, _options.DnsConvergenceTimeoutSeconds);
+
+        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+        return project is null
+            ? new(_options.LifetimeMinutes, _options.DnsConvergenceTimeoutSeconds)
+            : new(project.PreviewLifetimeMinutes, project.PreviewDnsConvergenceTimeoutSeconds);
+    }
+
+    private sealed record PreviewSettings(int LifetimeMinutes, int DnsConvergenceTimeoutSeconds);
 
     public async Task KeepAliveAsync(string token, CancellationToken ct = default)
     {
@@ -385,8 +482,12 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         if (!PreviewToken.IsValidLabel(token))
             throw new ArgumentException("Invalid preview token.", nameof(token));
 
-        var expiresAt = _clock.GetUtcNow().AddMinutes(_options.IdleTimeoutMinutes);
         var serviceName = PreviewReaper.ServiceName(token);
+        var routeRunId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
+        var previewSettings = string.IsNullOrEmpty(routeRunId)
+            ? new PreviewSettings(_options.LifetimeMinutes, _options.DnsConvergenceTimeoutSeconds)
+            : await ResolvePreviewSettingsAsync(routeRunId, ct).ConfigureAwait(false);
+        var expiresAt = _clock.GetUtcNow().AddMinutes(previewSettings.LifetimeMinutes);
         var patchJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             metadata = new
@@ -422,7 +523,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
         // Reassert the complete PreviewActive transition for active use. Reading the run id from the
         // durable route keeps TTL renewal and eviction protection replica-safe.
-        var routeRunId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(routeRunId))
             await ApplyPreviewLifecycleStateAsync(
                 routeRunId!, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
@@ -698,7 +798,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     {
         var active = state == PreviewLifecycleState.PreviewActive;
         var claimTtlSeconds = active
-            ? checked(_options.MaxLifetimeHours * 3600 + 600)
+            ? checked(_options.LifetimeMinutes * 60 + 600)
             : _normalClaimTtlSeconds;
 
         await SetBackingClaimTtlAsync(runId, claimTtlSeconds, ct).ConfigureAwait(false);

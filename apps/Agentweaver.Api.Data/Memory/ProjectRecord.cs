@@ -20,7 +20,9 @@ public sealed class ProjectRecord
     public int MaxReadyPerHeartbeat { get; set; } = 3;
     public bool PickupAutopilot { get; set; } = true;
     public bool PickupAutoApproveTools { get; set; } = true;
-    public int PreviewApprovalTimeoutMinutes { get; set; } = 30;
+    public int PreviewApprovalTimeoutMinutes { get; set; } = 1440;
+    public int PreviewLifetimeMinutes { get; set; } = 1440;
+    public int PreviewDnsConvergenceTimeoutSeconds { get; set; } = 600;
     public string? DefaultWorkflowId { get; set; }
     public string? ActiveReviewPolicyName { get; set; }
     public string? SandboxProfile { get; set; }

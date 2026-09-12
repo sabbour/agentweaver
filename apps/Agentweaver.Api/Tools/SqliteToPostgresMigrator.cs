@@ -766,8 +766,14 @@ public sealed class SqliteToPostgresMigrator
             ? "webhook_secret"
             : "NULL AS webhook_secret";
         var previewApprovalTimeout = await HasColumnAsync(conn, "projects", "preview_approval_timeout_minutes", ct)
-            ? "COALESCE(preview_approval_timeout_minutes,30)"
-            : "30 AS preview_approval_timeout_minutes";
+            ? "COALESCE(preview_approval_timeout_minutes,1440)"
+            : "1440 AS preview_approval_timeout_minutes";
+        var previewLifetime = await HasColumnAsync(conn, "projects", "preview_lifetime_minutes", ct)
+            ? "COALESCE(preview_lifetime_minutes,1440)"
+            : "1440 AS preview_lifetime_minutes";
+        var previewDnsConvergenceTimeout = await HasColumnAsync(conn, "projects", "preview_dns_convergence_timeout_seconds", ct)
+            ? "COALESCE(preview_dns_convergence_timeout_seconds,600)"
+            : "600 AS preview_dns_convergence_timeout_seconds";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -777,7 +783,7 @@ public sealed class SqliteToPostgresMigrator
                    COALESCE(state,'active'), created_at, updated_at,
                    COALESCE(max_ready_per_heartbeat,3), COALESCE(pickup_autopilot,1),
                    COALESCE(pickup_auto_approve_tools,0),
-                   {previewApprovalTimeout},
+                   {previewApprovalTimeout}, {previewLifetime}, {previewDnsConvergenceTimeout},
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
@@ -806,17 +812,19 @@ public sealed class SqliteToPostgresMigrator
                 PickupAutopilot = reader.GetInt32(14) != 0,
                 PickupAutoApproveTools = reader.GetInt32(15) != 0,
                 PreviewApprovalTimeoutMinutes = reader.GetInt32(16),
-                DefaultWorkflowId = reader.IsDBNull(17) ? null : reader.GetString(17),
-                ActiveReviewPolicyName = reader.IsDBNull(18) ? null : reader.GetString(18),
-                SandboxProfile = reader.IsDBNull(19) ? null : reader.GetString(19),
-                SourceBlueprintId = reader.IsDBNull(20) ? null : reader.GetString(20),
-                SourceBlueprintType = reader.IsDBNull(21) ? null : reader.GetString(21),
-                BlueprintGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
-                WorkflowGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
-                OutcomeSpecGenerationModel = reader.IsDBNull(24) ? null : reader.GetString(24),
-                AllowedWorkflowIds = reader.IsDBNull(25) ? null : reader.GetString(25),
-                WebhookSecret = reader.IsDBNull(26) ? null : reader.GetString(26),
-                TeamRevision = reader.GetInt64(27),
+                PreviewLifetimeMinutes = reader.GetInt32(17),
+                PreviewDnsConvergenceTimeoutSeconds = reader.GetInt32(18),
+                DefaultWorkflowId = reader.IsDBNull(19) ? null : reader.GetString(19),
+                ActiveReviewPolicyName = reader.IsDBNull(20) ? null : reader.GetString(20),
+                SandboxProfile = reader.IsDBNull(21) ? null : reader.GetString(21),
+                SourceBlueprintId = reader.IsDBNull(22) ? null : reader.GetString(22),
+                SourceBlueprintType = reader.IsDBNull(23) ? null : reader.GetString(23),
+                BlueprintGenerationModel = reader.IsDBNull(24) ? null : reader.GetString(24),
+                WorkflowGenerationModel = reader.IsDBNull(25) ? null : reader.GetString(25),
+                OutcomeSpecGenerationModel = reader.IsDBNull(26) ? null : reader.GetString(26),
+                AllowedWorkflowIds = reader.IsDBNull(27) ? null : reader.GetString(27),
+                WebhookSecret = reader.IsDBNull(28) ? null : reader.GetString(28),
+                TeamRevision = reader.GetInt64(29),
             });
         }
         return results;

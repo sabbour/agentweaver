@@ -45,7 +45,7 @@ public sealed class SandboxPreviewPublicationTests
             }
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
-        using var h = new Harness(publication, timeoutSeconds: 1, clock);
+        using var h = new Harness(publication, timeoutSeconds: 1, clock: clock);
 
         var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -98,6 +98,43 @@ public sealed class SandboxPreviewPublicationTests
         h.Kube.Requests.Should().NotContain(r => r.Method == "DELETE");
     }
 
+    [Fact]
+    public async Task DnsConvergenceWindow_AllowsNameResolutionBeyondPublicationWindow()
+    {
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                throw new HttpRequestException(HttpRequestError.NameResolutionError);
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(
+            publication,
+            timeoutSeconds: 1,
+            dnsConvergenceTimeoutSeconds: 3);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        calls.Should().Be(2, "DNS convergence gets its own configured retry window");
+        h.ReadyEvents().Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ExistingDnsRecord_IsProbedAndPublishedImmediately()
+    {
+        var publication = new PreviewPublicationHandler(
+            (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+        using var h = new Harness(publication);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(1));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        publication.Requests.Should().ContainSingle();
+        h.ReadyEvents().Should().HaveCount(2);
+    }
+
     [Theory]
     [InlineData("dns")]
     [InlineData("503")]
@@ -122,7 +159,7 @@ public sealed class SandboxPreviewPublicationTests
                 };
             return new HttpResponseMessage(failure == "403" ? HttpStatusCode.Forbidden : HttpStatusCode.ServiceUnavailable);
         });
-        using var h = new Harness(publication, timeoutSeconds: 1);
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 1);
 
         var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -214,7 +251,11 @@ public sealed class SandboxPreviewPublicationTests
         private readonly IKubernetes _client;
         private readonly SandboxPreviewService _service;
 
-        public Harness(PreviewPublicationHandler handler, int timeoutSeconds = 90, TimeProvider? clock = null)
+        public Harness(
+            PreviewPublicationHandler handler,
+            int timeoutSeconds = 90,
+            int dnsConvergenceTimeoutSeconds = 600,
+            TimeProvider? clock = null)
         {
             var claim = SandboxClaimConventions.DeriveAgentHostClaimName(Run.Id.ToString());
             Kube.OnGet(
@@ -229,6 +270,7 @@ public sealed class SandboxPreviewPublicationTests
                 Enabled = true,
                 ZoneSuffix = "preview.example.test",
                 PublicationTimeoutSeconds = timeoutSeconds,
+                DnsConvergenceTimeoutSeconds = dnsConvergenceTimeoutSeconds,
             }, NullLogger<SandboxPreviewService>.Instance, clock: clock, publicationClient: _http);
             Streams.Create(Run.Id.ToString(), Run.SubmittingUser);
         }

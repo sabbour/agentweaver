@@ -432,7 +432,9 @@ export function ProjectSettingsPage() {
   const [sandboxSaveError, setSandboxSaveError] = useState<string | null>(null);
   const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
   const sandboxLoading = project !== null && !sandboxFetched;
-  const [previewApprovalTimeout, setPreviewApprovalTimeout] = useState(30);
+  const [previewApprovalTimeout, setPreviewApprovalTimeout] = useState(1440);
+  const [previewLifetime, setPreviewLifetime] = useState(1440);
+  const [previewDnsConvergenceTimeout, setPreviewDnsConvergenceTimeout] = useState(600);
   const [savingPreviewApproval, setSavingPreviewApproval] = useState(false);
   const [previewApprovalError, setPreviewApprovalError] = useState<string | null>(null);
   const [previewApprovalSuccess, setPreviewApprovalSuccess] = useState(false);
@@ -483,7 +485,9 @@ export function ProjectSettingsPage() {
             outcome_spec_generation_model: p.outcome_spec_generation_model ?? '',
           });
           setNewName(p.name);
-          setPreviewApprovalTimeout(p.preview_approval_timeout_minutes ?? 30);
+          setPreviewApprovalTimeout(p.preview_approval_timeout_minutes ?? 1440);
+          setPreviewLifetime(p.preview_lifetime_minutes ?? 1440);
+          setPreviewDnsConvergenceTimeout(p.preview_dns_convergence_timeout_seconds ?? 600);
         }
       })
       .catch((err) => {
@@ -714,6 +718,20 @@ export function ProjectSettingsPage() {
       setPreviewApprovalSuccess(false);
       return;
     }
+    if (!Number.isInteger(previewDnsConvergenceTimeout)
+      || previewDnsConvergenceTimeout < 60
+      || previewDnsConvergenceTimeout > 3600) {
+      setPreviewApprovalError('DNS convergence deadline must be a whole number between 60 and 3600 seconds.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
+    if (!Number.isInteger(previewLifetime)
+      || previewLifetime < 1
+      || previewLifetime > 1440) {
+      setPreviewApprovalError('Preview lifetime must be a whole number between 1 and 1440 minutes.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
 
     setSavingPreviewApproval(true);
     setPreviewApprovalError(null);
@@ -721,10 +739,19 @@ export function ProjectSettingsPage() {
     try {
       const saved = await apiClient.updateProjectPreviewSettings(projectId, {
         approval_timeout_minutes: previewApprovalTimeout,
+        lifetime_minutes: previewLifetime,
+        dns_convergence_timeout_seconds: previewDnsConvergenceTimeout,
       });
       setPreviewApprovalTimeout(saved.approval_timeout_minutes);
+      setPreviewLifetime(saved.lifetime_minutes);
+      setPreviewDnsConvergenceTimeout(saved.dns_convergence_timeout_seconds);
       setProject((prev) => prev
-        ? { ...prev, preview_approval_timeout_minutes: saved.approval_timeout_minutes }
+        ? {
+          ...prev,
+          preview_approval_timeout_minutes: saved.approval_timeout_minutes,
+          preview_lifetime_minutes: saved.lifetime_minutes,
+          preview_dns_convergence_timeout_seconds: saved.dns_convergence_timeout_seconds,
+        }
         : prev);
       setPreviewApprovalSuccess(true);
     } catch (err) {
@@ -1364,14 +1391,14 @@ export function ProjectSettingsPage() {
             {displayedSection === 'sandbox' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
-                  <TitleText>Preview approval</TitleText>
+                  <TitleText>Preview lifetime</TitleText>
                   <Body as="p" tone="muted">
-                    Agent-requested previews remain private until approved. An expired request can be
-                    retried from the run timeline without restarting the run.
+                    Agent-requested previews remain private until approved. A published preview expires
+                    after its configured lifetime, which is also its hard cap.
                   </Body>
                   <Field
                     label="Approval timeout (minutes)"
-                    hint="Whole number from 1 to 1440. Existing and new projects default to 30 minutes."
+                    hint="Whole number from 1 to 1440. Default 1440 minutes (24 hours)."
                     validationState={previewApprovalError ? 'error' : 'none'}
                     validationMessage={previewApprovalError ?? undefined}
                   >
@@ -1385,19 +1412,47 @@ export function ProjectSettingsPage() {
                       aria-label="Preview approval timeout in minutes"
                     />
                   </Field>
+                  <Field
+                    label="Preview lifetime (minutes)"
+                    hint="Whole number from 1 to 1440. Default 1440 minutes (24 hours). This is both the expiration and hard cap."
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={String(previewLifetime)}
+                      onChange={(_, data) => setPreviewLifetime(Number(data.value))}
+                      aria-label="Preview lifetime in minutes"
+                    />
+                  </Field>
+                  <Field
+                    label="DNS convergence deadline (seconds)"
+                    hint="Whole number from 60 to 3600. Default 600 seconds (10 minutes); publication probes immediately and retries with bounded backoff."
+                  >
+                    <Input
+                      type="number"
+                      min={60}
+                      max={3600}
+                      step={1}
+                      value={String(previewDnsConvergenceTimeout)}
+                      onChange={(_, data) => setPreviewDnsConvergenceTimeout(Number(data.value))}
+                      aria-label="Preview DNS convergence deadline in seconds"
+                    />
+                  </Field>
                   <div className={styles.formActions}>
                     <Button
                       appearance="primary"
                       disabled={savingPreviewApproval}
                       onClick={() => void handleSavePreviewApproval()}
                     >
-                      {savingPreviewApproval ? 'Saving timeout' : 'Save preview approval'}
+                      {savingPreviewApproval ? 'Saving preview settings' : 'Save preview settings'}
                     </Button>
                     {savingPreviewApproval && <Spinner size="extra-tiny" aria-hidden="true" />}
                   </div>
                   {previewApprovalSuccess && (
                     <MessageBar intent="success">
-                      <MessageBarBody>Preview approval timeout saved.</MessageBarBody>
+                      <MessageBarBody>Preview settings saved.</MessageBarBody>
                     </MessageBar>
                   )}
                 </div>

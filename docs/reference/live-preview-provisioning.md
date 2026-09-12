@@ -13,7 +13,7 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
 | Port choice | Platform observes the app port inside the sandbox pod using log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:262`, `:610`, `:315` |
 | Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
-| End-to-end reachability | Confirmed by using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. The deploy step synchronizes `*.{ZoneSuffix}` to the preview Gateway's public IP before application rollout; the managed certificate alone does not create this DNS record. | `scripts/azure/steps/30-deploy.mjs`; `k8s/base/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs:147` |
+| End-to-end reachability | Confirmed by immediately using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. App Routing owns the managed DNS zone and creates each preview record; DNS name-resolution failures retry with bounded backoff until the configured convergence deadline (ten minutes by default), while an existing record succeeds immediately. | `k8s/base/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs` |
 | Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
 | Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
 | Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |
@@ -42,8 +42,8 @@ still in the future (`PreviewReaper.Decide(...) == Alive`). It deliberately does
 pod to still exist (the pod is present at the teardown boundary), and it is leak-safe: preview
 disabled, no un-expired route, or any lookup failure all return `false`, so the caller performs its
 normal teardown. Eventual teardown is therefore bounded and cannot leak: with no keepalive the preview
-idle-expires (`Sandbox:Preview:IdleTimeoutMinutes`, default 30) or hits its hard max
-(`Sandbox:Preview:MaxLifetimeHours`, default 8); the `SandboxPreviewReaperService` then deletes the
+expires at the project preview-lifetime setting (or `Sandbox:Preview:LifetimeMinutes`, default 24 hours),
+which is also its hard max; the `SandboxPreviewReaperService` then deletes the
 route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
 
 ### Direct-backed execution subtasks and worker reaper parity
@@ -86,7 +86,7 @@ keeps the pod alive for exactly as long as a preview may live:
 | Keepalive | Each keepalive renews the backing claim TTL for the route's run (read from the durable `preview-run-id` annotation). | `SandboxPreviewService.KeepAliveAsync` |
 
 `RenewBackingClaimTtlAsync` JSON-merge-patches `spec.lifecycle.ttlSecondsAfterFinished` up to
-`MaxLifetimeHours × 3600 + 600s` on both the agent-host (`agent-*`) and run-command (`run-*`) claim
+`LifetimeMinutes × 60 + 600s` on both the agent-host (`agent-*`) and run-command (`run-*`) claim
 names for the run (whichever exists is patched; a missing candidate 404s and is ignored). MergePatch
 preserves the sibling `shutdownPolicy`. It is **leak-safe / best-effort**: a no-op when preview is
 disabled and never throws. Bounded teardown is preserved because the extended TTL is only a *backstop*

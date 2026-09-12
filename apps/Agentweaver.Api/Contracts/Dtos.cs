@@ -772,12 +772,16 @@ public sealed record UpdateProjectProviderSettingsRequest
 public sealed record UpdateProjectPreviewSettingsRequest
 {
     [JsonPropertyName("approval_timeout_minutes")] public int ApprovalTimeoutMinutes { get; init; }
+    [JsonPropertyName("lifetime_minutes")] public int LifetimeMinutes { get; init; }
+    [JsonPropertyName("dns_convergence_timeout_seconds")] public int DnsConvergenceTimeoutSeconds { get; init; }
 }
 
 /// <summary>Project-scoped preview approval settings.</summary>
 public sealed record ProjectPreviewSettingsResponse
 {
     [JsonPropertyName("approval_timeout_minutes")] public required int ApprovalTimeoutMinutes { get; init; }
+    [JsonPropertyName("lifetime_minutes")] public required int LifetimeMinutes { get; init; }
+    [JsonPropertyName("dns_convergence_timeout_seconds")] public required int DnsConvergenceTimeoutSeconds { get; init; }
 }
 
 /// <summary>Canonical project view returned from creation, listing, and detail endpoints.</summary>
@@ -797,6 +801,8 @@ public sealed record ProjectResponse
     [JsonPropertyName("workflow_generation_model")] public string? WorkflowGenerationModel { get; init; }
     [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
     [JsonPropertyName("preview_approval_timeout_minutes")] public required int PreviewApprovalTimeoutMinutes { get; init; }
+    [JsonPropertyName("preview_lifetime_minutes")] public int PreviewLifetimeMinutes { get; init; } = 1440;
+    [JsonPropertyName("preview_dns_convergence_timeout_seconds")] public int PreviewDnsConvergenceTimeoutSeconds { get; init; } = 600;
     [JsonPropertyName("available")] public required bool Available { get; init; }
     [JsonPropertyName("state")] public required string State { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }

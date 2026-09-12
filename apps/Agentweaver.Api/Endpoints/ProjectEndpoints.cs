@@ -821,7 +821,7 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     return updated ? Results.NoContent() : Results.NotFound();
 });
 
-// PUT /api/projects/{id}/preview-settings — update the project-scoped preview HITL window.
+// PUT /api/projects/{id}/preview-settings — update project-scoped preview windows.
 app.MapPut("/api/projects/{id}/preview-settings", async (
     HttpContext httpContext,
     string id,
@@ -833,17 +833,23 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     if (request.ApprovalTimeoutMinutes is < 1 or > 1440)
         return Results.BadRequest(new { error = "approval_timeout_minutes must be between 1 and 1440." });
+    if (request.LifetimeMinutes is < 1 or > 1440)
+        return Results.BadRequest(new { error = "lifetime_minutes must be between 1 and 1440." });
+    if (request.DnsConvergenceTimeoutSeconds is < 60 or > 3600)
+        return Results.BadRequest(new { error = "dns_convergence_timeout_seconds must be between 60 and 3600." });
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
-    var updated = await projectService.UpdatePreviewApprovalTimeoutAsync(
-        projectId, request.ApprovalTimeoutMinutes, ct);
+    var updated = await projectService.UpdatePreviewSettingsAsync(
+        projectId, request.ApprovalTimeoutMinutes, request.LifetimeMinutes, request.DnsConvergenceTimeoutSeconds, ct);
     return updated
         ? Results.Ok(new ProjectPreviewSettingsResponse
         {
             ApprovalTimeoutMinutes = request.ApprovalTimeoutMinutes,
+            LifetimeMinutes = request.LifetimeMinutes,
+            DnsConvergenceTimeoutSeconds = request.DnsConvergenceTimeoutSeconds,
         })
         : Results.NotFound();
 })
@@ -1560,6 +1566,8 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
     WorkflowGenerationModel = p.WorkflowGenerationModel,
     OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
     PreviewApprovalTimeoutMinutes = p.PreviewApprovalTimeoutMinutes,
+    PreviewLifetimeMinutes = p.PreviewLifetimeMinutes,
+    PreviewDnsConvergenceTimeoutSeconds = p.PreviewDnsConvergenceTimeoutSeconds,
     Available = available,
     State = p.State == ProjectState.Active ? "active" : "deleting",
     CreatedAt = p.CreatedAt,

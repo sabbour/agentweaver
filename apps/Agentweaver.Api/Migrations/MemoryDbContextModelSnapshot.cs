@@ -1375,6 +1375,12 @@ namespace Agentweaver.Api.Migrations
                     b.Property<int>("PreviewApprovalTimeoutMinutes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("PreviewDnsConvergenceTimeoutSeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PreviewLifetimeMinutes")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("SandboxProfile")
                         .HasColumnType("TEXT");
 
