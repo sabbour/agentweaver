@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  assertAuthenticatedAgentweaverSession,
   assertChromeProfileIsUnlocked,
   buildChromeLaunchOptions,
   navigateAndStartAgentweaverSignIn,
@@ -53,5 +54,25 @@ test('reports an actionable error before a locked Default profile can be cloned'
   assert.throws(
     () => assertChromeProfileIsUnlocked(['1234']),
     /Close every Chrome window.*will not open Chrome with the live Default profile/i,
+  );
+});
+
+test('accepts only a real Agentweaver session returned to the configured origin', () => {
+  assert.doesNotThrow(() => assertAuthenticatedAgentweaverSession(
+    'https://app.example.test',
+    { 'agentweaver.sessionToken': 'test-only-memory-value' },
+    'https://app.example.test/projects',
+  ));
+  assert.throws(
+    () => assertAuthenticatedAgentweaverSession(
+      'https://login.microsoftonline.com',
+      { 'agentweaver.sessionToken': 'test-only-memory-value' },
+      'https://app.example.test',
+    ),
+    /did not return to the configured Agentweaver origin/,
+  );
+  assert.throws(
+    () => assertAuthenticatedAgentweaverSession('https://app.example.test', {}, 'https://app.example.test'),
+    /authentication was not completed/i,
   );
 });

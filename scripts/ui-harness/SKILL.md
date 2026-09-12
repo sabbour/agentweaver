@@ -85,6 +85,12 @@ Treat these files as credentials: never print, commit, log, or attach them. The 
 never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
 (or pass `--storage-state <local-path>` consistently).
 
+After a successful login, the API harness's `recorder-session` provider reuses these
+same cached artifacts for the matching Agentweaver origin. It returns the bearer only
+in memory; it does not start a second browser sign-in or export the value. If the
+artifacts are missing, expired, or for another origin, the API harness tells you to
+rerun this login command.
+
 `init` validates that the selected storage-state file exists and has a usable
 Playwright shape before it creates a scenario session. It starts that session's
 headless browser worker, but it does not launch or automate the login flow.

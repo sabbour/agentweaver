@@ -135,3 +135,16 @@ export async function navigateAndStartAgentweaverSignIn(page, baseUrl, {
   write('Agentweaver sign-in was opened. Complete any Microsoft Entra prompts privately; the harness will not interact with them.\n');
   return { hasSession: false, signInStarted: true };
 }
+
+export function assertAuthenticatedAgentweaverSession(origin, entries, baseUrl) {
+  if (origin !== new URL(baseUrl).origin) {
+    throw new Error('Sign-in did not return to the configured Agentweaver origin.');
+  }
+  if (typeof entries?.['agentweaver.sessionToken'] !== 'string'
+    || entries['agentweaver.sessionToken'].length === 0) {
+    throw new Error(
+      'Agentweaver authentication was not completed. Complete the sign-in in Chrome, '
+      + 'wait for the Agentweaver app, then press Resume.',
+    );
+  }
+}
