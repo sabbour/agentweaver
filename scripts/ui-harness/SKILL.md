@@ -33,24 +33,35 @@ Agentweaver staging uses Microsoft Entra Conditional Access, which blocks plain
 Chromium (and device-code flow). Authentication must use the managed **Chrome Default
 profile** on Windows (enrolled device).
 
-### Option A — Chrome is not currently running (preferred)
+### Option A — disposable Default-profile clone (preferred)
 
-Close all Chrome windows first (save any open work — they will be lost), then:
+Close all Chrome windows first (save any open work — they will **not** be closed by
+the harness), then:
 
 ```powershell
 node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain>
 ```
 
-This launches the real Chrome Default profile (`%LOCALAPPDATA%\Google\Chrome\User Data`).
-Entra SSO often completes automatically. If the sign-in page appears, complete it in the
-Chrome window, then press Resume in the Playwright Inspector.
+The command checks for active Chrome processes before copying anything. If Chrome still
+owns the Default-profile lock, it exits with instructions to close Chrome; it does not
+open an `about:blank` tab or fall back to the live profile. It then clones only the
+managed Default profile into `scripts/ui-harness/.auth/chrome-default-automation`,
+starts Chrome from that disposable, git-ignored clone, and deletes the clone when done.
 
-### Option B — Chrome is already running (CDP attach)
+The script navigates to `--base-url` before it checks or clicks Agentweaver's **Sign in
+with Microsoft Entra ID** button. Entra SSO often completes automatically. If an Entra
+page appears, complete it privately in the Chrome window, then press Resume in the
+Playwright Inspector. The harness never drives account selection, credentials, MFA, or
+consent.
 
-Relaunch Chrome with remote debugging (requires closing the current Chrome first):
+### Option B — advanced CDP attach
+
+Attach only to a Chrome instance that **you already launched with a disposable clone**,
+never `%LOCALAPPDATA%\Google\Chrome\User Data`. Current Chrome rejects remote debugging
+against its default data directory. This mode does not copy, launch, or close Chrome:
 
 ```powershell
-Start-Process chrome.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Google\Chrome\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
+chrome.exe --remote-debugging-port=9222 --user-data-dir="<disposable-clone>" --profile-directory=Default --no-first-run
 ```
 
 Then connect and capture:
@@ -58,6 +69,9 @@ Then connect and capture:
 ```powershell
 node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain> --cdp
 ```
+
+Use Option A unless an operator has an independently managed disposable clone. Do not
+point CDP Chrome at the managed Default directory.
 
 ### What is saved
 

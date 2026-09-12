@@ -32,8 +32,10 @@ Access (plain Chromium is blocked by Entra policy). Close all Chrome windows fir
 node scripts/ui-harness/login-chrome-default.mjs --base-url <staging-url>
 ```
 
-If Chrome is already running with `--remote-debugging-port=9222`, append `--cdp`. The
-script writes git-ignored state to `scripts/ui-harness/.auth/` and a
+The command launches a disposable, git-ignored clone rather than the live Default
+directory; it detects Chrome locks and exits before launching when Chrome is still
+running. For advanced CDP attach, Chrome must itself use a disposable clone—never the
+live Default directory. The script writes git-ignored state to `scripts/ui-harness/.auth/` and a
 `session-token.txt` for the API harness — never print or commit these.
 
 Read `scripts/ui-harness/SKILL.md` Authentication section for full options (Option A /
