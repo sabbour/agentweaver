@@ -2,6 +2,7 @@ using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
 using Agentweaver.Domain;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -20,15 +21,19 @@ public sealed class AppInsightsMetricsService
     /// 3). This service is registered as a singleton (see <c>Program.cs</c>), so a single semaphore here
     /// bounds the total number of simultaneous Azure Monitor workspace queries across every concurrent
     /// HTTP request/subquery fan-out, not just the ~8 subqueries of one <see cref="GetProjectMetricsAsync"/>
-    /// call. This does not implement caching or single-flight de-duplication (a larger follow-up); it
-    /// only prevents unbounded fan-out (e.g. an Overview page loading 4 projects x 2 ranges x 8
+    /// call. Single-flight trace retrieval below additionally prevents duplicate trace-panel loads from
+    /// multiplying work. This budget prevents unbounded fan-out (e.g. an Overview page loading 4 projects x 2 ranges x 8
     /// subqueries = 64 simultaneous queries) from all reaching Azure Monitor at once.
     /// </summary>
     private const int MaxConcurrentWorkspaceQueries = 16;
     private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
     private static readonly TimeSpan WorkspaceQueryTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan WorkspaceQueryCooldown = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan TracePageFallbackCacheLifetime = TimeSpan.FromMinutes(2);
+    private const int MaxTracePageFallbackEntries = 128;
     private long _workspaceUnavailableUntilUtcTicks;
+    private readonly ConcurrentDictionary<string, Lazy<Task<TracePage>>> _inflightTracePages = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CachedTracePage> _tracePageFallbackCache = new(StringComparer.Ordinal);
 
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
@@ -213,13 +218,16 @@ public sealed class AppInsightsMetricsService
         if (!TryDecodeTraceCursor(cursor, out var decodedCursor))
             return UnavailableRunTrace(runId, "The trace continuation is invalid. Reload the trace to start again.");
 
-        var result = await QueryRunTracesAsync(
+        var resolvedPageSize = Math.Clamp(pageSize ?? 100, 1, 250);
+        var tracePageKey = BuildTracePageKey(workspaceId, runId, agentNameByRunId, decodedCursor, resolvedPageSize);
+        var result = await QueryRunTracePageSingleFlightAsync(
+            tracePageKey,
             workspaceId,
             runId,
             agentNameByRunId,
             traceContextsByRunId,
             decodedCursor,
-            Math.Clamp(pageSize ?? 100, 1, 250),
+            resolvedPageSize,
             ct).ConfigureAwait(false);
         return new RunTraceDto
         {
@@ -679,6 +687,94 @@ public sealed class AppInsightsMetricsService
     internal static string EncodeTraceCursor(DateTimeOffset timestamp, string id) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new TraceCursor(timestamp, id))))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private sealed record CachedTracePage(TracePage Page, DateTimeOffset ExpiresAt);
+
+    private static string BuildTracePageKey(
+        string workspaceId,
+        string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        TraceCursor? cursor,
+        int pageSize)
+    {
+        var relatedRunIds = agentNameByRunId?.Keys
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+        if (relatedRunIds.Length == 0)
+            relatedRunIds = [runId];
+        return string.Join("|", [
+            workspaceId,
+            runId,
+            pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            (cursor?.Timestamp.UtcTicks ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cursor?.Id ?? string.Empty,
+            string.Join(",", relatedRunIds),
+        ]);
+    }
+
+    private async Task<TracePage> QueryRunTracePageSingleFlightAsync(
+        string tracePageKey,
+        string workspaceId,
+        string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
+        TraceCursor? cursor,
+        int pageSize,
+        CancellationToken ct)
+    {
+        var inFlight = _inflightTracePages.GetOrAdd(tracePageKey, _ => new Lazy<Task<TracePage>>(() =>
+        {
+            // A browser disconnect must not cancel the shared source request for other authorized
+            // viewers. QueryAsync still enforces the bounded dependency timeout.
+            return QueryRunTracesAsync(workspaceId, runId, agentNameByRunId, traceContextsByRunId, cursor, pageSize, CancellationToken.None);
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            var page = await inFlight.Value.WaitAsync(ct).ConfigureAwait(false);
+            if (page.QueryError is null)
+            {
+                CacheTracePage(tracePageKey, page);
+                return page;
+            }
+
+            if (_tracePageFallbackCache.TryGetValue(tracePageKey, out var cached))
+            {
+                if (cached.ExpiresAt > DateTimeOffset.UtcNow)
+                {
+                    return cached.Page with
+                    {
+                        QueryError = $"{page.QueryError} Showing trace spans retrieved earlier while the telemetry source recovers.",
+                    };
+                }
+                _tracePageFallbackCache.TryRemove(tracePageKey, out _);
+            }
+            return page;
+        }
+        finally
+        {
+            if (inFlight.IsValueCreated && inFlight.Value.IsCompleted)
+                _inflightTracePages.TryRemove(new KeyValuePair<string, Lazy<Task<TracePage>>>(tracePageKey, inFlight));
+        }
+    }
+
+    private void CacheTracePage(string tracePageKey, TracePage page)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var entry in _tracePageFallbackCache)
+        {
+            if (entry.Value.ExpiresAt <= now)
+                _tracePageFallbackCache.TryRemove(entry.Key, out _);
+        }
+        if (_tracePageFallbackCache.ContainsKey(tracePageKey)
+            || _tracePageFallbackCache.Count < MaxTracePageFallbackEntries)
+        {
+            _tracePageFallbackCache[tracePageKey] = new CachedTracePage(
+                page,
+                now.Add(TracePageFallbackCacheLifetime));
+        }
+    }
 
     private async Task<TracePage> QueryRunTracesAsync(
         string workspaceId,
