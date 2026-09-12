@@ -1509,7 +1509,7 @@ export function layout(spec: GraphSpec): {
     );
   }
 
-  const brandHeight = spec.brand ? 240 : 0;
+  const brandHeight = spec.brand ? 260 : 0;
   if (brandHeight > 0) {
     for (const p of placed) {
       p.y += brandHeight;
@@ -1628,7 +1628,7 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
           <div>
             <div style={{ fontSize: 64, fontWeight: 700, lineHeight: 1.05 }}>{spec.brand.name}</div>
             {spec.brand.subtitle && (
-              <div style={{ fontSize: 30, color: neutral.foreground3, marginTop: 8 }}>{spec.brand.subtitle}</div>
+              <div style={{ fontSize: 36, color: neutral.foreground3, marginTop: 8 }}>{spec.brand.subtitle}</div>
             )}
           </div>
         </div>
