@@ -8,6 +8,7 @@ import {
   assertChromeProfileIsUnlocked,
   buildChromeLaunchOptions,
   navigateAndStartAgentweaverSignIn,
+  resolveGoogleChromeExecutable,
 } from '../lib/chrome-default-profile.mjs';
 import { parseLoginOptions } from '../login-chrome-default.mjs';
 import { assertSupportedLoginCommand } from '../agent-driver-ui/tools.mjs';
@@ -16,15 +17,33 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 test('Chrome launches from the disposable clone with the Default profile selected', () => {
   const clone = path.resolve('scripts/ui-harness/.auth/chrome-default-automation');
-  const launch = buildChromeLaunchOptions(clone);
+  const installedChrome = resolveGoogleChromeExecutable({
+    localAppData: 'C:\\Users\\test\\AppData\\Local',
+    exists: (candidate) => candidate === 'C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe',
+  });
+  const launch = buildChromeLaunchOptions(clone, installedChrome);
 
   assert.equal(launch.channel, 'chrome');
+  assert.equal(launch.executablePath, installedChrome);
+  assert.match(launch.executablePath, /Google[\\/]Chrome[\\/]Application[\\/]chrome\.exe$/i);
   assert.equal(launch.userDataDir, clone);
   assert.deepEqual(launch.args, [
     '--profile-directory=Default',
     '--no-first-run',
     '--no-default-browser-check',
   ]);
+});
+
+test('refuses to substitute Playwright Chromium when installed Google Chrome is unavailable', () => {
+  assert.throws(
+    () => resolveGoogleChromeExecutable({
+      localAppData: 'C:\\Users\\test\\AppData\\Local',
+      programFiles: 'C:\\Program Files',
+      programFilesX86: 'C:\\Program Files (x86)',
+      exists: () => false,
+    }),
+    /Installed Google Chrome.*does not fall back to Playwright Chromium/i,
+  );
 });
 
 test('navigates to the requested app URL before inspecting or clicking its sign-in button', async () => {

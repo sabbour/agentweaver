@@ -34,7 +34,8 @@ with the exact `login-chrome-default.mjs --base-url <origin>` remediation. Micro
 Entra account selection, credentials, MFA, and consent remain human-only.
 Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
 launch/copy, or manual browser automation; surface the provider's recovery error and
-use the UI-harness login/cached-session flow.
+use the UI-harness login/cached-session flow. That flow requires the installed literal
+Google Chrome `chrome.exe` on Playwright's `chrome` channel, never bundled Chromium.
 
 Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/session` endpoint and requires `authenticated: true`. It uses public

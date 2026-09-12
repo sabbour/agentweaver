@@ -30,6 +30,9 @@ consent. If Chrome is locked, it exits with a close-Chrome instruction rather th
 opening an empty tab. Do not fall back to generic Playwright, direct CDP/DevTools,
 ad-hoc profile launches/copies, or manual browser automation. `--cdp` and `--cdp-url`
 are rejected; resolve the reported condition and rerun this command.
+The command asserts the installed Google Chrome `chrome.exe` path and Playwright's
+`chrome` channel; login and authenticated preview/session flows never substitute
+bundled Playwright Chromium.
 See `scripts/ui-harness/SKILL.md` for full options and what is saved.
 
 The local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops

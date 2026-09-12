@@ -60,6 +60,9 @@ Do not fall back to generic Playwright, CDP/DevTools attach, ad-hoc profile copy
 launches, or manual browser automation. `--cdp` and `--cdp-url` are explicitly
 rejected. When this command reports a lock, missing profile, failed copy, or incomplete
 authentication, resolve that stated condition and rerun this UI-harness command.
+It requires installed literal Google Chrome (`chrome.exe`) via Playwright's `chrome`
+channel for login and authenticated preview/session flows, and explicitly rejects a
+bundled Playwright Chromium fallback.
 
 ### What is saved
 

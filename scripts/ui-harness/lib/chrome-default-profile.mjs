@@ -22,9 +22,34 @@ export function resolveChromeDefaultProfile(localAppData = process.env.LOCALAPPD
   };
 }
 
-export function buildChromeLaunchOptions(automationUserDataDir) {
+export function resolveGoogleChromeExecutable({
+  localAppData = process.env.LOCALAPPDATA,
+  programFiles = process.env.ProgramFiles,
+  programFilesX86 = process.env['ProgramFiles(x86)'],
+  exists = existsSync,
+} = {}) {
+  const candidates = [
+    localAppData && path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    programFiles && path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    programFilesX86 && path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ].filter(Boolean);
+  const executablePath = candidates.find((candidate) => exists(candidate));
+  if (!executablePath) {
+    throw new Error(
+      'Installed Google Chrome (chrome.exe) was not found. Install or restore Google Chrome; '
+      + 'the Chrome Default-profile login flow does not fall back to Playwright Chromium.',
+    );
+  }
+  return path.resolve(executablePath);
+}
+
+export function buildChromeLaunchOptions(
+  automationUserDataDir,
+  executablePath = resolveGoogleChromeExecutable(),
+) {
   return {
     channel: 'chrome',
+    executablePath,
     headless: false,
     viewport: null,
     args: [

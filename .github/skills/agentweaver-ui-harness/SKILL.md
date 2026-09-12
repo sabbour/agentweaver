@@ -38,6 +38,8 @@ running. Do not use generic Playwright, CDP/DevTools, ad-hoc profile copies/laun
 or manual browser automation as a fallback. Resolve the explicit harness error and
 rerun this command. The script writes git-ignored state to `scripts/ui-harness/.auth/` and a
 `session-token.txt` for the API harness — never print or commit these.
+It requires the installed literal Google Chrome `chrome.exe` through Playwright's
+`chrome` channel and never substitutes bundled Playwright Chromium.
 The API harness consumes the matching cached session sidecar only in memory, so a
 successful UI login is reused rather than requiring another sign-in.
 
