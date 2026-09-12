@@ -23,7 +23,7 @@ import {
   type Point,
 } from './edges';
 import { badgeTones, neutral, radius } from './theme';
-import type { GraphEdge, GraphSpec, GraphNode } from './types';
+import type { GraphEdge, GraphGroup, GraphSpec, GraphNode } from './types';
 
 // Banded-lane layout, mirroring the deterministic column placement in
 // apps/web/src/components/ClusterTopologyGraph.tsx rather than dagre's
@@ -128,6 +128,63 @@ function wrapLabel(text: string, maxW: number): string[] {
 
 function cardHeight(n: GraphNode): number {
   return cardHeightFor(n);
+}
+
+function layoutGroupOverview(spec: GraphSpec, groups: GraphGroup[]): {
+  nodes: Node[];
+  edges: Edge[];
+  canvasWidth: number;
+  canvasHeight: number;
+} {
+  const compact = spec.brand?.compact === true;
+  const columns = groups.length === 1 ? 1 : 2;
+  const groupWidth = compact ? 264 : 620;
+  const groupHeight = compact ? 120 : 196;
+  const gap = compact ? 12 : 32;
+  const rows = Math.ceil(groups.length / columns);
+  const brandHeight = spec.brand ? (compact ? 92 : 200) : 0;
+  const margin = compact ? 20 : CANVAS_MARGIN;
+  const gridWidth = columns * groupWidth + (columns - 1) * gap;
+  const canvasWidth = gridWidth + margin * 2 - (compact ? 6 : 0);
+  const canvasHeight =
+    brandHeight + rows * groupHeight + Math.max(rows - 1, 0) * gap + margin * 2 - (compact ? 2 : 0);
+  const nodes: Node[] = [];
+
+  groups.forEach((group, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = margin + column * (groupWidth + gap);
+    const y = brandHeight + margin + row * (groupHeight + gap);
+    const data = {
+      label: group.label,
+      subLabel: group.subLabel,
+      tier: group.tier,
+      width: groupWidth - (compact ? 36 : 80),
+      compact,
+    };
+
+    nodes.push({
+      id: `group-${group.id}`,
+      type: 'band',
+      position: { x, y },
+      data,
+      style: { width: groupWidth, height: groupHeight },
+      draggable: false,
+      selectable: false,
+      zIndex: -100 + group.tier,
+    });
+    nodes.push({
+      id: `group-label-${group.id}`,
+      type: 'bandLabel',
+      position: { x: x + (compact ? 18 : 40), y: y + (compact ? 16 : 40) },
+      data,
+      draggable: false,
+      selectable: false,
+      zIndex: 4,
+    });
+  });
+
+  return { nodes, edges: [], canvasWidth, canvasHeight };
 }
 
 interface Placed {
@@ -388,6 +445,9 @@ export function layout(spec: GraphSpec): {
   canvasHeight: number;
 } {
   const groups = spec.groups ?? [];
+  if (spec.nodes.length === 0 && groups.length > 0) {
+    return layoutGroupOverview(spec, groups);
+  }
 
   const byGroup = new Map<string, GraphNode[]>();
   const ungrouped: GraphNode[] = [];
@@ -1544,7 +1604,7 @@ export function layout(spec: GraphSpec): {
       id: `group-${group.id}`,
       type: 'band',
       position: { x: box.x, y: box.y },
-      data: { label: group.label, tier: group.tier },
+      data: { label: group.label, subLabel: group.subLabel, tier: group.tier },
       style: { width: box.w, height: box.h },
       draggable: false,
       selectable: false,
@@ -1559,7 +1619,7 @@ export function layout(spec: GraphSpec): {
       id: `group-label-${group.id}`,
       type: 'bandLabel',
       position: { x: box.x + 40, y: box.y + 30 },
-      data: { label: group.label, tier: group.tier },
+      data: { label: group.label, subLabel: group.subLabel, tier: group.tier },
       draggable: false,
       selectable: false,
       zIndex: 4,
@@ -1588,6 +1648,7 @@ export interface DiagramCanvasProps {
 export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
   const { nodes, edges, canvasWidth, canvasHeight } = useMemo(() => layout(spec), [spec]);
   const [ready, setReady] = useState(false);
+  const compactBrand = spec.brand?.compact === true;
 
   useEffect(() => {
     const id = requestAnimationFrame(() =>
@@ -1615,20 +1676,20 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
       {spec.brand && (
         <div style={{
           position: 'absolute',
-          top: 48,
-          left: 64,
+          top: compactBrand ? 18 : 48,
+          left: compactBrand ? 24 : 64,
           zIndex: 5,
           display: 'flex',
           alignItems: 'center',
-          gap: 26,
+          gap: compactBrand ? 12 : 26,
           fontFamily: '"Segoe UI", ui-sans-serif, system-ui, sans-serif',
           color: neutral.foreground1,
         }}>
-          {spec.brand.logo && <img src={spec.brand.logo} alt="" style={{ width: 144, height: 144, objectFit: 'contain' }} />}
+          {spec.brand.logo && <img src={spec.brand.logo} alt="" style={{ width: compactBrand ? 56 : 144, height: compactBrand ? 56 : 144, objectFit: 'contain' }} />}
           <div>
-            <div style={{ fontSize: 64, fontWeight: 700, lineHeight: 1.05 }}>{spec.brand.name}</div>
+            <div style={{ fontSize: compactBrand ? 28 : 64, fontWeight: 700, lineHeight: 1.05 }}>{spec.brand.name}</div>
             {spec.brand.subtitle && (
-              <div style={{ fontSize: 36, color: neutral.foreground3, marginTop: 8 }}>{spec.brand.subtitle}</div>
+              <div style={{ fontSize: compactBrand ? 16 : 36, color: neutral.foreground3, marginTop: compactBrand ? 4 : 8 }}>{spec.brand.subtitle}</div>
             )}
           </div>
         </div>

@@ -14,6 +14,7 @@ export type IconKind =
 export interface GraphGroup {
   id: string;
   label: string;
+  subLabel?: string;
   tier: number;
   parent?: string;
 }
@@ -22,6 +23,7 @@ export interface GraphBrand {
   name: string;
   subtitle?: string;
   logo?: string;
+  compact?: boolean;
 }
 
 export interface GraphNode {
