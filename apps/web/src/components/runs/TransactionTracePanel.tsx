@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -1009,18 +1009,23 @@ export function TransactionTracePanel({
   const [events, setEvents] = useState<PersistedRunEvent[]>([]);
   const [eventsAvailability, setEventsAvailability] = useState<'idle' | 'loading' | 'loaded' | 'unavailable'>('idle');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
-  const [fullRequested, setFullRequested] = useState(false);
+  const [nextPageError, setNextPageError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TraceTab>('timeline');
+  const loadingMoreRef = useRef(false);
+  const traceLoadGeneration = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    traceLoadGeneration.current++;
     const loadTrace = async () => {
       setTraceError(null);
+      setNextPageError(null);
       setLoading(true);
       setTrace({ runId, spans: [] });
       setEvents([]);
@@ -1029,13 +1034,11 @@ export function TransactionTracePanel({
       setSelectedKey(null);
       setExpanded(new Set());
       try {
-        const next = await apiClient.getRunTraces(runId, { full: fullRequested });
+        const next = await apiClient.getRunTraces(runId);
         if (!cancelled) {
           const nextTree = buildTraceTree(next.spans);
           setTrace(next);
-          // Large traces initially show their roots only; expanding is deliberate work instead of
-          // creating a DOM row for every descendant before the user can inspect the trace.
-          setExpanded(next.isTruncated ? new Set() : collectExpandableKeys(nextTree, new Set<string>()));
+          setExpanded(collectExpandableKeys(nextTree, new Set<string>()));
           setSelectedKey(nextTree[0]?.key ?? null);
         }
       } catch {
@@ -1049,7 +1052,7 @@ export function TransactionTracePanel({
     };
     void loadTrace();
     return () => { cancelled = true; };
-  }, [runId, fullRequested, reloadNonce]);
+  }, [runId, reloadNonce]);
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
   const selectedNode = findNode(tree, selectedKey);
@@ -1095,6 +1098,38 @@ export function TransactionTracePanel({
     });
   }
 
+  async function loadNextPage() {
+    if (!trace.hasMore || !trace.nextCursor || loadingMoreRef.current) return;
+    const generation = traceLoadGeneration.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setNextPageError(null);
+    try {
+      const next = await apiClient.getRunTraces(runId, { cursor: trace.nextCursor });
+      if (generation !== traceLoadGeneration.current) return;
+      if (next.queryError) {
+        setNextPageError(next.queryError);
+        return;
+      }
+      setTrace((current) => {
+        // Ignore a stale response after a run change or reload and de-duplicate retries by span ID.
+        if (current.runId !== runId) return current;
+        const spansById = new Map(current.spans.map((span) => [span.id, span]));
+        for (const span of next.spans) spansById.set(span.id, span);
+        const spans = [...spansById.values()].sort((left, right) =>
+          new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()
+          || left.id.localeCompare(right.id));
+        return { ...next, runId, spans };
+      });
+    } catch {
+      if (generation === traceLoadGeneration.current)
+        setNextPageError('The next trace page could not be loaded. Retry to continue loading this trace.');
+    } finally {
+      if (generation === traceLoadGeneration.current) setLoadingMore(false);
+      loadingMoreRef.current = false;
+    }
+  }
+
   const axisTicks = timeline
     ? [0, 0.25, 0.5, 0.75, 1].map((fraction) => formatDurationMs(timeline.durationMs * fraction))
     : ['0 ms', '—', '—', '—', '—'];
@@ -1118,22 +1153,30 @@ export function TransactionTracePanel({
       {!loading && (trace.queryError || traceError) && (
         <MessageBar intent="warning">
           <MessageBarBody>{trace.queryError ?? traceError}</MessageBarBody>
-          {traceError && <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>}
+          <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>
         </MessageBar>
       )}
 
       {loading ? (
-        <Spinner label={fullRequested ? 'Loading the full transaction trace' : 'Loading transaction trace'} />
+        <Spinner label="Loading transaction trace" />
       ) : tree.length === 0 ? (
         <EmptyState title="No trace data available for this run yet." />
       ) : (
         <>
-          {trace.isTruncated && (
-            <MessageBar intent="info" aria-label="Partial trace loaded">
+          {trace.hasMore && (
+            <MessageBar intent="info" aria-label="More trace spans available">
               <MessageBarBody>
-                Showing the first 250 spans so this growing trace is ready to inspect promptly. All diagnostics remain available.
+                Showing loaded trace spans in chronological order. Continue loading to inspect the complete growing trace.
               </MessageBarBody>
-              <Button appearance="secondary" onClick={() => setFullRequested(true)}>Load full trace</Button>
+              <Button appearance="secondary" onClick={() => void loadNextPage()} disabled={loadingMore}>
+                {loadingMore ? 'Loading more spans' : 'Load more spans'}
+              </Button>
+            </MessageBar>
+          )}
+          {nextPageError && (
+            <MessageBar intent="warning" aria-label="Trace page load failed">
+              <MessageBarBody>{nextPageError}</MessageBarBody>
+              <Button appearance="transparent" onClick={() => void loadNextPage()} disabled={loadingMore}>Retry</Button>
             </MessageBar>
           )}
           <dl className={styles.summary} aria-label="Trace summary">

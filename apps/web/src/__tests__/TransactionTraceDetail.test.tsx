@@ -116,24 +116,46 @@ afterEach(() => {
 });
 
 describe('TransactionTracePanel trace detail', () => {
-  it('loads a bounded trace first and requests full fidelity only when asked', async () => {
+  it('loads trace pages incrementally without replacing already-loaded spans', async () => {
     vi.mocked(apiClient.getRunTraces)
       .mockResolvedValueOnce({
         runId: 'run-47',
-        isTruncated: true,
+        hasMore: true,
+        nextCursor: 'next-page',
         spans: [{ id: 'initial', name: 'initial', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
       })
       .mockResolvedValueOnce({
         runId: 'run-47',
-        isTruncated: false,
-        spans: [{ id: 'full', name: 'full', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+        hasMore: false,
+        spans: [{ id: 'later', name: 'later', timestamp: '2026-09-11T16:00:01.000Z', durationMs: 1, success: true }],
       });
     render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
 
-    await waitFor(() => expect(screen.getByLabelText('Partial trace loaded')).toBeTruthy());
-    expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { full: false });
-    fireEvent.click(screen.getByRole('button', { name: 'Load full trace' }));
-    await waitFor(() => expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { full: true }));
+    await waitFor(() => expect(screen.getByLabelText('More trace spans available')).toBeTruthy());
+    expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more spans' }));
+    await waitFor(() => expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { cursor: 'next-page' }));
+    expect(screen.getByTestId('trace-tree').querySelector('[data-span-key="initial"]')).toBeTruthy();
+    expect(screen.getByTestId('trace-tree').querySelector('[data-span-key="later"]')).toBeTruthy();
+  });
+
+  it('keeps the continuation available after a page failure and retries the same cursor', async () => {
+    vi.mocked(apiClient.getRunTraces)
+      .mockResolvedValueOnce({
+        runId: 'run-47', hasMore: true, nextCursor: 'retry-page',
+        spans: [{ id: 'initial', name: 'initial', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+      })
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({
+        runId: 'run-47', hasMore: false,
+        spans: [{ id: 'later', name: 'later', timestamp: '2026-09-11T16:00:01.000Z', durationMs: 1, success: true }],
+      });
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more spans' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Load more spans' }));
+    await waitFor(() => expect(screen.getByLabelText('Trace page load failed')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { cursor: 'retry-page' }));
   });
   it('renders a data-backed summary, hierarchical timeline, and selected span inspector', async () => {
     render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);

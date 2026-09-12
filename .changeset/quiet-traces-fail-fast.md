@@ -1,5 +1,5 @@
 ---
-"@agentweaver/api": patch
+"agentweaver": patch
 ---
 
 Keep trace pages responsive when Application Insights is unavailable by timing out workspace

@@ -135,8 +135,9 @@ public sealed record RunTraceDto
     [JsonPropertyName("runId")] public required string RunId { get; init; }
     [JsonPropertyName("spans")] public required IReadOnlyList<RunTraceSpanDto> Spans { get; init; }
     [JsonPropertyName("queryError")] public string? QueryError { get; init; }
-    /// <summary>True when this response is the fast initial window rather than the complete trace.</summary>
-    [JsonPropertyName("isTruncated")] public bool IsTruncated { get; init; }
+    /// <summary>Opaque continuation to read the next chronologically ordered page, if any.</summary>
+    [JsonPropertyName("nextCursor")] public string? NextCursor { get; init; }
+    [JsonPropertyName("hasMore")] public bool HasMore { get; init; }
 }
 
 public sealed record RunTraceSpanDto

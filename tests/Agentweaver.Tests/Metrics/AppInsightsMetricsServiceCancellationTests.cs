@@ -113,6 +113,19 @@ public class AppInsightsMetricsServiceCancellationTests
         Assert.Equal(1, fakeClient.QueryCount);
     }
 
+    [Fact]
+    public void TraceCursor_RoundTripsAndRejectsMalformedContinuations()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 12, 10, 30, 0, TimeSpan.Zero);
+        var cursor = AppInsightsMetricsService.EncodeTraceCursor(timestamp, "span-42");
+
+        Assert.True(AppInsightsMetricsService.TryDecodeTraceCursor(cursor, out var decoded));
+        Assert.NotNull(decoded);
+        Assert.Equal(timestamp, decoded.Timestamp);
+        Assert.Equal("span-42", decoded.Id);
+        Assert.False(AppInsightsMetricsService.TryDecodeTraceCursor("not-a-cursor", out _));
+    }
+
     /// <summary>
     /// Fake <see cref="LogsQueryClient"/> that cancels the supplied <see cref="CancellationTokenSource"/>
     /// and throws <see cref="OperationCanceledException"/> tied to that same token — mirroring a request
