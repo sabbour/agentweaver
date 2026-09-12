@@ -671,15 +671,15 @@ describe('adaptive workflow definition layout', () => {
   const hintsFor = (nodes: Node[]): Record<string, NodeSizeHint> =>
     Object.fromEntries(nodes.map((node) => [node.id, { width: WORKFLOW_DEFINITION_NODE_W, height: 80 }]));
 
-  it('folds a short workflow into a compact deterministic snake', () => {
+  it('uses the balanced-grid rollout engine by default', () => {
     const nodes = ['start', 'review', 'done'].map(makeNode);
     const edges = [makeEdge('start', 'review'), makeEdge('review', 'done')];
 
     const result = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes));
 
-    expect(result.mode).toBe('columns');
+    expect(result.mode).toBe('balanced-grid');
     expect(result.analysis).toMatchObject({ rankCount: 3, hasBranching: false, isLongLinear: false });
-    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
+    expect(new Set(result.nodes.map((node) => rounded(node.position.x))).size).toBeGreaterThan(1);
   });
 
   it('snakes single-node runs around branching ranks', () => {
@@ -696,7 +696,7 @@ describe('adaptive workflow definition layout', () => {
     const result = layoutWorkflowDefinitionNodes(nodes, edges, hints);
     const byId = new Map(result.nodes.map((node) => [node.id, node]));
 
-    expect(result.mode).toBe('columns');
+    expect(result.mode).toBe('balanced-grid');
     expect(result.analysis).toMatchObject({ hasBranching: true, hasParallelRank: true });
     expect(new Set(['research', 'synthesis', 'review', 'gate']
       .map((id) => rounded(byId.get(id)!.position.y))).size).toBeGreaterThan(1);
@@ -705,17 +705,20 @@ describe('adaptive workflow definition layout', () => {
     );
   });
 
-  it('reserves the staircase for genuinely long linear workflows', () => {
+  it('keeps the staircase available only as an explicit comparison engine', () => {
     const nodeIds = Array.from({ length: WORKFLOW_LONG_LINEAR_MIN_RANKS }, (_, index) => `step-${index}`);
     const nodes = nodeIds.map(makeNode);
     const edges = nodeIds.slice(1).map((id, index) => makeEdge(nodeIds[index], id));
 
     const analysis = analyzeWorkflowLayout(nodes, edges);
     const result = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes));
+    const legacy = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes), 'legacy-staircase');
 
     expect(analysis.isLongLinear).toBe(true);
-    expect(result.mode).toBe('staircase');
-    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
+    expect(result.mode).toBe('balanced-grid');
+    expect(legacy.mode).toBe('legacy-staircase');
+    expect(new Set(legacy.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
+    expect(new Set(result.nodes.map((node) => node.id))).toEqual(new Set(legacy.nodes.map((node) => node.id)));
   });
 
   it('is deterministic and keeps adaptive layouts non-overlapping', () => {

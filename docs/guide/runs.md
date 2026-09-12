@@ -161,6 +161,14 @@ The graph shows:
 - **Edge status** — running, completed, failed, awaiting
 - **Coordinator status badge** in the header (Dispatching → Awaiting assembly → Assembling → In review → Complete)
 
+### Comparing topology layouts
+
+The **Topology layout** control is available on the live run graph. **Balanced grid
+(current)** is the default layout engine. Choose **Legacy staircase (comparison)** only
+to compare card placement while diagnosing a rollout; it does not alter the run,
+its nodes, dependencies, edge direction, or status data. The selection is remembered
+locally and is also available in workflow graph viewer and editor canvases.
+
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 
 ## Steering mid-run
