@@ -536,12 +536,24 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         badgeColor: Number(p['failed'] ?? 0) > 0 ? 'warning' : 'subtle',
       };
     case 'coordinator.steering':
+    {
+      const status = String(p['status'] ?? 'acknowledged');
+      const targetChildRunId = p['targetChildRunId'] ?? p['target_child_run_id'];
+      const scope = targetChildRunId
+        ? `target child ${String(targetChildRunId)}`
+        : 'coordinator and active subtasks';
+      const outcome = status === 'queued'
+        ? 'Queued for a future coordinator step'
+        : status === 'applied'
+          ? 'Accepted by the coordinator'
+          : `Acknowledged (${status})`;
       return {
         icon: <WarningFilled aria-hidden="true" />,
         label: 'steering',
-        summary: `${String(p['kind'] ?? 'directive')}${p['instruction'] ? `: ${String(p['instruction']).slice(0, 120)}` : ''} (${String(p['status'] ?? '')})`,
+        summary: `${outcome} · target and scope: ${scope}${p['instruction'] ? ` · ${String(p['instruction']).slice(0, 120)}` : ''}. Await explicit progress before treating work as advanced.`,
         badgeColor: 'subtle',
       };
+    }
     case 'coordinator.assembly_started':
       return {
         icon: <BranchRegular aria-hidden="true" />,

@@ -38,6 +38,28 @@ describe('LifecycleEventCard — coordinator.work_plan', () => {
 
     expect(screen.getByText(warning)).toBeDefined();
   });
+
+  describe('LifecycleEventCard — durable steering acknowledgement', () => {
+    it('distinguishes a queued child directive from child execution progress', () => {
+      render(
+        <Wrapper>
+          <LifecycleEventCard
+            event={makeEvent('coordinator.steering', {
+              kind: 'send',
+              status: 'queued',
+              targetChildRunId: 'child-7',
+              instruction: 'Wait for approval before continuing.',
+            })}
+            runId="coordinator-1"
+          />
+        </Wrapper>,
+      );
+
+      const summary = screen.getByText(/Queued for a future coordinator step/);
+      expect(summary.textContent).toContain('target and scope: target child child-7');
+      expect(summary.textContent).toContain('Await explicit progress before treating work as advanced.');
+    });
+  });
 });
 
 describe('LifecycleEventCard — tool.approval_required', () => {

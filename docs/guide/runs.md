@@ -178,6 +178,13 @@ While a coordinator orchestration is active, you can intervene from the topology
 Stopping a run takes effect immediately on all running agents. Redirecting or amending takes effect at the next agent turn boundary — the current turn completes first.
 :::
 
+After sending guidance, the Messages pane records a durable acknowledgement with its
+**queued** or **applied** outcome and its target/scope. This acknowledgement means the
+coordinator accepted the direction; it is not evidence that a child advanced. A child
+waiting for its own approval remains blocked until that approval is resolved. When live
+updates are reconnecting or disconnected, the pane marks the displayed state as possibly
+stale until an explicit progress event arrives.
+
 ## Watching an execution live
 
 Click any agent node in the topology view to open its **execution view**. This streams every event from that agent's run in real time.
