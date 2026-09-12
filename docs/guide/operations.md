@@ -203,7 +203,9 @@ particular, it shows the trace session ID only when the runtime emitted one, and
 event timestamps when a legacy persisted event has no recorded time. The attributes pane is a fixed,
 safe schema rather than a dump of custom dimensions: it includes operational identity, model,
 provider, policy, sandbox, usage, and status fields, but never prompts, credentials, raw tokens,
-secrets, or arbitrary tool payloads. See
+secrets, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
+child agent that executed them using the persisted parent-run relationship; the original distributed
+trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
 
 ### Provisioning monitoring resources
