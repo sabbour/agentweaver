@@ -25,8 +25,7 @@ internal sealed class PreviewRunnerOptions
     public int MaxObserveTimeoutSeconds { get; init; } = 120;
     public int HealthTimeoutSeconds { get; init; } = 2;
     public int StopGraceSeconds { get; init; } = 5;
-    public int IdleTimeoutMinutes { get; init; } = 30;
-    public int MaxLifetimeHours { get; init; } = 8;
+    public int LifetimeMinutes { get; init; } = 1440;
     public int ReaperIntervalSeconds { get; init; } = 60;
 
     // Public-port range for the pod-local TCP forwarder (spec-006 preview-forwarder). MUST MIRROR
@@ -630,8 +629,8 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             var now = _clock.GetUtcNow();
             foreach (var state in _sessions.Values)
             {
-                var maxLifetimeExceeded = now - state.StartedAt > TimeSpan.FromHours(Math.Max(1, _options.MaxLifetimeHours));
-                var idleExceeded = now - state.LastTouchedAt > TimeSpan.FromMinutes(Math.Max(1, _options.IdleTimeoutMinutes));
+                var maxLifetimeExceeded = now - state.StartedAt > TimeSpan.FromMinutes(Math.Max(1, _options.LifetimeMinutes));
+                var idleExceeded = now - state.LastTouchedAt > TimeSpan.FromMinutes(Math.Max(1, _options.LifetimeMinutes));
                 var exited = state.HasExited;
                 if (!maxLifetimeExceeded && !idleExceeded && !exited)
                     continue;

@@ -190,7 +190,8 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         result.Origin.Should().Be("blank");
         result.State.Should().Be("active");
         result.Available.Should().BeTrue();
-        result.PreviewApprovalTimeoutMinutes.Should().Be(30);
+        result.PreviewApprovalTimeoutMinutes.Should().Be(1440);
+        result.PreviewLifetimeMinutes.Should().Be(1440);
         response.Headers.Location.Should().NotBeNull();
     }
 
@@ -325,26 +326,58 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
         var response = await _client.PutAsJsonAsync(
             $"/api/projects/{id}/preview-settings",
-            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = 45 });
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = 45, LifetimeMinutes = 120, DnsConvergenceTimeoutSeconds = 900 });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var saved = await response.Content.ReadFromJsonAsync<ProjectPreviewSettingsResponse>();
         saved!.ApprovalTimeoutMinutes.Should().Be(45);
+        saved.LifetimeMinutes.Should().Be(120);
+        saved.DnsConvergenceTimeoutSeconds.Should().Be(900);
 
         var project = await _client.GetFromJsonAsync<ProjectResponse>($"/api/projects/{id}");
         project!.PreviewApprovalTimeoutMinutes.Should().Be(45);
+        project.PreviewLifetimeMinutes.Should().Be(120);
+        project.PreviewDnsConvergenceTimeoutSeconds.Should().Be(900);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(1441)]
-    public async Task PutPreviewSettings_RejectsOutOfRangeTimeout(int minutes)
+    public async Task PutPreviewSettings_RejectsOutOfRangeApprovalTimeout(int minutes)
     {
         var id = await CreateBlankProjectAsync();
 
         var response = await _client.PutAsJsonAsync(
             $"/api/projects/{id}/preview-settings",
-            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = minutes });
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = minutes, LifetimeMinutes = 1440, DnsConvergenceTimeoutSeconds = 600 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(59)]
+    [InlineData(3601)]
+    public async Task PutPreviewSettings_RejectsOutOfRangeDnsConvergenceTimeout(int seconds)
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/preview-settings",
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = 1440, LifetimeMinutes = 1440, DnsConvergenceTimeoutSeconds = seconds });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1441)]
+    public async Task PutPreviewSettings_RejectsOutOfRangeLifetime(int minutes)
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/preview-settings",
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = 1440, LifetimeMinutes = minutes, DnsConvergenceTimeoutSeconds = 600 });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }

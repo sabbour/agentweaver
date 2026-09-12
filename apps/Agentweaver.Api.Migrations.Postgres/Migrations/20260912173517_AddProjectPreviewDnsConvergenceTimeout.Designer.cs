@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260912173517_AddProjectPreviewDnsConvergenceTimeout")]
+    partial class AddProjectPreviewDnsConvergenceTimeout
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1752,7 +1755,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<int>("PreviewApprovalTimeoutMinutes")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasDefaultValue(1440)
+                        .HasDefaultValue(30)
                         .HasColumnName("preview_approval_timeout_minutes");
 
                     b.Property<int>("PreviewDnsConvergenceTimeoutSeconds")
@@ -1760,12 +1763,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(600)
                         .HasColumnName("preview_dns_convergence_timeout_seconds");
-
-                    b.Property<int>("PreviewLifetimeMinutes")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(1440)
-                        .HasColumnName("preview_lifetime_minutes");
 
                     b.Property<string>("SandboxProfile")
                         .HasColumnType("text")

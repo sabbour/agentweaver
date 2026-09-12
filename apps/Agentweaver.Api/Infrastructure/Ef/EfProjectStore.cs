@@ -118,9 +118,11 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
-    public async Task UpdatePreviewApprovalTimeoutAsync(
+    public async Task UpdatePreviewSettingsAsync(
         ProjectId id,
-        int timeoutMinutes,
+        int approvalTimeoutMinutes,
+        int lifetimeMinutes,
+        int dnsConvergenceTimeoutSeconds,
         DateTimeOffset updatedAt,
         CancellationToken ct = default)
     {
@@ -128,7 +130,9 @@ public sealed class EfProjectStore : IProjectStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         await db.Projects.Where(p => p.ProjectId == pid)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.PreviewApprovalTimeoutMinutes, timeoutMinutes)
+                .SetProperty(p => p.PreviewApprovalTimeoutMinutes, approvalTimeoutMinutes)
+                .SetProperty(p => p.PreviewLifetimeMinutes, lifetimeMinutes)
+                .SetProperty(p => p.PreviewDnsConvergenceTimeoutSeconds, dnsConvergenceTimeoutSeconds)
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
@@ -257,6 +261,8 @@ public sealed class EfProjectStore : IProjectStore
         PickupAutopilot = p.PickupAutopilot,
         PickupAutoApproveTools = p.PickupAutoApproveTools,
         PreviewApprovalTimeoutMinutes = p.PreviewApprovalTimeoutMinutes,
+        PreviewLifetimeMinutes = p.PreviewLifetimeMinutes,
+        PreviewDnsConvergenceTimeoutSeconds = p.PreviewDnsConvergenceTimeoutSeconds,
         DefaultWorkflowId = p.DefaultWorkflowId,
         ActiveReviewPolicyName = p.ActiveReviewPolicyName,
         SandboxProfile = p.SandboxProfile,
@@ -305,6 +311,8 @@ public sealed class EfProjectStore : IProjectStore
             PickupAutopilot = r.PickupAutopilot,
             PickupAutoApproveTools = r.PickupAutoApproveTools,
             PreviewApprovalTimeoutMinutes = r.PreviewApprovalTimeoutMinutes,
+            PreviewLifetimeMinutes = r.PreviewLifetimeMinutes,
+            PreviewDnsConvergenceTimeoutSeconds = r.PreviewDnsConvergenceTimeoutSeconds,
             DefaultWorkflowId = r.DefaultWorkflowId,
             ActiveReviewPolicyName = r.ActiveReviewPolicyName,
             SandboxProfile = r.SandboxProfile,

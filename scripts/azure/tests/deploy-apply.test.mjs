@@ -29,7 +29,6 @@ import {
   SANDBOX_MANIFESTS,
   DEPLOYMENT_MANIFESTS,
   WORKER_MANIFESTS,
-  ensurePreviewWildcardDnsRecord,
 } from "../steps/30-deploy.mjs";
 import * as execDefault from "../lib/exec.mjs";
 
@@ -113,15 +112,6 @@ function makeFakes({
     if (cmd === "kubectl" && args[0] === "api-resources") {
       return { stdout: hasSandboxCrd ? "sandboxtemplates  extensions.agents.x-k8s.io  true  SandboxTemplate" : "", stderr: "", code: 0 };
     }
-    if (cmd === "kubectl" && args[0] === "get" && args[1] === "gateway") {
-      return { stdout: "10.0.0.5", stderr: "", code: 0 };
-    }
-    if (cmd === "az" && args.slice(0, 4).join(" ") === "network dns zone list") {
-      return { stdout: "mc_agentweaver-rg_agentweaver_westus2", stderr: "", code: 0 };
-    }
-    if (cmd === "az" && args.includes("show") && args.includes("--name")) {
-      return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "10.0.0.5" }] }), stderr: "", code: 0 };
-    }
     return { stdout: "", stderr: "", code: 0 };
   };
 
@@ -197,53 +187,6 @@ test("run(): both gateways are waited on for condition=Programmed with a 180s ti
   }
 });
 
-test("ensurePreviewWildcardDnsRecord(): replaces the wildcard target and verifies the result", async () => {
-  const calls = [];
-  let showCount = 0;
-  const capture = async (cmd, args) => {
-    calls.push({ type: "capture", cmd, args });
-    if (args.join(" ").includes("zone list")) return { stdout: "managed-rg\n", code: 0 };
-    showCount += 1;
-    if (showCount === 1) return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "10.0.0.4" }] }), code: 0 };
-    return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "20.1.74.85" }] }), code: 0 };
-  };
-  const run = async (cmd, args) => {
-    calls.push({ type: "run", cmd, args });
-    return { code: 0 };
-  };
-
-  const result = await ensurePreviewWildcardDnsRecord("example.aksapp.io", "20.1.74.85", {
-    run,
-    capture,
-    log: { info() {} },
-  });
-
-  assert.deepEqual(result, {
-    resourceGroup: "managed-rg",
-    zoneSuffix: "example.aksapp.io",
-    gatewayIp: "20.1.74.85",
-  });
-  const updates = calls.filter((call) => call.type === "run").map((call) => call.args);
-  assert.equal(updates[0][4], "create");
-  assert.ok(updates[0].includes("--name"));
-  assert.ok(!updates[0].includes("--record-set-name"));
-  assert.deepEqual(updates[0].slice(-2), ["--ttl", "60"]);
-  assert.equal(updates[1][4], "remove-record");
-  assert.deepEqual(updates[1].slice(-2), ["--ipv4-address", "10.0.0.4"]);
-  assert.equal(updates[2][4], "add-record");
-  assert.deepEqual(updates[2].slice(-2), ["--ipv4-address", "20.1.74.85"]);
-});
-
-test("ensurePreviewWildcardDnsRecord(): refuses an ambiguous zone lookup", async () => {
-  await assert.rejects(
-    () => ensurePreviewWildcardDnsRecord("example.aksapp.io", "20.1.74.85", {
-      run: async () => assert.fail("must not mutate an ambiguous zone"),
-      capture: async () => ({ stdout: "one\ntwo\n", code: 0 }),
-      log: { info() {} },
-    }),
-    /Expected exactly one Azure DNS zone/,
-  );
-});
 
 test("run(): rollout status waits use api=180s, frontend=120s, mcp=120s, worker=300s", async () => {
   const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes();

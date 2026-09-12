@@ -284,6 +284,8 @@ export interface Project {
   workflow_generation_model: string | null;
   outcome_spec_generation_model: string | null;
   preview_approval_timeout_minutes?: number;
+  preview_lifetime_minutes?: number;
+  preview_dns_convergence_timeout_seconds?: number;
   available: boolean;
   state: ProjectState;
   created_at: string;
@@ -366,10 +368,14 @@ export interface UpdateProjectProviderSettingsRequest {
 
 export interface UpdateProjectPreviewSettingsRequest {
   approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
 }
 
 export interface ProjectPreviewSettingsResponse {
   approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
 }
 
 export interface CreateProjectRunRequest {

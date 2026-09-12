@@ -54,7 +54,7 @@ run timeline:
   the preview behaves exactly like one you started yourself (same URL, same auto-expiry, same Stop).
 - The approval remains visible in the notification badge, a persistent toast, and the run timeline.
   The timeline card shows when it expires.
-- If you don't approve within the project's configured window (30 minutes by default), the request
+- If you don't approve within the project's configured window (24 hours by default), the request
   lapses. Choose **Retry approval** on the expired card or preview status to create a fresh approval
   request. Agentweaver reuses the healthy server process instead of restarting the run or executing
   the preview command again.
@@ -63,9 +63,10 @@ run timeline:
 
 Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (or the per-run
 auto-approve-tools option) to grant these requests automatically. Project owners can set the manual
-approval window to 1–1440 minutes in **Project settings → Sandbox policy**. The deployment setting
+approval expiry and preview lifetime to 1–1440 minutes in **Project settings → Sandbox policy**;
+both default to 24 hours. Preview lifetime is a single expiration and hard-cap setting. The deployment setting
 `Sandbox:Preview:ApprovalTimeoutMinutes` (or `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) is retained
-as a 30-minute-default fallback for legacy runs that are not associated with a project. In normal use
+as a 24-hour-default fallback for legacy runs that are not associated with a project. In normal use
 the approval stays in your hands.
 
 ## Build & Test preview
