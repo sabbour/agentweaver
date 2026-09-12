@@ -81,6 +81,38 @@ public class AppInsightsMetricsServiceCancellationTests
         Assert.Contains("GetProjectMetricsAsync", errorEntries[0].Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task GetRunTracesAsync_WhenWorkspaceFails_ReturnsDiagnosticAndFailsFastDuringCooldown()
+    {
+        var fakeClient = new AlwaysThrowingLogsQueryClient(new InvalidOperationException("simulated Azure Monitor outage"));
+        var logger = new CapturingLogger();
+        var service = CreateService(fakeClient, logger);
+
+        var first = await service.GetRunTracesAsync("run-1");
+        var second = await service.GetRunTracesAsync("run-1");
+
+        Assert.Empty(first.Spans);
+        Assert.Contains("temporarily unavailable", first.QueryError, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(second.Spans);
+        Assert.Contains("temporarily unavailable", second.QueryError, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, fakeClient.QueryCount);
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("AppTraces", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetRunTracesAsync_WhenWorkspaceDoesNotRespond_TimesOutAndReportsSafeDiagnostic()
+    {
+        var fakeClient = new WaitingLogsQueryClient();
+        var logger = new CapturingLogger();
+        var service = CreateService(fakeClient, logger);
+
+        var result = await service.GetRunTracesAsync("run-1");
+
+        Assert.Empty(result.Spans);
+        Assert.Contains("did not respond within 3 seconds", result.QueryError, StringComparison.Ordinal);
+        Assert.Equal(1, fakeClient.QueryCount);
+    }
+
     /// <summary>
     /// Fake <see cref="LogsQueryClient"/> that cancels the supplied <see cref="CancellationTokenSource"/>
     /// and throws <see cref="OperationCanceledException"/> tied to that same token — mirroring a request
@@ -114,6 +146,7 @@ public class AppInsightsMetricsServiceCancellationTests
     private sealed class AlwaysThrowingLogsQueryClient : LogsQueryClient
     {
         private readonly Exception _exception;
+        public int QueryCount { get; private set; }
 
         public AlwaysThrowingLogsQueryClient(Exception exception) : base()
         {
@@ -127,7 +160,25 @@ public class AppInsightsMetricsServiceCancellationTests
             LogsQueryOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            QueryCount++;
             throw _exception;
+        }
+    }
+
+    private sealed class WaitingLogsQueryClient : LogsQueryClient
+    {
+        public int QueryCount { get; private set; }
+
+        public override async Task<Response<LogsQueryResult>> QueryWorkspaceAsync(
+            string workspaceId,
+            string query,
+            QueryTimeRange timeRange,
+            LogsQueryOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            QueryCount++;
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The canceled delay unexpectedly completed.");
         }
     }
 }

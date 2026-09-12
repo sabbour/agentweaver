@@ -25,6 +25,9 @@ public sealed class AppInsightsMetricsService
     /// </summary>
     private const int MaxConcurrentWorkspaceQueries = 16;
     private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
+    private static readonly TimeSpan WorkspaceQueryTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan WorkspaceQueryCooldown = TimeSpan.FromMinutes(1);
+    private long _workspaceUnavailableUntilUtcTicks;
 
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
@@ -199,11 +202,11 @@ public sealed class AppInsightsMetricsService
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
-            return EmptyRunTrace(runId);
+            return UnavailableRunTrace(runId, "Application Insights trace telemetry is not configured.");
 
         var workspaceId = ResolveWorkspaceId(connectionString);
         if (string.IsNullOrWhiteSpace(workspaceId))
-            return EmptyRunTrace(runId);
+            return UnavailableRunTrace(runId, "Application Insights workspace id is not configured.");
 
         var (spans, queryError, isTruncated) = await QueryRunTracesAsync(
             workspaceId,
@@ -717,7 +720,7 @@ public sealed class AppInsightsMetricsService
             timeFrom,
             timeTo,
             ct,
-            _ => queryError = "Application Insights trace query failed.").ConfigureAwait(false);
+            exception => queryError = DescribeTraceQueryFailure(exception)).ConfigureAwait(false);
         if (result is null) return ([], queryError, false);
 
         var isTruncated = !full && result.Table.Rows.Count > initialSpanLimit;
@@ -902,20 +905,30 @@ public sealed class AppInsightsMetricsService
         var client = GetClient();
         if (client is null) return null;
 
-        // #208 point 3: bound the total number of simultaneous workspace queries across every
-        // concurrent request this (singleton) service is handling, not just the ~8 subqueries of one
-        // batch. This wait is intentionally OUTSIDE the try/finally below: if `ct` is canceled while
-        // queued behind the budget, WaitAsync throws before any permit is acquired, so there is nothing
-        // to release. That cancellation still surfaces as a plain OperationCanceledException to the
-        // caller (no permit was taken, no query issued) — control flow, not a dependency failure.
-        await _queryConcurrency.WaitAsync(ct).ConfigureAwait(false);
+        if (TryGetWorkspaceCooldown(out var remaining))
+        {
+            var exception = new TelemetryQueryUnavailableException(
+                $"Application Insights workspace queries are paused for approximately {Math.Ceiling(remaining.TotalSeconds)} seconds after a dependency failure.");
+            onError?.Invoke(exception);
+            failures?.Record(context, exception);
+            return null;
+        }
+
+        using var queryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        queryCts.CancelAfter(WorkspaceQueryTimeout);
+        var leaseAcquired = false;
         try
         {
+            // This timeout covers both time spent queued behind the process-wide concurrency budget
+            // and the Azure Monitor request, preventing an unavailable workspace from consuming
+            // request threads or multiplying work as trace traffic grows.
+            await _queryConcurrency.WaitAsync(queryCts.Token).ConfigureAwait(false);
+            leaseAcquired = true;
             var response = await client.QueryWorkspaceAsync(
                 workspaceId,
                 query,
                 new QueryTimeRange(from, to),
-                cancellationToken: ct).ConfigureAwait(false);
+                cancellationToken: queryCts.Token).ConfigureAwait(false);
             return response.Value;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -929,37 +942,60 @@ public sealed class AppInsightsMetricsService
         }
         catch (Exception ex)
         {
-            onError?.Invoke(ex);
+            var failure = ex is OperationCanceledException
+                ? new TimeoutException($"Application Insights workspace query exceeded the {WorkspaceQueryTimeout.TotalSeconds:0}-second timeout.", ex)
+                : ex;
+            MarkWorkspaceUnavailable();
+            onError?.Invoke(failure);
             if (failures is not null)
             {
                 // #208 point 2: part of a top-level batch — record for a single aggregated log line
                 // instead of logging once per subquery.
-                failures.Record(context, ex);
+                failures.Record(context, failure);
             }
             else
             {
-                // Standalone call site (no batch sink supplied): keep prior per-call logging.
                 _logger.LogError(
-                    ex,
-                    "Application Insights query failed in {QueryContext}. KQL (truncated): {Query}",
+                    failure,
+                    "Application Insights query failed in {QueryContext} ({FailureType}); workspace queries are paused for {CooldownSeconds} seconds.",
                     context,
-                    TruncateQuery(query));
+                    failure.GetType().Name,
+                    WorkspaceQueryCooldown.TotalSeconds);
             }
             return null;
         }
         finally
         {
-            _queryConcurrency.Release();
+            if (leaseAcquired)
+                _queryConcurrency.Release();
         }
     }
 
-    private static string TruncateQuery(string query)
+    private bool TryGetWorkspaceCooldown(out TimeSpan remaining)
     {
-        const int maxLoggedQueryLength = 4_000;
-        return query.Length <= maxLoggedQueryLength
-            ? query
-            : query[..maxLoggedQueryLength] + "...";
+        var unavailableUntil = new DateTimeOffset(Interlocked.Read(ref _workspaceUnavailableUntilUtcTicks), TimeSpan.Zero);
+        remaining = unavailableUntil - DateTimeOffset.UtcNow;
+        return remaining > TimeSpan.Zero;
     }
+
+    private void MarkWorkspaceUnavailable() =>
+        Interlocked.Exchange(ref _workspaceUnavailableUntilUtcTicks, DateTimeOffset.UtcNow.Add(WorkspaceQueryCooldown).Ticks);
+
+    private static RunTraceDto UnavailableRunTrace(string runId, string queryError) => new()
+    {
+        RunId = runId,
+        Spans = [],
+        QueryError = queryError,
+    };
+
+    private static string DescribeTraceQueryFailure(Exception exception) =>
+        exception is TimeoutException
+            ? $"Application Insights trace telemetry did not respond within {WorkspaceQueryTimeout.TotalSeconds:0} seconds. Trace retrieval is paused briefly to protect responsiveness; retry shortly."
+            : exception is TelemetryQueryUnavailableException
+                ? "Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly."
+                : "Application Insights trace telemetry is temporarily unavailable. Retry shortly.";
+
+    private sealed class TelemetryQueryUnavailableException(string message) : Exception(message);
 
     private ProjectMetricsDto Empty() => new()
     {
