@@ -35,6 +35,7 @@ import {
   findNode,
   formatSafeToolValue,
   getTraceTimeline,
+  maxToolErrorDetailLength,
   normalizeType,
   totalNanoAiu,
 } from './traceTree';
@@ -489,6 +490,20 @@ function traceSucceeded(spans: RunTraceSpanDto[]): boolean {
   return rootSpans.length > 0 && rootSpans.every((span) => span.success);
 }
 
+type TraceRunState = 'active' | 'completed' | 'failed';
+
+function traceRunState(events: PersistedRunEvent[]): TraceRunState {
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (events[index].type === 'run.failed' || events[index].type === 'run.error') return 'failed';
+    if (events[index].type === 'run.completed') return 'completed';
+  }
+  return 'active';
+}
+
+function traceRunStateLabel(state: TraceRunState): string {
+  return state === 'failed' ? 'Terminal failed run' : state === 'completed' ? 'Completed run' : 'Run active';
+}
+
 function DetailRow({ label, value, styles }: { label: string; value: ReactNode; styles: ReturnType<typeof useStyles> }) {
   return (
     <>
@@ -523,7 +538,7 @@ function ToolValue({
   error?: boolean;
   styles: ReturnType<typeof useStyles>;
 }) {
-  const formatted = formatSafeToolValue(value);
+  const formatted = formatSafeToolValue(value, error ? maxToolErrorDetailLength : undefined);
   if (formatted.state === 'unavailable') {
     return (
       <div>
@@ -661,11 +676,13 @@ function TraceInspector({
   node,
   roleByAgent,
   toolCallIndex,
+  runState,
   styles,
 }: {
   node: TraceNode | null;
   roleByAgent?: Record<string, string>;
   toolCallIndex: Map<string, ToolCallDetail>;
+  runState: TraceRunState;
   styles: ReturnType<typeof useStyles>;
 }) {
   if (!node) {
@@ -715,6 +732,17 @@ function TraceInspector({
             <>
               <DetailRow label="Tool" value={span.toolName ?? span.name} styles={styles} />
               {span.toolCallId && <DetailRow label="Call ID" value={<code>{span.toolCallId}</code>} styles={styles} />}
+              {toolDetail?.outcome === 'failed' && (
+                <DetailRow
+                  label="Attempt outcome"
+                  value={runState === 'completed'
+                    ? 'Recovered — run completed after this failed attempt'
+                    : runState === 'failed'
+                      ? 'Run failed — terminal outcome'
+                      : 'Run active — outcome pending'}
+                  styles={styles}
+                />
+              )}
             </>
           ) : (
             <>
@@ -989,6 +1017,11 @@ export function TransactionTracePanel({
   const tokens = useMemo(() => rawTokenTotals(trace.spans), [trace.spans]);
   const agent = useMemo(() => traceAgent(trace.spans), [trace.spans]);
   const sessionId = useMemo(() => traceSessionId(trace.spans), [trace.spans]);
+  const runState = useMemo(() => traceRunState(events), [events]);
+  const failedToolAttempts = useMemo(
+    () => [...toolCallIndex.values()].filter((detail) => detail.outcome === 'failed').length,
+    [toolCallIndex],
+  );
 
   const selectedNode = findNode(tree, selectedKey);
 
@@ -1059,16 +1092,20 @@ export function TransactionTracePanel({
               </div>
             )}
             <div className={styles.summaryItem}>
-              <dt className={styles.summaryLabel}>Trace status</dt>
+              <dt className={styles.summaryLabel}>Run state</dt>
               <dd className={styles.summaryValue}>
                 <Badge
                   appearance="tint"
-                  color={traceSucceeded(trace.spans) ? 'success' : 'danger'}
-                  icon={traceSucceeded(trace.spans) ? <CheckmarkCircleRegular /> : <ErrorCircleRegular />}
+                  color={runState === 'failed' ? 'danger' : runState === 'completed' ? 'success' : 'warning'}
+                  icon={runState === 'failed' ? <ErrorCircleRegular /> : undefined}
                 >
-                  {traceSucceeded(trace.spans) ? 'Success' : 'Failed'}
+                  {traceRunStateLabel(runState)}
                 </Badge>
               </dd>
+            </div>
+            <div className={styles.summaryItem}>
+              <dt className={styles.summaryLabel}>Failed tool attempts</dt>
+              <dd className={styles.summaryValue}>{failedToolAttempts || 'None'}</dd>
             </div>
           </dl>
 
@@ -1110,7 +1147,13 @@ export function TransactionTracePanel({
                   ))}
                 </div>
               </div>
-              <TraceInspector node={selectedNode} roleByAgent={roleByAgent} toolCallIndex={toolCallIndex} styles={styles} />
+              <TraceInspector
+                node={selectedNode}
+                roleByAgent={roleByAgent}
+                toolCallIndex={toolCallIndex}
+                runState={runState}
+                styles={styles}
+              />
             </div>
           )}
 

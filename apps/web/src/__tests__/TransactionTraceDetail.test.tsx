@@ -116,6 +116,7 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Trace summary').textContent).toContain('agentweaver-run-run-47');
     expect(screen.getByLabelText('Trace summary').textContent).toContain('120 input');
     expect(screen.getByLabelText('Trace summary').textContent).toContain('45 output');
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('Run active');
     expect(screen.getByTestId('trace-timeline')).toBeTruthy();
     expect(screen.getAllByTestId('trace-span')).toHaveLength(3);
     expect(screen.getAllByTestId('trace-span')[0].textContent).toContain('Coordinator');
@@ -218,6 +219,55 @@ describe('TransactionTracePanel trace detail', () => {
     fireEvent.click(toolSpan!);
 
     expect(screen.getByText('No output')).toBeTruthy();
+  });
+
+  it('distinguishes a recovered failed attempt from an active or terminally failed run', async () => {
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-7', toolName: 'grep', arguments: { pattern: 'trace' } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.error',
+        payload: { callId: 'call-7', errorMessage: 'tool timed out' },
+      },
+      { sequence: 10, type: 'run.completed', payload: {} },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    fireEvent.click(toolSpan!);
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('Completed run');
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('Failed tool attempts');
+    expect(screen.getByLabelText('Span inspector').textContent)
+      .toContain('Recovered — run completed after this failed attempt');
+  });
+
+  it('identifies a failed tool attempt within a terminally failed run', async () => {
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 8, type: 'tool.error', payload: { callId: 'call-7', errorMessage: 'tool timed out' } },
+      { sequence: 9, type: 'run.failed', payload: {} },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    fireEvent.click(toolSpan!);
+    expect(screen.getByLabelText('Trace summary').textContent).toContain('Terminal failed run');
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('Run failed — terminal outcome');
   });
 
   it('redacts sensitive input and output again before rendering legacy event data', async () => {

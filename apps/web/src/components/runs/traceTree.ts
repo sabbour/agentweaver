@@ -7,6 +7,7 @@ export interface ToolCallDetail {
   arguments?: unknown;
   content?: unknown;
   errorMessage?: unknown;
+  outcome: 'pending' | 'succeeded' | 'failed';
 }
 
 export interface SafeToolValue {
@@ -17,6 +18,7 @@ export interface SafeToolValue {
 const REDACTED = '***REDACTED***';
 const maxStringLength = 8_192;
 const maxRenderedLength = 16_384;
+export const maxToolErrorDetailLength = 2_048;
 const maxCollectionEntries = 100;
 const maxDepth = 8;
 const sensitiveKey = /(token|authorization|password|secret|credential|connection.?string|api.?key|private.?key|access.?key|bearer|key)/i;
@@ -80,13 +82,13 @@ function normalizeToolValue(value: unknown, depth: number): { value: unknown; re
  * Produces a bounded, syntax-readable representation of tool data. This repeats backend
  * redaction defensively so a malformed or legacy event cannot expose credentials in the trace UI.
  */
-export function formatSafeToolValue(value: unknown): SafeToolValue {
+export function formatSafeToolValue(value: unknown, maximumLength = maxRenderedLength): SafeToolValue {
   if (value === undefined) return { state: 'unavailable' };
   const normalized = normalizeToolValue(value, 0);
   const text = typeof normalized.value === 'string'
     ? normalized.value
     : JSON.stringify(normalized.value, null, 2);
-  if (text.length > maxRenderedLength)
+  if (text.length > maximumLength)
     return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
   return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
@@ -103,12 +105,14 @@ export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, Too
     const payload = event.payload;
     const callId = typeof payload?.['callId'] === 'string' ? payload['callId'] : undefined;
     if (!callId) continue;
-    const entry = index.get(callId) ?? {};
+    const entry: ToolCallDetail = index.get(callId) ?? { outcome: 'pending' };
     if (event.type === 'tool.call') {
       if (Object.hasOwn(payload, 'arguments')) entry.arguments = payload['arguments'];
     } else if (event.type === 'tool.result') {
+      entry.outcome = 'succeeded';
       if (Object.hasOwn(payload, 'content')) entry.content = payload['content'];
     } else if (event.type === 'tool.error') {
+      entry.outcome = 'failed';
       if (Object.hasOwn(payload, 'errorMessage')) entry.errorMessage = payload['errorMessage'];
     } else {
       continue;

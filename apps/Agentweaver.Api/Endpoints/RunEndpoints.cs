@@ -615,7 +615,7 @@ app.MapGet("/api/runs/{id}/events", async (
             payload = IsPromptPayloadEventType(rec.EventType)
                 ? new { }
                 : IsToolPayloadEventType(rec.EventType)
-                    ? Agentweaver.Domain.SensitiveDataRedactor.RedactElement(element)
+                    ? RedactAndBoundToolPayload(rec.EventType, element)
                     : element;
             durationMs = ReadRecordedEventDuration(element);
         }
@@ -3560,6 +3560,30 @@ private static string? PersistedEventStatus(string eventType) => eventType switc
     EventTypes.ToolApprovalResolved or EventTypes.ToolAutoApproved => "approved",
     _ => null,
 };
+
+/// <summary>
+/// Keeps diagnostic tool failures useful without making the persisted-event API a vehicle for
+/// arbitrarily large exception text. The redactor runs before truncation so legacy rows cannot
+/// expose credentials through their error details.
+/// </summary>
+static System.Text.Json.JsonElement RedactAndBoundToolPayload(string eventType, System.Text.Json.JsonElement element)
+{
+    var redacted = SensitiveDataRedactor.RedactElement(element);
+    if (eventType != EventTypes.ToolError || redacted.ValueKind != System.Text.Json.JsonValueKind.Object
+        || !redacted.TryGetProperty("errorMessage", out var error)
+        || error.ValueKind != System.Text.Json.JsonValueKind.String)
+        return redacted;
+
+    const int maximumErrorLength = 2048;
+    var message = SensitiveDataRedactor.RedactJsonStringIfApplicable(error.GetString());
+    if (message.Length > maximumErrorLength)
+        message = string.Concat(message.AsSpan(0, maximumErrorLength - 1), "…");
+
+    var node = System.Text.Json.Nodes.JsonNode.Parse(redacted.GetRawText())!.AsObject();
+    node["errorMessage"] = message;
+    using var document = System.Text.Json.JsonDocument.Parse(node.ToJsonString());
+    return document.RootElement.Clone();
+}
 }
 
 /// <summary>
