@@ -163,6 +163,7 @@ public static class MetricsEndpoints
             string runId,
             IRunStore runStore,
             AppInsightsMetricsService metrics,
+            bool? full,
             CancellationToken ct) =>
         {
             if (!RunId.TryParse(runId, out var parsedRunId))
@@ -195,6 +196,7 @@ public static class MetricsEndpoints
                 runId,
                 agentNameByRunId,
                 traceContextsByRunId,
+                full == true,
                 ct).ConfigureAwait(false));
         });
     }

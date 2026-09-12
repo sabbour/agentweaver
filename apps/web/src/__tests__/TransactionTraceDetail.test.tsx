@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { TransactionTracePanel } from '../components/runs/TransactionTracePanel';
 import { AzureFluentProvider } from '../copilot-fluent-system';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -102,6 +102,25 @@ afterEach(() => {
 });
 
 describe('TransactionTracePanel trace detail', () => {
+  it('loads a bounded trace first and requests full fidelity only when asked', async () => {
+    vi.mocked(apiClient.getRunTraces)
+      .mockResolvedValueOnce({
+        runId: 'run-47',
+        isTruncated: true,
+        spans: [{ id: 'initial', name: 'initial', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-47',
+        isTruncated: false,
+        spans: [{ id: 'full', name: 'full', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+      });
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByLabelText('Partial trace loaded')).toBeTruthy());
+    expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { full: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Load full trace' }));
+    await waitFor(() => expect(apiClient.getRunTraces).toHaveBeenLastCalledWith('run-47', { full: true }));
+  });
   it('renders a data-backed summary, hierarchical timeline, and selected span inspector', async () => {
     render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
 
@@ -124,6 +143,7 @@ describe('TransactionTracePanel trace detail', () => {
 
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     expect(toolSpan?.textContent).toContain('timeout');
+    expect(apiClient.getRunEvents).not.toHaveBeenCalled();
     fireEvent.click(toolSpan!);
 
     expect(toolSpan?.getAttribute('data-selected')).toBe('true');
@@ -150,7 +170,7 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getAllByText('Not recorded').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Events' }));
-    expect(screen.getByLabelText('Persisted trace events').textContent).toContain('tool.call');
+    await waitFor(() => expect(screen.getByLabelText('Persisted trace events').textContent).toContain('tool.call'));
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Sequence 8');
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Call call-7');
     expect(screen.getByLabelText('Persisted trace events').textContent).toContain('Duration 500 ms');
@@ -221,7 +241,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    expect(screen.getByText('Input')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Input')).toBeTruthy());
     expect(screen.getByText(/"pattern": "trace"/)).toBeTruthy();
     expect(screen.getByText(/"matches": \[/)).toBeTruthy();
     expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
@@ -246,7 +266,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    expect(screen.getByText('No output')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('No output')).toBeTruthy());
   });
 
   it('distinguishes a recovered failed attempt from an active or terminally failed run', async () => {
@@ -323,7 +343,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    expect(screen.queryByText(secret)).toBeNull();
+    await waitFor(() => expect(screen.queryByText(secret)).toBeNull());
     expect(screen.getAllByText('Redacted')).toHaveLength(2);
     expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/)).toHaveLength(2);
   });

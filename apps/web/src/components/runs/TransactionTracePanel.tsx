@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
+  Button,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -924,7 +925,7 @@ function TraceEvents({
   styles,
 }: {
   events: PersistedRunEvent[];
-  availability: 'loading' | 'loaded' | 'unavailable';
+  availability: 'idle' | 'loading' | 'loaded' | 'unavailable';
   styles: ReturnType<typeof useStyles>;
 }) {
   if (availability === 'loading') return <Spinner label="Loading persisted events" />;
@@ -974,8 +975,11 @@ export function TransactionTracePanel({
   const styles = useStyles();
   const [trace, setTrace] = useState<RunTraceDto>({ runId, spans: [] });
   const [events, setEvents] = useState<PersistedRunEvent[]>([]);
-  const [eventsAvailability, setEventsAvailability] = useState<'loading' | 'loaded' | 'unavailable'>('loading');
+  const [eventsAvailability, setEventsAvailability] = useState<'idle' | 'loading' | 'loaded' | 'unavailable'>('idle');
   const [loading, setLoading] = useState(true);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [fullRequested, setFullRequested] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -984,49 +988,61 @@ export function TransactionTracePanel({
   useEffect(() => {
     let cancelled = false;
     const loadTrace = async () => {
+      setTraceError(null);
       setLoading(true);
       setTrace({ runId, spans: [] });
-      setEvents([]);
-      setEventsAvailability('loading');
-      setToolCallIndex(new Map());
       setSelectedKey(null);
-      setActiveTab('timeline');
+      setExpanded(new Set());
       try {
-        const next = await apiClient.getRunTraces(runId);
+        const next = await apiClient.getRunTraces(runId, { full: fullRequested });
         if (!cancelled) {
           const nextTree = buildTraceTree(next.spans);
           setTrace(next);
-          setExpanded(collectExpandableKeys(nextTree, new Set<string>()));
+          // Large traces initially show their roots only; expanding is deliberate work instead of
+          // creating a DOM row for every descendant before the user can inspect the trace.
+          setExpanded(next.isTruncated ? new Set() : collectExpandableKeys(nextTree, new Set<string>()));
           setSelectedKey(nextTree[0]?.key ?? null);
         }
       } catch {
         if (!cancelled) {
           setTrace({ runId, spans: [] });
-          setExpanded(new Set());
-          setSelectedKey(null);
+          setTraceError('The transaction trace could not be loaded. Retry to request it again.');
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
-      try {
-        const nextEvents = await apiClient.getRunEvents(runId);
-        if (!cancelled) {
-          setEvents(nextEvents);
-          setToolCallIndex(buildToolCallIndex(nextEvents));
-          setEventsAvailability('loaded');
-        }
-      } catch {
-        if (!cancelled) {
-          setToolCallIndex(new Map());
-          setEventsAvailability('unavailable');
-        }
-      }
     };
     void loadTrace();
     return () => { cancelled = true; };
+  }, [runId, fullRequested, reloadNonce]);
+
+  useEffect(() => {
+    setEvents([]);
+    setToolCallIndex(new Map());
+    setEventsAvailability('idle');
   }, [runId]);
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
+  const selectedNode = findNode(tree, selectedKey);
+  const shouldLoadEvents = activeTab === 'events' || selectedNode?.type === 'tool';
+
+  useEffect(() => {
+    if (!shouldLoadEvents || eventsAvailability === 'loading' || eventsAvailability === 'loaded') return;
+    let cancelled = false;
+    setEventsAvailability('loading');
+    void apiClient.getRunEvents(runId)
+      .then((nextEvents) => {
+        if (cancelled) return;
+        setEvents(nextEvents);
+        setToolCallIndex(buildToolCallIndex(nextEvents));
+        setEventsAvailability('loaded');
+      })
+      .catch(() => {
+        if (!cancelled) setEventsAvailability('unavailable');
+      });
+    return () => { cancelled = true; };
+  }, [runId, shouldLoadEvents, eventsAvailability]);
+
   const timeline = useMemo(() => getTraceTimeline(trace.spans), [trace.spans]);
   const runTotalNanoAiu = useMemo(() => totalNanoAiu(tree), [tree]);
   const tokens = useMemo(() => rawTokenTotals(trace.spans), [trace.spans]);
@@ -1037,8 +1053,6 @@ export function TransactionTracePanel({
     () => [...toolCallIndex.values()].filter((detail) => detail.outcome === 'failed').length,
     [toolCallIndex],
   );
-
-  const selectedNode = findNode(tree, selectedKey);
 
   function toggle(key: string) {
     setExpanded((current) => {
@@ -1069,18 +1083,27 @@ export function TransactionTracePanel({
         <Body tone="muted">{subtitle}</Body>
       </header>
 
-      {!loading && trace.queryError && (
+      {!loading && (trace.queryError || traceError) && (
         <MessageBar intent="warning">
-          <MessageBarBody>{trace.queryError}</MessageBarBody>
+          <MessageBarBody>{trace.queryError ?? traceError}</MessageBarBody>
+          {traceError && <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>}
         </MessageBar>
       )}
 
       {loading ? (
-        <Spinner label="Loading transaction trace" />
+        <Spinner label={fullRequested ? 'Loading the full transaction trace' : 'Loading transaction trace'} />
       ) : tree.length === 0 ? (
         <EmptyState title="No trace data available for this run yet." />
       ) : (
         <>
+          {trace.isTruncated && (
+            <MessageBar intent="info" aria-label="Partial trace loaded">
+              <MessageBarBody>
+                Showing the first 250 spans so this growing trace is ready to inspect promptly. All diagnostics remain available.
+              </MessageBarBody>
+              <Button appearance="secondary" onClick={() => setFullRequested(true)}>Load full trace</Button>
+            </MessageBar>
+          )}
           <dl className={styles.summary} aria-label="Trace summary">
             <div className={styles.summaryItem}>
               <dt className={styles.summaryLabel}>Agent</dt>
