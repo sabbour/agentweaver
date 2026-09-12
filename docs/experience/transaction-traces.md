@@ -54,6 +54,13 @@ says **No input** or **No output**; if a value is redacted, it is explicitly mar
 The UI applies a second, bounded redaction pass before displaying legacy event data, so credentials
 and oversized or deeply nested payloads cannot leak through the inspector.
 
+When a tool attempt fails, its inspector shows a bounded, redacted error detail and explains the
+outcome in the context of the run: **Recovered** means the run later completed, **Run active**
+means the final outcome is not yet recorded, and **Run failed** means a terminal failure was
+recorded. The summary keeps failed-tool-attempt count separate from run state, so a recovered
+attempt is never presented as a failed run. The events API also redacts legacy error payloads and
+limits an individual error detail to 2,048 characters before the UI receives it.
+
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call
 nested beneath it; the panel header shows the total cost across the whole run. The underlying value
