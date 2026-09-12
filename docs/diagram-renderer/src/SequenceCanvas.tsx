@@ -9,15 +9,15 @@ import type {
   SequenceStep,
 } from './types';
 
-const CARD_W = 196;
-const CARD_H = 82;
+const CARD_W = 236;
+const CARD_H = 124;
 const COL_GAP = 54;
 const MARGIN_X = 54;
 const TOP = 34;
 const LIFELINE_TOP = TOP + CARD_H;
-const STEP_GAP = 54;
-const SELF_GAP = 70;
-const NOTE_GAP = 68;
+const STEP_GAP = 62;
+const SELF_GAP = 78;
+const NOTE_GAP = 78;
 const FRAGMENT_PAD = 38;
 const BOTTOM_CARD_GAP = 28;
 
@@ -49,8 +49,8 @@ function plainText(value: string): string {
 function messageHeight(message: SequenceMessage, xById: Map<string, number>): number {
   if (message.from === message.to) return SELF_GAP;
   const width = Math.max(120, Math.abs((xById.get(message.to) ?? 0) - (xById.get(message.from) ?? 0)) - 28);
-  const lines = Math.max(1, Math.ceil(plainText(message.label).length * 7.2 / width));
-  return STEP_GAP + Math.max(0, lines - 1) * 16;
+  const lines = Math.max(1, Math.ceil(plainText(message.label).length * 8.8 / width));
+  return STEP_GAP + Math.max(0, lines - 1) * 20;
 }
 
 function layoutSteps(
@@ -127,8 +127,8 @@ function ParticipantCard({ participant, x, y }: { participant: SequenceParticipa
         boxSizing: 'border-box',
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        padding: '13px 12px 12px 15px',
+        gap: 12,
+        padding: '14px 14px 14px 17px',
         background: neutral.background1,
         border: `1px solid ${neutral.stroke2}`,
         borderLeft: `5px solid ${tone.fg}`,
@@ -138,12 +138,12 @@ function ParticipantCard({ participant, x, y }: { participant: SequenceParticipa
         zIndex: 4,
       }}
     >
-      <span style={{ display: 'flex', flexShrink: 0, color: tone.fg }}><Icon fontSize={24} /></span>
+      <span style={{ display: 'flex', flexShrink: 0, color: tone.fg }}><Icon fontSize={28} /></span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{
           display: 'block',
           color: neutral.foreground1,
-          fontSize: participant.label.length > 22 ? 13 : 15,
+          fontSize: participant.label.length > 22 ? 16 : 18,
           lineHeight: 1.18,
           fontWeight: 650,
           overflowWrap: participant.label.includes(' ') ? 'normal' : 'anywhere',
@@ -151,7 +151,7 @@ function ParticipantCard({ participant, x, y }: { participant: SequenceParticipa
           {participant.label}
         </span>
         {participant.subLabel && (
-          <span style={{ display: 'block', color: neutral.foreground3, fontSize: 11, marginTop: 2 }}>
+          <span style={{ display: 'block', color: neutral.foreground3, fontSize: 13, lineHeight: 1.2, marginTop: 2 }}>
             {participant.subLabel}
           </span>
         )}
@@ -162,7 +162,7 @@ function ParticipantCard({ participant, x, y }: { participant: SequenceParticipa
           borderRadius: radius.badge,
           color: tone.fg,
           background: tone.bg,
-          fontSize: 10,
+          fontSize: 12,
           fontWeight: 700,
         }}>{participant.badge.text}</span>
       </span>
@@ -172,7 +172,7 @@ function ParticipantCard({ participant, x, y }: { participant: SequenceParticipa
 
 function Label({ x, y, width, children, align = 'center' }: { x: number; y: number; width: number; children: ReactNode; align?: 'center' | 'left' }) {
   return (
-    <foreignObject x={x} y={y} width={width} height={44}>
+    <foreignObject x={x} y={y} width={width} height={56}>
       <div style={{
         width: '100%',
         boxSizing: 'border-box',
@@ -180,9 +180,9 @@ function Label({ x, y, width, children, align = 'center' }: { x: number; y: numb
         textAlign: align,
         color: neutral.foreground2,
         fontFamily,
-        fontSize: 13,
+        fontSize: 16,
         fontWeight: 600,
-        lineHeight: 1.2,
+        lineHeight: 1.25,
       }}>
         <span style={{
           display: 'inline',
