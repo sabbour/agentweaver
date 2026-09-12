@@ -234,9 +234,9 @@ function SequenceSvg({
       const left = Math.min(...xs) - 82;
       const right = Math.max(...xs) + 82;
       return [<g key={key}>
-        <rect x={left} y={item.y + 8} width={right - left} height={42} rx={8} fill={badgeTones.marigold.bg} stroke={badgeTones.marigold.fg} strokeOpacity={0.42} />
-        <foreignObject x={left + 9} y={item.y + 14} width={right - left - 18} height={30}>
-          <div style={{ fontFamily, fontSize: 12, lineHeight: 1.25, color: neutral.foreground1, textAlign: 'center' }}>{plainText(step.label)}</div>
+        <rect x={left} y={item.y + 8} width={right - left} height={54} rx={8} fill={badgeTones.marigold.bg} stroke={badgeTones.marigold.fg} strokeOpacity={0.42} />
+        <foreignObject x={left + 9} y={item.y + 8} width={right - left - 18} height={54}>
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily, fontSize: 14, lineHeight: 1.25, color: neutral.foreground1, textAlign: 'center' }}>{plainText(step.label)}</div>
         </foreignObject>
       </g>];
     }
