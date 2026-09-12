@@ -482,7 +482,11 @@ function traceSessionId(spans: RunTraceSpanDto[]): string | null {
 }
 
 function traceSucceeded(spans: RunTraceSpanDto[]): boolean {
-  return spans.every((span) => span.success);
+  const spanIds = new Set(spans.map((span) => span.id));
+  const rootSpans = spans.filter((span) => !span.parentId || !spanIds.has(span.parentId));
+  // A failed child tool attempt can be deliberately retried by an otherwise-successful agent
+  // invocation. The trace outcome belongs to its roots; child failures remain visible inline.
+  return rootSpans.length > 0 && rootSpans.every((span) => span.success);
 }
 
 function DetailRow({ label, value, styles }: { label: string; value: ReactNode; styles: ReturnType<typeof useStyles> }) {
