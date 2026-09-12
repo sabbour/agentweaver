@@ -443,7 +443,7 @@ export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelPos.x + offset.dx}px, ${labelPos.y + offset.dy}px)`,
               fontFamily,
-              fontSize: 16,
+              fontSize: 18,
               fontWeight: 600,
               lineHeight: 1.15,
               color: neutral.foreground2,
