@@ -119,7 +119,7 @@ function makeFakes({
     if (cmd === "az" && args.slice(0, 4).join(" ") === "network dns zone list") {
       return { stdout: "mc_agentweaver-rg_agentweaver_westus2", stderr: "", code: 0 };
     }
-    if (cmd === "az" && args.includes("show") && args.includes("--record-set-name")) {
+    if (cmd === "az" && args.includes("show") && args.includes("--name")) {
       return { stdout: JSON.stringify({ aRecords: [{ ipv4Address: "10.0.0.5" }] }), stderr: "", code: 0 };
     }
     return { stdout: "", stderr: "", code: 0 };
@@ -222,6 +222,8 @@ test("ensurePreviewWildcardDnsRecord(): replaces the wildcard target and verifie
   });
   const updates = calls.filter((call) => call.type === "run").map((call) => call.args);
   assert.equal(updates[0][4], "create");
+  assert.ok(updates[0].includes("--name"));
+  assert.ok(!updates[0].includes("--record-set-name"));
   assert.deepEqual(updates[0].slice(-2), ["--ttl", "60"]);
   assert.equal(updates[1][4], "update");
   assert.deepEqual(updates[1].slice(-3), ["--set", "aRecords=[{ipv4Address=20.1.74.85}]", "ttl=60"]);

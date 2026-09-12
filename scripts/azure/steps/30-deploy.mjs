@@ -207,7 +207,7 @@ export async function ensurePreviewWildcardDnsRecord(zoneSuffix, gatewayIp, opts
   const recordArgs = [
     "--resource-group", resourceGroup,
     "--zone-name", zoneSuffix,
-    "--record-set-name", "*",
+    "--name", "*",
   ];
 
   // `create` is idempotent. `update --set` replaces (rather than appends to)
