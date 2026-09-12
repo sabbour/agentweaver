@@ -442,6 +442,19 @@ function formatNumber(value: number | null | undefined): string {
   return value == null ? '—' : value.toLocaleString();
 }
 
+function formatBytes(value: number | null | undefined): string {
+  if (value == null) return 'Not recorded';
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let scaled = value;
+  let unit = -1;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit++;
+  }
+  return `${scaled.toFixed(scaled >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
 function formatDateTime(timestamp: string): string {
   const value = new Date(timestamp);
   return Number.isNaN(value.getTime()) ? '—' : value.toLocaleString();
@@ -867,6 +880,24 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
     ['timestamp', formatDateTime(span.timestamp)],
     ['duration', formatDurationMs(span.durationMs)],
   ];
+  const execution = attributes?.execution;
+  const diagnosticValues: Array<[string, ReactNode]> = [
+    ['assessment', execution
+      ? 'Host-process evidence recorded; bottleneck is not determined from this trace alone.'
+      : 'Unavailable — this trace has no resource evidence, so no bottleneck is inferred.'],
+    ['queue.entered_at', execution?.queueEnteredAt ? formatDateTime(execution.queueEnteredAt) : 'Not recorded'],
+    ['dispatch.started_at', execution?.dispatchStartedAt ? formatDateTime(execution.dispatchStartedAt) : 'Not recorded'],
+    ['process.started_at', execution?.processStartedAt ? formatDateTime(execution.processStartedAt) : 'Not recorded'],
+    ['process.ended_at', execution?.processEndedAt ? formatDateTime(execution.processEndedAt) : 'Not recorded'],
+    ['host_process.cpu_ms', execution?.hostProcessCpuMs != null ? formatDurationMs(execution.hostProcessCpuMs) : 'Not recorded'],
+    ['host_process.working_set', formatBytes(execution?.hostProcessWorkingSetBytes)],
+    ['host_process.peak_working_set', formatBytes(execution?.hostProcessPeakWorkingSetBytes)],
+    ['disk_io', 'Not recorded'],
+    ['network_io', 'Not recorded'],
+    ['capacity_or_queue', execution?.queueEnteredAt && execution?.dispatchStartedAt
+      ? 'Phase timestamps recorded; no capacity cause is inferred.'
+      : 'Not recorded'],
+  ];
 
   return (
     <div className={styles.attributes}>
@@ -874,6 +905,7 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
       <AttributeGroup title="Operation and model" values={operationValues} styles={styles} />
       <AttributeGroup title="Tool and authorization" values={toolPolicyValues} styles={styles} />
       <AttributeGroup title="Runtime, usage, and status" values={runtimeValues} styles={styles} />
+      <AttributeGroup title="Execution diagnostics" values={diagnosticValues} styles={styles} />
     </div>
   );
 }
