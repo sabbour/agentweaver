@@ -89,11 +89,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     private bool _byokProviderConfigurationResolved;
 
-    // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
-    // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
-    // permission handler consults this to avoid emitting a second, orphaned tool.call for these
-    // tools — the wrapper already records tool.call/tool.result/tool.error around the real
-    // invocation, with its own correlated callId and execute_tool span (see #850 follow-up).
+    // Names of custom tools wrapped in InstrumentedCustomAIFunction (populated fresh on every
+    // RebuildInnerAgent call). The permission handler avoids emitting a second, orphaned
+    // tool.call for these tools because the wrapper records the lifecycle around their real
+    // invocation with its own correlated callId and execute_tool span.
     private readonly HashSet<string> _instrumentedToolNames = new(StringComparer.Ordinal);
     protected readonly ILogger<CopilotAIAgent> _logger;
 
@@ -529,10 +528,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // policy shell enabled); native shell is denied below so this is the only shell path.
             includeControlledRunCommand: true,
             runCapabilityToken: _apiCapabilityToken,
-            // #850 follow-up: instrument every IAgentRuntimeToolProvider tool (start_preview and
-            // its preview-lifecycle siblings) so their tool.call/tool.result/tool.error RunEvents
-            // and execute_tool span are recorded directly around the real invocation — see
-            // InstrumentedCustomAIFunction.
+            // Instrument custom tools around their actual invocation. SDK lifecycle delivery can
+            // be delayed behind tool execution, which must not inflate measured duration.
             instrumentProviderTool: tool =>
             {
                 _instrumentedToolNames.Add(tool.Name);
@@ -1642,6 +1639,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             return;
         }
 
+        if (_instrumentedToolNames.Contains(resolvedToolName))
+        {
+            // The wrapper owns this custom tool's span and RunEvents at invocation time. Ignore
+            // its later SDK lifecycle pair so it cannot create a duplicate, consumer-delayed span.
+            _suppressedCallIds.Add(callId);
+            return;
+        }
+
         if (IsShellToolName(resolvedToolName) &&
             _shellExecutionTracker?.ActiveExecution is null)
         {
@@ -2364,7 +2369,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // is the correct fail-closed behavior for a shell-disabled run.
             var commandFn = all.FirstOrDefault(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
             if (commandFn is not null)
-                tools.Add(commandFn);
+                // Measure run_command directly around execution rather than through lifecycle
+                // events that the SDK emits only when the stream consumer catches up.
+                tools.Add(instrumentProviderTool?.Invoke(commandFn) ?? commandFn);
         }
 
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
