@@ -163,7 +163,8 @@ public static class MetricsEndpoints
             string runId,
             IRunStore runStore,
             AppInsightsMetricsService metrics,
-            bool? full,
+            string? cursor,
+            int? pageSize,
             CancellationToken ct) =>
         {
             if (!RunId.TryParse(runId, out var parsedRunId))
@@ -196,7 +197,8 @@ public static class MetricsEndpoints
                 runId,
                 agentNameByRunId,
                 traceContextsByRunId,
-                full == true,
+                cursor,
+                pageSize,
                 ct).ConfigureAwait(false));
         });
     }

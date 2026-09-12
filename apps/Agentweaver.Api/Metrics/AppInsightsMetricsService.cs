@@ -3,6 +3,7 @@ using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
 using Agentweaver.Domain;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 
 namespace Agentweaver.Api.Metrics;
@@ -197,7 +198,8 @@ public sealed class AppInsightsMetricsService
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId = null,
-        bool full = false,
+        string? cursor = null,
+        int? pageSize = null,
         CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
@@ -208,19 +210,24 @@ public sealed class AppInsightsMetricsService
         if (string.IsNullOrWhiteSpace(workspaceId))
             return UnavailableRunTrace(runId, "Application Insights workspace id is not configured.");
 
-        var (spans, queryError, isTruncated) = await QueryRunTracesAsync(
+        if (!TryDecodeTraceCursor(cursor, out var decodedCursor))
+            return UnavailableRunTrace(runId, "The trace continuation is invalid. Reload the trace to start again.");
+
+        var result = await QueryRunTracesAsync(
             workspaceId,
             runId,
             agentNameByRunId,
             traceContextsByRunId,
-            full,
+            decodedCursor,
+            Math.Clamp(pageSize ?? 100, 1, 250),
             ct).ConfigureAwait(false);
         return new RunTraceDto
         {
             RunId = runId,
-            Spans = spans,
-            QueryError = queryError,
-            IsTruncated = isTruncated,
+            Spans = result.Spans,
+            QueryError = result.QueryError,
+            NextCursor = result.NextCursor,
+            HasMore = result.HasMore,
         };
     }
 
@@ -652,19 +659,43 @@ public sealed class AppInsightsMetricsService
         return points;
     }
 
-    private async Task<(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError, bool IsTruncated)> QueryRunTracesAsync(
+    internal sealed record TraceCursor(DateTimeOffset Timestamp, string Id);
+    private sealed record TracePage(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError, string? NextCursor, bool HasMore);
+
+    internal static bool TryDecodeTraceCursor(string? value, out TraceCursor? cursor)
+    {
+        cursor = null;
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        try
+        {
+            var bytes = Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + new string('=', (4 - value.Length % 4) % 4));
+            cursor = JsonSerializer.Deserialize<TraceCursor>(bytes);
+            return cursor is { Id.Length: > 0 } && cursor.Timestamp != default;
+        }
+        catch (FormatException) { return false; }
+        catch (JsonException) { return false; }
+    }
+
+    internal static string EncodeTraceCursor(DateTimeOffset timestamp, string id) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new TraceCursor(timestamp, id))))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private async Task<TracePage> QueryRunTracesAsync(
         string workspaceId,
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
-        bool full,
+        TraceCursor? cursor,
+        int pageSize,
         CancellationToken ct)
     {
-        const int initialSpanLimit = 250;
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
         var runIds = agentNameByRunId?.Keys.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [runId];
         var runIdPredicate = BuildRunIdDimensionPredicate(runId, runIds, "Properties");
+        var continuationPredicate = cursor is null
+            ? string.Empty
+            : $"| where timestamp > datetime({cursor.Timestamp.UtcDateTime:O}) or (timestamp == datetime({cursor.Timestamp.UtcDateTime:O}) and id > \"{EscapeKusto(cursor.Id)}\")";
         var query =
             $"""
             let run_operations = materialize(
@@ -709,8 +740,9 @@ public sealed class AppInsightsMetricsService
                 success,
                 resultCode,
                 customDimensions
-            | order by timestamp asc
-            {(full ? string.Empty : $"| take {initialSpanLimit + 1}")}
+            {continuationPredicate}
+            | order by timestamp asc, id asc
+            | take {pageSize + 1}
             """;
 
         string? queryError = null;
@@ -721,10 +753,10 @@ public sealed class AppInsightsMetricsService
             timeTo,
             ct,
             exception => queryError = DescribeTraceQueryFailure(exception)).ConfigureAwait(false);
-        if (result is null) return ([], queryError, false);
+        if (result is null) return new TracePage([], queryError, null, false);
 
-        var isTruncated = !full && result.Table.Rows.Count > initialSpanLimit;
-        var rows = isTruncated ? result.Table.Rows.Take(initialSpanLimit) : result.Table.Rows;
+        var hasMore = result.Table.Rows.Count > pageSize;
+        var rows = hasMore ? result.Table.Rows.Take(pageSize).ToArray() : result.Table.Rows.ToArray();
         var spans = rows
             .Select((row, index) =>
             {
@@ -775,7 +807,10 @@ public sealed class AppInsightsMetricsService
                 };
             })
             .ToList();
-        return (spans, null, isTruncated);
+        var nextCursor = hasMore && rows.Length > 0
+            ? EncodeTraceCursor(ReadDateTimeOffset(rows[^1][3]) ?? timeFrom, ReadRequiredString(rows[^1][0], $"{runId}-{rows.Length - 1}"))
+            : null;
+        return new TracePage(spans, null, nextCursor, hasMore);
     }
 
     /// <summary>

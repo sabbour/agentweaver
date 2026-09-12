@@ -194,10 +194,11 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 Open a project, select **Observability** → **Traces**, then choose **Preview trace** for a
 coordinator run. The trace detail includes a timeline, span attributes, and persisted run events.
-For responsiveness, a large trace opens with its first 250 spans and collapsed branches; choose
-**Load full trace** to request every correlated span when completing an investigation. Persisted
-events are loaded only when the Events tab or a tool span needs them, so tool inputs and outputs
-remain available without delaying the initial trace. It shows only trace data returned by
+Trace spans load in chronological pages; choose **Load more spans** until no more spans are
+available to inspect the complete trace. The opaque continuation keeps already loaded spans,
+selection, and tree state intact, and a failed page can be retried without reloading the whole
+trace. Persisted events are loaded only when the Events tab or a tool span needs them, so tool
+inputs and outputs remain available without delaying the initial trace. It shows only trace data returned by
 Application Insights and the persisted run-event API. In
 particular, it shows the trace session ID only when the runtime emitted one, and it does not invent
 event timestamps when a legacy persisted event has no recorded time. The attributes pane is a fixed,

@@ -1836,8 +1836,9 @@ export interface RunTraceDto {
   spans: RunTraceSpanDto[];
   /** Present when Application Insights could not complete the trace query. */
   queryError?: string | null;
-  /** The server returned its fast initial trace window; request `full=true` for all spans. */
-  isTruncated?: boolean;
+  /** Opaque continuation for the next chronologically ordered trace page. */
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 // Global overview "at a glance" counters.
