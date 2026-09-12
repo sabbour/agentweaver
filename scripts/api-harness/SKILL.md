@@ -32,6 +32,9 @@ The provider uses `scripts/ui-harness/.auth/` by default; use
 If the cached UI session is absent, expired, or belongs to another origin, it fails
 with the exact `login-chrome-default.mjs --base-url <origin>` remediation. Microsoft
 Entra account selection, credentials, MFA, and consent remain human-only.
+Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
+launch/copy, or manual browser automation; surface the provider's recovery error and
+use the UI-harness login/cached-session flow.
 
 Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/session` endpoint and requires `authenticated: true`. It uses public
