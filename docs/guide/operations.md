@@ -208,6 +208,13 @@ child agent that executed them using the persisted parent-run relationship; the 
 trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
 
+If the Application Insights workspace is unavailable or slow, trace retrieval stops after three
+seconds and displays a diagnostic to authorized run viewers. The API then pauses workspace queries
+briefly, rather than allowing repeated trace loads to queue or amplify the dependency failure.
+Retry after the displayed interval; platform operators can use the API log's query context and
+failure type to investigate workspace credentials, RBAC, and availability without logging KQL
+payloads.
+
 ### Provisioning monitoring resources
 
 Monitoring is provisioned as part of `npm run azure:provision-infra`. To rerun only
