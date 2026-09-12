@@ -194,6 +194,7 @@ public sealed class AppInsightsMetricsService
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId = null,
+        bool full = false,
         CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
@@ -204,17 +205,19 @@ public sealed class AppInsightsMetricsService
         if (string.IsNullOrWhiteSpace(workspaceId))
             return EmptyRunTrace(runId);
 
-        var (spans, queryError) = await QueryRunTracesAsync(
+        var (spans, queryError, isTruncated) = await QueryRunTracesAsync(
             workspaceId,
             runId,
             agentNameByRunId,
             traceContextsByRunId,
+            full,
             ct).ConfigureAwait(false);
         return new RunTraceDto
         {
             RunId = runId,
             Spans = spans,
             QueryError = queryError,
+            IsTruncated = isTruncated,
         };
     }
 
@@ -646,13 +649,15 @@ public sealed class AppInsightsMetricsService
         return points;
     }
 
-    private async Task<(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError)> QueryRunTracesAsync(
+    private async Task<(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError, bool IsTruncated)> QueryRunTracesAsync(
         string workspaceId,
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
+        bool full,
         CancellationToken ct)
     {
+        const int initialSpanLimit = 250;
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
         var runIds = agentNameByRunId?.Keys.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [runId];
@@ -702,6 +707,7 @@ public sealed class AppInsightsMetricsService
                 resultCode,
                 customDimensions
             | order by timestamp asc
+            {(full ? string.Empty : $"| take {initialSpanLimit + 1}")}
             """;
 
         string? queryError = null;
@@ -712,9 +718,11 @@ public sealed class AppInsightsMetricsService
             timeTo,
             ct,
             _ => queryError = "Application Insights trace query failed.").ConfigureAwait(false);
-        if (result is null) return ([], queryError);
+        if (result is null) return ([], queryError, false);
 
-        var spans = result.Table.Rows
+        var isTruncated = !full && result.Table.Rows.Count > initialSpanLimit;
+        var rows = isTruncated ? result.Table.Rows.Take(initialSpanLimit) : result.Table.Rows;
+        var spans = rows
             .Select((row, index) =>
             {
                 var customDimensions = ReadCustomDimensions(row[7]);
@@ -764,7 +772,7 @@ public sealed class AppInsightsMetricsService
                 };
             })
             .ToList();
-        return (spans, null);
+        return (spans, null, isTruncated);
     }
 
     /// <summary>
