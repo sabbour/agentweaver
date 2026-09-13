@@ -516,7 +516,20 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
 
     private static async Task<AutomationActivationRecord> ActivateAsync(MemoryDbContext db, ProjectId projectId)
     {
-        db.Projects.Add(new ProjectRecord { ProjectId = projectId.ToString() });
+        // This helper intentionally exercises a database pinned before later project migrations.
+        // Insert the legacy-shaped row directly; the current EF model must not reference preview
+        // settings columns until Database.MigrateAsync() advances the schema below.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO projects
+                (project_id, Name, OriginKind, WorkingDirectory, DefaultBranch, Owner,
+                 DefaultProvider, State, CreatedAt, UpdatedAt, TeamRevision,
+                 MaxReadyPerHeartbeat, PickupAutoApproveTools, PickupAutopilot,
+                 PreviewApprovalTimeoutMinutes)
+            VALUES
+                ({projectId.ToString()}, 'legacy project', 'blank', '.', 'main', 'owner',
+                 'github-copilot', 'active', {DateTimeOffset.UtcNow}, {DateTimeOffset.UtcNow}, 0,
+                 1, 0, 0, 30);
+            """);
         db.GitHubInstallations.Add(new GitHubInstallationRecord
         {
             InstallationId = 1, AppKind = GitHubAppKind.Repo, ProjectId = projectId.ToString(), CreatedAt = DateTimeOffset.UtcNow,
