@@ -17,9 +17,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 test('Chrome launches from the disposable clone with the Default profile selected', () => {
   const clone = path.resolve('scripts/ui-harness/.auth/chrome-default-automation');
+  const localAppData = 'C:\\Users\\test\\AppData\\Local';
+  const syntheticChrome = path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe');
   const installedChrome = resolveGoogleChromeExecutable({
-    localAppData: 'C:\\Users\\test\\AppData\\Local',
-    exists: (candidate) => candidate === 'C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe',
+    localAppData,
+    exists: (candidate) => candidate === syntheticChrome,
   });
   const launch = buildChromeLaunchOptions(clone, installedChrome);
 
