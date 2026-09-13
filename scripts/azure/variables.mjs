@@ -262,6 +262,7 @@ export async function resolveVariables(options = {}) {
   // the target tag/digest before deciding whether a retry is safe.
   const ACR_BUILD_TIMEOUT_MS = env.ACR_BUILD_TIMEOUT_MS || "";
   const ACR_IMPORT_TIMEOUT_MS = env.ACR_IMPORT_TIMEOUT_MS || "";
+  const ACR_QUERY_TIMEOUT_MS = env.ACR_QUERY_TIMEOUT_MS || "";
 
   let TENANT_ID = env.TENANT_ID || "";
   if (!TENANT_ID && resolveLive) {
@@ -337,6 +338,7 @@ export async function resolveVariables(options = {}) {
     REPO_APP_PRIVATE_KEY_FILE,
     ACR_BUILD_TIMEOUT_MS,
     ACR_IMPORT_TIMEOUT_MS,
+    ACR_QUERY_TIMEOUT_MS,
     TENANT_ID,
     IDENTITY_CLIENT_ID,
     AGENTHOST_IDENTITY_CLIENT_ID,
