@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.31.0
+
+### Minor Changes
+
+- 618f60a: Load growing transaction traces incrementally in stable chronological pages, with retryable continuations that preserve inspected spans and trace context.
+- 5f39296: Add a persisted topology layout control that defaults run and workflow graphs to the balanced-grid engine while retaining a legacy staircase comparison view for rollout diagnosis.
+
+### Patch Changes
+
+- 967ffe8: Keep transaction trace panels responsive during transient Application Insights failures by sharing duplicate page requests and clearly labeling recovered cached trace pages.
+- 3a25ac5: Make coordinator steering acknowledgements show their queued or applied outcome, target scope, child approval state, and live-update health without implying that child work advanced.
+- b4e245a: Add privacy-safe execution timing and host-process resource evidence to transaction traces without inferring a bottleneck when telemetry is unavailable.
+- 88c0947: Keep trace pages responsive when Application Insights is unavailable by timing out workspace
+  queries, briefly pausing retries, and showing authorized viewers a safe diagnostic.
+- 2a36d9a: Allow the documentation diagram renderer to render or check only named graph specifications with repeated `--spec` options.
+
 ## 0.30.0
 
 ### Minor Changes
