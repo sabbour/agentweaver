@@ -65,6 +65,19 @@ export function installedChromeLaunchOptions(
   };
 }
 
+export function browserLaunchOptions(
+  opts,
+  resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
+  environment = process.env,
+) {
+  // The bundled browser is only permitted for hermetic fixture tests. Production
+  // authentication and preview runs always resolve installed Google Chrome above.
+  if (environment.NODE_ENV === 'test' && environment.AGENTWEAVER_UI_HARNESS_TEST_BROWSER === '1') {
+    return { headless: opts.headless !== false };
+  }
+  return installedChromeLaunchOptions(opts, resolveGoogleChromeExecutableFn);
+}
+
 export async function closeBrowserResources(context, browser, page) {
   const errors = [];
   if (page) {
@@ -122,7 +135,7 @@ export async function openBrowserSession(opts, {
     const base = guardedUrl(opts.baseUrl, '/', opts);
     const chromium = chromiumOverride ?? await playwrightChromium();
     browserLaunchAttempted = true;
-    browser = await chromium.launch(installedChromeLaunchOptions(opts, resolveGoogleChromeExecutableFn));
+    browser = await chromium.launch(browserLaunchOptions(opts, resolveGoogleChromeExecutableFn));
     const contextOptions = {};
     if (opts.storageState) {
       contextOptions.storageState = await loadStorageStateForOriginImpl(opts.storageState, base.origin);

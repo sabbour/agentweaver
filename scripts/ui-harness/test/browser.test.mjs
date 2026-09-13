@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   closeBrowserResources,
+  browserLaunchOptions,
   guardedUrl,
   installedChromeLaunchOptions,
   openBrowserSession,
@@ -16,6 +17,25 @@ test('UI sessions launch installed Google Chrome rather than Playwright Chromium
     headless: true,
     channel: 'chrome',
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  });
+
+  test('bundled browser launch is available only through the explicit test seam', () => {
+    assert.deepEqual(
+      browserLaunchOptions(
+        { headless: true },
+        () => { throw new Error('must not resolve Chrome in test seam'); },
+        { NODE_ENV: 'test', AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1' },
+      ),
+      { headless: true },
+    );
+    assert.throws(
+      () => browserLaunchOptions(
+        { headless: true },
+        () => { throw new Error('Google Chrome required'); },
+        { AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1' },
+      ),
+      /Google Chrome required/,
+    );
   });
 });
 
