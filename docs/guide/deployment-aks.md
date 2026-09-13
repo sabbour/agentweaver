@@ -117,12 +117,19 @@ operation, explicitly set one or both environment variables:
 ```powershell
 $env:ACR_BUILD_TIMEOUT_MS = "1800000"  # 30 minutes
 $env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
-$env:ACR_QUERY_TIMEOUT_MS = "600000"   # 10 minutes for ACR digest verification
+$env:ACR_QUERY_TIMEOUT_MS = "90000"    # 90s per ACR digest-verification attempt
 ```
 
-These limits are opt-in and do not retry a timed-out build or import: a local
-CLI timeout leaves the remote operation's state unknown. Inspect the target
-ACR tag/digest before deciding whether a manual retry is safe.
+`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. The digest
+lookup is a read-only query, so a timed-out attempt is treated as "not visible
+yet" and is retried by the existing bounded backoff. Keep it short: raising it
+does not buy reliability, it just makes each hung `az acr repository show` stall
+that much longer before the retry can happen.
+
+The build and import limits behave differently: they are opt-in and do **not**
+retry a timed-out build or import, because a local CLI timeout leaves the remote
+operation's state unknown. Inspect the target ACR tag/digest before deciding
+whether a manual retry is safe.
 
 ### Deploying local work to an existing environment
 
