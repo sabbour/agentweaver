@@ -60,6 +60,10 @@ From a project, navigate to **Workflows** in the sidebar. Each workflow card sho
 
 Click a workflow to expand it and see its full YAML definition, a visual graph of the roles and steps, or the raw step-by-step pipeline.
 
+The visual graph and visual editor include a **Topology layout** comparison control.
+They default to **Balanced grid (current)**. **Legacy staircase (comparison)** changes
+only the visual arrangement, never the workflow YAML, nodes, or edges.
+
 ### Setting the default workflow
 
 Click **Set as default** on any valid workflow to make it the project's default. When a submitted task matches no specific workflow — or when auto-matching is overridden — the default is used.

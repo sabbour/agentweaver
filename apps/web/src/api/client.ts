@@ -343,8 +343,12 @@ export class AgentweaverApiClient {
     return this.request<import('./types').RunAgentTokenBreakdownDto>('GET', `/runs/${encodeURIComponent(runId)}/token-breakdown`);
   }
 
-  getRunTraces(runId: string): Promise<import('./types').RunTraceDto> {
-    return this.request<import('./types').RunTraceDto>('GET', `/metrics/runs/${encodeURIComponent(runId)}/traces`);
+  getRunTraces(runId: string, options?: { cursor?: string; pageSize?: number }): Promise<import('./types').RunTraceDto> {
+    const parameters = new URLSearchParams();
+    if (options?.cursor) parameters.set('cursor', options.cursor);
+    if (options?.pageSize) parameters.set('pageSize', String(options.pageSize));
+    const query = parameters.size ? `?${parameters}` : '';
+    return this.request<import('./types').RunTraceDto>('GET', `/metrics/runs/${encodeURIComponent(runId)}/traces${query}`);
   }
 
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {

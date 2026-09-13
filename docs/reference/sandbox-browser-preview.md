@@ -19,7 +19,7 @@ exists and the caller owns it (`404`/`403`). Source:
 | `POST /api/runs/{runId}/sandbox/port-forward` | `{ "targetPort": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `targetPort` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
 | `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000>, "preview_runner_session_id": "..." }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port, session_id?)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). The optional process-session ID lets the API recheck process health before publication. Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:60`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry` | — | `202 Accepted` with fresh `request_id`, `retry_of_request_id`, and `expires_at` | Owner-only retry for the latest **expired** preview approval on a non-terminal run. Reuses the retained PreviewRunner process; it does not rerun the preview command or restart the run. |
-| `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
+| `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview expiry by its configured lifetime. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
 | `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active preview sessions for the run. Liveness is the policy-safe existence of a bound pod with the preview-run label, not an API-side TCP probe. |
 
@@ -36,8 +36,12 @@ For platform live-preview, readiness is the AgentHost in-pod observation: log hi
 pod's own `/proc/net/tcp` and `/proc/net/tcp6` tables are parsed for new listening sockets, the app responds on
 its real port, the in-pod `TcpPortForwarder` listens on `0.0.0.0:{publicPort}`, and AgentHost verifies the
 forwarder public port before registration (`apps/Agentweaver.AgentHost/PreviewRunner.cs:262`, `:610`). The
-`tcp6` table matters for Node's default IPv6-any binds. After registration, the real end-to-end check is
-opening the returned Gateway hostname (`preview_url`). `ListForRunAsync` uses a label-selector pod-existence
+`tcp6` table matters for Node's default IPv6-any binds. After registration, the real end-to-end check is opening the returned Gateway hostname (`preview_url`). A
+new generated hostname can remain NXDOMAIN while App Routing creates its per-preview DNS record, so this
+validation probes immediately, then retries DNS name-resolution failures with a bounded backoff for up to
+`DnsConvergenceTimeoutSeconds` (ten minutes by default). A hostname whose record already exists succeeds
+on that initial probe. Once DNS resolves, ordinary Gateway and application failures remain bounded by
+`PublicationTimeoutSeconds`. `ListForRunAsync` uses a label-selector pod-existence
 check as its liveness proxy, because the same NetworkPolicy makes an API-side TCP liveness probe invalid
 (`SandboxPreviewService.cs:399`, `:768`).
 
@@ -98,8 +102,12 @@ end-to-end unattended; leave it `false` in production.
 The approval wait window is stored on the run's project and defaults migration-safely to 30 minutes.
 Project owners configure 1–1440 minutes in **Project settings → Sandbox policy** or via
 `PUT /api/projects/{projectId}/preview-settings` with
-`{ "approval_timeout_minutes": 30 }`. `Sandbox:Preview:ApprovalTimeoutMinutes` and
-`SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES` remain a 30-minute-default fallback only for legacy/non-project
+`{ "approval_timeout_minutes": 1440, "lifetime_minutes": 1440, "dns_convergence_timeout_seconds": 600 }`.
+Project owners can set each approval and preview lifetime from 1–1440 minutes; both
+default to 24 hours. They can set the DNS convergence deadline from 60–3600 seconds; it defaults
+to 600 seconds (10 minutes).
+`Sandbox:Preview:ApprovalTimeoutMinutes` and
+`SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES` remain a 24-hour-default fallback only for legacy/non-project
 runs.
 
 When a request expires, `tool.approval_resolved` removes it from pending notifications while the timeline
@@ -134,13 +142,16 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` | Shared Gateway the per-preview HTTPRoute attaches to. Applied from `k8s/base/gateway-preview.yaml`. |
 | `Sandbox:Preview:GatewayNamespace` | `agentweaver` | Namespace of the shared preview Gateway. |
 | `Sandbox:Preview:Namespace` | `agentweaver` | Namespace where the per-preview Service / HTTPRoute / pod live. |
-| `Sandbox:Preview:IdleTimeoutMinutes` | `30` | Sliding idle TTL; a preview not kept alive within this window is reaped. |
-| `Sandbox:Preview:MaxLifetimeHours` | `8` | Hard cap; a preview is always reaped after this, regardless of keepalive. |
+| `Sandbox:Preview:LifetimeMinutes` | `1440` | Preview lifetime fallback for legacy/non-project runs. It is used for both sliding expiry and the hard cap. Project-backed previews use their project lifetime setting. |
 | `Sandbox:Preview:KeepAfterRun` | `true` | Retain the preview after the run completes / pod is released; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
-| Project `approval_timeout_minutes` | `30` | Human approval window for agent-initiated preview, configurable by a project owner from 1–1440 minutes. Existing projects receive 30 through storage defaults/migrations. |
-| `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `30` | Fallback for legacy/non-project runs. Values clamp to 1–1440 minutes. Project-backed runs use the project setting. |
+| `Sandbox:Preview:DnsConvergenceTimeoutSeconds` | `600` | Upper-bound deadline for App Routing to create a new generated preview hostname after DNS name-resolution failures. Publication probes immediately, then retries with a 1 s, 2 s, 4 s, 8 s, then 10 s-max backoff. This does not create or modify DNS records. After DNS resolves, `PublicationTimeoutSeconds` bounds HTTPS Gateway/application readiness. |
+| `Sandbox:Preview:PublicationTimeoutSeconds` | `90` | Bounded wait for HTTPS Gateway/application readiness once DNS resolves, or immediately for non-DNS failures. |
+| Project `approval_timeout_minutes` | `1440` | Human approval window for agent-initiated preview, configurable by a project owner from 1–1440 minutes. |
+| Project `lifetime_minutes` | `1440` | Published preview lifetime and hard cap, configurable by a project owner from 1–1440 minutes in **Project settings → Sandbox policy**. It is used consistently for the route expiration and maximum lifetime. |
+| Project `dns_convergence_timeout_seconds` | `600` | Per-project upper-bound DNS convergence deadline, configurable by a project owner from 60–3600 seconds in **Project settings → Sandbox policy**. The API probes immediately and uses this effective project value for bounded DNS retries. Existing projects receive 600 through storage defaults/migrations. |
+| `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `1440` | Fallback for legacy/non-project runs. Values clamp to 1–1440 minutes. Project-backed runs use the project setting. |
 | `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:176`](#source). Keep `false` in production. |
 | Run `auto_approve_tools` policy | `false` | When explicitly selected at direct start or atomically captured from backlog pickup settings, auto-approves `start_preview` without creating an approval card, notification, or waiter. The decision cites the persisted immutable policy snapshot ID and sanitized target port. Port/process/ownership/publication validation remains enforced. |
 

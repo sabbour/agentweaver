@@ -173,13 +173,11 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
-    public void BuildSessionConfigTools_WrapsProviderTools_WhenInstrumentProviderToolSupplied()
+    public void BuildSessionConfigTools_WrapsEveryExecutableCustomTool_WhenInstrumentationSupplied()
     {
-        // #850 follow-up: PreviewRunnerToolProvider tools (start_preview and its siblings) must be
-        // routed through instrumentProviderTool so their tool.call/tool.result/tool.error and
-        // execute_tool span are recorded directly around invocation. This asserts the plumbing in
-        // BuildSessionConfigTools actually applies the delegate to every provider-built tool,
-        // rather than silently keeping the un-instrumented original.
+        // Custom API tools and provider tools must both be routed through the instrumentation
+        // wrapper: the SDK's external-tool completion is only an acknowledgement and does not
+        // contain the tool's real output.
         using var workspace = new TempWorkspace();
         var context = new SandboxToolContext(
             AgentId: "qa-engineer",
@@ -189,7 +187,7 @@ public sealed class StartPreviewToolTests
             FileTools: new SandboxedFileTools(workspace.Path),
             SearchTools: new SandboxedSearchTools(workspace.Path),
             Redactor: SandboxOutputRedactor.Default,
-            Options: new SandboxToolOptions(ShellEnabled: false),
+            Options: new SandboxToolOptions(ShellEnabled: true),
             Logger: NullLogger.Instance,
             RunId: RunId);
 
@@ -199,16 +197,47 @@ public sealed class StartPreviewToolTests
         var tools = CopilotAIAgent.BuildSessionConfigTools(
             context, ProjectId, AgentName, "http://localhost", apiKey: null,
             toolProviders: [provider],
-            instrumentProviderTool: tool =>
+            includeControlledRunCommand: true,
+            instrumentCustomTool: tool =>
             {
                 wrappedNames.Add(tool.Name);
                 return new MarkerAIFunction(tool);
             });
 
+        wrappedNames.Should().Contain("list_decisions",
+            because: "Agentweaver API tools must persist their real output, not the SDK acknowledgement");
+        wrappedNames.Should().Contain("run_command",
+            because: "the sandboxed shell path is also a custom SDK tool with no result-bearing lifecycle event");
         wrappedNames.Should().Contain("start_preview");
         tools.Should().ContainSingle(t => t.Name == "start_preview")
             .Which.Should().BeOfType<MarkerAIFunction>(
-                because: "provider tools must be routed through instrumentProviderTool, not added raw");
+                because: "provider tools must be routed through the common custom-tool instrumentation");
+    }
+
+    [Fact]
+    public void BuildSessionConfigTools_WrapsRunCommand_WhenInstrumentationIsSupplied()
+    {
+        using var workspace = new TempWorkspace();
+        var context = new SandboxToolContext(
+            AgentId: "qa-engineer",
+            WorkingDirectory: workspace.Path,
+            SandboxRoot: workspace.Path,
+            Executor: SandboxExecutorFactory.CreatePassthrough(),
+            FileTools: new SandboxedFileTools(workspace.Path),
+            SearchTools: new SandboxedSearchTools(workspace.Path),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: true),
+            Logger: NullLogger.Instance,
+            RunId: RunId);
+
+        var tools = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true,
+            instrumentCustomTool: tool => new MarkerAIFunction(tool));
+
+        tools.Should().ContainSingle(tool => tool.Name == "run_command")
+            .Which.Should().BeOfType<MarkerAIFunction>(
+                because: "run_command duration must be measured at its actual custom-function invocation, not delayed SDK stream lifecycle consumption");
     }
 
     [Fact]
@@ -223,16 +252,16 @@ public sealed class StartPreviewToolTests
 
         var calls = new List<(string CallId, string ToolName, object? Args)>();
         var results = new List<(string CallId, string Content)>();
-        var spanStarts = new List<(string CallId, string ToolName)>();
-        var spanCompletes = new List<(string CallId, bool Success, string? Error)>();
+        var spanStarts = new List<(string CallId, string ToolName, DateTimeOffset? Timestamp)>();
+        var spanCompletes = new List<(string CallId, bool Success, string? Error, DateTimeOffset? Timestamp)>();
 
         var wrapped = new CopilotAIAgent.InstrumentedCustomAIFunction(
             inner,
             emitToolCallOnce: (callId, toolName, args) => calls.Add((callId, toolName, args)),
             emitToolResultOnce: (callId, content) => results.Add((callId, content)),
             emitToolErrorOnce: (_, _) => throw new InvalidOperationException("should not error on success"),
-            startToolSpan: (callId, toolName, _) => spanStarts.Add((callId, toolName)),
-            completeToolSpan: (callId, success, error, _, _) => spanCompletes.Add((callId, success, error)));
+            startToolSpan: (callId, toolName, timestamp) => spanStarts.Add((callId, toolName, timestamp)),
+            completeToolSpan: (callId, success, error, timestamp, _) => spanCompletes.Add((callId, success, error, timestamp)));
 
         var result = (await wrapped.InvokeAsync(new AIFunctionArguments(
             new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
@@ -247,6 +276,10 @@ public sealed class StartPreviewToolTests
         results[0].CallId.Should().Be(callId, because: "the span tag and RunEvents must share one id for frontend correlation");
         spanStarts[0].CallId.Should().Be(callId);
         spanCompletes[0].CallId.Should().Be(callId);
+        spanStarts[0].Timestamp.Should().NotBeNull();
+        spanCompletes[0].Timestamp.Should().NotBeNull();
+        (spanCompletes[0].Timestamp!.Value - spanStarts[0].Timestamp!.Value).Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "the wrapper must bound spans at the real custom-tool invocation before a delayed SDK stream consumer observes its lifecycle");
 
         calls[0].ToolName.Should().Be("start_preview");
         spanCompletes[0].Success.Should().BeTrue();
@@ -321,7 +354,7 @@ internal sealed class FakeToolProvider(AIFunction tool) : Agentweaver.AgentRunti
     }
 }
 
-/// <summary>Marker wrapper used only to assert BuildSessionConfigTools routed a tool through instrumentProviderTool.</summary>
+/// <summary>Marker wrapper used only to assert BuildSessionConfigTools routed a tool through instrumentation.</summary>
 internal sealed class MarkerAIFunction(AIFunction inner) : AIFunction
 {
     public override string Name => inner.Name;

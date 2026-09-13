@@ -58,6 +58,9 @@ public interface IPreviewRunnerHttpClient
 
     Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct);
 
+    Task RetainProcessAsync(string runId, string? bearer, string sessionId, CancellationToken ct) =>
+        Task.CompletedTask;
+
     /// <summary>Health-check by explicit origin (used by the keepalive dual-touch on either replica).</summary>
     Task<PreviewRunnerHealthResult> HealthCheckByOriginAsync(
         string origin, string? bearer, string sessionId, int port, string path, CancellationToken ct);
@@ -130,6 +133,13 @@ public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
         var origin = await ResolveOriginOrThrowAsync(runId, ct).ConfigureAwait(false);
         var url = $"{origin}/preview-runner/processes/{Uri.EscapeDataString(sessionId)}?reason={Uri.EscapeDataString(reason)}";
         await SendAsync(HttpMethod.Delete, url, bearer, body: null, ct).ConfigureAwait(false);
+    }
+
+    public async Task RetainProcessAsync(string runId, string? bearer, string sessionId, CancellationToken ct)
+    {
+        var origin = await ResolveOriginOrThrowAsync(runId, ct).ConfigureAwait(false);
+        var url = $"{origin}/preview-runner/processes/{Uri.EscapeDataString(sessionId)}/retain";
+        await SendAsync(HttpMethod.Post, url, bearer, body: null, ct).ConfigureAwait(false);
     }
 
     private async Task<string> ResolveOriginOrThrowAsync(string runId, CancellationToken ct)

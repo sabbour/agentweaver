@@ -59,6 +59,7 @@ vi.mock('../api/apiClient', () => ({
       breakdown: [{ agentName: 'Neo', totalTokens: 1200, totalNanoAiu: 15990000000 }],
     }),
     getRunEvents: vi.fn().mockResolvedValue([]),
+    getPendingApprovals: vi.fn().mockResolvedValue({ run_id: 'coord-run-1', count: 0, approvals: [] }),
     getRunFiles: vi.fn().mockResolvedValue([
       { path: 'src/app.ts', status: 'modified', added_lines: 3, removed_lines: 1 },
     ]),
@@ -147,6 +148,11 @@ beforeEach(() => {
     updated_at: '2026-07-07T00:00:00.000Z',
   } as never);
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+  vi.mocked(apiClient.getPendingApprovals).mockResolvedValue({
+    run_id: 'coord-run-1',
+    count: 0,
+    approvals: [],
+  });
   vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
   vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: true });
   vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'coord-run-1', auto_approve_tools: true });
@@ -1146,7 +1152,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     });
     // Coordinator-scoped messages steer the whole run, not a specific child.
     expect(vi.mocked(apiClient.steerCoordinator).mock.calls[0][1]).not.toHaveProperty('target_child_run_id');
-    expect(await screen.findByText('Message sent to coordinator.')).toBeTruthy();
+    expect(await screen.findByText(/Steering accepted by the coordinator\./)).toBeTruthy();
   });
 
   it('keeps an acknowledged outcome-plan clarification visibly revising until a newer plan event arrives', async () => {

@@ -112,9 +112,6 @@ function makeFakes({
     if (cmd === "kubectl" && args[0] === "api-resources") {
       return { stdout: hasSandboxCrd ? "sandboxtemplates  extensions.agents.x-k8s.io  true  SandboxTemplate" : "", stderr: "", code: 0 };
     }
-    if (cmd === "kubectl" && args[0] === "get" && args[1] === "gateway") {
-      return { stdout: "10.0.0.5", stderr: "", code: 0 };
-    }
     return { stdout: "", stderr: "", code: 0 };
   };
 
@@ -189,6 +186,7 @@ test("run(): both gateways are waited on for condition=Programmed with a 180s ti
     assert.ok(w.args.includes("--timeout=180s"));
   }
 });
+
 
 test("run(): rollout status waits use api=180s, frontend=120s, mcp=120s, worker=300s", async () => {
   const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes();

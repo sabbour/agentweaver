@@ -86,6 +86,11 @@ function runCli(...args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [TOOLS, ...args], {
       cwd: ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1',
+      },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -429,6 +434,7 @@ test('partial startup with unproven browser closure retains sanitized retry meta
           chromium: { launch: async () => browser },
           loadStorageStateForOriginImpl: async () => ({ cookies: [], origins: [] }),
           loadSessionStorageSeedImpl: async () => null,
+          resolveGoogleChromeExecutableFn: () => 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         }),
       }),
       (error) => {

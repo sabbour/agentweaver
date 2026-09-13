@@ -46,7 +46,8 @@ public sealed class SqliteProjectStoreTests
         retrieved!.Id.Should().Be(project.Id);
         retrieved.Name.Should().Be("My Project");
         retrieved.State.Should().Be(ProjectState.Active);
-        retrieved.PreviewApprovalTimeoutMinutes.Should().Be(30);
+        retrieved.PreviewApprovalTimeoutMinutes.Should().Be(1440);
+        retrieved.PreviewLifetimeMinutes.Should().Be(1440);
     }
 
     // =========================================================================
@@ -202,6 +203,7 @@ public sealed class SqliteProjectStoreTests
 
         var retrieved = await store.GetAsync(project.Id);
         retrieved!.PreviewApprovalTimeoutMinutes.Should().Be(90);
+        retrieved.PreviewLifetimeMinutes.Should().Be(1440);
     }
 
     // =========================================================================

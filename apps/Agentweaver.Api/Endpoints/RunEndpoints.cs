@@ -615,7 +615,7 @@ app.MapGet("/api/runs/{id}/events", async (
             payload = IsPromptPayloadEventType(rec.EventType)
                 ? new { }
                 : IsToolPayloadEventType(rec.EventType)
-                    ? Agentweaver.Domain.SensitiveDataRedactor.RedactElement(element)
+                    ? RedactAndBoundToolPayload(rec.EventType, element)
                     : element;
             durationMs = ReadRecordedEventDuration(element);
         }
@@ -674,6 +674,7 @@ app.MapGet("/api/runs/{id}/pending-approvals", async (
             RequestId = item.RequestId,
             ToolName = item.ToolName,
             Url = item.Url,
+            Command = item.Command,
             Message = item.Message,
             RequestedAt = item.RequestedUtc,
             ExpiresAt = item.ExpiresUtc,
@@ -1458,6 +1459,7 @@ app.MapPost("/api/runs/{id}/retry", async (
     IProjectStore projectStore,
     AiExecutionPlanService executionPlans,
     AiExecutionPlanAccessor executionPlanAccessor,
+    RunModelProviderSnapshotStore providerSnapshots,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -1541,6 +1543,16 @@ app.MapPost("/api/runs/{id}/retry", async (
                     execution.Plan.ResolutionScope,
                     beforeResume: async resumeCt =>
                     {
+                        // An explicit retry may safely refresh an unreadable private provider
+                        // snapshot from the newly accepted execution plan. This preserves
+                        // completed children and retries only collective assembly.
+                        if (execution.Plan.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                            or EffectiveModelProviderResult.PlatformGitHubCopilot)
+                        {
+                            await providerSnapshots.RefreshUnavailableCopilotSnapshotForRetryAsync(
+                                run, execution.Plan.Provider, resumeCt).ConfigureAwait(false);
+                        }
+
                         // The source snapshot fences only an in-place continuation. A retry that has
                         // no recoverable source work falls through and mints a fresh run against the
                         // accepted current provider instead of being rejected by stale source state.
@@ -1720,9 +1732,14 @@ app.MapGet("/api/runs/{id}/workspace", async (
         return Results.Json(Array.Empty<WorkspaceNode>());
 
     // An active run can become visible before asynchronous worktree provisioning
-    // writes its path. This is an empty workspace, not a missing artifact source.
+    // writes its path. Do not represent that as an empty workspace: it incorrectly
+    // tells an authorized viewer that the child produced no files.
     if (run.Status is RunStatus.InProgress && string.IsNullOrEmpty(run.WorktreePath))
-        return Results.Json(Array.Empty<WorkspaceNode>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Files will appear automatically when it is ready."
+        });
 
     // Merged runs: enumerate the commit tree from git (worktree has been deleted).
     if (run.Status is RunStatus.Merged)
@@ -1757,7 +1774,15 @@ app.MapGet("/api/runs/{id}/workspace", async (
     }
 
     if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+    {
+        if (run.Status is RunStatus.InProgress)
+            return Results.Conflict(new
+            {
+                error = "workspace_provisioning",
+                message = "The child workspace is not available yet. Files will appear automatically when provisioning completes."
+            });
         return Results.NotFound();
+    }
 
     try
     {
@@ -2527,17 +2552,24 @@ app.MapGet("/api/runs/{id}/files", async (
     var hasWorktreeBranch = !string.IsNullOrEmpty(run.WorktreeBranch);
 
     // Worktree provisioning is asynchronous. An active child can be visible before its sandbox
-    // has published either worktree field, which is a valid empty-artifact state.
+    // has published either worktree field. Report that state explicitly rather than returning an
+    // indistinguishable empty change set; the browser continues polling this response.
     if (!hasWorktreePath && !hasWorktreeBranch)
-        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Changes will appear automatically when it is ready."
+        });
 
     if (!hasWorktreePath || !hasWorktreeBranch)
     {
         // Worktree fields are persisted independently while a child run starts.
-        // Treat a partial snapshot as no artifacts yet, not as a server failure that
-        // causes the live artifact browser to retry aggressively.
         logger.LogDebug("Run {RunId} worktree metadata is not ready while retrieving file entries", runId);
-        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+        return Results.Conflict(new
+        {
+            error = "workspace_provisioning",
+            message = "The child workspace is still being provisioned. Changes will appear automatically when it is ready."
+        });
     }
 
     if (!Directory.Exists(run.WorktreePath!))
@@ -3559,6 +3591,30 @@ private static string? PersistedEventStatus(string eventType) => eventType switc
     EventTypes.ToolApprovalResolved or EventTypes.ToolAutoApproved => "approved",
     _ => null,
 };
+
+/// <summary>
+/// Keeps diagnostic tool failures useful without making the persisted-event API a vehicle for
+/// arbitrarily large exception text. The redactor runs before truncation so legacy rows cannot
+/// expose credentials through their error details.
+/// </summary>
+static System.Text.Json.JsonElement RedactAndBoundToolPayload(string eventType, System.Text.Json.JsonElement element)
+{
+    var redacted = SensitiveDataRedactor.RedactElement(element);
+    if (eventType != EventTypes.ToolError || redacted.ValueKind != System.Text.Json.JsonValueKind.Object
+        || !redacted.TryGetProperty("errorMessage", out var error)
+        || error.ValueKind != System.Text.Json.JsonValueKind.String)
+        return redacted;
+
+    const int maximumErrorLength = 2048;
+    var message = SensitiveDataRedactor.RedactJsonStringIfApplicable(error.GetString());
+    if (message.Length > maximumErrorLength)
+        message = string.Concat(message.AsSpan(0, maximumErrorLength - 1), "…");
+
+    var node = System.Text.Json.Nodes.JsonNode.Parse(redacted.GetRawText())!.AsObject();
+    node["errorMessage"] = message;
+    using var document = System.Text.Json.JsonDocument.Parse(node.ToJsonString());
+    return document.RootElement.Clone();
+}
 }
 
 /// <summary>

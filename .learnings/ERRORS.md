@@ -743,3 +743,35 @@ Expected 2 ***REDACTED*** elements, but received 1
 - Related Files: apps/web/src/__tests__/TransactionTraceDetail.test.tsx
 
 ---
+
+## [ERR-20260912-AZDNS] Azure DNS CLI dry-run unsupported
+
+**Logged**: 2026-09-12T06:12:13-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Azure DNS record-set update does not support a `--dry-run` argument.
+
+### Error
+```
+ERROR: unrecognized arguments: --dry-run
+```
+
+### Context
+Attempted to validate the preview wildcard A-record update argument shape without modifying Azure.
+
+### Suggested Fix
+Use unit-test command capture for dry-run validation; use `az ... --help` for CLI argument support.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/azure/steps/30-deploy.mjs
+
+### Resolution
+- **Resolved**: 2026-09-12T06:12:13-07:00
+- **Commit/PR**: e50116ab
+- **Notes**: Verified supported generic `--set` syntax through CLI help and deployment unit tests.
+
+---

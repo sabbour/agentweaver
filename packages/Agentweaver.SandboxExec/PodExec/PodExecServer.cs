@@ -163,6 +163,9 @@ public sealed class PodExecServer : IAsyncDisposable
                 case PodExecOps.Spawn:
                     await HandleSpawnAsync(request, writer, reader, ct).ConfigureAwait(false);
                     break;
+                case PodExecOps.Retain:
+                    await HandleRetainAsync(request, writer, ct).ConfigureAwait(false);
+                    break;
                 case PodExecOps.Ports:
                     await HandlePortsAsync(request, writer, ct).ConfigureAwait(false);
                     break;
@@ -344,12 +347,22 @@ public sealed class PodExecServer : IAsyncDisposable
         var stderr = PumpAsync(supervised.Process.StandardError, PodExecFrameTypes.Stderr, writer, gate, ct);
         var disconnect = WatchForDisconnectAsync(reader, ct);
 
+        var retainSession = false;
         try
         {
             var exited = supervised.Process.WaitForExitAsync(ct);
             var completed = await Task.WhenAny(exited, disconnect).ConfigureAwait(false);
             if (completed == disconnect)
             {
+                if (session.IsRetained)
+                {
+                    retainSession = true;
+                    _logger?.LogInformation(
+                        "Executor sidecar retained preview session {Handle} after its relay disconnected.",
+                        handle);
+                    return;
+                }
+
                 _logger?.LogInformation(
                     "Executor sidecar lost its supervisor connection for handle {Handle}; terminating the sandboxed process group.",
                     handle);
@@ -377,9 +390,26 @@ public sealed class PodExecServer : IAsyncDisposable
         }
         finally
         {
-            _sessions.TryRemove(handle, out _);
-            await TerminateAsync(session, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            if (!retainSession)
+            {
+                _sessions.TryRemove(handle, out _);
+                await TerminateAsync(session, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
         }
+    }
+
+    private async Task HandleRetainAsync(PodExecRequest request, StreamWriter writer, CancellationToken ct)
+    {
+        var handle = RequireValue(request.Handle, "handle");
+        if (!_sessions.TryGetValue(handle, out var session))
+        {
+            await WriteAsync(writer, Error($"Unknown executor handle '{handle}'."), ct).ConfigureAwait(false);
+            return;
+        }
+
+        session.Retain();
+        await WriteAsync(writer, new PodExecFrame { Type = PodExecFrameTypes.Ack, Ok = true }, ct)
+            .ConfigureAwait(false);
     }
 
     private async Task HandlePortsAsync(PodExecRequest request, StreamWriter writer, CancellationToken ct)
@@ -424,7 +454,7 @@ public sealed class PodExecServer : IAsyncDisposable
     private async Task HandleStopAsync(PodExecRequest request, StreamWriter writer, CancellationToken ct)
     {
         var handle = RequireValue(request.Handle, "handle");
-        if (_sessions.TryGetValue(handle, out var session))
+        if (_sessions.TryRemove(handle, out var session))
         {
             await TerminateAsync(
                     session,
@@ -685,9 +715,15 @@ public sealed class PodExecServer : IAsyncDisposable
         }
     }
 
-    private sealed record SpawnedSession(string Handle, KataBwrapExecutor.SupervisedProcess Supervised)
+    private sealed class SpawnedSession(string handle, KataBwrapExecutor.SupervisedProcess supervised)
     {
+        private int _retained;
+
+        public string Handle { get; } = handle;
+        public KataBwrapExecutor.SupervisedProcess Supervised { get; } = supervised;
         public int ProcessGroupId => Supervised.WorkloadProcessGroupId;
+        public bool IsRetained => Volatile.Read(ref _retained) == 1;
+        public void Retain() => Volatile.Write(ref _retained, 1);
     }
 }
 

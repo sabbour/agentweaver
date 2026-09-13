@@ -52,6 +52,13 @@ When the user clicks **Preview** and picks a port, `StartPreviewAsync`
    [`:438`](#source)). If the HTTPRoute create fails for any reason other than `Conflict`, the
    just-created Service is best-effort deleted before rethrowing, so a retry can't leak ClusterIPs
    ([`SandboxPreviewService.cs:184`](#source)).
+6. **Validate publication through the generated hostname.** App Routing owns the managed DNS zone and creates
+   the per-preview record. The API probes immediately; a fresh name may be NXDOMAIN while that record
+   converges, so it retries only name-resolution failures with bounded backoff until the configured
+   `DnsConvergenceTimeoutSeconds` deadline (ten minutes by default). Existing records succeed on the
+   initial probe. After DNS resolves, non-DNS Gateway and application failures use the shorter
+   `PublicationTimeoutSeconds` readiness window. The API neither creates wildcard records nor otherwise
+   mutates DNS.
 
 The API returns `preview_url` and a relative `keepalive_url`; the browser opens the URL (in an iframe with
 `referrerPolicy="no-referrer"`) and pings keepalive every 60 s. The API does **not** prove readiness by
@@ -113,11 +120,9 @@ A preview outlives the run by default (`KeepAfterRun=true`, [`SandboxPreviewOpti
 is torn down by a background reaper, an explicit stop, or pod disappearance:
 
 - **Sliding idle TTL.** The HTTPRoute's `preview-expires-at` annotation is set to
-  now + `IdleTimeoutMinutes` (**30 min** default). The frontend pings `keepalive` ~every 60 s, and
-  `KeepAliveAsync` ([`SandboxPreviewService.cs:206`](#source)) bumps the annotation. Stop pinging and the
-  preview lapses within the idle window.
-- **Hard lifetime cap.** `preview-max-until` = now + `MaxLifetimeHours` (**8 h** default). A preview is
-  always reaped after this, regardless of keepalive.
+  now + the project `lifetime_minutes` (**24 h** default; deployment fallback is
+  `LifetimeMinutes`). `preview-max-until` uses the same lifetime, so no distinct hidden cap can
+  end a preview sooner.
 - **Pod-gone.** If the backing pod no longer exists (run ended, claim released), the reaper reaps the
   preview as an orphan.
 - **The reaper.** `SandboxPreviewReaperService` ([`SandboxPreviewReaperService.cs`](#source)) sweeps every

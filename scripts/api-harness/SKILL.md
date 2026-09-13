@@ -6,20 +6,19 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. At its first authenticated call, it starts or restores the managed-browser
-recording session. It obtains the bearer only through the recorder-session provider,
-in memory, and never accepts bearer material in process arguments or borrows
+newer. At its first authenticated call, it obtains the bearer only through the cached
+UI-harness recorder-session provider, in memory, and never accepts bearer material in
+process arguments or borrows
 `gh auth token` or `GITHUB_TOKEN` for a remote target.
 
 ### Browser-managed authentication for staging (Entra Conditional Access)
 
-Agentweaver staging uses Entra Conditional Access. The API harness automatically
-uses the managed Chrome recorder session at its first authenticated request. If the
-session is closed, it restores protected recorder state; if state is absent or
-expired, it launches the documented Chrome Default-profile flow, clicks
-Agentweaver's own Entra sign-in button, and waits for session readiness. It reads
-the protected token only in memory and never exports it to an environment variable,
-CLI argument, transcript, finding, verdict, or log:
+Agentweaver staging uses Entra Conditional Access. Before an authenticated API run,
+run the documented UI-harness Chrome Default-profile login once for that target. The
+`recorder-session` provider reads its cached UI storage/session sidecar, verifies it
+belongs to the requested origin, and returns the bearer only in memory. It never
+starts a second browser sign-in or exports the value to an environment variable, CLI
+argument, transcript, finding, verdict, or log:
 
 ```powershell
 node scripts/api-harness/run-persona.mjs `
@@ -27,15 +26,16 @@ node scripts/api-harness/run-persona.mjs `
   --target https://<host>.staging.<domain>
 ```
 
-The provider uses `scripts/demo-recording/.auth/` by default; use
-`--recorder-auth-root` only for an existing protected recording-auth root.
+The provider uses `scripts/ui-harness/.auth/` by default; use
+`--recorder-auth-root` only for an existing protected UI-harness auth root.
 `--auth-provider recorder-session` remains accepted for clarity but is the default.
-The harness does not fail merely because the recorder session is closed. It pauses
-only when Microsoft Entra displays account selection, credentials, MFA, or consent;
-that genuine IdP interaction remains human-only.
-If a verified recorder session is already open but the current worktree lacks its
-protected handoff sidecar, the harness refreshes and restores the managed session
-once before it reports authentication failure.
+If the cached UI session is absent, expired, or belongs to another origin, it fails
+with the exact `login-chrome-default.mjs --base-url <origin>` remediation. Microsoft
+Entra account selection, credentials, MFA, and consent remain human-only.
+Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
+launch/copy, or manual browser automation; surface the provider's recovery error and
+use the UI-harness login/cached-session flow. That flow requires the installed literal
+Google Chrome `chrome.exe` on Playwright's `chrome` channel, never bundled Chromium.
 
 Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/session` endpoint and requires `authenticated: true`. It uses public

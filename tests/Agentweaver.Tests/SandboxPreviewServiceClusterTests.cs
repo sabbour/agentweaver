@@ -24,8 +24,7 @@ public sealed class SandboxPreviewServiceClusterTests
         Enabled = true,
         ZoneSuffix = "6a3de4fe.westus2.staging.aksapp.io",
         Namespace = "agentweaver",
-        IdleTimeoutMinutes = 30,
-        MaxLifetimeHours = 8,
+        LifetimeMinutes = 480,
     };
 
     private static IKubernetes ClientFor(FakeKubeHandler handler) =>
@@ -507,14 +506,14 @@ public sealed class SandboxPreviewServiceClusterTests
 
         var svc = new SandboxPreviewService(
             ClientFor(handler),
-            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
+            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", LifetimeMinutes = 480 },
             NullLogger<SandboxPreviewService>.Instance);
 
         (await svc.ReconcilePreviewLifecycleAsync(runId)).Should().Be(PreviewLifecycleState.PreviewActive,
             "worker-side cleanup must honor durable preview state even when that process does not create routes");
     }
 
-    private const int ExpectedRenewedTtlSeconds = 8 * 3600 + 600; // MaxLifetimeHours(8h) + 10min margin
+    private const int ExpectedRenewedTtlSeconds = 480 * 60 + 600; // LifetimeMinutes(8h) + 10min margin
 
     [Fact]
     public async Task StartPreview_enters_PreviewActive_with_ttl_and_eviction_protection()

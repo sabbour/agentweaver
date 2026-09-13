@@ -1,6 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { closeBrowserResources, guardedUrl, openBrowserSession } from '../lib/browser.mjs';
+import {
+  closeBrowserResources,
+  browserLaunchOptions,
+  guardedUrl,
+  installedChromeLaunchOptions,
+  openBrowserSession,
+} from '../lib/browser.mjs';
+
+test('UI sessions launch installed Google Chrome rather than Playwright Chromium', () => {
+  const launch = installedChromeLaunchOptions(
+    { headless: true },
+    () => 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  );
+  assert.deepEqual(launch, {
+    headless: true,
+    channel: 'chrome',
+    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  });
+
+  test('bundled browser launch is available only through the explicit test seam', () => {
+    assert.deepEqual(
+      browserLaunchOptions(
+        { headless: true },
+        () => { throw new Error('must not resolve Chrome in test seam'); },
+        { NODE_ENV: 'test', AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1' },
+      ),
+      { headless: true },
+    );
+    assert.throws(
+      () => browserLaunchOptions(
+        { headless: true },
+        () => { throw new Error('Google Chrome required'); },
+        { AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1' },
+      ),
+      /Google Chrome required/,
+    );
+  });
+});
 
 test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.equal(guardedUrl('https://agentweaver.foo.staging.example.com', '/projects', {}).pathname, '/projects');
@@ -212,6 +249,7 @@ function startupFailureFixture(stage, { failBrowserClose = false } = {}) {
       origin: 'https://agentweaver.example.com',
       entries: {},
     }),
+    resolveGoogleChromeExecutableFn: () => 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   };
   return { browserCloseError, calls, dependencies, startupError };
 }

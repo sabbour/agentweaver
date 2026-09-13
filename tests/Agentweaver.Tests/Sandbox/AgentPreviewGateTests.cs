@@ -254,9 +254,9 @@ public sealed class AgentPreviewGateTests
     }
 
     [Theory]
-    [InlineData(null, 30)]
-    [InlineData("", 30)]
-    [InlineData("wat", 30)]
+    [InlineData(null, 1440)]
+    [InlineData("", 1440)]
+    [InlineData("wat", 1440)]
     [InlineData("0", 1)]
     [InlineData("-4", 1)]
     [InlineData("2000", 1440)]

@@ -27,7 +27,7 @@ public sealed class SqliteProjectStore : IProjectStore
                                   default_provider, default_model_copilot, default_model_foundry,
                                   state, created_at, updated_at,
                                   max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
-                                  preview_approval_timeout_minutes,
+                                  preview_approval_timeout_minutes, preview_lifetime_minutes, preview_dns_convergence_timeout_seconds,
                                   default_workflow_id, active_review_policy_name, sandbox_profile,
                                   source_blueprint_id, source_blueprint_type,
                                   blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
@@ -37,7 +37,7 @@ public sealed class SqliteProjectStore : IProjectStore
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
                     $state, $createdAt, $updatedAt,
                     $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools,
-                    $previewApprovalTimeoutMinutes,
+                    $previewApprovalTimeoutMinutes, $previewLifetimeMinutes, $previewDnsConvergenceTimeoutSeconds,
                     $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
                     $sourceBlueprintId, $sourceBlueprintType,
                     $blueprintGenerationModel, $workflowGenerationModel, $outcomeSpecGenerationModel,
@@ -60,6 +60,8 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$pickupAutopilot", project.PickupAutopilot ? 1 : 0);
         command.Parameters.AddWithValue("$pickupAutoApproveTools", project.PickupAutoApproveTools ? 1 : 0);
         command.Parameters.AddWithValue("$previewApprovalTimeoutMinutes", project.PreviewApprovalTimeoutMinutes);
+        command.Parameters.AddWithValue("$previewLifetimeMinutes", project.PreviewLifetimeMinutes);
+        command.Parameters.AddWithValue("$previewDnsConvergenceTimeoutSeconds", project.PreviewDnsConvergenceTimeoutSeconds);
         command.Parameters.AddWithValue("$defaultWorkflowId", (object?)project.DefaultWorkflowId ?? DBNull.Value);
         command.Parameters.AddWithValue("$activeReviewPolicyName", (object?)project.ActiveReviewPolicyName ?? DBNull.Value);
         command.Parameters.AddWithValue("$sandboxProfile", (object?)project.SandboxProfile ?? DBNull.Value);
@@ -207,9 +209,11 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    public async Task UpdatePreviewApprovalTimeoutAsync(
+    public async Task UpdatePreviewSettingsAsync(
         ProjectId id,
-        int timeoutMinutes,
+        int approvalTimeoutMinutes,
+        int lifetimeMinutes,
+        int dnsConvergenceTimeoutSeconds,
         DateTimeOffset updatedAt,
         CancellationToken ct = default)
     {
@@ -218,15 +222,26 @@ public sealed class SqliteProjectStore : IProjectStore
         command.CommandText =
             """
             UPDATE projects
-               SET preview_approval_timeout_minutes = $timeoutMinutes,
+               SET preview_approval_timeout_minutes = $approvalTimeoutMinutes,
+                   preview_lifetime_minutes = $lifetimeMinutes,
+                   preview_dns_convergence_timeout_seconds = $dnsConvergenceTimeoutSeconds,
                    updated_at = $updatedAt
              WHERE project_id = $projectId;
             """;
-        command.Parameters.AddWithValue("$timeoutMinutes", timeoutMinutes);
+        command.Parameters.AddWithValue("$approvalTimeoutMinutes", approvalTimeoutMinutes);
+        command.Parameters.AddWithValue("$lifetimeMinutes", lifetimeMinutes);
+        command.Parameters.AddWithValue("$dnsConvergenceTimeoutSeconds", dnsConvergenceTimeoutSeconds);
         command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
         command.Parameters.AddWithValue("$projectId", id.ToString());
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
+
+    public Task UpdatePreviewApprovalTimeoutAsync(
+        ProjectId id,
+        int timeoutMinutes,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default) =>
+        UpdatePreviewSettingsAsync(id, timeoutMinutes, 1440, 600, updatedAt, ct);
 
     public async Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
@@ -385,18 +400,18 @@ public sealed class SqliteProjectStore : IProjectStore
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
     //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
-    //           16=preview_approval_timeout_minutes 17=default_workflow_id
-    //           18=active_review_policy_name 19=sandbox_profile 20=source_blueprint_id
-    //           21=source_blueprint_type 22=blueprint_generation_model
-    //           23=workflow_generation_model 24=outcome_spec_generation_model
-    //           25=allowed_workflow_ids 26=webhook_secret 27=team_revision
+    //           16=preview_approval_timeout_minutes 17=preview_lifetime_minutes 18=preview_dns_convergence_timeout_seconds
+    //           19=default_workflow_id 20=active_review_policy_name 21=sandbox_profile
+    //           22=source_blueprint_id 23=source_blueprint_type 24=blueprint_generation_model
+    //           25=workflow_generation_model 26=outcome_spec_generation_model
+    //           27=allowed_workflow_ids 28=webhook_secret 29=team_revision
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
                default_branch, owner, default_provider, default_model_copilot,
                default_model_foundry, state, created_at, updated_at,
                max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
-               preview_approval_timeout_minutes,
+               preview_approval_timeout_minutes, preview_lifetime_minutes, preview_dns_convergence_timeout_seconds,
                default_workflow_id, active_review_policy_name, sandbox_profile,
               source_blueprint_id, source_blueprint_type,
               blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
@@ -431,18 +446,20 @@ public sealed class SqliteProjectStore : IProjectStore
             MaxReadyPerHeartbeat   = r.IsDBNull(13) ? 3 : r.GetInt32(13),
             PickupAutopilot        = r.IsDBNull(14) ? true : r.GetInt32(14) != 0,
             PickupAutoApproveTools = r.IsDBNull(15) ? true : r.GetInt32(15) != 0,
-            PreviewApprovalTimeoutMinutes = r.IsDBNull(16) ? 30 : r.GetInt32(16),
-            DefaultWorkflowId      = r.IsDBNull(17) ? null : r.GetString(17),
-            ActiveReviewPolicyName = r.IsDBNull(18) ? null : r.GetString(18),
-            SandboxProfile         = r.IsDBNull(19) ? null : r.GetString(19),
-            SourceBlueprintId      = r.IsDBNull(20) ? null : r.GetString(20),
-            SourceBlueprintType    = r.IsDBNull(21) ? null : r.GetString(21),
-            BlueprintGenerationModel = r.IsDBNull(22) ? null : r.GetString(22),
-            WorkflowGenerationModel = r.IsDBNull(23) ? null : r.GetString(23),
-            OutcomeSpecGenerationModel = r.IsDBNull(24) ? null : r.GetString(24),
-            AllowedWorkflowIds     = r.IsDBNull(25) ? null : DeserializeWorkflowIds(r.GetString(25), r.GetString(0)),
-            WebhookSecret          = r.IsDBNull(26) ? null : r.GetString(26),
-            TeamRevision           = r.GetInt64(27),
+            PreviewApprovalTimeoutMinutes = r.IsDBNull(16) ? 1440 : r.GetInt32(16),
+            PreviewLifetimeMinutes = r.IsDBNull(17) ? 1440 : r.GetInt32(17),
+            PreviewDnsConvergenceTimeoutSeconds = r.IsDBNull(18) ? 600 : r.GetInt32(18),
+            DefaultWorkflowId      = r.IsDBNull(19) ? null : r.GetString(19),
+            ActiveReviewPolicyName = r.IsDBNull(20) ? null : r.GetString(20),
+            SandboxProfile         = r.IsDBNull(21) ? null : r.GetString(21),
+            SourceBlueprintId      = r.IsDBNull(22) ? null : r.GetString(22),
+            SourceBlueprintType    = r.IsDBNull(23) ? null : r.GetString(23),
+            BlueprintGenerationModel = r.IsDBNull(24) ? null : r.GetString(24),
+            WorkflowGenerationModel = r.IsDBNull(25) ? null : r.GetString(25),
+            OutcomeSpecGenerationModel = r.IsDBNull(26) ? null : r.GetString(26),
+            AllowedWorkflowIds     = r.IsDBNull(27) ? null : DeserializeWorkflowIds(r.GetString(27), r.GetString(0)),
+            WebhookSecret          = r.IsDBNull(28) ? null : r.GetString(28),
+            TeamRevision           = r.GetInt64(29),
         };
     }
 

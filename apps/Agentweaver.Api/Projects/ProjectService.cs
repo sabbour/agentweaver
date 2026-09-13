@@ -270,20 +270,23 @@ public sealed class ProjectService
         return true;
     }
 
-    public async Task<bool> UpdatePreviewApprovalTimeoutAsync(
-        ProjectId id,
-        int timeoutMinutes,
-        CancellationToken ct = default)
+    public async Task<bool> UpdatePreviewSettingsAsync(
+        ProjectId id, int approvalTimeoutMinutes, int lifetimeMinutes, int dnsConvergenceTimeoutSeconds, CancellationToken ct = default)
     {
-        if (timeoutMinutes is < 1 or > 1440)
-            throw new ArgumentOutOfRangeException(
-                nameof(timeoutMinutes),
+        if (approvalTimeoutMinutes is < 1 or > 1440)
+            throw new ArgumentOutOfRangeException(nameof(approvalTimeoutMinutes),
                 "Preview approval timeout must be between 1 and 1440 minutes.");
+        if (lifetimeMinutes is < 1 or > 1440)
+            throw new ArgumentOutOfRangeException(nameof(lifetimeMinutes),
+                "Preview lifetime must be between 1 and 1440 minutes.");
+        if (dnsConvergenceTimeoutSeconds is < 60 or > 3600)
+            throw new ArgumentOutOfRangeException(nameof(dnsConvergenceTimeoutSeconds),
+                "Preview DNS convergence timeout must be between 60 and 3600 seconds.");
 
         var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
         if (project is null) return false;
-        await _store.UpdatePreviewApprovalTimeoutAsync(
-            id, timeoutMinutes, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        await _store.UpdatePreviewSettingsAsync(
+            id, approvalTimeoutMinutes, lifetimeMinutes, dnsConvergenceTimeoutSeconds, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         return true;
     }
 

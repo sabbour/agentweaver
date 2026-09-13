@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
+  Button,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -35,6 +36,7 @@ import {
   findNode,
   formatSafeToolValue,
   getTraceTimeline,
+  maxToolErrorDetailLength,
   normalizeType,
   totalNanoAiu,
 } from './traceTree';
@@ -103,15 +105,22 @@ const useStyles = makeStyles({
     display: 'grid',
     gap: tokens.spacingHorizontalL,
     minWidth: 0,
+    alignItems: 'start',
     '@media (min-width: 1100px)': {
       gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 360px)',
     },
   },
   timeline: {
     minWidth: 0,
+    maxHeight: 'min(680px, 70vh)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    overflow: 'hidden',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    scrollbarWidth: 'thin',
+    '@media (max-width: 1099px)': {
+      maxHeight: 'min(560px, 60vh)',
+    },
   },
   axis: {
     display: 'grid',
@@ -123,6 +132,9 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
   },
   axisTitle: {
     fontWeight: tokens.fontWeightSemibold,
@@ -240,6 +252,8 @@ const useStyles = makeStyles({
   inspector: {
     minWidth: 0,
     height: 'fit-content',
+    position: 'sticky',
+    top: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -247,6 +261,9 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    '@media (max-width: 1099px)': {
+      position: 'static',
+    },
   },
   inspectorHeader: {
     display: 'flex',
@@ -425,6 +442,19 @@ function formatNumber(value: number | null | undefined): string {
   return value == null ? '—' : value.toLocaleString();
 }
 
+function formatBytes(value: number | null | undefined): string {
+  if (value == null) return 'Not recorded';
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let scaled = value;
+  let unit = -1;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit++;
+  }
+  return `${scaled.toFixed(scaled >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
 function formatDateTime(timestamp: string): string {
   const value = new Date(timestamp);
   return Number.isNaN(value.getTime()) ? '—' : value.toLocaleString();
@@ -482,7 +512,25 @@ function traceSessionId(spans: RunTraceSpanDto[]): string | null {
 }
 
 function traceSucceeded(spans: RunTraceSpanDto[]): boolean {
-  return spans.every((span) => span.success);
+  const spanIds = new Set(spans.map((span) => span.id));
+  const rootSpans = spans.filter((span) => !span.parentId || !spanIds.has(span.parentId));
+  // A failed child tool attempt can be deliberately retried by an otherwise-successful agent
+  // invocation. The trace outcome belongs to its roots; child failures remain visible inline.
+  return rootSpans.length > 0 && rootSpans.every((span) => span.success);
+}
+
+type TraceRunState = 'active' | 'completed' | 'failed';
+
+function traceRunState(events: PersistedRunEvent[]): TraceRunState {
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (events[index].type === 'run.failed' || events[index].type === 'run.error') return 'failed';
+    if (events[index].type === 'run.completed') return 'completed';
+  }
+  return 'active';
+}
+
+function traceRunStateLabel(state: TraceRunState): string {
+  return state === 'failed' ? 'Terminal failed run' : state === 'completed' ? 'Completed run' : 'Run active';
 }
 
 function DetailRow({ label, value, styles }: { label: string; value: ReactNode; styles: ReturnType<typeof useStyles> }) {
@@ -519,7 +567,7 @@ function ToolValue({
   error?: boolean;
   styles: ReturnType<typeof useStyles>;
 }) {
-  const formatted = formatSafeToolValue(value);
+  const formatted = formatSafeToolValue(value, error ? maxToolErrorDetailLength : undefined);
   if (formatted.state === 'unavailable') {
     return (
       <div>
@@ -657,11 +705,13 @@ function TraceInspector({
   node,
   roleByAgent,
   toolCallIndex,
+  runState,
   styles,
 }: {
   node: TraceNode | null;
   roleByAgent?: Record<string, string>;
   toolCallIndex: Map<string, ToolCallDetail>;
+  runState: TraceRunState;
   styles: ReturnType<typeof useStyles>;
 }) {
   if (!node) {
@@ -711,6 +761,17 @@ function TraceInspector({
             <>
               <DetailRow label="Tool" value={span.toolName ?? span.name} styles={styles} />
               {span.toolCallId && <DetailRow label="Call ID" value={<code>{span.toolCallId}</code>} styles={styles} />}
+              {toolDetail?.outcome === 'failed' && (
+                <DetailRow
+                  label="Attempt outcome"
+                  value={runState === 'completed'
+                    ? 'Recovered — run completed after this failed attempt'
+                    : runState === 'failed'
+                      ? 'Run failed — terminal outcome'
+                      : 'Run active — outcome pending'}
+                  styles={styles}
+                />
+              )}
             </>
           ) : (
             <>
@@ -819,6 +880,24 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
     ['timestamp', formatDateTime(span.timestamp)],
     ['duration', formatDurationMs(span.durationMs)],
   ];
+  const execution = attributes?.execution;
+  const diagnosticValues: Array<[string, ReactNode]> = [
+    ['assessment', execution
+      ? 'Host-process evidence recorded; bottleneck is not determined from this trace alone.'
+      : 'Unavailable — this trace has no resource evidence, so no bottleneck is inferred.'],
+    ['queue.entered_at', execution?.queueEnteredAt ? formatDateTime(execution.queueEnteredAt) : 'Not recorded'],
+    ['dispatch.started_at', execution?.dispatchStartedAt ? formatDateTime(execution.dispatchStartedAt) : 'Not recorded'],
+    ['process.started_at', execution?.processStartedAt ? formatDateTime(execution.processStartedAt) : 'Not recorded'],
+    ['process.ended_at', execution?.processEndedAt ? formatDateTime(execution.processEndedAt) : 'Not recorded'],
+    ['host_process.cpu_ms', execution?.hostProcessCpuMs != null ? formatDurationMs(execution.hostProcessCpuMs) : 'Not recorded'],
+    ['host_process.working_set', formatBytes(execution?.hostProcessWorkingSetBytes)],
+    ['host_process.peak_working_set', formatBytes(execution?.hostProcessPeakWorkingSetBytes)],
+    ['disk_io', 'Not recorded'],
+    ['network_io', 'Not recorded'],
+    ['capacity_or_queue', execution?.queueEnteredAt && execution?.dispatchStartedAt
+      ? 'Phase timestamps recorded; no capacity cause is inferred.'
+      : 'Not recorded'],
+  ];
 
   return (
     <div className={styles.attributes}>
@@ -826,6 +905,7 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
       <AttributeGroup title="Operation and model" values={operationValues} styles={styles} />
       <AttributeGroup title="Tool and authorization" values={toolPolicyValues} styles={styles} />
       <AttributeGroup title="Runtime, usage, and status" values={runtimeValues} styles={styles} />
+      <AttributeGroup title="Execution diagnostics" values={diagnosticValues} styles={styles} />
     </div>
   );
 }
@@ -877,7 +957,7 @@ function TraceEvents({
   styles,
 }: {
   events: PersistedRunEvent[];
-  availability: 'loading' | 'loaded' | 'unavailable';
+  availability: 'idle' | 'loading' | 'loaded' | 'unavailable';
   styles: ReturnType<typeof useStyles>;
 }) {
   if (availability === 'loading') return <Spinner label="Loading persisted events" />;
@@ -927,23 +1007,32 @@ export function TransactionTracePanel({
   const styles = useStyles();
   const [trace, setTrace] = useState<RunTraceDto>({ runId, spans: [] });
   const [events, setEvents] = useState<PersistedRunEvent[]>([]);
-  const [eventsAvailability, setEventsAvailability] = useState<'loading' | 'loaded' | 'unavailable'>('loading');
+  const [eventsAvailability, setEventsAvailability] = useState<'idle' | 'loading' | 'loaded' | 'unavailable'>('idle');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [nextPageError, setNextPageError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TraceTab>('timeline');
+  const loadingMoreRef = useRef(false);
+  const traceLoadGeneration = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    traceLoadGeneration.current++;
     const loadTrace = async () => {
+      setTraceError(null);
+      setNextPageError(null);
       setLoading(true);
       setTrace({ runId, spans: [] });
       setEvents([]);
-      setEventsAvailability('loading');
       setToolCallIndex(new Map());
+      setEventsAvailability('idle');
       setSelectedKey(null);
-      setActiveTab('timeline');
+      setExpanded(new Set());
       try {
         const next = await apiClient.getRunTraces(runId);
         if (!cancelled) {
@@ -955,38 +1044,50 @@ export function TransactionTracePanel({
       } catch {
         if (!cancelled) {
           setTrace({ runId, spans: [] });
-          setExpanded(new Set());
-          setSelectedKey(null);
+          setTraceError('The transaction trace could not be loaded. Retry to request it again.');
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
-      try {
-        const nextEvents = await apiClient.getRunEvents(runId);
-        if (!cancelled) {
-          setEvents(nextEvents);
-          setToolCallIndex(buildToolCallIndex(nextEvents));
-          setEventsAvailability('loaded');
-        }
-      } catch {
-        if (!cancelled) {
-          setToolCallIndex(new Map());
-          setEventsAvailability('unavailable');
-        }
-      }
     };
     void loadTrace();
     return () => { cancelled = true; };
-  }, [runId]);
+  }, [runId, reloadNonce]);
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
+  const selectedNode = findNode(tree, selectedKey);
+  const shouldLoadEvents = activeTab === 'events' || selectedNode?.type === 'tool';
+
+  useEffect(() => {
+    if (!shouldLoadEvents || eventsAvailability === 'loading' || eventsAvailability === 'loaded') return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setEventsAvailability('loading');
+    });
+    void apiClient.getRunEvents(runId)
+      .then((nextEvents) => {
+        if (cancelled) return;
+        setEvents(nextEvents);
+        setToolCallIndex(buildToolCallIndex(nextEvents));
+        setEventsAvailability('loaded');
+      })
+      .catch(() => {
+        if (!cancelled) setEventsAvailability('unavailable');
+      });
+    return () => { cancelled = true; };
+  }, [runId, shouldLoadEvents, eventsAvailability]);
+
   const timeline = useMemo(() => getTraceTimeline(trace.spans), [trace.spans]);
   const runTotalNanoAiu = useMemo(() => totalNanoAiu(tree), [tree]);
   const tokens = useMemo(() => rawTokenTotals(trace.spans), [trace.spans]);
   const agent = useMemo(() => traceAgent(trace.spans), [trace.spans]);
   const sessionId = useMemo(() => traceSessionId(trace.spans), [trace.spans]);
-
-  const selectedNode = findNode(tree, selectedKey);
+  const traceIsSuccessful = useMemo(() => traceSucceeded(trace.spans), [trace.spans]);
+  const runState = useMemo(() => traceRunState(events), [events]);
+  const failedToolAttempts = useMemo(
+    () => [...toolCallIndex.values()].filter((detail) => detail.outcome === 'failed').length,
+    [toolCallIndex],
+  );
 
   function toggle(key: string) {
     setExpanded((current) => {
@@ -995,6 +1096,38 @@ export function TransactionTracePanel({
       else next.add(key);
       return next;
     });
+  }
+
+  async function loadNextPage() {
+    if (!trace.hasMore || !trace.nextCursor || loadingMoreRef.current) return;
+    const generation = traceLoadGeneration.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setNextPageError(null);
+    try {
+      const next = await apiClient.getRunTraces(runId, { cursor: trace.nextCursor });
+      if (generation !== traceLoadGeneration.current) return;
+      if (next.queryError) {
+        setNextPageError(next.queryError);
+        return;
+      }
+      setTrace((current) => {
+        // Ignore a stale response after a run change or reload and de-duplicate retries by span ID.
+        if (current.runId !== runId) return current;
+        const spansById = new Map(current.spans.map((span) => [span.id, span]));
+        for (const span of next.spans) spansById.set(span.id, span);
+        const spans = [...spansById.values()].sort((left, right) =>
+          new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()
+          || left.id.localeCompare(right.id));
+        return { ...next, runId, spans };
+      });
+    } catch {
+      if (generation === traceLoadGeneration.current)
+        setNextPageError('The next trace page could not be loaded. Retry to continue loading this trace.');
+    } finally {
+      if (generation === traceLoadGeneration.current) setLoadingMore(false);
+      loadingMoreRef.current = false;
+    }
   }
 
   const axisTicks = timeline
@@ -1017,18 +1150,42 @@ export function TransactionTracePanel({
         <Body tone="muted">{subtitle}</Body>
       </header>
 
-      {!loading && trace.queryError && (
+      {!loading && (trace.queryError || traceError) && (
         <MessageBar intent="warning">
-          <MessageBarBody>{trace.queryError}</MessageBarBody>
+          <MessageBarBody>{trace.queryError ?? traceError}</MessageBarBody>
+          <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>
         </MessageBar>
       )}
 
       {loading ? (
         <Spinner label="Loading transaction trace" />
       ) : tree.length === 0 ? (
-        <EmptyState title="No trace data available for this run yet." />
+        <EmptyState
+          title={trace.queryError
+            ? 'Trace spans are temporarily unavailable.'
+            : 'No trace data available for this run yet.'}
+          description={trace.queryError
+            ? 'The telemetry source did not return a trace page. This does not mean the run produced no trace data; retry shortly.'
+            : undefined}
+        />
       ) : (
         <>
+          {trace.hasMore && (
+            <MessageBar intent="info" aria-label="More trace spans available">
+              <MessageBarBody>
+                Showing loaded trace spans in chronological order. Continue loading to inspect the complete growing trace.
+              </MessageBarBody>
+              <Button appearance="secondary" onClick={() => void loadNextPage()} disabled={loadingMore}>
+                {loadingMore ? 'Loading more spans' : 'Load more spans'}
+              </Button>
+            </MessageBar>
+          )}
+          {nextPageError && (
+            <MessageBar intent="warning" aria-label="Trace page load failed">
+              <MessageBarBody>{nextPageError}</MessageBarBody>
+              <Button appearance="transparent" onClick={() => void loadNextPage()} disabled={loadingMore}>Retry</Button>
+            </MessageBar>
+          )}
           <dl className={styles.summary} aria-label="Trace summary">
             <div className={styles.summaryItem}>
               <dt className={styles.summaryLabel}>Agent</dt>
@@ -1055,16 +1212,28 @@ export function TransactionTracePanel({
               </div>
             )}
             <div className={styles.summaryItem}>
-              <dt className={styles.summaryLabel}>Trace status</dt>
+              <dt className={styles.summaryLabel}>Run state</dt>
               <dd className={styles.summaryValue}>
                 <Badge
                   appearance="tint"
-                  color={traceSucceeded(trace.spans) ? 'success' : 'danger'}
-                  icon={traceSucceeded(trace.spans) ? <CheckmarkCircleRegular /> : <ErrorCircleRegular />}
+                  color={runState === 'failed' ? 'danger' : runState === 'completed' ? 'success' : 'warning'}
+                  icon={runState === 'failed' ? <ErrorCircleRegular /> : undefined}
                 >
-                  {traceSucceeded(trace.spans) ? 'Success' : 'Failed'}
+                  {traceRunStateLabel(runState)}
                 </Badge>
               </dd>
+            </div>
+            <div className={styles.summaryItem}>
+              <dt className={styles.summaryLabel}>Trace status</dt>
+              <dd className={styles.summaryValue}>
+                <Badge appearance="tint" color={traceIsSuccessful ? 'success' : 'danger'}>
+                  {traceIsSuccessful ? 'Success' : 'Failed'}
+                </Badge>
+              </dd>
+            </div>
+            <div className={styles.summaryItem}>
+              <dt className={styles.summaryLabel}>Failed tool attempts</dt>
+              <dd className={styles.summaryValue}>{failedToolAttempts || 'None'}</dd>
             </div>
           </dl>
 
@@ -1081,7 +1250,14 @@ export function TransactionTracePanel({
 
           {activeTab === 'timeline' && (
             <div className={styles.timelineLayout}>
-              <div className={styles.timeline} data-testid="trace-timeline">
+              <div
+                className={styles.timeline}
+                data-testid="trace-timeline"
+                data-scrollable="true"
+                role="region"
+                aria-label="Trace timeline"
+                tabIndex={0}
+              >
                 <div className={styles.axis}>
                   <Text className={styles.axisTitle}>SPAN</Text>
                   <span className={styles.axisTicks}>
@@ -1106,7 +1282,13 @@ export function TransactionTracePanel({
                   ))}
                 </div>
               </div>
-              <TraceInspector node={selectedNode} roleByAgent={roleByAgent} toolCallIndex={toolCallIndex} styles={styles} />
+              <TraceInspector
+                node={selectedNode}
+                roleByAgent={roleByAgent}
+                toolCallIndex={toolCallIndex}
+                runState={runState}
+                styles={styles}
+              />
             </div>
           )}
 

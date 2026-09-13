@@ -1752,8 +1752,20 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<int>("PreviewApprovalTimeoutMinutes")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasDefaultValue(30)
+                        .HasDefaultValue(1440)
                         .HasColumnName("preview_approval_timeout_minutes");
+
+                    b.Property<int>("PreviewDnsConvergenceTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(600)
+                        .HasColumnName("preview_dns_convergence_timeout_seconds");
+
+                    b.Property<int>("PreviewLifetimeMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1440)
+                        .HasColumnName("preview_lifetime_minutes");
 
                     b.Property<string>("SandboxProfile")
                         .HasColumnType("text")

@@ -123,6 +123,19 @@ public class SandboxPreviewTests
         options.AllowedPortMax.Should().Be(9000);
     }
 
+    [Fact]
+    public void Options_default_preview_lifetime_is_twenty_four_hours()
+    {
+        var options = new SandboxPreviewOptions();
+        options.LifetimeMinutes.Should().Be(1440);
+    }
+
+    [Fact]
+    public void Options_default_dns_convergence_window_allows_ten_minutes()
+    {
+        new SandboxPreviewOptions().DnsConvergenceTimeoutSeconds.Should().Be(600);
+    }
+
     // ── PreviewToken ─────────────────────────────────────────────────────────────
 
     [Fact]

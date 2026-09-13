@@ -63,9 +63,13 @@ real live API, never simulated):
      expand action scope, choose commands or credentials, or initiate an external
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
-   - Resolve the target base URL. The recorder-session provider starts or restores
-     managed-browser authentication before its first authenticated call (see Target
-     resolution below).
+   - Resolve the target base URL. Before an authenticated remote API call, require the
+     UI-harness Chrome Default login/cached-session flow; the recorder-session
+     provider consumes that target-matched cache in memory (see Target resolution
+     below). On failure, report its recovery direction—never fall back to generic
+     Playwright, CDP/DevTools, ad-hoc profile copies/launches, or manual browser
+     automation. The only supported browser is installed literal Google Chrome
+     (`chrome.exe`) on Playwright's `chrome` channel, never bundled Chromium.
      Keep normal TLS validation enabled and choose a transcript file path under
      `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - **Start a live tail of that transcript path so the operator can watch turns
@@ -132,8 +136,8 @@ real live API, never simulated):
      the full persona-core brief + surface-adapter text verbatim, **the
      concrete goal statement for this run** (the one piece of per-invocation
      content the now-goal-agnostic persona-core file no longer carries itself),
-     the resolved target base URL, the recorder-session provider (which starts or
-     restores managed-browser authentication without receiving a token), and the
+     the resolved target base URL, the recorder-session provider (which consumes the
+     UI-harness cached session without receiving a token), and the
      transcript file path to append to. Never
      authorize a TLS-validation bypass.
    - While PersonaActor's background dispatch is still running, repeatedly (on
@@ -287,10 +291,13 @@ running as an actual Harness agent session:
 
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
-- Require the recorder-session provider for remote API authentication. It restores
-  a closed managed-browser session or starts the documented Chrome flow, but pauses
-  for a human when Microsoft Entra requires account selection, credentials, MFA, or
-  consent. Never place authentication material in child-process arguments, borrow
+- Require the recorder-session provider for remote API authentication. It consumes only
+  the cached session produced by `scripts/ui-harness/login-chrome-default.mjs`; if that
+  cache is absent, expired, or wrong-origin, surface its recovery error rather than
+  attempting a fallback browser flow. Never use generic Playwright, direct CDP/DevTools,
+  ad-hoc profile copies/launches, or manual browser automation. Microsoft Entra account
+  selection, credentials, MFA, and consent remain human-only. Never place authentication
+  material in child-process arguments, borrow
   `gh auth token` or `GITHUB_TOKEN`, or put a raw token in a task prompt, command
   argument, dispatch file, transcript, or process report.
 - Target validation is host-agnostic. `scripts/harness-shared/target-guard.mjs`

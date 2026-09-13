@@ -137,35 +137,35 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
     }
 
     [Fact]
-    public async Task InProgressRun_WithoutWorktreeMetadata_Returns200WithEmptyArray()
+    public async Task InProgressRun_WithoutWorktreeMetadata_ReturnsActionableProvisioningState()
     {
         var runId = await InsertOwnerRunAsync(RunStatus.InProgress);
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "a visible run can legitimately precede asynchronous worktree provisioning");
-        var files = await response.Content.ReadFromJsonAsync<JsonElement>();
-        files.ValueKind.Should().Be(JsonValueKind.Array);
-        files.GetArrayLength().Should().Be(0);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "an empty array would incorrectly state that an active child has produced no changes");
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        payload.GetProperty("error").GetString().Should().Be("workspace_provisioning");
+        payload.GetProperty("message").GetString().Should().Contain("automatically");
     }
 
     [Fact]
-    public async Task InProgressRun_WithoutWorktreePath_ReturnsEmptyWorkspaceWhileProvisioning()
+    public async Task InProgressRun_WithoutWorktreePath_ReturnsActionableWorkspaceProvisioningState()
     {
         var runId = await InsertOwnerRunAsync(RunStatus.InProgress);
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/workspace");
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "an active run may be visible before asynchronous worktree provisioning completes");
-        var workspace = await response.Content.ReadFromJsonAsync<JsonElement>();
-        workspace.ValueKind.Should().Be(JsonValueKind.Array);
-        workspace.GetArrayLength().Should().Be(0);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "an empty workspace would imply that the active child has no files");
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        payload.GetProperty("error").GetString().Should().Be("workspace_provisioning");
+        payload.GetProperty("message").GetString().Should().Contain("automatically");
     }
 
     [Fact]
-    public async Task InProgressRun_WithIncompleteWorktreeMetadata_ReturnsEmptyArrayWhileProvisioning()
+    public async Task InProgressRun_WithIncompleteWorktreeMetadata_ReturnsActionableProvisioningState()
     {
         const string persistedPath = @"C:\worktrees\incomplete-run";
         var runId = await InsertOwnerRunAsync(
@@ -174,11 +174,10 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "worktree metadata is persisted asynchronously and must not surface as a retryable server error");
-        var files = await response.Content.ReadFromJsonAsync<JsonElement>();
-        files.ValueKind.Should().Be(JsonValueKind.Array);
-        files.GetArrayLength().Should().Be(0);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a partial worktree record is provisioning, not proof that the child has no changes");
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        payload.GetProperty("error").GetString().Should().Be("workspace_provisioning");
     }
 
     [Fact]
@@ -238,6 +237,41 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             using var files = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             files.RootElement.GetArrayLength().Should().Be(1);
             files.RootElement[0].GetProperty("path").GetString().Should().Be("artifact.txt");
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
+    }
+
+    [Fact]
+    public async Task InProgressRun_WithLiveWorktree_ReturnsCurrentChangesAndWorkspace()
+    {
+        const string worktreeBranch = "agentweaver/artifact-files-live";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(worktreeBranch);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryPath, "live-artifact.txt"), "current child output\n");
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.InProgress,
+                worktreePath: repositoryPath,
+                worktreeBranch: worktreeBranch,
+                repositoryPath: repositoryPath);
+
+            var changesResponse = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+            changesResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            var changes = await changesResponse.Content.ReadFromJsonAsync<JsonElement>();
+            changes.EnumerateArray().Select(entry => entry.GetProperty("path").GetString())
+                .Should().Contain("live-artifact.txt",
+                    "an active child must expose files written to its available worktree");
+
+            var workspaceResponse = await _ownerClient.GetAsync($"/api/runs/{runId}/workspace");
+            workspaceResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            var workspace = await workspaceResponse.Content.ReadFromJsonAsync<JsonElement>();
+            var liveFile = workspace.EnumerateArray().Single(
+                entry => entry.GetProperty("path").GetString() == "live-artifact.txt");
+            liveFile.GetProperty("status").GetString().Should().Be("added");
         }
         finally
         {

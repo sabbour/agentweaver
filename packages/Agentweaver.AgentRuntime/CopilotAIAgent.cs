@@ -89,11 +89,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     private bool _byokProviderConfigurationResolved;
 
-    // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
-    // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
-    // permission handler consults this to avoid emitting a second, orphaned tool.call for these
-    // tools — the wrapper already records tool.call/tool.result/tool.error around the real
-    // invocation, with its own correlated callId and execute_tool span (see #850 follow-up).
+    // Names of custom tools wrapped in InstrumentedCustomAIFunction (populated fresh on every
+    // RebuildInnerAgent call). The permission handler avoids emitting a second, orphaned
+    // tool.call for these tools because the wrapper records the lifecycle around their real
+    // invocation with its own correlated callId and execute_tool span.
     private readonly HashSet<string> _instrumentedToolNames = new(StringComparer.Ordinal);
     protected readonly ILogger<CopilotAIAgent> _logger;
 
@@ -529,11 +528,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // policy shell enabled); native shell is denied below so this is the only shell path.
             includeControlledRunCommand: true,
             runCapabilityToken: _apiCapabilityToken,
-            // #850 follow-up: instrument every IAgentRuntimeToolProvider tool (start_preview and
-            // its preview-lifecycle siblings) so their tool.call/tool.result/tool.error RunEvents
-            // and execute_tool span are recorded directly around the real invocation — see
-            // InstrumentedCustomAIFunction.
-            instrumentProviderTool: tool =>
+            // Custom SDK tools only acknowledge ExternalToolCompletedEvent; its result payload is
+            // empty. Wrap every executable custom tool around its actual invocation so the durable
+            // event stream contains the real redacted arguments and terminal result/error under
+            // one callId, with durations unaffected by lifecycle delivery delay.
+            instrumentCustomTool: tool =>
             {
                 _instrumentedToolNames.Add(tool.Name);
                 return new InstrumentedCustomAIFunction(
@@ -1223,11 +1222,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         activity.SetTag("model_id", _modelId);
         activity.SetTag(TraceTelemetry.RequestModel, _modelId);
         ApplySafeTraceContext(activity);
+        CaptureHostProcessTelemetryStart(activity);
         return activity;
     }
 
     private void CompleteModelTurnTelemetry(Activity? activity, bool succeeded)
     {
+        if (activity is not null)
+            CaptureHostProcessTelemetry(activity, DateTimeOffset.UtcNow);
         var model = _turnModelId ?? _modelId ?? "unknown";
         var agent = string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName!;
         activity?.SetTag(TraceTelemetry.SpanKind, "agent_turn");
@@ -1642,6 +1644,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             return;
         }
 
+        if (_instrumentedToolNames.Contains(resolvedToolName))
+        {
+            // The wrapper owns this custom tool's span and RunEvents at invocation time. Ignore
+            // its later SDK lifecycle pair so it cannot create a duplicate, consumer-delayed span.
+            _suppressedCallIds.Add(callId);
+            return;
+        }
+
         if (IsShellToolName(resolvedToolName) &&
             _shellExecutionTracker?.ActiveExecution is null)
         {
@@ -1711,6 +1721,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             : ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
         if (activity is not null && startTime is { } ts && ts != default)
             activity.SetStartTime(ts.UtcDateTime);
+        if (activity is not null)
+            CaptureHostProcessTelemetryStart(activity);
         return activity;
     }
 
@@ -1767,6 +1779,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime, string? toolResult = null)
     {
+        CaptureHostProcessTelemetry(activity, endTime ?? DateTimeOffset.UtcNow);
         activity.SetTag(TraceTelemetry.ToolSuccess, success);
         activity.SetTag(TraceTelemetry.Status, success ? "success" : "error");
         if (!success)
@@ -1783,6 +1796,37 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    private static void CaptureHostProcessTelemetryStart(Activity activity)
+    {
+        activity.SetTag(TraceTelemetry.ProcessStartedAt, activity.StartTimeUtc.ToString("O"));
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            activity.SetTag("agentweaver.execution.host_process.cpu_start_ms", process.TotalProcessorTime.TotalMilliseconds);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static void CaptureHostProcessTelemetry(Activity activity, DateTimeOffset endedAt)
+    {
+        activity.SetTag(TraceTelemetry.ProcessEndedAt, endedAt.ToString("O"));
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var cpuEndMs = process.TotalProcessorTime.TotalMilliseconds;
+            if (activity.GetTagItem("agentweaver.execution.host_process.cpu_start_ms") is { } cpuStart
+                && double.TryParse(cpuStart.ToString(), out var cpuStartMs))
+                activity.SetTag(TraceTelemetry.HostProcessCpuMs, (long)Math.Round(Math.Max(0, cpuEndMs - cpuStartMs)));
+            activity.SetTag(TraceTelemetry.HostProcessWorkingSetBytes, process.WorkingSet64);
+            activity.SetTag(TraceTelemetry.HostProcessPeakWorkingSetBytes, process.PeakWorkingSet64);
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     /// <summary>
@@ -2335,7 +2379,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
         bool includeControlledRunCommand = false,
         string? runCapabilityToken = null,
-        Func<AIFunction, AIFunction>? instrumentProviderTool = null)
+        Func<AIFunction, AIFunction>? instrumentCustomTool = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -2352,7 +2396,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (context.QuestionGate is not null)
         {
             var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
-            tools.Add(new CopilotOverrideAIFunction(askFn));
+            tools.Add(InstrumentCustomTool(new CopilotOverrideAIFunction(askFn), instrumentCustomTool));
         }
 
         if (includeControlledRunCommand)
@@ -2364,19 +2408,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // is the correct fail-closed behavior for a shell-disabled run.
             var commandFn = all.FirstOrDefault(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
             if (commandFn is not null)
-                tools.Add(commandFn);
+                tools.Add(InstrumentCustomTool(commandFn, instrumentCustomTool));
         }
 
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
             tools.AddRange(AgentweaverApiTools.Build(
-                projectId,
-                agentName,
-                effectiveBaseUrl,
-                apiKey,
-                runId: context.RunId,
-                runCapabilityToken: runCapabilityToken));
+                    projectId,
+                    agentName,
+                    effectiveBaseUrl,
+                    apiKey,
+                    runId: context.RunId,
+                    runCapabilityToken: runCapabilityToken)
+                .Select(tool => InstrumentCustomTool(tool, instrumentCustomTool)));
         }
 
         if (toolProviders is not null)
@@ -2392,18 +2437,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             {
                 foreach (var providerTool in provider.BuildTools(providerContext))
                 {
-                    // #850 follow-up: tools built by IAgentRuntimeToolProvider implementations
-                    // (start_preview, start_preview_process, observe_bound_port, health_check,
-                    // stop_preview_process) never had any tool.call/tool.result RunEvent or
-                    // execute_tool span instrumentation — see InstrumentedCustomAIFunction for why
-                    // that made start_preview's trace card show "No arguments/output recorded".
-                    tools.Add(instrumentProviderTool?.Invoke(providerTool) ?? providerTool);
+                    tools.Add(InstrumentCustomTool(providerTool, instrumentCustomTool));
                 }
             }
         }
 
         return tools;
     }
+
+    private static AIFunction InstrumentCustomTool(
+        AIFunction tool,
+        Func<AIFunction, AIFunction>? instrumentCustomTool) =>
+        instrumentCustomTool?.Invoke(tool) ?? tool;
 
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.

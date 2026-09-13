@@ -43,6 +43,11 @@ public static class TraceTelemetry
     public const string Status = "agentweaver.status";
     public const string ErrorType = "error.type";
     public const string NanoAiu = "agentweaver.aiu.nano";
+    public const string ProcessStartedAt = "agentweaver.execution.process.started_at";
+    public const string ProcessEndedAt = "agentweaver.execution.process.ended_at";
+    public const string HostProcessCpuMs = "agentweaver.execution.host_process.cpu_ms";
+    public const string HostProcessWorkingSetBytes = "agentweaver.execution.host_process.working_set_bytes";
+    public const string HostProcessPeakWorkingSetBytes = "agentweaver.execution.host_process.peak_working_set_bytes";
 
     public const string DecisionAllowed = "allowed";
     public const string DecisionDenied = "denied";

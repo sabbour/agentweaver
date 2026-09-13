@@ -113,6 +113,10 @@ export interface NodeSizeHint {
   height: number;
 }
 
+/** The rollout layout is the balanced grid; staircase remains a diagnostic comparison. */
+export type TopologyLayoutEngine = 'balanced-grid' | 'legacy-staircase';
+export const DEFAULT_TOPOLOGY_LAYOUT_ENGINE: TopologyLayoutEngine = 'balanced-grid';
+
 export interface ConnectorPoint {
   x: number;
   y: number;
@@ -640,7 +644,7 @@ export interface WorkflowLayoutAnalysis {
   isLongLinear: boolean;
 }
 
-export type WorkflowDefinitionLayoutMode = 'columns' | 'staircase';
+export type WorkflowDefinitionLayoutMode = TopologyLayoutEngine;
 
 export interface WorkflowDefinitionLayoutResult {
   nodes: Node[];
@@ -1052,25 +1056,27 @@ export function layoutWorkflowDefinitionNodes(
   nodes: Node[],
   edges: Edge[],
   nodeSizeHints?: Record<string, NodeSizeHint>,
+  engine: TopologyLayoutEngine = DEFAULT_TOPOLOGY_LAYOUT_ENGINE,
 ): WorkflowDefinitionLayoutResult {
   const analysis = analyzeWorkflowLayout(nodes, edges);
-  const mode: WorkflowDefinitionLayoutMode = analysis.isLongLinear ? 'staircase' : 'columns';
-  const laidOut = layoutBandedLane(
-    nodes,
-    edges,
-    {
+  const laidOut = engine === 'legacy-staircase'
+    ? layoutDagStaircase(nodes, edges, {
       rankdir: 'LR',
-      rankGap: mode === 'staircase' ? 64 : 72,
-      nodeGap: mode === 'staircase' ? 40 : 48,
-      snakeMinRanks: BANDED_SNAKE_MIN_RANKS,
+      rankSep: analysis.isLongLinear ? 64 : 72,
+      nodeSep: analysis.isLongLinear ? 40 : 48,
+      minStepRanks: BANDED_SNAKE_MIN_RANKS,
       targetAspect: 1.35,
-    },
-    nodeSizeHints,
-  );
+    }, nodeSizeHints)
+    : layoutDagBalancedGrid(nodes, edges, {
+      rankSep: 72,
+      nodeSep: 48,
+      minColumns: 1,
+      maxColumns: 4,
+    }, nodeSizeHints);
 
   return {
     nodes: laidOut,
-    mode,
+    mode: engine,
     bbox: layoutBBox(laidOut, nodeSizeHints),
     analysis,
   };

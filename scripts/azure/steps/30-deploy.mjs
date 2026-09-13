@@ -579,6 +579,7 @@ export async function run(cfg, opts = {}) {
     log.info(`  Gateway IP:          ${GATEWAY_IP}`);
     log.info("");
     log.info(`  Preview gateway:     ${PREVIEW_HOSTNAME} (TLS: ${PREVIEW_TLS_SECRET})`);
+    log.info("  Preview DNS:         App Routing creates per-preview records.");
     log.info(`  Preview zone suffix: ${ZONE_SUFFIX}`);
     log.info("  Sandbox__Preview__Enabled:          true");
     log.info(`  Sandbox__Preview__ZoneSuffix:       ${ZONE_SUFFIX}`);

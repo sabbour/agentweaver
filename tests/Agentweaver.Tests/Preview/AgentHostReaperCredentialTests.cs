@@ -260,7 +260,7 @@ public sealed class AgentHostReaperCredentialTests
             {
                 Enabled = false, // worker does not provision routes, but must read their cluster state
                 Namespace = Namespace,
-                MaxLifetimeHours = 8,
+                LifetimeMinutes = 480,
             },
             NullLogger<SandboxPreviewService>.Instance,
             clock);

@@ -355,6 +355,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         }
         runner.StopCalls.Should().Be(0);
         runner.HealthCalls.Should().Be(source == "operator" ? 0 : 1);
+        if (source is "agent" or "retry")
+            runner.LastBearer.Should().Be("retained-test-credential",
+                "the API-to-AgentHost liveness recheck must use the retained preview credential, not the caller's API credential");
         kube.Requests.Should().ContainSingle(r => r.Method == "POST" && r.Path == routes);
         kube.Requests.Should().ContainSingle(r =>
             r.Method == "POST" && r.Path == "/api/v1/namespaces/agentweaver/services");
@@ -484,8 +487,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         if (!pauseAtPersistence)
             publicationCancelled.Should().Be(completeLocalStream);
         runner.HealthCancellationToken.IsCancellationRequested.Should().Be(completeLocalStream);
-        runner.LastBearer.Should().Be(initialApproval
-            ? ProjectsWebApplicationFactory.TestApiKey : "retained-test-credential");
+        runner.LastBearer.Should().Be("retained-test-credential");
         await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         runner.HealthCalls.Should().Be(1);
         runner.StopCalls.Should().Be(1);

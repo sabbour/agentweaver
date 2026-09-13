@@ -15,8 +15,12 @@ telemetry.
 
 The timeline reconstructs hierarchy from parent/child relationships, shows each span against
 the measured trace window, and uses distinct agent, model, and tool visuals. Failed spans use
+error styling. The summary status follows the root agent/coordinator spans, so a failed tool
+attempt that a later retry recovers from remains visible without marking the whole trace failed.
 error styling. Select a span to inspect its status, timing, correlation IDs, operation, model
-usage, and tool-call context.
+usage, and tool-call context. Long timelines scroll inside their own bounded region, keeping the
+selected-span inspector visible beside the rows on wide screens. On narrower screens the layout
+stacks so both the timeline and inspector remain usable.
 
 The trace tree is organized by span relationships:
 
@@ -51,6 +55,13 @@ readable JSON. A failed tool call appears as an error-formatted output. If data 
 says **No input** or **No output**; if a value is redacted, it is explicitly marked **Redacted**.
 The UI applies a second, bounded redaction pass before displaying legacy event data, so credentials
 and oversized or deeply nested payloads cannot leak through the inspector.
+
+When a tool attempt fails, its inspector shows a bounded, redacted error detail and explains the
+outcome in the context of the run: **Recovered** means the run later completed, **Run active**
+means the final outcome is not yet recorded, and **Run failed** means a terminal failure was
+recorded. The summary keeps failed-tool-attempt count separate from run state, so a recovered
+attempt is never presented as a failed run. The events API also redacts legacy error payloads and
+limits an individual error detail to 2,048 characters before the UI receives it.
 
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call

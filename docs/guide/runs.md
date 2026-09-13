@@ -161,6 +161,14 @@ The graph shows:
 - **Edge status** — running, completed, failed, awaiting
 - **Coordinator status badge** in the header (Dispatching → Awaiting assembly → Assembling → In review → Complete)
 
+### Comparing topology layouts
+
+The **Topology layout** control is available on the live run graph. **Balanced grid
+(current)** is the default layout engine. Choose **Legacy staircase (comparison)** only
+to compare card placement while diagnosing a rollout; it does not alter the run,
+its nodes, dependencies, edge direction, or status data. The selection is remembered
+locally and is also available in workflow graph viewer and editor canvases.
+
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 
 ## Steering mid-run
@@ -177,6 +185,13 @@ While a coordinator orchestration is active, you can intervene from the topology
 ::: tip Stop is immediate; redirect is at the next turn
 Stopping a run takes effect immediately on all running agents. Redirecting or amending takes effect at the next agent turn boundary — the current turn completes first.
 :::
+
+After sending guidance, the Messages pane records a durable acknowledgement with its
+**queued** or **applied** outcome and its target/scope. This acknowledgement means the
+coordinator accepted the direction; it is not evidence that a child advanced. A child
+waiting for its own approval remains blocked until that approval is resolved. When live
+updates are reconnecting or disconnected, the pane marks the displayed state as possibly
+stale until an explicit progress event arrives.
 
 ## Watching an execution live
 
@@ -289,6 +304,20 @@ to that trace's focused view; they are navigation handles, not raw telemetry pay
 The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
 available without repeating the provider or error code in separate status fragments.
 
+### Execution bottleneck evidence
+
+Select a span and open **Attributes** to inspect **Execution diagnostics**. Agentweaver
+records safe process start/end times plus host-process CPU time and memory working-set
+snapshots when the host makes them available. The panel also reserves queue and dispatch
+timestamps for environments that emit them.
+
+This evidence is correlated with the selected agent or tool span, but it is deliberately
+not a bottleneck verdict. Disk and network I/O, sandbox-process resource usage, capacity
+pressure, and unrecorded queue phases display **Not recorded**. When evidence is missing
+or incomplete, the panel says that no bottleneck is inferred rather than attributing a
+delay to CPU, memory, I/O, network, or capacity. No commands, command output, prompts,
+credentials, paths, or arbitrary dependency payloads are added to trace telemetry.
+
 Provider snapshot failures are separate from provider health and authorization:
 
 - `model_provider_snapshot_unavailable` means Agentweaver could not load the immutable
@@ -332,6 +361,8 @@ From the runs list you can also **Abandon** an in-flight run (discards pending c
 ## Sandboxed execution
 
 Each agent runs inside a **dedicated git worktree** branched from the project's working directory. Agents cannot reach outside their worktree unless the sandbox policy explicitly allows it. The originating branch is never modified during a run — only after you approve and the merge step completes.
+
+While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
 
 ![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/canonical-sandbox-experience.png)
 

@@ -134,6 +134,42 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetEvents_ToolErrorsAreRedactedAndBoundedForDiagnostics()
+    {
+        var childRunId = await InsertChildRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunId.New().ToString(), "3");
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        var workflowFactory = _factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
+        entry.RecordNext(EventTypes.ToolError, new
+        {
+            callId = "tool-long-error",
+            errorMessage = new string('x', 3000),
+        });
+        entry.RecordNext(EventTypes.ToolError, new
+        {
+            callId = "tool-secret-error",
+            errorMessage = "provider returned ghu_sensitive-token",
+        });
+        streamStore.Complete(childRunId);
+        await workflowFactory.PersistRunEventsAsync(childRunId);
+
+        var response = await _owner.GetAsync($"/api/runs/{childRunId}/events");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = await response.Content.ReadFromJsonAsync<List<EventDto>>();
+        events.Should().NotBeNull();
+        var actualEvents = events!;
+
+        var longError = actualEvents.Single(e => e.Payload.GetProperty("callId").GetString() == "tool-long-error")
+            .Payload.GetProperty("errorMessage").GetString();
+        longError.Should().HaveLength(2048).And.EndWith("…");
+
+        var secretError = actualEvents.Single(e => e.Payload.GetProperty("callId").GetString() == "tool-secret-error")
+            .Payload.GetProperty("errorMessage").GetString();
+        secretError.Should().Be(SensitiveDataRedactor.RedactedPlaceholder);
+    }
+
+    [Fact]
     public async Task GetEvents_NonOwner_Returns403()
     {
         var childRunId = await InsertChildRunAsync(

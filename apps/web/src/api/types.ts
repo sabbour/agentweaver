@@ -56,6 +56,7 @@ export interface PendingApprovalDto {
   request_id: string;
   tool_name: string | null;
   url: string | null;
+  command?: string | null;
   message: string | null;
   requested_at: string;
   expires_at: string | null;
@@ -283,6 +284,8 @@ export interface Project {
   workflow_generation_model: string | null;
   outcome_spec_generation_model: string | null;
   preview_approval_timeout_minutes?: number;
+  preview_lifetime_minutes?: number;
+  preview_dns_convergence_timeout_seconds?: number;
   available: boolean;
   state: ProjectState;
   created_at: string;
@@ -365,10 +368,14 @@ export interface UpdateProjectProviderSettingsRequest {
 
 export interface UpdateProjectPreviewSettingsRequest {
   approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
 }
 
 export interface ProjectPreviewSettingsResponse {
   approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
 }
 
 export interface CreateProjectRunRequest {
@@ -1816,6 +1823,18 @@ export interface TraceSpanAttributesDto {
   totalNanoAiu?: number | null;
   status?: string | null;
   errorType?: string | null;
+  execution?: ExecutionDiagnosticsDto | null;
+}
+
+/** Fixed execution evidence; missing values are unavailable, not zero. */
+export interface ExecutionDiagnosticsDto {
+  queueEnteredAt?: string | null;
+  dispatchStartedAt?: string | null;
+  processStartedAt?: string | null;
+  processEndedAt?: string | null;
+  hostProcessCpuMs?: number | null;
+  hostProcessWorkingSetBytes?: number | null;
+  hostProcessPeakWorkingSetBytes?: number | null;
 }
 
 export interface RunTraceDto {
@@ -1823,6 +1842,9 @@ export interface RunTraceDto {
   spans: RunTraceSpanDto[];
   /** Present when Application Insights could not complete the trace query. */
   queryError?: string | null;
+  /** Opaque continuation for the next chronologically ordered trace page. */
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 // Global overview "at a glance" counters.

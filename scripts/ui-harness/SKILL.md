@@ -33,31 +33,36 @@ Agentweaver staging uses Microsoft Entra Conditional Access, which blocks plain
 Chromium (and device-code flow). Authentication must use the managed **Chrome Default
 profile** on Windows (enrolled device).
 
-### Option A — Chrome is not currently running (preferred)
+### Option A — disposable Default-profile clone (preferred)
 
-Close all Chrome windows first (save any open work — they will be lost), then:
+Close all Chrome windows first (save any open work — they will **not** be closed by
+the harness), then:
 
 ```powershell
 node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain>
 ```
 
-This launches the real Chrome Default profile (`%LOCALAPPDATA%\Google\Chrome\User Data`).
-Entra SSO often completes automatically. If the sign-in page appears, complete it in the
-Chrome window, then press Resume in the Playwright Inspector.
+The command checks for active Chrome processes before copying anything. If Chrome still
+owns the Default-profile lock, it exits with instructions to close Chrome; it does not
+open an `about:blank` tab or fall back to the live profile. It then clones only the
+managed Default profile into `scripts/ui-harness/.auth/chrome-default-automation`,
+starts Chrome from that disposable, git-ignored clone, and deletes the clone when done.
 
-### Option B — Chrome is already running (CDP attach)
+The script navigates to `--base-url` before it checks or clicks Agentweaver's **Sign in
+with Microsoft Entra ID** button. Entra SSO often completes automatically. If an Entra
+page appears, complete it privately in the Chrome window, then press Resume in the
+Playwright Inspector. The harness never drives account selection, credentials, MFA, or
+consent.
 
-Relaunch Chrome with remote debugging (requires closing the current Chrome first):
+### Required recovery path
 
-```powershell
-Start-Process chrome.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Google\Chrome\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
-```
-
-Then connect and capture:
-
-```powershell
-node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain> --cdp
-```
+Do not fall back to generic Playwright, CDP/DevTools attach, ad-hoc profile copying or
+launches, or manual browser automation. `--cdp` and `--cdp-url` are explicitly
+rejected. When this command reports a lock, missing profile, failed copy, or incomplete
+authentication, resolve that stated condition and rerun this UI-harness command.
+It requires installed literal Google Chrome (`chrome.exe`) via Playwright's `chrome`
+channel for login and authenticated preview/session flows, and explicitly rejects a
+bundled Playwright Chromium fallback.
 
 ### What is saved
 
@@ -71,13 +76,19 @@ Treat these files as credentials: never print, commit, log, or attach them. The 
 never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
 (or pass `--storage-state <local-path>` consistently).
 
+After a successful login, the API harness's `recorder-session` provider reuses these
+same cached artifacts for the matching Agentweaver origin. It returns the bearer only
+in memory; it does not start a second browser sign-in or export the value. If the
+artifacts are missing, expired, or for another origin, the API harness tells you to
+rerun this login command.
+
 `init` validates that the selected storage-state file exists and has a usable
 Playwright shape before it creates a scenario session. It starts that session's
 headless browser worker, but it does not launch or automate the login flow.
 
-> **Legacy note**: `login-capture-chrome.mjs` and the `tools.mjs login` command use plain
-> Chromium (channel `chrome` without the Default profile user-data-dir). They may fail
-> Conditional Access. Prefer `login-chrome-default.mjs` for Entra-protected staging.
+> **Legacy note**: `login-capture-chrome.mjs` and `tools.mjs login` are retired and
+> explicitly fail with the supported `login-chrome-default.mjs` recovery command. They
+> cannot be used as generic-browser authentication fallbacks.
 
 ## Run a persona flow
 

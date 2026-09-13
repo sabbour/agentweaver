@@ -7,6 +7,7 @@ export interface ToolCallDetail {
   arguments?: unknown;
   content?: unknown;
   errorMessage?: unknown;
+  outcome: 'pending' | 'succeeded' | 'failed';
 }
 
 export interface SafeToolValue {
@@ -17,6 +18,7 @@ export interface SafeToolValue {
 const REDACTED = '***REDACTED***';
 const maxStringLength = 8_192;
 const maxRenderedLength = 16_384;
+export const maxToolErrorDetailLength = 2_048;
 const maxCollectionEntries = 100;
 const maxDepth = 8;
 const sensitiveKey = /(token|authorization|password|secret|credential|connection.?string|api.?key|private.?key|access.?key|bearer|key)/i;
@@ -80,13 +82,13 @@ function normalizeToolValue(value: unknown, depth: number): { value: unknown; re
  * Produces a bounded, syntax-readable representation of tool data. This repeats backend
  * redaction defensively so a malformed or legacy event cannot expose credentials in the trace UI.
  */
-export function formatSafeToolValue(value: unknown): SafeToolValue {
+export function formatSafeToolValue(value: unknown, maximumLength = maxRenderedLength): SafeToolValue {
   if (value === undefined) return { state: 'unavailable' };
   const normalized = normalizeToolValue(value, 0);
   const text = typeof normalized.value === 'string'
     ? normalized.value
     : JSON.stringify(normalized.value, null, 2);
-  if (text.length > maxRenderedLength)
+  if (text.length > maximumLength)
     return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
   return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
@@ -103,12 +105,14 @@ export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, Too
     const payload = event.payload;
     const callId = typeof payload?.['callId'] === 'string' ? payload['callId'] : undefined;
     if (!callId) continue;
-    const entry = index.get(callId) ?? {};
+    const entry: ToolCallDetail = index.get(callId) ?? { outcome: 'pending' };
     if (event.type === 'tool.call') {
       if (Object.hasOwn(payload, 'arguments')) entry.arguments = payload['arguments'];
     } else if (event.type === 'tool.result') {
+      entry.outcome = 'succeeded';
       if (Object.hasOwn(payload, 'content')) entry.content = payload['content'];
     } else if (event.type === 'tool.error') {
+      entry.outcome = 'failed';
       if (Object.hasOwn(payload, 'errorMessage')) entry.errorMessage = payload['errorMessage'];
     } else {
       continue;
@@ -165,14 +169,17 @@ export function normalizeType(span: RunTraceSpanDto): SpanType {
 
 /**
  * Reconstructs a span forest from the flat AppInsights span list using parentId links.
- * Spans whose parent is missing from the set become roots. Each invoke-agent span that carries
- * model/token usage also gets a synthetic LLM leaf child so the tree mirrors the AppInsights
- * "Invoke Agent -> LLM -> Execute Tool" reference structure.
+ * Spans whose parent is missing from the set become roots. Child runs additionally carry a
+ * durable parent-run relationship, which is used only for presentation when a distributed
+ * trace crosses runs. The original parentId remains intact on every span.
+ * Each invoke-agent span that carries model/token usage also gets a synthetic LLM leaf child
+ * so the tree mirrors the AppInsights "Invoke Agent -> LLM -> Execute Tool" reference structure.
  */
 export function buildTraceTree(spans: RunTraceSpanDto[]): TraceNode[] {
   if (!spans.length) return [];
 
   const nodes = new Map<string, TraceNode>();
+  const parentByKey = new Map<string, TraceNode | null>();
   for (const span of spans) {
     nodes.set(span.id, { key: span.id, span, type: normalizeType(span), synthetic: false, children: [] });
   }
@@ -181,12 +188,81 @@ export function buildTraceTree(spans: RunTraceSpanDto[]): TraceNode[] {
   for (const span of spans) {
     const node = nodes.get(span.id)!;
     const parent = span.parentId ? nodes.get(span.parentId) : undefined;
-    if (parent && parent !== node) parent.children.push(node);
-    else roots.push(node);
+    if (parent && parent !== node) {
+      parent.children.push(node);
+      parentByKey.set(node.key, parent);
+    } else {
+      roots.push(node);
+      parentByKey.set(node.key, null);
+    }
   }
 
   const sortByTime = (a: TraceNode, b: TraceNode) =>
     new Date(a.span.timestamp).getTime() - new Date(b.span.timestamp).getTime();
+
+  const runId = (node: TraceNode) => node.span.attributes?.runId?.trim() || null;
+  const parentRunId = (node: TraceNode) => node.span.attributes?.parentRunId?.trim() || null;
+  const invocationByRunId = new Map<string, TraceNode[]>();
+  for (const node of nodes.values()) {
+    const id = runId(node);
+    if (id && node.type === 'invoke-agent') {
+      const invocations = invocationByRunId.get(id) ?? [];
+      invocations.push(node);
+      invocationByRunId.set(id, invocations);
+    }
+  }
+  for (const invocations of invocationByRunId.values())
+    invocations.sort(sortByTime);
+
+  const closestInvocation = (invocations: TraceNode[], timestamp: string) => {
+    const startedAt = new Date(timestamp).getTime();
+    for (let index = invocations.length - 1; index >= 0; index--) {
+      if (new Date(invocations[index].span.timestamp).getTime() <= startedAt)
+        return invocations[index];
+    }
+    return invocations[0];
+  };
+
+  const move = (node: TraceNode, nextParent: TraceNode) => {
+    const currentParent = parentByKey.get(node.key);
+    if (currentParent === nextParent || node === nextParent) return;
+    if (currentParent) currentParent.children = currentParent.children.filter((child) => child !== node);
+    else {
+      const rootIndex = roots.indexOf(node);
+      if (rootIndex >= 0) roots.splice(rootIndex, 1);
+    }
+    nextParent.children.push(node);
+    parentByKey.set(node.key, nextParent);
+  };
+
+  // Activity parent IDs describe the real distributed trace and can cross a run boundary.
+  // Render that boundary as an agent invocation instead: a child-run tool must belong to the
+  // child agent that executed it, never directly to the coordinator's agent turn.
+  for (const node of nodes.values()) {
+    const childRunId = runId(node);
+    const owningRunId = parentRunId(node);
+    if (!childRunId || !owningRunId || node.type === 'invoke-agent') continue;
+
+    const childInvocations = invocationByRunId.get(childRunId);
+    if (!childInvocations?.length) continue;
+    const currentParent = parentByKey.get(node.key);
+    if (currentParent && runId(currentParent) === childRunId) continue;
+    move(node, closestInvocation(childInvocations, node.span.timestamp));
+  }
+
+  // A child agent can likewise be a root (or physically parented to a non-agent span) when
+  // telemetry crosses an async process boundary. Attach its invocation to the parent run's
+  // closest agent span while retaining the underlying trace parentId for the inspector/API.
+  for (const [childRunId, childInvocations] of invocationByRunId) {
+    const owningRunId = parentRunId(childInvocations[0]);
+    const parentInvocations = owningRunId ? invocationByRunId.get(owningRunId) : undefined;
+    if (!parentInvocations?.length) continue;
+    for (const childInvocation of childInvocations) {
+      const currentParent = parentByKey.get(childInvocation.key);
+      if (currentParent && runId(currentParent) === childRunId) continue;
+      move(childInvocation, closestInvocation(parentInvocations, childInvocation.span.timestamp));
+    }
+  }
 
   for (const node of nodes.values()) {
     node.children.sort(sortByTime);

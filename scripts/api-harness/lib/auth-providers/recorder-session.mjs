@@ -1,81 +1,63 @@
-import { getSessionToken } from '../../../demo-recording/lib/auth.mjs';
+import path from 'node:path';
 import {
-  openRecordingSession,
-  parseRecordingCommandOptions,
-  refreshRecordingAuthentication,
-  recordingAuthPaths,
-} from '../../../demo-recording/lib/recording-session.mjs';
+  DEFAULT_STORAGE_STATE,
+  loadSessionStorageSeed,
+  loadStorageState,
+} from '../../../ui-harness/lib/auth.mjs';
 
 export const RECORDER_SESSION_AUTH_PROVIDER = 'recorder-session';
+
+export function uiHarnessAuthPaths(authRoot) {
+  const storageStatePath = authRoot
+    ? path.join(path.resolve(authRoot), 'staging.storageState.json')
+    : DEFAULT_STORAGE_STATE;
+  return {
+    storageStatePath,
+    sessionStoragePath: `${storageStatePath}.sessionStorage.json`,
+  };
+}
 
 export function createRecorderSessionAuthProvider({
   authRoot,
   baseUrl,
-  session,
-  getSessionTokenFn = getSessionToken,
-  recordingAuthPathsFn = recordingAuthPaths,
-  openRecorderSessionFn = openRecordingSession,
-  refreshRecorderAuthenticationFn = refreshRecordingAuthentication,
-  parseOpenOptionsFn = parseRecordingCommandOptions,
+  uiHarnessAuthPathsFn = uiHarnessAuthPaths,
+  loadStorageStateFn = loadStorageState,
+  loadSessionStorageSeedFn = loadSessionStorageSeed,
 } = {}) {
-  const { sessionStoragePath } = recordingAuthPathsFn(authRoot);
-  let readiness;
-  let refresh;
-
-  const ensureReady = async () => {
-    if (!readiness) {
-      readiness = Promise.resolve().then(async () => {
-        if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
-          throw new Error('A target base URL is required to start managed-browser authentication.');
-        }
-        const argv = ['--base-url', baseUrl];
-        if (authRoot) argv.push('--auth-root', authRoot);
-        if (session) argv.push('--session', session);
-        await openRecorderSessionFn(parseOpenOptionsFn('open', argv));
-      }).catch((error) => {
-        readiness = null;
-        throw error;
-      });
-    }
-    await readiness;
-  };
-
-  const refreshAndRestore = async () => {
-    if (!refresh) {
-      refresh = Promise.resolve().then(async () => {
-        const argv = ['--base-url', baseUrl];
-        if (authRoot) argv.push('--auth-root', authRoot);
-        if (session) argv.push('--session', session);
-        const options = parseOpenOptionsFn('open', argv);
-        await refreshRecorderAuthenticationFn(options);
-        readiness = null;
-        await ensureReady();
-      }).finally(() => {
-        refresh = null;
-      });
-    }
-    await refresh;
-  };
-
-  const readSessionToken = async () => {
-    const token = await getSessionTokenFn(sessionStoragePath);
-    if (typeof token !== 'string' || token.length === 0) {
-      throw new Error('Protected recording authentication did not provide a session token.');
-    }
-    return token;
-  };
+  const { storageStatePath } = uiHarnessAuthPathsFn(authRoot);
+  let authorization;
 
   return {
     name: RECORDER_SESSION_AUTH_PROVIDER,
     async getAuthorization() {
-      await ensureReady();
+      if (authorization) return authorization;
+      if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
+        throw new Error('A target base URL is required to use cached UI-harness authentication.');
+      }
+      let expectedOrigin;
       try {
-        return `Bearer ${await readSessionToken()}`;
+        expectedOrigin = new URL(baseUrl).origin;
       } catch {
-        // A globally-open recorder session can be valid while this worktree has no
-        // protected sidecar yet. Refreshing restores both the session and its local handoff.
-        await refreshAndRestore();
-        return `Bearer ${await readSessionToken()}`;
+        throw new Error('The target base URL is invalid; cached UI-harness authentication cannot be selected.');
+      }
+
+      try {
+        await loadStorageStateFn(storageStatePath);
+        const seed = await loadSessionStorageSeedFn(storageStatePath);
+        if (seed?.origin !== expectedOrigin) {
+          throw new Error('the cached UI-harness session belongs to a different target origin');
+        }
+        const token = seed.entries?.['agentweaver.sessionToken'];
+        if (typeof token !== 'string' || token.length === 0) {
+          throw new Error('the cached UI-harness session does not contain an Agentweaver session token');
+        }
+        authorization = `Bearer ${token}`;
+        return authorization;
+      } catch (error) {
+        throw new Error(
+          `Cached UI-harness authentication is unavailable or expired (${error.message}). `
+          + `Close Chrome and run node scripts/ui-harness/login-chrome-default.mjs --base-url ${expectedOrigin}, then retry.`,
+        );
       }
     },
   };

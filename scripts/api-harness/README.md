@@ -24,10 +24,10 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 ## Run a persona scenario (dynamic)
 
 `PersonaActor` is dispatched after Harness resolves the target. It drives one real
-call at a time. Its recorder-session provider automatically starts or restores the
-managed Chrome session before the first authenticated call. Raw tokens never enter
-prompts, argv, or transcripts. When an already-open recorder session has no local
-handoff sidecar, the provider refreshes and restores it once before failing.
+call at a time. Its recorder-session provider reuses the target-matched cached session
+created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
+Chrome sign-in. Raw tokens never enter prompts, argv, or transcripts. Missing,
+expired, or wrong-origin UI state fails with the login command needed to refresh it.
 
 ```powershell
 @'

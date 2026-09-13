@@ -320,7 +320,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
-            e.Property(p => p.PreviewApprovalTimeoutMinutes).HasColumnName("preview_approval_timeout_minutes").HasDefaultValue(30);
+            e.Property(p => p.PreviewApprovalTimeoutMinutes).HasColumnName("preview_approval_timeout_minutes").HasDefaultValue(1440);
+            e.Property(p => p.PreviewLifetimeMinutes).HasColumnName("preview_lifetime_minutes").HasDefaultValue(1440);
+            e.Property(p => p.PreviewDnsConvergenceTimeoutSeconds).HasColumnName("preview_dns_convergence_timeout_seconds").HasDefaultValue(600);
             e.Property(p => p.DefaultWorkflowId).HasColumnName("default_workflow_id");
             e.Property(p => p.ActiveReviewPolicyName).HasColumnName("active_review_policy_name");
             e.Property(p => p.SandboxProfile).HasColumnName("sandbox_profile");

@@ -176,6 +176,7 @@ public sealed class TraceInstrumentationTests
         activity.Should().NotBeNull();
         activity!.StartTimeUtc.Should().BeCloseTo(sdkStart.UtcDateTime, TimeSpan.FromMilliseconds(50),
             "the span start must reflect the SDK ToolExecutionStartEvent.Timestamp, not 'now'");
+        activity.GetTagItem(TraceTelemetry.ProcessStartedAt).Should().Be(sdkStart.UtcDateTime.ToString("O"));
         activity.Stop();
     }
 
@@ -214,6 +215,9 @@ public sealed class TraceInstrumentationTests
             "to be observed behind a blocked sibling");
         activity.Duration.Should().BeLessThan(TimeSpan.FromMinutes(1),
             "a near-instant tool must never inherit the blocked sibling's ~5-minute duration");
+        activity.GetTagItem(TraceTelemetry.ProcessEndedAt).Should().Be(sdkEnd.ToString("O"));
+        activity.GetTagItem(TraceTelemetry.HostProcessCpuMs).Should().NotBeNull();
+        activity.GetTagItem(TraceTelemetry.HostProcessWorkingSetBytes).Should().NotBeNull();
     }
 
     [Fact]
@@ -405,6 +409,11 @@ public sealed class TraceInstrumentationTests
             [TraceTelemetry.RuntimePurpose] = "default",
             [TraceTelemetry.InputTokens] = "42",
             [TraceTelemetry.Status] = "success",
+            [TraceTelemetry.ProcessStartedAt] = "2026-09-11T16:00:00.0000000+00:00",
+            [TraceTelemetry.ProcessEndedAt] = "2026-09-11T16:00:02.0000000+00:00",
+            [TraceTelemetry.HostProcessCpuMs] = "750",
+            [TraceTelemetry.HostProcessWorkingSetBytes] = "1048576",
+            [TraceTelemetry.HostProcessPeakWorkingSetBytes] = "2097152",
             ["prompt"] = "must never be projected",
             ["authorization"] = "must never be projected",
         };
@@ -429,6 +438,12 @@ public sealed class TraceInstrumentationTests
         attributes.SandboxIsolated.Should().BeTrue();
         attributes.InputTokens.Should().Be(42);
         attributes.RoutingDecision.Should().BeNull("Agentweaver has not emitted a routing decision");
+        attributes.Execution.Should().NotBeNull();
+        attributes.Execution!.ProcessStartedAt.Should().Be(DateTimeOffset.Parse("2026-09-11T16:00:00.0000000+00:00"));
+        attributes.Execution.ProcessEndedAt.Should().Be(DateTimeOffset.Parse("2026-09-11T16:00:02.0000000+00:00"));
+        attributes.Execution.HostProcessCpuMs.Should().Be(750);
+        attributes.Execution.HostProcessWorkingSetBytes.Should().Be(1048576);
+        attributes.Execution.HostProcessPeakWorkingSetBytes.Should().Be(2097152);
     }
 
     [Fact]
@@ -486,6 +501,7 @@ public sealed class TraceInstrumentationTests
 
         attributes.AgentName.Should().BeNull();
         attributes.PolicyDecision.Should().BeNull();
+        attributes.Execution.Should().BeNull("unrecorded execution telemetry must stay unavailable rather than become a zero-valued diagnosis");
     }
 
     private static CopilotAIAgent BuildAgent()

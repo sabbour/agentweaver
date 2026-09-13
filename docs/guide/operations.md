@@ -194,13 +194,31 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 Open a project, select **Observability** → **Traces**, then choose **Preview trace** for a
 coordinator run. The trace detail includes a timeline, span attributes, and persisted run events.
-It shows only trace data returned by Application Insights and the persisted run-event API. In
+Trace spans load in chronological pages; choose **Load more spans** until no more spans are
+available to inspect the complete trace. The opaque continuation keeps already loaded spans,
+selection, and tree state intact, and a failed page can be retried without reloading the whole
+trace. Persisted events are loaded only when the Events tab or a tool span needs them, so tool
+inputs and outputs remain available without delaying the initial trace. It shows only trace data returned by
+Application Insights and the persisted run-event API. In
 particular, it shows the trace session ID only when the runtime emitted one, and it does not invent
 event timestamps when a legacy persisted event has no recorded time. The attributes pane is a fixed,
 safe schema rather than a dump of custom dimensions: it includes operational identity, model,
 provider, policy, sandbox, usage, and status fields, but never prompts, credentials, raw tokens,
-secrets, or arbitrary tool payloads. See
+secrets, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
+child agent that executed them using the persisted parent-run relationship; the original distributed
+trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
+
+If the Application Insights workspace is unavailable or slow, trace retrieval stops after three
+seconds and displays a diagnostic to authorized run viewers. The API coalesces concurrent requests
+for the same run and cursor page into one bounded workspace query, then pauses workspace queries
+briefly rather than allowing repeated trace loads to queue or amplify the dependency failure. A
+recently retrieved page may be shown while the source recovers and is explicitly labeled as such;
+an unavailable source with no safe cached page is not presented as proof that the run has no trace
+data. Cursor paging remains incremental, so retry or **Load more spans** only requests the needed
+page. Retry after the displayed interval; platform operators can use the API log's query context
+and failure type to investigate workspace credentials, RBAC, and availability without logging KQL
+payloads.
 
 ### Provisioning monitoring resources
 

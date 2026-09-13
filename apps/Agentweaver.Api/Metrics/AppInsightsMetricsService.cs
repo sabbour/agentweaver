@@ -2,7 +2,9 @@ using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
 using Agentweaver.Domain;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 
 namespace Agentweaver.Api.Metrics;
@@ -19,12 +21,19 @@ public sealed class AppInsightsMetricsService
     /// 3). This service is registered as a singleton (see <c>Program.cs</c>), so a single semaphore here
     /// bounds the total number of simultaneous Azure Monitor workspace queries across every concurrent
     /// HTTP request/subquery fan-out, not just the ~8 subqueries of one <see cref="GetProjectMetricsAsync"/>
-    /// call. This does not implement caching or single-flight de-duplication (a larger follow-up); it
-    /// only prevents unbounded fan-out (e.g. an Overview page loading 4 projects x 2 ranges x 8
+    /// call. Single-flight trace retrieval below additionally prevents duplicate trace-panel loads from
+    /// multiplying work. This budget prevents unbounded fan-out (e.g. an Overview page loading 4 projects x 2 ranges x 8
     /// subqueries = 64 simultaneous queries) from all reaching Azure Monitor at once.
     /// </summary>
     private const int MaxConcurrentWorkspaceQueries = 16;
     private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
+    private static readonly TimeSpan WorkspaceQueryTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan WorkspaceQueryCooldown = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan TracePageFallbackCacheLifetime = TimeSpan.FromMinutes(2);
+    private const int MaxTracePageFallbackEntries = 128;
+    private long _workspaceUnavailableUntilUtcTicks;
+    private readonly ConcurrentDictionary<string, Lazy<Task<TracePage>>> _inflightTracePages = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CachedTracePage> _tracePageFallbackCache = new(StringComparer.Ordinal);
 
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
@@ -194,27 +203,39 @@ public sealed class AppInsightsMetricsService
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId = null,
+        string? cursor = null,
+        int? pageSize = null,
         CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
-            return EmptyRunTrace(runId);
+            return UnavailableRunTrace(runId, "Application Insights trace telemetry is not configured.");
 
         var workspaceId = ResolveWorkspaceId(connectionString);
         if (string.IsNullOrWhiteSpace(workspaceId))
-            return EmptyRunTrace(runId);
+            return UnavailableRunTrace(runId, "Application Insights workspace id is not configured.");
 
-        var (spans, queryError) = await QueryRunTracesAsync(
+        if (!TryDecodeTraceCursor(cursor, out var decodedCursor))
+            return UnavailableRunTrace(runId, "The trace continuation is invalid. Reload the trace to start again.");
+
+        var resolvedPageSize = Math.Clamp(pageSize ?? 100, 1, 250);
+        var tracePageKey = BuildTracePageKey(workspaceId, runId, agentNameByRunId, decodedCursor, resolvedPageSize);
+        var result = await QueryRunTracePageSingleFlightAsync(
+            tracePageKey,
             workspaceId,
             runId,
             agentNameByRunId,
             traceContextsByRunId,
+            decodedCursor,
+            resolvedPageSize,
             ct).ConfigureAwait(false);
         return new RunTraceDto
         {
             RunId = runId,
-            Spans = spans,
-            QueryError = queryError,
+            Spans = result.Spans,
+            QueryError = result.QueryError,
+            NextCursor = result.NextCursor,
+            HasMore = result.HasMore,
         };
     }
 
@@ -646,17 +667,131 @@ public sealed class AppInsightsMetricsService
         return points;
     }
 
-    private async Task<(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError)> QueryRunTracesAsync(
+    internal sealed record TraceCursor(DateTimeOffset Timestamp, string Id);
+    private sealed record TracePage(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError, string? NextCursor, bool HasMore);
+
+    internal static bool TryDecodeTraceCursor(string? value, out TraceCursor? cursor)
+    {
+        cursor = null;
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        try
+        {
+            var bytes = Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + new string('=', (4 - value.Length % 4) % 4));
+            cursor = JsonSerializer.Deserialize<TraceCursor>(bytes);
+            return cursor is { Id.Length: > 0 } && cursor.Timestamp != default;
+        }
+        catch (FormatException) { return false; }
+        catch (JsonException) { return false; }
+    }
+
+    internal static string EncodeTraceCursor(DateTimeOffset timestamp, string id) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new TraceCursor(timestamp, id))))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private sealed record CachedTracePage(TracePage Page, DateTimeOffset ExpiresAt);
+
+    private static string BuildTracePageKey(
+        string workspaceId,
+        string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        TraceCursor? cursor,
+        int pageSize)
+    {
+        var relatedRunIds = agentNameByRunId?.Keys
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+        if (relatedRunIds.Length == 0)
+            relatedRunIds = [runId];
+        return string.Join("|", [
+            workspaceId,
+            runId,
+            pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            (cursor?.Timestamp.UtcTicks ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            cursor?.Id ?? string.Empty,
+            string.Join(",", relatedRunIds),
+        ]);
+    }
+
+    private async Task<TracePage> QueryRunTracePageSingleFlightAsync(
+        string tracePageKey,
         string workspaceId,
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId,
         IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
+        TraceCursor? cursor,
+        int pageSize,
+        CancellationToken ct)
+    {
+        var inFlight = _inflightTracePages.GetOrAdd(tracePageKey, _ => new Lazy<Task<TracePage>>(() =>
+        {
+            // A browser disconnect must not cancel the shared source request for other authorized
+            // viewers. QueryAsync still enforces the bounded dependency timeout.
+            return QueryRunTracesAsync(workspaceId, runId, agentNameByRunId, traceContextsByRunId, cursor, pageSize, CancellationToken.None);
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            var page = await inFlight.Value.WaitAsync(ct).ConfigureAwait(false);
+            if (page.QueryError is null)
+            {
+                CacheTracePage(tracePageKey, page);
+                return page;
+            }
+
+            if (_tracePageFallbackCache.TryGetValue(tracePageKey, out var cached))
+            {
+                if (cached.ExpiresAt > DateTimeOffset.UtcNow)
+                {
+                    return cached.Page with
+                    {
+                        QueryError = $"{page.QueryError} Showing trace spans retrieved earlier while the telemetry source recovers.",
+                    };
+                }
+                _tracePageFallbackCache.TryRemove(tracePageKey, out _);
+            }
+            return page;
+        }
+        finally
+        {
+            if (inFlight.IsValueCreated && inFlight.Value.IsCompleted)
+                _inflightTracePages.TryRemove(new KeyValuePair<string, Lazy<Task<TracePage>>>(tracePageKey, inFlight));
+        }
+    }
+
+    private void CacheTracePage(string tracePageKey, TracePage page)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var entry in _tracePageFallbackCache)
+        {
+            if (entry.Value.ExpiresAt <= now)
+                _tracePageFallbackCache.TryRemove(entry.Key, out _);
+        }
+        if (_tracePageFallbackCache.ContainsKey(tracePageKey)
+            || _tracePageFallbackCache.Count < MaxTracePageFallbackEntries)
+        {
+            _tracePageFallbackCache[tracePageKey] = new CachedTracePage(
+                page,
+                now.Add(TracePageFallbackCacheLifetime));
+        }
+    }
+
+    private async Task<TracePage> QueryRunTracesAsync(
+        string workspaceId,
+        string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        IReadOnlyDictionary<string, RunTraceContext>? traceContextsByRunId,
+        TraceCursor? cursor,
+        int pageSize,
         CancellationToken ct)
     {
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
         var runIds = agentNameByRunId?.Keys.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [runId];
         var runIdPredicate = BuildRunIdDimensionPredicate(runId, runIds, "Properties");
+        var continuationPredicate = cursor is null
+            ? string.Empty
+            : $"| where timestamp > datetime({cursor.Timestamp.UtcDateTime:O}) or (timestamp == datetime({cursor.Timestamp.UtcDateTime:O}) and id > \"{EscapeKusto(cursor.Id)}\")";
         var query =
             $"""
             let run_operations = materialize(
@@ -701,7 +836,9 @@ public sealed class AppInsightsMetricsService
                 success,
                 resultCode,
                 customDimensions
-            | order by timestamp asc
+            {continuationPredicate}
+            | order by timestamp asc, id asc
+            | take {pageSize + 1}
             """;
 
         string? queryError = null;
@@ -711,10 +848,12 @@ public sealed class AppInsightsMetricsService
             timeFrom,
             timeTo,
             ct,
-            _ => queryError = "Application Insights trace query failed.").ConfigureAwait(false);
-        if (result is null) return ([], queryError);
+            exception => queryError = DescribeTraceQueryFailure(exception)).ConfigureAwait(false);
+        if (result is null) return new TracePage([], queryError, null, false);
 
-        var spans = result.Table.Rows
+        var hasMore = result.Table.Rows.Count > pageSize;
+        var rows = hasMore ? result.Table.Rows.Take(pageSize).ToArray() : result.Table.Rows.ToArray();
+        var spans = rows
             .Select((row, index) =>
             {
                 var customDimensions = ReadCustomDimensions(row[7]);
@@ -764,7 +903,10 @@ public sealed class AppInsightsMetricsService
                 };
             })
             .ToList();
-        return (spans, null);
+        var nextCursor = hasMore && rows.Length > 0
+            ? EncodeTraceCursor(ReadDateTimeOffset(rows[^1][3]) ?? timeFrom, ReadRequiredString(rows[^1][0], $"{runId}-{rows.Length - 1}"))
+            : null;
+        return new TracePage(spans, null, nextCursor, hasMore);
     }
 
     /// <summary>
@@ -832,7 +974,32 @@ public sealed class AppInsightsMetricsService
                 ?? (success ? "success" : "error"),
             ErrorType = BoundedDimension(dimensions, TraceTelemetry.ErrorType)
                 ?? (!success ? BoundedValue(resultCode) : null),
+            Execution = ProjectExecutionDiagnostics(dimensions),
         };
+    }
+
+    private static ExecutionDiagnosticsDto? ProjectExecutionDiagnostics(
+        IReadOnlyDictionary<string, string?> dimensions)
+    {
+        var diagnostics = new ExecutionDiagnosticsDto
+        {
+            QueueEnteredAt = ReadBoundedTimestamp(dimensions, "agentweaver.execution.queue.entered_at"),
+            DispatchStartedAt = ReadBoundedTimestamp(dimensions, "agentweaver.execution.dispatch.started_at"),
+            ProcessStartedAt = ReadBoundedTimestamp(dimensions, TraceTelemetry.ProcessStartedAt),
+            ProcessEndedAt = ReadBoundedTimestamp(dimensions, TraceTelemetry.ProcessEndedAt),
+            HostProcessCpuMs = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessCpuMs),
+            HostProcessWorkingSetBytes = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessWorkingSetBytes),
+            HostProcessPeakWorkingSetBytes = ReadNonNegativeLong(dimensions, TraceTelemetry.HostProcessPeakWorkingSetBytes),
+        };
+        return diagnostics.QueueEnteredAt is null
+            && diagnostics.DispatchStartedAt is null
+            && diagnostics.ProcessStartedAt is null
+            && diagnostics.ProcessEndedAt is null
+            && diagnostics.HostProcessCpuMs is null
+            && diagnostics.HostProcessWorkingSetBytes is null
+            && diagnostics.HostProcessPeakWorkingSetBytes is null
+                ? null
+                : diagnostics;
     }
 
     /// <summary>
@@ -869,20 +1036,30 @@ public sealed class AppInsightsMetricsService
         var client = GetClient();
         if (client is null) return null;
 
-        // #208 point 3: bound the total number of simultaneous workspace queries across every
-        // concurrent request this (singleton) service is handling, not just the ~8 subqueries of one
-        // batch. This wait is intentionally OUTSIDE the try/finally below: if `ct` is canceled while
-        // queued behind the budget, WaitAsync throws before any permit is acquired, so there is nothing
-        // to release. That cancellation still surfaces as a plain OperationCanceledException to the
-        // caller (no permit was taken, no query issued) — control flow, not a dependency failure.
-        await _queryConcurrency.WaitAsync(ct).ConfigureAwait(false);
+        if (TryGetWorkspaceCooldown(out var remaining))
+        {
+            var exception = new TelemetryQueryUnavailableException(
+                $"Application Insights workspace queries are paused for approximately {Math.Ceiling(remaining.TotalSeconds)} seconds after a dependency failure.");
+            onError?.Invoke(exception);
+            failures?.Record(context, exception);
+            return null;
+        }
+
+        using var queryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        queryCts.CancelAfter(WorkspaceQueryTimeout);
+        var leaseAcquired = false;
         try
         {
+            // This timeout covers both time spent queued behind the process-wide concurrency budget
+            // and the Azure Monitor request, preventing an unavailable workspace from consuming
+            // request threads or multiplying work as trace traffic grows.
+            await _queryConcurrency.WaitAsync(queryCts.Token).ConfigureAwait(false);
+            leaseAcquired = true;
             var response = await client.QueryWorkspaceAsync(
                 workspaceId,
                 query,
                 new QueryTimeRange(from, to),
-                cancellationToken: ct).ConfigureAwait(false);
+                cancellationToken: queryCts.Token).ConfigureAwait(false);
             return response.Value;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -896,37 +1073,60 @@ public sealed class AppInsightsMetricsService
         }
         catch (Exception ex)
         {
-            onError?.Invoke(ex);
+            var failure = ex is OperationCanceledException
+                ? new TimeoutException($"Application Insights workspace query exceeded the {WorkspaceQueryTimeout.TotalSeconds:0}-second timeout.", ex)
+                : ex;
+            MarkWorkspaceUnavailable();
+            onError?.Invoke(failure);
             if (failures is not null)
             {
                 // #208 point 2: part of a top-level batch — record for a single aggregated log line
                 // instead of logging once per subquery.
-                failures.Record(context, ex);
+                failures.Record(context, failure);
             }
             else
             {
-                // Standalone call site (no batch sink supplied): keep prior per-call logging.
                 _logger.LogError(
-                    ex,
-                    "Application Insights query failed in {QueryContext}. KQL (truncated): {Query}",
+                    failure,
+                    "Application Insights query failed in {QueryContext} ({FailureType}); workspace queries are paused for {CooldownSeconds} seconds.",
                     context,
-                    TruncateQuery(query));
+                    failure.GetType().Name,
+                    WorkspaceQueryCooldown.TotalSeconds);
             }
             return null;
         }
         finally
         {
-            _queryConcurrency.Release();
+            if (leaseAcquired)
+                _queryConcurrency.Release();
         }
     }
 
-    private static string TruncateQuery(string query)
+    private bool TryGetWorkspaceCooldown(out TimeSpan remaining)
     {
-        const int maxLoggedQueryLength = 4_000;
-        return query.Length <= maxLoggedQueryLength
-            ? query
-            : query[..maxLoggedQueryLength] + "...";
+        var unavailableUntil = new DateTimeOffset(Interlocked.Read(ref _workspaceUnavailableUntilUtcTicks), TimeSpan.Zero);
+        remaining = unavailableUntil - DateTimeOffset.UtcNow;
+        return remaining > TimeSpan.Zero;
     }
+
+    private void MarkWorkspaceUnavailable() =>
+        Interlocked.Exchange(ref _workspaceUnavailableUntilUtcTicks, DateTimeOffset.UtcNow.Add(WorkspaceQueryCooldown).Ticks);
+
+    private static RunTraceDto UnavailableRunTrace(string runId, string queryError) => new()
+    {
+        RunId = runId,
+        Spans = [],
+        QueryError = queryError,
+    };
+
+    private static string DescribeTraceQueryFailure(Exception exception) =>
+        exception is TimeoutException
+            ? $"Application Insights trace telemetry did not respond within {WorkspaceQueryTimeout.TotalSeconds:0} seconds. Trace retrieval is paused briefly to protect responsiveness; retry shortly."
+            : exception is TelemetryQueryUnavailableException
+                ? "Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly."
+                : "Application Insights trace telemetry is temporarily unavailable. Retry shortly.";
+
+    private sealed class TelemetryQueryUnavailableException(string message) : Exception(message);
 
     private ProjectMetricsDto Empty() => new()
     {
@@ -1104,6 +1304,23 @@ public sealed class AppInsightsMetricsService
     {
         var value = ReadDimension(dimensions, key);
         return long.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static long? ReadNonNegativeLong(IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = ReadDimensionLong(dimensions, key);
+        return value is >= 0 ? value : null;
+    }
+
+    private static DateTimeOffset? ReadBoundedTimestamp(
+        IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = BoundedValue(ReadDimension(dimensions, key));
+        return DateTimeOffset.TryParse(value, out var timestamp)
+            && timestamp >= DateTimeOffset.UnixEpoch
+            && timestamp <= DateTimeOffset.UtcNow.AddDays(1)
+                ? timestamp
+                : null;
     }
 
     private static bool? ReadDimensionBoolean(IReadOnlyDictionary<string, string?> dimensions, string key)

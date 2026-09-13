@@ -1,5 +1,6 @@
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 import { loadStorageStateForOrigin, loadSessionStorageSeed } from './auth.mjs';
+import { resolveGoogleChromeExecutable } from './chrome-default-profile.mjs';
 
 const DEFAULT_IDENTITY_PROVIDER_ORIGINS = Object.freeze([
   'https://github.com',
@@ -53,6 +54,30 @@ async function playwrightChromium() {
   return chromium;
 }
 
+export function installedChromeLaunchOptions(
+  opts,
+  resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
+) {
+  return {
+    headless: opts.headless !== false,
+    channel: 'chrome',
+    executablePath: resolveGoogleChromeExecutableFn(),
+  };
+}
+
+export function browserLaunchOptions(
+  opts,
+  resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
+  environment = process.env,
+) {
+  // The bundled browser is only permitted for hermetic fixture tests. Production
+  // authentication and preview runs always resolve installed Google Chrome above.
+  if (environment.NODE_ENV === 'test' && environment.AGENTWEAVER_UI_HARNESS_TEST_BROWSER === '1') {
+    return { headless: opts.headless !== false };
+  }
+  return installedChromeLaunchOptions(opts, resolveGoogleChromeExecutableFn);
+}
+
 export async function closeBrowserResources(context, browser, page) {
   const errors = [];
   if (page) {
@@ -100,6 +125,7 @@ export async function openBrowserSession(opts, {
   chromium: chromiumOverride,
   loadStorageStateForOriginImpl = loadStorageStateForOrigin,
   loadSessionStorageSeedImpl = loadSessionStorageSeed,
+  resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
 } = {}) {
   let browserLaunchAttempted = false;
   let browser;
@@ -109,7 +135,7 @@ export async function openBrowserSession(opts, {
     const base = guardedUrl(opts.baseUrl, '/', opts);
     const chromium = chromiumOverride ?? await playwrightChromium();
     browserLaunchAttempted = true;
-    browser = await chromium.launch({ headless: opts.headless !== false });
+    browser = await chromium.launch(browserLaunchOptions(opts, resolveGoogleChromeExecutableFn));
     const contextOptions = {};
     if (opts.storageState) {
       contextOptions.storageState = await loadStorageStateForOriginImpl(opts.storageState, base.origin);

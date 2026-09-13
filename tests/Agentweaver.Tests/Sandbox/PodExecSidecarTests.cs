@@ -256,6 +256,49 @@ public sealed class PodExecSidecarTests
         }
     }
 
+    [SidecarLinuxFact]
+    public async Task RetainedSpawnedProcess_SurvivesRelayExit_AndIsExplicitlyReaped()
+    {
+            if (!KataRuntimeGate.Available())
+                return;
+
+            var root = NewRoot();
+            var (workspace, _) = CreateTwoRuns(root);
+            var ready = Path.Combine(workspace, "ready.txt");
+            var terminated = Path.Combine(workspace, "terminated.txt");
+            await using var harness = PodExecTestHarness.StartServer(root);
+            var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+            client.RegisterTrustedWorkspace(workspace);
+            client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+            var supervised = await client.StartSupervisedProcessAsync(
+                $"trap 'printf terminated > {Quote(terminated)}; exit 0' TERM; " +
+                $"printf ready > {Quote(ready)}; while :; do sleep 1; done",
+                workspace,
+                null,
+                networkEnabled: false);
+
+            try
+            {
+                await WaitForFileAsync(ready, TimeSpan.FromSeconds(20));
+                await client.RetainAsync(supervised.Handle);
+
+                supervised.Process.Kill(entireProcessTree: true);
+                await supervised.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+                await Task.Delay(500);
+                File.Exists(terminated).Should().BeFalse(
+                    "retaining a published preview transfers ownership from the relay to the sidecar");
+
+                await client.StopAsync(supervised.Handle, TimeSpan.FromSeconds(2));
+                await WaitForFileAsync(terminated, TimeSpan.FromSeconds(20));
+            }
+            finally
+            {
+                await client.StopAsync(supervised.Handle, TimeSpan.FromSeconds(2));
+                supervised.Process.Dispose();
+            }
+    }
+
     /// <summary>
     /// Regression for a cleanup flaw found in review: when the command itself finishes normally
     /// (the wrapper exits on its own, not because the relay disconnected) but leaves a backgrounded
