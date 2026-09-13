@@ -126,10 +126,48 @@ yet" and is retried by the existing bounded backoff. Keep it short: raising it
 does not buy reliability, it just makes each hung `az acr repository show` stall
 that much longer before the retry can happen.
 
-The build and import limits behave differently: they are opt-in and do **not**
-retry a timed-out build or import, because a local CLI timeout leaves the remote
-operation's state unknown. Inspect the target ACR tag/digest before deciding
-whether a manual retry is safe.
+The build and import limits behave differently from each other. A timed-out
+`az acr build` is **not** retried: a local CLI timeout leaves the remote build's
+state unknown. Inspect the target ACR tag/digest before deciding whether a
+manual retry is safe.
+
+ACR *import*, retag, and untag operations are retried automatically (three
+attempts, exponential backoff with jitter) on transient transport or service
+failures — connection resets, throttling, and timeouts. This is safe because
+those operations are idempotent: retries pass `--force`, so importing the same
+source into the same tag converges on the same digest even if an earlier attempt
+actually landed before the connection dropped. Deterministic errors (a missing
+source image, an authentication failure) still fail immediately rather than
+burning retries. Staging-tag cleanup never fails a deployment: a leaked
+preflight tag is harmless, an aborted deployment is not.
+
+### Resuming a failed deployment
+
+A release deployment records each completed stage, so a failure part-way
+through does not force you to repeat the expensive work:
+
+```bash
+npm run azure:deploy-from-release -- v1.2.3 --resume
+```
+
+`--resume` skips the build/promotion and deploy stages if they already completed
+for this exact release **and** the same target (subscription, resource group,
+registry, cluster, namespace, and image source), reusing the image digests they
+resolved. Anything else starts clean. Use `--restart` to discard the recorded
+state and re-run every stage; `--resume` and `--restart` cannot be combined.
+
+Verification stages are never skipped. Provenance, warm-pool, and health checks
+re-run on every attempt, including a resumed one — they are the evidence that
+the deployment is correct, so a resumed run still has to prove it. A fully
+verified deployment clears its own checkpoint, so the next run for that tag is
+complete by default.
+
+Checkpoints are stored under `~/.agentweaver/deploy-state/`, deliberately
+outside the repository: a release deployment refuses to run against a dirty
+working tree, and that check inspects untracked and ignored paths, so in-repo
+state would block the very command that wrote it. The files record only stage
+completion timestamps and resolved image digests — never credentials — and are
+safe to delete at any time.
 
 ### Deploying local work to an existing environment
 

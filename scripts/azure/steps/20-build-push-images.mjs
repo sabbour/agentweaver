@@ -37,6 +37,15 @@ import * as kubectlDefault from "../lib/kubectl.mjs";
 import { githubReleaseExists, resolveGitHubRepository } from "../lib/github.mjs";
 import { IMAGES, buildArgsFor } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
+import { withRetry } from "../lib/retry.mjs";
+
+/** Attempts (initial + retries) for idempotent ACR mutations. */
+const ACR_MUTATION_ATTEMPTS = 3;
+
+function logRetry({ attempt, attempts, delay, error, label }) {
+  const reason = (error?.message || String(error)).split("\n")[0];
+  log.warn(`  ${label}: attempt ${attempt}/${attempts} failed (${reason}); retrying in ${delay}ms`);
+}
 
 const CUSTOM_IMAGE_FIELDS = Object.freeze({
   "agentweaver-api": "IMAGE_API",
@@ -374,21 +383,32 @@ export async function retagImage(image, sourceTag, targetTag, cfg, { exec = exec
     return;
   }
   await log.withTiming(`ACR retag ${image}:${sourceTag} -> ${targetTag}`, () =>
-    exec.capture("az", [
-      "acr",
-      "import",
-      "--name",
-      cfg.ACR_NAME,
-      "--resource-group",
-      cfg.RESOURCE_GROUP,
-      "--source",
-      `${cfg.ACR_LOGIN_SERVER}/${image}:${sourceTag}`,
-      "--image",
-      `${image}:${targetTag}`,
-      "--force",
-      "--output",
-      "none",
-    ], { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+    // Idempotent: `--force` re-points the same target tag at the same source
+    // digest, so a retry after an indeterminate failure converges rather than
+    // duplicating work.
+    withRetry(
+      () =>
+        exec.capture("az", [
+          "acr",
+          "import",
+          "--name",
+          cfg.ACR_NAME,
+          "--resource-group",
+          cfg.RESOURCE_GROUP,
+          "--source",
+          `${cfg.ACR_LOGIN_SERVER}/${image}:${sourceTag}`,
+          "--image",
+          `${image}:${targetTag}`,
+          "--force",
+          "--output",
+          "none",
+        ], { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+      {
+        attempts: ACR_MUTATION_ATTEMPTS,
+        label: `ACR retag ${image}:${targetTag}`,
+        onRetry: logRetry,
+      },
+    ),
   );
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${targetTag}`);
 }
@@ -399,7 +419,7 @@ function ghcrImportAuthArgs(cfg) {
 }
 
 async function importIntoAcr(source, image, targetTag, cfg, { exec = execDefault, force = false, ghcrAuth = false } = {}) {
-  const args = [
+  const argsFor = (useForce) => [
     "acr",
     "import",
     "--name",
@@ -410,22 +430,53 @@ async function importIntoAcr(source, image, targetTag, cfg, { exec = execDefault
     source,
     "--image",
     `${image}:${targetTag}`,
-    ...(force ? ["--force"] : []),
+    ...(useForce ? ["--force"] : []),
     ...(ghcrAuth ? ghcrImportAuthArgs(cfg) : []),
     "--output",
     "none",
   ];
   await log.withTiming(`ACR import ${image}:${targetTag}`, () =>
-    exec.capture("az", args, { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+    // Idempotent on retry: importing the same source into the same tag yields
+    // the same digest. Retries always pass `--force` because a first attempt
+    // that actually landed before the transport failed would otherwise make
+    // the retry fail with "tag already exists" -- a false deploy failure.
+    withRetry(
+      (attempt) =>
+        exec.capture("az", argsFor(force || attempt > 1), {
+          timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined,
+        }),
+      {
+        attempts: ACR_MUTATION_ATTEMPTS,
+        label: `ACR import ${image}:${targetTag}`,
+        onRetry: logRetry,
+      },
+    ),
   );
 }
 
 async function untagImage(image, tag, cfg, { exec = execDefault } = {}) {
-  await exec.capture(
-    "az",
-    ["acr", "repository", "untag", "--name", cfg.ACR_NAME, "--image", `${image}:${tag}`],
-    { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
-  );
+  // This only removes a temporary preflight staging tag, and the result is
+  // discarded. `allowFailure` covers a non-zero exit code but NOT a timeout,
+  // which rejects -- so an unreachable registry during cleanup used to fail an
+  // otherwise fully successful deployment. Leaking a staging tag is harmless;
+  // failing the deploy is not.
+  try {
+    await withRetry(
+      () =>
+        exec.capture(
+          "az",
+          ["acr", "repository", "untag", "--name", cfg.ACR_NAME, "--image", `${image}:${tag}`],
+          { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
+        ),
+      {
+        attempts: ACR_MUTATION_ATTEMPTS,
+        label: `ACR untag ${image}:${tag}`,
+        onRetry: logRetry,
+      },
+    );
+  } catch (error) {
+    log.warn(`  could not remove staging tag ${image}:${tag} (${error.message}); continuing`);
+  }
 }
 
 function ghcrStageTag(targetTag) {
