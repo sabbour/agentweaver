@@ -87,6 +87,7 @@ const SUBCOMMANDS = Object.freeze([
   "release",
   "verify",
   "dev",
+  "prune-registry",
 ]);
 
 export const HELP_TEXT = `Agentweaver Azure toolchain
@@ -104,6 +105,7 @@ Commands:
   release              Publish, then deploy, a prepared exact-main release.
   verify               Post-deploy health verification.
   dev                  Local dev orchestration.
+  prune-registry       Delete unreferenced image manifests from the ACR (dry run by default).
 
 Run 'node scripts/azure/cli.mjs <command> --help' for command-specific options.
 `;
@@ -162,6 +164,8 @@ export async function run(argv = [], opts = {}) {
         return importFn("./steps/40-verify.mjs");
       case "dev":
         return importFn("./dev.mjs");
+      case "prune-registry":
+        return importFn("./prune-registry.mjs");
       default:
         throw new Error(`Unknown command: '${command}'.`);
     }
@@ -247,6 +251,23 @@ export async function run(argv = [], opts = {}) {
       env,
       recoverRepoAppPrivateKey,
     });
+  }
+
+  if (command === "prune-registry") {
+    if (rest.includes("-h") || rest.includes("--help")) {
+      log.info(mod.HELP_TEXT ?? HELP_TEXT);
+      return { ok: true, help: true };
+    }
+    // Uses the same per-user params.<username>.json auto-load as the deploy
+    // commands so ACR_NAME does not have to be repeated on the command line.
+    const { env, argv: pruneArgs, recoverRepoAppPrivateKey } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    if (recoverRepoAppPrivateKey) {
+      throw new Error("--recover-repo-app-private-key is valid only for deployment commands.");
+    }
+    return mod.run({ argv: pruneArgs, log, env });
   }
 
   return mod.run({ argv: rest, log });

@@ -13,6 +13,7 @@
     "azure:deploy-from-release": "node scripts/azure/cli.mjs deploy-from-release",
     "azure:release": "node scripts/azure/cli.mjs release",
     "azure:verify": "node scripts/azure/cli.mjs verify",
+    "azure:prune-registry": "node scripts/azure/cli.mjs prune-registry",
     "dev:web": "npm --prefix apps/web run build && npm --prefix apps/web run dev",
     "dev:api": "dotnet build apps/Agentweaver.Api -c Release -p:CopilotSkipCliDownload=true && dotnet run --project apps/Agentweaver.Api -c Release --no-build -p:CopilotSkipCliDownload=true",
     "docs:dev": "npm --prefix docs run dev",
