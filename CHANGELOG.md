@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.31.1
+
+### Patch Changes
+
+- 87ebadd: Allow release deployments to configure the ACR digest-query timeout when registry verification takes longer than the default bound.
+
 ## 0.31.0
 
 ### Minor Changes
