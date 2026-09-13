@@ -103,17 +103,6 @@ public sealed class RunModelProviderSnapshotStore(
             throw SnapshotUnavailable();
         }
 
-        try
-        {
-            var existing = await TryGetAsync(run, ct).ConfigureAwait(false);
-            if (existing is not null)
-                return existing;
-        }
-        catch (AgentProviderException ex) when (ex.ErrorCode == "model_provider_snapshot_unavailable")
-        {
-            // A retry is allowed to replace only an unreadable owned snapshot.
-        }
-
         var candidate = new Snapshot(
             Version,
             provider.ProviderKind(),
@@ -122,6 +111,20 @@ public sealed class RunModelProviderSnapshotStore(
             provider.CredentialVersion(),
             ByokConfiguration: null);
         ValidateSnapshot(candidate);
+
+        try
+        {
+            var existing = await TryGetAsync(run, ct).ConfigureAwait(false);
+            // No owned snapshot needs replacement: this execution path has no private
+            // provider material to preserve or refresh.
+            if (existing is not null)
+                return existing;
+            return ToBoundary(candidate);
+        }
+        catch (AgentProviderException ex) when (ex.ErrorCode == "model_provider_snapshot_unavailable")
+        {
+            // A retry is allowed to replace only an unreadable owned snapshot.
+        }
 
         var replacementReference = CandidateKey(run.Id);
         await secrets.SetSecretAsync(
