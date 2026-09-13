@@ -117,6 +117,7 @@ operation, explicitly set one or both environment variables:
 ```powershell
 $env:ACR_BUILD_TIMEOUT_MS = "1800000"  # 30 minutes
 $env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
+$env:ACR_QUERY_TIMEOUT_MS = "600000"   # 10 minutes for ACR digest verification
 ```
 
 These limits are opt-in and do not retry a timed-out build or import: a local
