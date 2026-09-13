@@ -20,6 +20,7 @@ import {
   importImagesFromCustomSources,
   stashFrontendNodeModules,
   waitForAcrTagDigest,
+  waitForAcrRepositoryDigest,
   stampProvenance,
   run as runBuild,
 } from "../steps/20-build-push-images.mjs";
@@ -301,6 +302,38 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
 test("acrRepositoryDigestForImage: returns null when the image tag does not exist", async () => {
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "", stderr: "not found", code: 1 }) });
   assert.equal(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), null);
+});
+
+test("acrRepositoryDigestForImage: treats a timeout rejection as 'not visible yet' instead of throwing", async () => {
+  // `az acr repository show` is observably hang-prone, so exec rejects on the
+  // timeout rather than returning a non-zero code. That rejection must not escape.
+  const exec = fakeExec({
+    captureImpl: async () => {
+      throw new Error("Command timed out after 90000ms; remote operation state is unknown and was not retried: az acr repository show");
+    },
+  });
+  assert.equal(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), null);
+});
+
+test("waitForAcrRepositoryDigest: keeps retrying past a hung CLI call and returns the digest once it resolves", async () => {
+  const digest = "sha256:" + "e".repeat(64);
+  let attempts = 0;
+  const exec = fakeExec({
+    captureImpl: async () => {
+      attempts += 1;
+      // First two attempts hang and are killed by the per-attempt timeout.
+      if (attempts <= 2) throw new Error("Command timed out after 90000ms; ... was not retried: az acr repository show");
+      return { stdout: digest + "\n", stderr: "", code: 0 };
+    },
+  });
+
+  const resolved = await waitForAcrRepositoryDigest("agentweaver-api", "v1.2.3", CFG, {
+    exec,
+    sleep: async () => {}, // skip real delays in tests
+  });
+
+  assert.equal(resolved, digest, "a transient CLI hang must not abort the deploy");
+  assert.equal(attempts, 3);
 });
 
 test("stampProvenance: imports the source digest into prov-<sha> and then locks it read-only", async () => {
