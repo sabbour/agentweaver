@@ -204,6 +204,70 @@ npm run azure:release
 See the [operations guide](./operations.md#release-process) for the full
 release preparation, publication, deployment, and recovery mechanics.
 
+### Pruning the container registry
+
+Every deployment adds manifests to the registry: release images, per-commit
+images, provenance-stamped copies, and temporary preflight staging tags. Left
+alone this grows without bound and makes registry queries slower. To remove
+what nothing references:
+
+```bash
+# Show what would be removed -- changes nothing.
+npm run azure:prune-registry
+
+# Apply it.
+npm run azure:prune-registry -- --execute
+```
+
+**The prune is a dry run by default** and prints a full plan first. `--execute`
+additionally asks for confirmation; pass `--yes` to skip the prompt in
+automation.
+
+A manifest is **kept** when it is any of:
+
+- one of the newest `--keep` releases (default 3) in its repository,
+- tagged `latest-release`, `latest`, or `stable`,
+- running in the cluster right now, by tag **or** by pinned digest,
+- a child of any retained multi-arch index, or
+- in a protected repository (`moby/*`, which holds the BuildKit images that
+  `az acr build` itself runs on).
+
+Everything else is unreferenced and is deleted.
+
+Two safety properties are worth understanding before you trust it:
+
+- **It protects by digest, never by tag name.** A multi-arch OCI index
+  references its per-architecture children by digest, and those children carry
+  no tags of their own. The intuitive shortcut — "delete everything untagged" —
+  therefore destroys the architectures of images you meant to keep. Retained
+  indexes are expanded into their children, and a manifest that cannot be
+  expanded is kept rather than risked.
+- **It fails closed.** If the set of running images cannot be read from the
+  cluster, the prune refuses to delete anything instead of guessing, because
+  that set is exactly what protects in-use digests. Check your `kubectl`
+  context before running it.
+
+Release provenance tags are deliberately write-locked (`writeEnabled=false`),
+so deleting one returns `405 REGISTRY_DISALLOWED_OPERATION`. The prune lifts
+that lock only for a manifest it has already decided to retire, then retries
+the delete once.
+
+Useful flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--registry <name>` | Target registry; defaults to `ACR_NAME` from your params file. |
+| `--keep <n>` | Releases to retain per repository (default 3). |
+| `--json` | Emit the plan as JSON for scripting or review. |
+| `--concurrency <n>` | Parallel deletes (default 8). |
+
+Like the rest of the toolchain this talks to the registry REST API rather than
+`az acr repository`, which intermittently hangs for minutes at a time (see
+[Image-build progress and optional Azure CLI
+limits](#image-build-progress-and-optional-azure-cli-limits)). A prune walks
+every manifest in every repository, so it is precisely the workload where those
+hangs are worst.
+
 ## Running an individual step
 
 `scripts/azure/cli.mjs` composes the same step modules under `scripts/azure/steps/`
