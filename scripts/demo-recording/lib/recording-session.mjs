@@ -14,7 +14,7 @@ import { joinCaptureConfig, loadCaptureConfig } from './capture-config.mjs';
 import { loadBeatPlan } from './beats.mjs';
 import { renderCaptureScript } from './capture-plan.mjs';
 import { resolveCapturePreflight, verifyFixtureWorkflowRequirements } from './preflight.mjs';
-import { writeSeedScript } from './auth.mjs';
+import { getSessionTokenStatus, writeSeedScript } from './auth.mjs';
 
 export const DEFAULT_RECORDING_SESSION = 'agentweaver-demo';
 export const UNAUTHENTICATED_RECORDING_SESSION = 'agentweaver-demo-unauthenticated';
@@ -894,13 +894,27 @@ export async function recordingStatus(options) {
     chromeDefaultProfile: false,
     authIgnored: false,
     authReady: false,
+    tokenPresent: false,
+    tokenExpiresAt: null,
+    tokenExpired: false,
+    tokenMinutesRemaining: null,
     sessionOpen: false,
     sessionAuthenticated: false,
   };
   status.chromeDefaultProfile = await validateLiteralChromeDefaultProfile(chromeProfile)
     .then(() => true, () => false);
   status.authIgnored = await assertProtectedAuthRoot(paths.root).then(() => true, () => false);
-  status.authReady = status.authIgnored && await hasRecordingAuth(paths.root);
+  const tokenStatus = await getSessionTokenStatus(paths.sessionStoragePath).catch(() => ({
+    present: false, expiresAt: null, expired: false, minutesRemaining: null,
+  }));
+  status.tokenPresent = tokenStatus.present;
+  status.tokenExpiresAt = tokenStatus.expiresAt;
+  status.tokenExpired = tokenStatus.expired;
+  status.tokenMinutesRemaining = tokenStatus.minutesRemaining;
+  // "ready" must mean usable. An expired token is structurally present but
+  // makes every authenticated request fail with 401, so reporting it as ready
+  // sends callers to debug the wrong thing.
+  status.authReady = status.authIgnored && await hasRecordingAuth(paths.root) && !tokenStatus.expired;
   const sessions = listPlaywrightSessions();
   status.sessionOpen = sessions.get(options.session)?.status === 'open';
   if (status.sessionOpen) {

@@ -42,6 +42,30 @@ Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/config` only to explain a `401` without retaining provider configuration
 in evidence.
 
+#### Check the token is actually live before dispatching a run
+
+A cached session token expires long before anything structural changes on disk.
+Confirm it is live *first* — a run dispatched against an expired token produces a
+uniform wall of `401`s that is easy to misread as a product bug:
+
+```powershell
+npm run demo:record -- status
+```
+
+Require the `Session token:` line to report time remaining. If it reports
+`EXPIRED`, refresh before doing anything else; `getSessionToken` will refuse an
+expired token rather than return it.
+
+Two traps make this easy to misdiagnose:
+
+- `GET /api/version` and `/openapi/v1.yaml` are **unauthenticated**. Fetching
+  either successfully proves nothing about auth. Probe an authenticated endpoint
+  such as `GET /api/blueprints` and require a non-`401`.
+- Refreshing is **human-only**: `npm run demo:record -- signin` blocks until all
+  Google Chrome windows are closed so it can take the Default profile, and Entra
+  MFA/consent cannot be completed unattended. An agent that finds an expired
+  token must report the blocker and stop, not attempt a workaround.
+
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
 There is no curated list of named scenario subcommands, no per-persona fixed

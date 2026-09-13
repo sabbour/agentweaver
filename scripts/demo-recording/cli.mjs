@@ -338,10 +338,18 @@ export async function runRecordingCommand(command, argv, {
     await printPrepared(await captureRecordingPlan(options));
   } else if (command === 'status') {
     const status = await recordingStatus(options);
+    const tokenLine = !status.tokenPresent
+      ? 'missing'
+      : status.tokenExpiresAt === null
+        ? 'present (no decodable expiry)'
+        : status.tokenExpired
+          ? `EXPIRED ${Math.abs(status.tokenMinutesRemaining)} minute(s) ago at ${status.tokenExpiresAt.toISOString()} -- run "npm run demo:record -- signin"`
+          : `valid for ${status.tokenMinutesRemaining} more minute(s) (expires ${status.tokenExpiresAt.toISOString()})`;
     process.stdout.write([
       `Google Chrome Default profile: ${status.chromeDefaultProfile ? 'found' : 'missing'}`,
       `Protected auth directory: ${status.authIgnored ? 'Git-ignored' : 'not Git-ignored'}`,
       `Recording authentication: ${status.authReady ? 'ready' : 'missing'}`,
+      `Session token: ${tokenLine}`,
       `Session "${options.session}": ${status.sessionOpen ? 'open' : 'closed'}`,
       `Session authentication: ${status.sessionAuthenticated ? 'verified' : 'not verified'}`,
       '',
