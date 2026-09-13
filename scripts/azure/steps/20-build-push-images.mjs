@@ -214,27 +214,40 @@ export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = 
   }
 }
 
-/** Looks up the digest a concrete ACR image tag currently resolves to via `az acr repository show`. */
+/**
+ * Looks up the digest a concrete ACR image tag currently resolves to via `az acr repository show`.
+ *
+ * `allowFailure` only covers a non-zero exit code; a `timeoutMs` breach *rejects*
+ * instead. Without this catch that rejection escapes `waitForAcrRepositoryDigest`'s
+ * backoff loop and aborts the whole deploy on a single hung CLI call, which is exactly
+ * what the (observably hang-prone) `az acr repository show` does in practice. Treating a
+ * timeout as "not visible yet" keeps this read-only query retryable, matching
+ * `acrDigestForTag`.
+ */
 export async function acrRepositoryDigestForImage(image, tag, cfg, { exec = execDefault } = {}) {
-  const { stdout, code } = await exec.capture(
-    "az",
-    [
-      "acr",
-      "repository",
-      "show",
-      "--name",
-      cfg.ACR_NAME,
-      "--image",
-      `${image}:${tag}`,
-      "--query",
-      "digest",
-      "--output",
-      "tsv",
-    ],
-    { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
-  );
-  if (code !== 0) return null;
-  return stdout.trim() || null;
+  try {
+    const { stdout, code } = await exec.capture(
+      "az",
+      [
+        "acr",
+        "repository",
+        "show",
+        "--name",
+        cfg.ACR_NAME,
+        "--image",
+        `${image}:${tag}`,
+        "--query",
+        "digest",
+        "--output",
+        "tsv",
+      ],
+      { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
+    );
+    if (code !== 0) return null;
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function waitForAcrRepositoryDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
