@@ -53,7 +53,8 @@ come from the persisted `tool.call` / `tool.result` / `tool.error` run events (m
 by `callId`), not from Application Insights. Objects and JSON-string output are formatted as
 readable JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane
 says **No input** or **No output**; if a value is redacted, it is explicitly marked **Redacted**.
-The UI applies a second, bounded redaction pass before displaying legacy event data, so credentials
+For `run_command`, these command details start collapsed and require an explicit expansion. The UI
+applies a second, bounded redaction pass before displaying legacy event data, so credentials
 and oversized or deeply nested payloads cannot leak through the inspector.
 
 When a tool attempt fails, its inspector shows a bounded, redacted error detail and explains the
@@ -62,6 +63,14 @@ means the final outcome is not yet recorded, and **Run failed** means a terminal
 recorded. The summary keeps failed-tool-attempt count separate from run state, so a recovered
 attempt is never presented as a failed run. The events API also redacts legacy error payloads and
 limits an individual error detail to 2,048 characters before the UI receives it.
+
+Command progress is not inferred from the absence of a terminal result. The current sandbox tool
+uses the executor's buffered `ExecuteAsync` contract, while `StreamAsync` carries output-bearing
+chunks. Replacing one with the other merely to make a timer appear active could alter buffering or
+expose output prematurely. A future live-progress implementation must emit a correlated,
+output-free server-side heartbeat only while the exact command invocation is active, stop it on
+every terminal path, and deliver it over the existing run stream rather than adding browser polling.
+It must not use activity/span telemetry for command text or output.
 
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call

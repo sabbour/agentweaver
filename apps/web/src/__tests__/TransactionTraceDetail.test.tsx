@@ -371,6 +371,52 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Span inspector').textContent).toContain('Run failed — terminal outcome');
   });
 
+  it('keeps run-command input and output collapsed until requested', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [{
+        id: 'command',
+        name: 'run_command',
+        spanType: 'tool',
+        timestamp: '2026-09-11T16:00:01.000Z',
+        durationMs: 500,
+        success: true,
+        toolName: 'run_command',
+        toolCallId: 'call-command',
+      }],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-command', toolName: 'run_command', arguments: { command: 'dotnet test' } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.result',
+        payload: { callId: 'call-command', content: 'exit_code: 0' },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId('trace-span'));
+
+    const details = screen.getByTestId('run-command-details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.getByText('Command details')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Command details'));
+    expect(details.open).toBe(true);
+    expect(screen.getByText(/"command": "dotnet test"/)).toBeTruthy();
+    expect(screen.getByText('exit_code: 0')).toBeTruthy();
+  });
+
   it('redacts sensitive input and output again before rendering legacy event data', async () => {
     const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
