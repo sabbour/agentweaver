@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Agentweaver.Api.Sandbox;
 using k8s;
 
 namespace Agentweaver.Api.Diagnostics;
@@ -95,6 +96,7 @@ public sealed class KubernetesTopologyService
             "runtime" => new[]
             {
                 NamespacedCore("Pod", "pods", async token => (object)await _k8s!.CoreV1.ListNamespacedPodAsync(state.Namespace, limit: ListLimit, cancellationToken: token)),
+                Custom("Sandbox", "agents.x-k8s.io/v1beta1", "sandboxes"),
                 Custom("SandboxClaim", "extensions.agents.x-k8s.io/v1beta1", "sandboxclaims"),
                 Custom("SandboxWarmPool", "extensions.agents.x-k8s.io/v1beta1", "sandboxwarmpools"),
                 Custom("SandboxTemplate", "extensions.agents.x-k8s.io/v1beta1", "sandboxtemplates"),
@@ -562,6 +564,7 @@ public sealed class KubernetesTopologyService
             "HorizontalPodAutoscaler" or "VerticalPodAutoscaler" or "ScaledObject" =>
                 ConditionsHealthy(status) ? "healthy" : "unknown",
             "SandboxClaim" => ConditionsHealthy(status) ? "healthy" : "attention",
+            "Sandbox" => ConditionsHealthy(status) ? "healthy" : "attention",
             "SandboxWarmPool" => Int(status, "readyReplicas") >= Math.Max(1, Int(Property(item, "spec"), "replicas"))
                 ? "healthy" : Int(status, "readyReplicas") > 0 ? "attention" : "critical",
             _ => "unknown",
@@ -590,6 +593,7 @@ public sealed class KubernetesTopologyService
             "ScaledObject" => $"KEDA ScaledObject · {ArrayCount(spec, "triggers")} triggers",
             "PodDisruptionBudget" => $"PDB · {Int(status, "disruptionsAllowed")} disruptions allowed",
             "SandboxClaim" => $"SandboxClaim · {(ConditionsHealthy(status) ? "ready" : "pending")}",
+            "Sandbox" => $"Sandbox · {(ConditionsHealthy(status) ? "ready" : "pending")}",
             "SandboxWarmPool" => $"SandboxWarmPool · {Int(status, "readyReplicas")}/{Int(spec, "replicas")} ready",
             "SandboxTemplate" => "SandboxTemplate",
             _ => kind,
@@ -611,8 +615,73 @@ public sealed class KubernetesTopologyService
         Add(result, "currentReplicas", Number(status, "currentReplicas"));
         Add(result, "desiredReplicas", Number(status, "desiredReplicas"));
         Add(result, "disruptionsAllowed", Number(status, "disruptionsAllowed"));
+        Add(result, "createdUtc", String(Property(item, "metadata"), "creationTimestamp"));
+        Add(result, "ageSeconds", AgeSeconds(String(Property(item, "metadata"), "creationTimestamp")));
+        Add(result, "lastTransitionUtc", LatestConditionTransitionUtc(status));
+        Add(result, "imageTags", ImageTags(Property(Property(spec, "template"), "spec").ValueKind == JsonValueKind.Object
+            ? Property(Property(Property(spec, "template"), "spec"), "containers")
+            : Property(spec, "containers")));
         if (kind == "Service") Add(result, "type", String(spec, "type") ?? "ClusterIP");
         if (kind == "StorageClass") Add(result, "provisioner", String(item, "provisioner"));
+        if (kind == "Pod")
+        {
+            Add(result, "ready", PodReady(status));
+            Add(result, "restartCount", PodRestartCount(status));
+            Add(result, "nodeName", String(spec, "nodeName"));
+            Add(result, "runtimeClassName", String(spec, "runtimeClassName") ?? "runc");
+            Add(result, "containers", ContainerNames(Property(spec, "containers")));
+            Add(result, "deployment", PodDeploymentName(item));
+        }
+        if (kind == "Deployment")
+        {
+            Add(result, "lastRolloutUtc", LatestConditionTransitionUtc(status));
+            Add(result, "containers", ContainerNames(Property(Property(Property(spec, "template"), "spec"), "containers")));
+        }
+        if (kind == "SandboxWarmPool")
+        {
+            Add(result, "template", String(Property(spec, "sandboxTemplateRef"), "name") ?? String(Property(spec, "templateRef"), "name"));
+            Add(result, "minReplicas", Number(spec, "minReplicas"));
+            Add(result, "maxReplicas", Number(spec, "maxReplicas"));
+            Add(result, "claimedReplicas", Number(status, "claimedReplicas"));
+            Add(result, "lastScaleEvent", LatestConditionTransitionUtc(status));
+        }
+        if (kind == "SandboxClaim")
+        {
+            var metadata = Property(item, "metadata");
+            var annotations = ObjectStrings(Property(metadata, "annotations"));
+            Add(result, "runId", SandboxClaimConventions.TryGetRunIdAnnotation(item) ??
+                annotations.GetValueOrDefault("agentweaver.io/run-id") ??
+                annotations.GetValueOrDefault("agentweaver.dev/run-id"));
+            Add(result, "subtask", annotations.GetValueOrDefault("agentweaver.io/subtask-id") ??
+                annotations.GetValueOrDefault("agentweaver.dev/subtask-id"));
+            Add(result, "boundSandbox", String(Property(status, "sandbox"), "name"));
+            Add(result, "warmPool", String(Property(spec, "warmPoolRef"), "name"));
+            Add(result, "phase", ConditionsHealthy(status) ? "bound" : "pending");
+        }
+        if (kind == "Sandbox")
+        {
+            var templateSpec = Property(Property(spec, "podTemplate"), "spec");
+            Add(result, "podName", ObjectStrings(Property(Property(item, "metadata"), "annotations"))
+                .GetValueOrDefault("agents.x-k8s.io/pod-name"));
+            Add(result, "nodeName", String(status, "nodeName"));
+            Add(result, "runtimeClassName", String(templateSpec, "runtimeClassName") ?? "runc");
+            Add(result, "isolationBackend", IsolationBackend(String(templateSpec, "runtimeClassName")));
+            Add(result, "containers", ContainerNames(Property(templateSpec, "containers")));
+            Add(result, "imageTags", ImageTags(Property(templateSpec, "containers")));
+            Add(result, "status", ConditionsHealthy(status) ? "available" : "pending");
+        }
+        if (kind == "SandboxTemplate")
+        {
+            var template = Property(spec, "podTemplate");
+            var templateSpec = Property(template, "spec");
+            Add(result, "runtimeClassName", String(templateSpec, "runtimeClassName") ?? "runc");
+            Add(result, "containers", ContainerNames(Property(templateSpec, "containers")));
+            Add(result, "imageTags", ImageTags(Property(templateSpec, "containers")));
+            Add(result, "resourceRequests", ContainerResources(Property(templateSpec, "containers"), "requests"));
+            Add(result, "resourceLimits", ContainerResources(Property(templateSpec, "containers"), "limits"));
+            Add(result, "mounts", MountPaths(Property(templateSpec, "containers")));
+            Add(result, "policy", TemplatePolicy(spec));
+        }
         if (kind == "NetworkPolicy")
         {
             var ingress = Property(spec, "ingress");
@@ -743,6 +812,148 @@ public sealed class KubernetesTopologyService
         Property(element, name).ValueKind == JsonValueKind.Number && Property(element, name).TryGetInt32(out var value) ? value : 0;
     private static string? Number(JsonElement element, string name) =>
         Property(element, name).ValueKind == JsonValueKind.Number ? Property(element, name).GetRawText() : null;
+    private static string? AgeSeconds(string? createdUtc)
+    {
+        if (!DateTimeOffset.TryParse(createdUtc, out var created)) return null;
+        var seconds = Math.Max(0, (DateTimeOffset.UtcNow - created).TotalSeconds);
+        return ((int)seconds).ToString();
+    }
+    private static string? LatestConditionTransitionUtc(JsonElement status)
+    {
+        var conditions = Property(status, "conditions");
+        if (conditions.ValueKind != JsonValueKind.Array) return null;
+        DateTimeOffset? latest = null;
+        foreach (var condition in conditions.EnumerateArray())
+        {
+            var raw = String(condition, "lastTransitionTime") ?? String(condition, "lastUpdateTime");
+            if (DateTimeOffset.TryParse(raw, out var parsed) && (latest is null || parsed > latest))
+                latest = parsed;
+        }
+        return latest?.UtcDateTime.ToString("O");
+    }
+    private static string? PodReady(JsonElement status)
+    {
+        var containers = Property(status, "containerStatuses");
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var total = containers.GetArrayLength();
+        var ready = containers.EnumerateArray().Count(container => Property(container, "ready").ValueKind == JsonValueKind.True);
+        return $"{ready}/{total}";
+    }
+    private static string? PodRestartCount(JsonElement status)
+    {
+        var containers = Property(status, "containerStatuses");
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var restarts = containers.EnumerateArray().Sum(container => Int(container, "restartCount"));
+        return restarts.ToString();
+    }
+    private static string? ContainerNames(JsonElement containers)
+    {
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var names = containers.EnumerateArray()
+            .Select(container => String(container, "name"))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return names.Count == 0 ? null : string.Join(", ", names);
+    }
+    private static string? ImageTags(JsonElement containers)
+    {
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var tags = containers.EnumerateArray()
+            .Select(container => String(container, "image"))
+            .Where(image => !string.IsNullOrWhiteSpace(image))
+            .Select(ResolvedImageTag)
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return tags.Count == 0 ? null : string.Join(", ", tags);
+    }
+    private static string ResolvedImageTag(string? image)
+    {
+        if (string.IsNullOrWhiteSpace(image)) return "unknown";
+        var digestIndex = image.IndexOf('@', StringComparison.Ordinal);
+        if (digestIndex >= 0)
+        {
+            var digest = image[(digestIndex + 1)..];
+            return digest.Length > 19 ? digest[..19] : digest;
+        }
+        var slash = image.LastIndexOf('/');
+        var colon = image.LastIndexOf(':');
+        return colon > slash ? image[(colon + 1)..] : "latest";
+    }
+    private static string? PodDeploymentName(JsonElement pod)
+    {
+        var metadata = Property(pod, "metadata");
+        var labels = ObjectStrings(Property(metadata, "labels"));
+        if (labels.TryGetValue("app", out var app) && !string.IsNullOrWhiteSpace(app)) return app;
+        if (labels.TryGetValue("app.kubernetes.io/name", out var appName) && !string.IsNullOrWhiteSpace(appName)) return appName;
+        if (labels.TryGetValue("app.kubernetes.io/component", out var component) && !string.IsNullOrWhiteSpace(component))
+            return $"agentweaver-{component}";
+        var owners = Property(metadata, "ownerReferences");
+        if (owners.ValueKind != JsonValueKind.Array) return null;
+        var owner = owners.EnumerateArray().FirstOrDefault();
+        var name = String(owner, "name");
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var lastDash = name.LastIndexOf('-');
+        return lastDash > 0 && name[(lastDash + 1)..].All(IsKubernetesHashChar)
+            ? name[..lastDash]
+            : name;
+    }
+    private static bool IsKubernetesHashChar(char c) =>
+        c is >= 'a' and <= 'f' or >= '0' and <= '9';
+    private static string IsolationBackend(string? runtimeClassName) =>
+        string.Equals(runtimeClassName, "kata-vm-isolation", StringComparison.OrdinalIgnoreCase)
+            ? "Kata VM isolation"
+            : string.IsNullOrWhiteSpace(runtimeClassName) ? "runc" : runtimeClassName;
+    private static string? ContainerResources(JsonElement containers, string kind)
+    {
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var values = new List<string>();
+        foreach (var container in containers.EnumerateArray())
+        {
+            var name = String(container, "name") ?? "container";
+            var resources = Property(Property(container, "resources"), kind);
+            var cpu = Scalar(resources, "cpu");
+            var memory = Scalar(resources, "memory");
+            var storage = Scalar(resources, "ephemeral-storage");
+            var parts = new[] { cpu is null ? null : $"cpu {cpu}", memory is null ? null : $"memory {memory}", storage is null ? null : $"ephemeral {storage}" }
+                .Where(part => part is not null);
+            var text = string.Join(", ", parts);
+            if (!string.IsNullOrWhiteSpace(text)) values.Add($"{name}: {text}");
+        }
+        return values.Count == 0 ? null : string.Join("; ", values);
+    }
+    private static string? MountPaths(JsonElement containers)
+    {
+        if (containers.ValueKind != JsonValueKind.Array) return null;
+        var paths = containers.EnumerateArray()
+            .SelectMany(container => Property(container, "volumeMounts").ValueKind == JsonValueKind.Array
+                ? Property(container, "volumeMounts").EnumerateArray().Select(mount => String(mount, "mountPath")).ToArray()
+                : [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        return paths.Count == 0 ? null : string.Join(", ", paths);
+    }
+    private static string TemplatePolicy(JsonElement spec)
+    {
+        var parts = new List<string>();
+        if (String(spec, "envVarsInjectionPolicy") is { } env) parts.Add($"env injection {env}");
+        if (String(spec, "networkPolicyManagement") is { } network) parts.Add($"network {network}");
+        if (String(spec, "volumeClaimTemplatesPolicy") is { } volumes) parts.Add($"volume claims {volumes}");
+        return parts.Count == 0 ? "No template policy reported" : string.Join("; ", parts);
+    }
+    private static string? Scalar(JsonElement element, string name)
+    {
+        var value = Property(element, name);
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            _ => null,
+        };
+    }
     private static int ArrayCount(JsonElement element, string name) =>
         Property(element, name).ValueKind == JsonValueKind.Array ? Property(element, name).GetArrayLength() : 0;
     private static bool ArrayContains(JsonElement element, string value) =>

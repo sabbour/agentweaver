@@ -18,6 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwiseRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import type {
   AgentPodInfoDto,
   ClusterDiagnosticsDto,
@@ -243,6 +244,7 @@ function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
 
 export function ClusterPage() {
   const styles = useStyles();
+  const { projectId } = useParams<{ projectId: string }>();
   const [data, setData] = useState<ClusterDiagnosticsDto | null>(null);
   const [notAvailable, setNotAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -407,7 +409,7 @@ export function ClusterPage() {
             </div>
             {topologyError && <MessageBar intent="warning"><MessageBarBody>{topologyError}</MessageBarBody></MessageBar>}
             {topologyLoading && !topology && <LoadingState label="Loading resource topology" />}
-            {topology && <ClusterTopologyGraph topology={topology} />}
+            {topology && <ClusterTopologyGraph topology={topology} projectId={projectId} />}
           </PageSection>
 
           <PageSection title="Health checks">
