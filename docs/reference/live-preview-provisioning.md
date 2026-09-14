@@ -1,6 +1,6 @@
 # Decoupled live-preview provisioning — Reference
 
-See [Resolve command, supervise process, observe port, approve and publish](../diagrams/live-preview-provisioning-fig1.png) for the shared visual model.
+See Resolve command, supervise process, observe port, approve and publish for the shared visual model.
 
 Reference for the platform-owned preview step that runs after Build & Test. It starts a supervised app process, discovers the actual port, registers a Gateway preview URL, and records a durable preview outcome without changing the Build & Test verdict.
 
@@ -116,7 +116,6 @@ The coordinator run page reads the latest preview event:
 - [Coordinator reference](./coordinator.md)
 - [Sandbox browser preview — Reference](./sandbox-browser-preview.md)
 
-<!-- diagram-context:live-preview-provisioning-fig1:start -->
 <details id="diagram-context-live-preview-provisioning-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -163,4 +162,3 @@ The coordinator run page reads the latest preview event:
 <tr><td>notes</td><td>Denial/expiry branch stays private; unresolved commands fail explicitly.; Rows summarize stages; the page retains detailed failure and retry rules.; Resource creation alone is not readiness; API does not probe pod preview ports.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:live-preview-provisioning-fig1:end -->

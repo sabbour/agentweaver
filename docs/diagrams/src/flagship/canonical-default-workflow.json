@@ -1,0 +1,150 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Default workflow: produce, review, merge, publish, record",
+  "alt": "Flowchart of the six-stage default workflow: agent production, Responsible AI gate, human review, merge attempt, pull-request publication attempt, and Scribe recording, including revision, no-change, decline, safety, and blocked-merge paths.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "agent",
+      "label": "Produce or revise work",
+      "subLabel": "Agent stage",
+      "icon": "box",
+      "fluentIcon": "agent",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "rai",
+      "label": "Responsible AI gate",
+      "subLabel": "Changes, safety, and revision need",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Gate",
+      "variant": "decision"
+    },
+    {
+      "id": "review",
+      "label": "Human review",
+      "subLabel": "Approve, request changes, or decline",
+      "icon": "box",
+      "fluentIcon": "review",
+      "badge": "Gate",
+      "variant": "decision"
+    },
+    {
+      "id": "merge",
+      "label": "Attempt approved merge",
+      "subLabel": "Blocked conflicts return to review",
+      "icon": "box",
+      "fluentIcon": "merge",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "publish",
+      "label": "Attempt PR publication",
+      "subLabel": "Success, skip, or visible failure",
+      "icon": "box",
+      "fluentIcon": "repository",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "scribe",
+      "label": "Record outcome",
+      "subLabel": "Scribe stage",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Workflow path finished",
+      "subLabel": "Not a guarantee of merge or publication",
+      "icon": "box",
+      "fluentIcon": "outcome",
+      "badge": "Outcome",
+      "variant": "terminator"
+    },
+    {
+      "id": "failed",
+      "label": "Explicit unsuccessful outcome",
+      "subLabel": "Turn failure, safety failure, or decline",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Stop",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "agent",
+      "to": "rai",
+      "label": "turn complete"
+    },
+    {
+      "from": "rai",
+      "to": "agent",
+      "label": "revise",
+      "loopback": true
+    },
+    {
+      "from": "rai",
+      "to": "review",
+      "label": "changes"
+    },
+    {
+      "from": "rai",
+      "to": "scribe",
+      "label": "no change / safe"
+    },
+    {
+      "from": "rai",
+      "to": "failed",
+      "label": "safety failure"
+    },
+    {
+      "from": "review",
+      "to": "agent",
+      "label": "request changes",
+      "loopback": true
+    },
+    {
+      "from": "review",
+      "to": "merge",
+      "label": "approve"
+    },
+    {
+      "from": "review",
+      "to": "failed",
+      "label": "decline"
+    },
+    {
+      "from": "merge",
+      "to": "publish",
+      "label": "non-blocked result"
+    },
+    {
+      "from": "publish",
+      "to": "scribe",
+      "label": "continue"
+    },
+    {
+      "from": "scribe",
+      "to": "done",
+      "label": "recorded"
+    }
+  ]
+}

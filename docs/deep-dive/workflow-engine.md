@@ -14,11 +14,6 @@ Conceptually, a workflow engine has five jobs:
 4. **Select** the best process fit when several workflows are available.
 5. **Bind** the selected definition to real runtime executors, failing closed if any node or edge cannot run safely.
 
-![From workflow definition to execution: Binding, checkpointed execution and observation are distinct responsibilities.](../diagrams/workflow-engine-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig1/v2/iteration-manifest.json. -->
-
 A useful rebuilding rule is: **workflows are declarative policy graphs; binding is the safety boundary that turns policy into execution.**
 
 The executor chain shown is the built-in default, not every workflow. Checkpoints use `ICheckpointStoreFactory`: PostgreSQL-backed shared storage for the PostgreSQL provider, file storage for local/default configuration (`apps/Agentweaver.Api/Program.cs:1063–1065`; `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181–188`). Pending human decisions are durable records, not browser-local state.
@@ -53,11 +48,6 @@ A workflow template is a declarative graph with:
 - and node metadata used for rendering and execution context.
 
 The key abstraction is that a workflow describes **what process should happen**, not the hidden plumbing required to execute it. A single logical edge such as `rai -> review when review` may expand into adapters, state storage, predicates, review ports, and graph outputs when bound to the runtime.
-
-![Declarative data is not an executor: A parsed workflow still needs structural and runtime-bindability validation.](../diagrams/workflow-engine-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig2/v2/iteration-manifest.json. -->
 
 The loader validates the static shape first: required fields, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
 
@@ -107,7 +97,6 @@ edges:
     to: record
 ```
 
-
 ### Software assembly gate order
 
 Authored assembly gates are ordered using a breadth-first traversal from `start` over unconditional edges and verdict edges whose `when` is `approved`, `pass`, or `review`. The resolver selects known check/Build & Test nodes, sorts them by that traversal index (unvisited gates sort last, in declaration order), projects canonical assembly stages (`rai`, `build-test`, `rubberduck`, `human-review`), and deduplicates by stage. For non-code-producing work, the platform Build & Test gate is omitted (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1586–1676`). This is aggregate gate projection, not execution of every workflow node by the assembly service.
@@ -120,10 +109,6 @@ Build & Test infrastructure failures are not authored `request-changes` verdicts
 
 The default workflow encodes the standard standalone run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`), loaded once through the real loader as `BuiltInWorkflows.Default`. `DefaultWorkflowTemplate.TryMaterialize` can write an inspectable project copy at `.agentweaver/workflows/default.yaml`; customization requires a new workflow id because the registry skips a materialized `default`. The current success path is `agent -> rai -> review -> merge -> push-pr -> scribe -> done`, with separate safety-failed and declined sinks (`apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:42–161`).
 
-![Standalone default workflow: agent work, RAI routing, human review, guarded merge, PR publication, Scribe and terminal outcomes](../diagrams/canonical-default-workflow.png)
-
-<!-- Shared read-only canonical; editable source: ../diagrams/src/canonical-default-workflow.drawio. -->
-
 This default produces work, applies Responsible AI safety review, pauses for human review when required, merges if approved, attempts PR publication, and records the outcome. Its RAI routing distinguishes no-change, revision, human-review and safety-failed paths; it must not be confused with collective assembly, where RAI RED opens durable human review. The loops are part of the workflow, not exceptional control flow.
 
 ## Role Slots, Catalog Roles, and Bespoke Charters
@@ -134,11 +119,6 @@ Workflow nodes carry two different kinds of "role" information:
 2. **Catalog or bespoke execution roles** identify who should perform a node when a real agent identity is needed.
 
 Do not collapse these into one concept. A node with `role: review` is in a review lane; it is not automatically a catalog role named `review`. A peer-review node names a concrete reviewer with `agent: qa-engineer` when it needs that agent. A generated or project-authored node carries an inline `charter` when no catalog role fits.
-
-![Visual role versus runtime context: Node fields feed different executors; role/kind never becomes an executing catalog identity.](../diagrams/workflow-engine-fig4.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig4.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig4/v2/iteration-manifest.json. -->
 
 The runtime uses explicit node fields and run context to build the agent prompt. Catalog roles are preferred because their charters are already known to the casting system. Bespoke charters are a controlled escape hatch for generated workflows whose process needs a role outside the catalog.
 
@@ -155,11 +135,6 @@ For a project, `WorkflowRegistry.Build` assembles a `ProjectWorkflowSet` from:
 3. project-authored `.yaml` / `.yml` files under `.agentweaver/workflows/` (`WorkflowRegistry.WorkflowsRelativePath`).
 
 The result is cached per project in `WorkflowRegistry.GetOrLoad`. Each cache entry is keyed by a signature of the project's top-level workflow YAML files plus the project's allowed workflow id set, so a replica refreshes its local cache when shared project files or blueprint restrictions change. `WorkflowRegistry.Sync` still provides the explicit user-facing refresh path and rebuilds from disk; validation errors are cached as registry results for replica coherence. Invalid workflows remain visible in `ProjectWorkflowSet.Results` with their errors, but `ProjectWorkflowSet.Available` excludes them.
-
-![Discover and cache valid workflows: Registry sources are categories, not a project-policy precedence chain.](../diagrams/workflow-engine-fig5.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig5.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig5/v2/iteration-manifest.json. -->
 
 The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project via `Project.AllowedWorkflowIds`; `WorkflowRegistry.FilterByAllowedSet` keeps only allowed ids **plus** the built-in `default`, which is always retained so a project never has zero workflows. An empty/absent allowed set means all workflows are returned (backward compatible).
 
@@ -179,11 +154,6 @@ This layered design lets the UI show useful authoring errors while preserving ru
 ## Invocation Context
 
 `RunOrigin` describes how a run began. Backlog pickup records `RunOrigin.BacklogPickup`; manually started and child runs have their own origin/responsibility context. The selector does not convert this into a separate invocation-kind eligibility filter (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:297–300`). There is no current `WorkflowInvocationKind` / `ResolveInvocationKindAsync` API.
-
-![How work enters the coordinator: Origin produces work; it does not filter the set of selectable workflows.](../diagrams/canonical-workflow-invocation.png)
-
-<!-- Editable A5 source: ../diagrams/src/canonical-workflow-invocation.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/canonical-workflow-invocation/v2/iteration-manifest.json. -->
 
 Event and schedule automation are implemented upstream producers, not future selector modes. A matching trigger must obtain or recover an authorized automation invocation before the Ready task is published with a workflow pin (`apps/Agentweaver.Api/Workflows/WorkflowEventTriggerService.cs:59–116`; `WorkflowScheduleTriggerService.cs:145–199`). Manual starts and heartbeat pickup use the same normally available workflow set.
 
@@ -272,11 +242,6 @@ The library is process-oriented. Workflow selection compares process steps and e
 
 Workflow generation turns a natural-language process request into an unsaved YAML draft.
 
-![Generate a draft, not a saved workflow: One correction attempt reuses loader and binder validation; saving is a separate action.](../diagrams/workflow-engine-fig11.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig11.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig11/v2/iteration-manifest.json. -->
-
 Generation has these rules:
 
 - The prompt is built server-side.
@@ -309,10 +274,6 @@ Blueprint generation can also invoke workflow generation when no library workflo
 ## Selection Logic
 
 Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, availability, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ available definitions.
-
-![Trigger-agnostic workflow selection: available explicit choices precede singleton or model selection; post-decomposition compatibility is a separate check](../diagrams/canonical-workflow-selection.png)
-
-<!-- Shared read-only canonical; editable source: ../diagrams/src/canonical-workflow-selection.drawio. -->
 
 The selector prompt asks for process fit:
 
@@ -350,11 +311,6 @@ The binder:
 4. wires terminal outputs from incoming edge semantics;
 5. preserves hidden plumbing such as adapters and stored merge data;
 6. fails closed when a node or transition has no mapping.
-
-![Bind contracts, not just node names: Typed executor, start and transition contracts can reject otherwise parseable YAML.](../diagrams/workflow-engine-fig9.png)
-
-<!-- Editable A5 source: ../diagrams/src/workflow-engine-fig9.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/workflow-engine-fig9/v2/iteration-manifest.json. -->
 
 The binder resolves by node type, not by hardcoded ids. A workflow can rename `agent`, `rai`, `review`, `merge`, and `scribe` and still bind if the node types and gate kinds describe the same process. This is what lets library and generated workflows use meaningful node ids while preserving the same runtime semantics.
 
@@ -450,7 +406,6 @@ The central design principle is simple: **load workflows as data, select among v
 - `docs/workflow-library.md`
 - `docs/workflow-selection.md`
 
-<!-- diagram-context:canonical-default-workflow:start -->
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -491,9 +446,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>edge-10-label</td><td>blocked</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-default-workflow:end -->
 
-<!-- diagram-context:canonical-workflow-invocation:start -->
 <details id="diagram-context-canonical-workflow-invocation" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -539,9 +492,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>ORIGIN CHANNELS; AUTOMATION ADMISSION AND DURABLE WORK; PICKUP, CONFIRMATION AND SELECTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-invocation:end -->
 
-<!-- diagram-context:canonical-workflow-selection:start -->
 <details id="diagram-context-canonical-workflow-selection" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -596,9 +547,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>fallback</td><td>default / standard</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-selection:end -->
 
-<!-- diagram-context:workflow-engine-fig1:start -->
 <details id="diagram-context-workflow-engine-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -645,9 +594,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>DECLARATIVE INPUT AND BINDING; EXECUTION AND CHECKPOINTS; DURABLE OBSERVATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig1:end -->
 
-<!-- diagram-context:workflow-engine-fig11:start -->
 <details id="diagram-context-workflow-engine-fig11" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -693,9 +640,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>DRAFT REQUEST AND GENERATION; NORMALIZATION AND VALIDATION; BOUNDED CORRECTION OR RESULT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig11:end -->
 
-<!-- diagram-context:workflow-engine-fig2:start -->
 <details id="diagram-context-workflow-engine-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -741,9 +686,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>DECLARATIVE SHAPE; STRUCTURE AND SEMANTIC CLASSIFICATION; BINDABILITY AND RESULT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig2:end -->
 
-<!-- diagram-context:workflow-engine-fig4:start -->
 <details id="diagram-context-workflow-engine-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -788,9 +731,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>AUTHORED FIELD FAMILIES; PRESENTATION AND WORKER CONTEXT; SPECIALIZED EXECUTOR CONTEXT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig4:end -->
 
-<!-- diagram-context:workflow-engine-fig5:start -->
 <details id="diagram-context-workflow-engine-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -834,9 +775,7 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>DEFINITION SOURCES; VALIDATION AND FILTERING; DIAGNOSTICS, CACHE AND AVAILABILITY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig5:end -->
 
-<!-- diagram-context:workflow-engine-fig9:start -->
 <details id="diagram-context-workflow-engine-fig9" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -884,4 +823,13 @@ The central design principle is simple: **load workflows as data, select among v
 <tr><td>groups</td><td>DEFINITION AND CLASSIFICATION; EXECUTOR AND MESSAGE CONTRACTS; START, EDGE AND TERMINAL VALIDATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-engine-fig9:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Workflow invocation
+
+[![Flow showing interactive starts, library workflow runs, and authorized event or schedule automation converging on durable task staging, atomic coordinator pickup, planning, dependency-aware dispatch, and child execution.](../diagrams/flagship/canonical-workflow-invocation.png)](../diagrams/drawio/generated/flagship/canonical-workflow-invocation.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-workflow-invocation.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-workflow-invocation.drawio)
+<!-- flagship-diagrams:end -->

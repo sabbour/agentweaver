@@ -6,12 +6,6 @@ selects for the task's process and outputs, rather than name similarity.
 
 ## The selection flow
 
-![Workflow selection: collect valid trigger-agnostic candidates, honor explicit and conversational overrides, handle zero or one candidate, then select with bounded retries and deterministic fallback](diagrams/canonical-workflow-selection.png)
-
-<!-- Editable source: diagrams/src/canonical-workflow-selection.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-workflow-selection.
-     Review evidence: diagrams/reviews/canonical-workflow-selection/. -->
-
 1. Collect available, valid definitions from the registry. Selection is trigger-agnostic.
 1. Honor an available explicit request/backlog override, then an available conversational
    override from the orchestration input's `ReviseFeedback`.
@@ -55,7 +49,6 @@ only singleton projects.
 The root workflow library is the canonical
 [blueprint mapping](workflow-library.md#blueprint-workflow-mappings).
 
-<!-- diagram-context:canonical-workflow-selection:start -->
 <details id="diagram-context-canonical-workflow-selection" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -110,4 +103,13 @@ The root workflow library is the canonical
 <tr><td>fallback</td><td>default / standard</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-selection:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Workflow selection
+
+[![Two-phase flowchart showing Blueprint workflow candidates, explicit and conversational overrides, zero/one/multiple candidate handling, bounded model selection with deterministic fallback, and post-decomposition Build and Test compatibility.](diagrams/flagship/canonical-workflow-selection.png)](diagrams/drawio/generated/flagship/canonical-workflow-selection.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-workflow-selection.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-workflow-selection.drawio)
+<!-- flagship-diagrams:end -->

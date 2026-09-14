@@ -18,8 +18,6 @@ What changes is *where the work physically runs*: each run's agent now executes 
 Kata-isolated pod instead of inside the worker process. A **pod name** on the agent box shows recorded
 placement. Provisioning delays and remote-turn failures can also be visible.
 
-![Mental model: User watching a run, Agent box in topology, Pod pill, Live tokens / status, Operator, api/system/runtime, api/runs/id/graph, Mental model:](../diagrams/canonical-sandbox-experience.png)
-
 <!-- Shared diagram: canonical-sandbox-experience; consume the stable canonical PNG.
      The shared owner maintains the source and visual validation. -->
 
@@ -95,8 +93,6 @@ after completion. The flow a user follows:
    `DELETE` on that session, removing its route and service. You can run more than one preview at a time (up to a
    per-run cap), each its own port and entry, and stop them individually.
 
-![API provisions the preview Service and HTTPRoute; browser traffic flows through the Gateway to the run's sandbox pod](../diagrams/sandbox-browser-preview-fig1.png)
-
 <!-- Shared diagram: sandbox-browser-preview-fig1; owned by deep-dive-execution.
      Consume the stable canonical PNG; do not edit a local duplicate. -->
 
@@ -148,11 +144,6 @@ What the user experiences across that boundary:
 The coordinator's **orchestration loop stays in the worker** — only leaf agent turns occupy AgentHost.
 Its timeline and steering do not depend on retaining a coordinator pod, although assembly preview
 resources can deliberately stay alive during review.
-
-![Worker-owned review pause, conditional pod release or preview retention, checkpoint resume, and pod events returned through the worker to the user](../diagrams/experience-sandbox-pod-execution-fig3.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-sandbox-pod-execution-fig3.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
 
 A debug/low-latency option exists for operators (`Sandbox:ReleasePodOnSuspend = false`) that keeps the
 pod warm across a suspension, at the cost of holding capacity. With release enabled, a name change across
@@ -227,7 +218,6 @@ read the [A2A distributed agents experience](./a2a-distributed-agents.md) for wh
 - [Operations](./operations.md) — health, heartbeat, and sandbox policy surfaces.
 - [A2A distributed agents experience](./a2a-distributed-agents.md) — the `-preview` transport behind it.
 
-<!-- diagram-context:canonical-sandbox-experience:start -->
 <details id="diagram-context-canonical-sandbox-experience" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -289,9 +279,7 @@ read the [A2A distributed agents experience](./a2a-distributed-agents.md) for wh
 <tr><td>groups</td><td>ADMIT AND PREPARE; EXECUTE AND RETURN EVIDENCE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-experience:end -->
 
-<!-- diagram-context:experience-sandbox-pod-execution-fig3:start -->
 <details id="diagram-context-experience-sandbox-pod-execution-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -344,9 +332,7 @@ release failures are logged.</td></tr>
 <tr><td>groups</td><td>ACTIVE WORK AND WAIT; RESUME OR RETAIN</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-sandbox-pod-execution-fig3:end -->
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -409,4 +395,3 @@ release failures are logged.</td></tr>
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->

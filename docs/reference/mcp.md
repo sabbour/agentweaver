@@ -1,6 +1,6 @@
 # MCP server reference
 
-See [One-call run orchestration, gates, watch and retry](../diagrams/canonical-coordinator-journey.png) for the shared visual model.
+See [One-call run orchestration, gates, watch and retry](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
 
 See [AI execution context](./api.md#ai-execution-context) for the shared visual model.
 
@@ -1474,7 +1474,6 @@ Get the content of a file in a project workspace at a given ref.
 
 **Returns**: Object with `path`, `content` (base64-encoded), `encoding`, and `size`.
 
-
 ## Cross-surface launch and provider contracts
 
 Coordinator launch has three relevant cases:
@@ -1491,7 +1490,6 @@ Confirmation advances into selection, decomposition, dispatch, steering and coll
 
 MCP prepares AI context internally, rejects unresolved providers, and forwards its `execution_key` as `If-Model-Provider-Key`. The forwarding key is not a public tool parameter. Workflow responses include ordered `triggers` plus first-trigger alias `trigger`; writes still use complete workflow YAML generation/save rather than a dedicated structured trigger-edit tool.
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1579,4 +1577,3 @@ MCP prepares AI context internally, rejects unresolved providers, and forwards i
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->

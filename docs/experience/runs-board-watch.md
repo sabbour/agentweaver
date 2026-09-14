@@ -16,11 +16,6 @@ Agentweaver separates **work intake** from **run execution**.
 
 The product shape is intentionally simple: capture work, rank it, let the coordinator claim Ready work, watch live execution, review the result, then archive what no longer needs attention.
 
-![Shared board lifecycle: Backlog and Ready intake, Active execution, Human Review, Done, and Problems; immediate starts bypass intake](../diagrams/canonical-board-lifecycle.png)
-
-<!-- Diagram source: ../diagrams/src/canonical-board-lifecycle.drawio.
-     Shared canonical; changes belong to its owner. -->
-
 ## Submitting work
 
 Submitting work answers one question: **what outcome should Agentweaver produce, and where should it work?**
@@ -388,7 +383,6 @@ Tool-call details can be large. The watch page truncates very large argument or 
 - [Sandbox browser preview](./sandbox-browser-preview.md) — open a live HTTPS preview of a server an agent started inside its run's sandbox pod, from the run/watch view.
 - [Token usage monitoring](./token-usage-monitoring.md) — current run/graph and selected-range telemetry surfaces, including how to read AI Credit values.
 
-<!-- diagram-context:canonical-board-lifecycle:start -->
 <details id="diagram-context-canonical-board-lifecycle" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -467,4 +461,3 @@ Tool-call details can be large. The watch page truncates very large argument or 
 <tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-board-lifecycle:end -->

@@ -1,8 +1,8 @@
 # Events reference
 
-See [Outcome, DAG, redispatch and collective assembly event families](../diagrams/resilient-assembly-review-fig1.png) for the shared visual model.
+See Outcome, DAG, redispatch and collective assembly event families for the shared visual model.
 
-See [Durable replay, nonterminal waits and child-human round trips](../diagrams/canonical-durable-event-stream.png) for the shared visual model.
+See Durable replay, nonterminal waits and child-human round trips for the shared visual model.
 
 Every run event uses the same envelope:
 
@@ -388,7 +388,6 @@ intentionally not terminal: it represents a retryable park, so SSE subscribers s
 recovers or reaches a real terminal event (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:153`,
 `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`).
 
-
 ## Model-assisted casting
 
 Creating a casting proposal in `free_text` or `analysis` mode starts a MAF run on GitHub Copilot. That run emits events under the same event model as a regular agentweaver run — the same envelope, the same event types, and the same SSE endpoint.
@@ -407,7 +406,6 @@ The wait is resolved by `POST /api/runs/{id}/questions/{requestId}/answer` with 
 
 For a coordinator CHILD run, the coordinator's child watcher (`CoordinatorDispatchService.ObserveChildAsync`) re-projects the child's `agent.question_asked` onto the COORDINATOR stream as `coordinator.child_question`, and the child's `tool.approval_required` as `coordinator.child_approval_required`, each carrying `childRunId` + `subtaskId` + `requestId`. The answer/approval flows back to the CHILD run: answer via `POST /api/runs/{childRunId}/questions/{requestId}/answer`, approval via the existing `POST /api/runs/{childRunId}/tool-approvals` / `tool-denials`. Re-projection does not affect terminal-event mapping.
 
-
 Scenario-mode proposals resolve without a model run. The `run_id` field in their proposal response is `null`.
 
 Coordinator graph descriptors combine work-plan topology with persisted status. Nodes may include `status`, `status_reason`, and `terminal_stage`; subtask state also arrives through `coordinator.topology`. Selected-workflow assembly gates become `kind: "live"` when reached, even though their stable IDs start with `planned:assembly-`. Failure projection uses the terminal stage so failure-scribe does not mark never-run gates as executed. Delegated plans leave skipped nodes planned with delegated status.
@@ -416,7 +414,6 @@ Leaf subtasks connect to the first selected gate (or merge if none); the gates f
 
 The SSE envelope sequence is the per-run replay cursor. The `seq` inside `coordinator.topology` is a separate topology snapshot/delta counter, not a substitute for `Last-Event-ID`.
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -507,9 +504,7 @@ The SSE envelope sequence is the per-run replay cursor. The `seq` inside `coordi
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-<!-- diagram-context:resilient-assembly-review-fig1:start -->
 <details id="diagram-context-resilient-assembly-review-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -559,4 +554,3 @@ The SSE envelope sequence is the per-run replay cursor. The `seq` inside `coordi
 <tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:resilient-assembly-review-fig1:end -->

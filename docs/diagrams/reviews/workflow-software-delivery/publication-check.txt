@@ -1,4 +1,0 @@
-OK: workflow-software-delivery.png and editable draw.io source are in sync with workflow-software-delivery.drawio
-Pinned renderer: 31.4.5
-Published pixels equal the inspected pass-04 PNG.
-Docs build not run: no Markdown/page writes; build outputs are outside the exclusive asset scope.

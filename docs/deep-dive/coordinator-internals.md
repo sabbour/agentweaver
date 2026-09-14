@@ -25,10 +25,6 @@ A coordinator run has two personalities:
 
 That split is the key to rebuilding the subsystem. The model helps create structured intent and plan data. Durable services then advance that data through deterministic state machines.
 
-![Coordinator responsibility overview: intent planning, durable child supervision, and collective assembly](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Shared read-only canonical; editable source: ../diagrams/src/canonical-coordinator-architecture.drawio. -->
-
 The durable artifacts are:
 
 - **Coordinator run** — the parent run visible to clients.
@@ -100,11 +96,6 @@ This contract is stored before the work is decomposed. From that point forward, 
 ### How drafting works
 
 The first coordinator phase is a Microsoft Agents Framework workflow:
-
-![Draft, decide and finalize: DefineOutcome confirms intent before decomposition; decline finalizes without work.](../diagrams/coordinator-internals-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/coordinator-internals-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/coordinator-internals-fig2/v2/iteration-manifest.json. -->
 
 The drafting executor compiles team memory and active decisions, resolves the Coordinator charter, and runs a real Copilot coordinator turn. The prompt asks for one JSON object with `desired_outcome`, `scope`, `assumptions`, and `clarifying_questions`.
 
@@ -212,11 +203,6 @@ The persisted WorkPlan starts as `planned`, with subtasks in `pending` and depen
 ### Ready frontier
 
 Dispatch repeatedly computes the ready frontier:
-
-![Dispatch frontier and observation: Quiescence triggers an eligibility check; it does not prove every child succeeded.](../diagrams/coordinator-internals-fig3.png)
-
-<!-- Editable A5 source: ../diagrams/src/coordinator-internals-fig3.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/coordinator-internals-fig3/v2/iteration-manifest.json. -->
 
 Only `assemble_ready` and `completed` satisfy dependencies. A failed or RAI-flagged dependency fails its still-pending dependents with recovery guidance, because serial dependents cannot safely proceed from a bad prerequisite.
 
@@ -433,11 +419,6 @@ The frontend renders a pod chip on a node only when `executionPodName` is non-nu
 ## Collective assembly
 
 When dispatch becomes quiescent, it hands off to `awaiting_assembly`; that is not proof that all children succeeded. Assembly is service-driven rather than a MAF workflow because it starts from published Git state, owns durable aggregate review, and routes corrections through an explicit steering decision rather than an unconditional re-dispatch.
-
-![Collective assembly and review: RED parks durably for a human. REVISE enters explicit steering, not RaiBlocked.](../diagrams/coordinator-internals-fig4.png)
-
-<!-- Editable A5 source: ../diagrams/src/coordinator-internals-fig4.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/coordinator-internals-fig4/v2/iteration-manifest.json. -->
 
 ### Exactly-once claim
 
@@ -712,7 +693,6 @@ To rebuild the coordinator from scratch:
 15. **Recover by state, not memory.** On startup and heartbeat, route by WorkPlan status and re-arm idempotent drivers.
 16. **Preserve durable provider boundaries.** Resolve the effective child provider and the persisted parent boundary for aggregate reviewers rather than hardcoding a single provider.
 
-
 ## v0.9.5 observable run-page projection
 
 The current coordinator UI projection is intentionally seeded from durable artifacts, not only from a live SSE stream. `CoordinatorRunPage` fetches the work plan and children together, stores `workPlanData`, and calls `seedTopologyFromWorkPlan(workPlan, children)` so a completed or reloaded run renders the planned graph immediately (`apps/web/src/pages/CoordinatorRunPage.tsx:1974`, `:1987`). It then inserts synthetic **Outcome plan** and **Work plan** nodes into the graph before the downstream subtask nodes, making the planning contract visible as part of the executable topology (`CoordinatorRunPage.tsx:2224`, `:2272`).
@@ -735,13 +715,29 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 - `packages/Agentweaver.AgentRuntime/Workflow/`
 - `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### System architecture
+
+[![Deployment and component view showing web and MCP clients entering the Agentweaver API, API and worker orchestration authority, isolated AgentHost execution, durable PostgreSQL and Azure Files state, and separate identity, repository, and model-provider dependencies.](../diagrams/flagship/canonical-coordinator-architecture.png)](../diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-coordinator-architecture.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+
+### Coordinator-to-agent communication and A2A runtime
+
+[![UML sequence showing a caller starting a parent run, the coordinator persisting intent and a work plan, dependency-ready child work executing in AgentHost, collective review and merge, and durable completion observed by the caller.](../diagrams/flagship/canonical-coordinator-runtime-sequence.png)](../diagrams/drawio/generated/flagship/canonical-coordinator-runtime-sequence.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-coordinator-runtime-sequence.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-coordinator-runtime-sequence.drawio)
+<!-- flagship-diagrams:end -->
+
 ## See also
 
 - [Resilient assembly-review loop — Deep Dive](./resilient-assembly-review.md) — the hardening built on top of the assembly pipeline: budget-exhausted escalation, accumulated context, reviewer-rejection lockout, and reliable child-turn terminal emission.
 - [Events reference — `coordinator.subtask_redispatched`](../reference/events.md#coordinator-subtask-redispatched) — the diagnostic emitted when a stalled subtask is redispatched before dead-ending.
 - [Git integration — resilient worktree deletion](./git-integration.md#resilient-worktree-deletion-on-azure-files-smb) — how assembly Build & Test survives the Azure Files SMB `Directory not empty` window during worktree teardown.
 
-<!-- diagram-context:coordinator-internals-fig2:start -->
 <details id="diagram-context-coordinator-internals-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -789,9 +785,7 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 <tr><td>groups</td><td>DEFINE OUTCOME; DECISION ALTERNATIVES; FINALIZATION AND GUARDED PLANNING</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:coordinator-internals-fig2:end -->
 
-<!-- diagram-context:coordinator-internals-fig3:start -->
 <details id="diagram-context-coordinator-internals-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -840,9 +834,7 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 <tr><td>groups</td><td>PERSISTED READINESS; EXECUTION AND OBSERVATION; RECOVERY AND HANDOFF</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:coordinator-internals-fig3:end -->
 
-<!-- diagram-context:coordinator-internals-fig4:start -->
 <details id="diagram-context-coordinator-internals-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -895,4 +887,3 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 <tr><td>groups</td><td>CLAIM AND AGGREGATE; AUTHORED CHECKS AND HUMAN WAIT; STEERING, RECOVERY AND COMPLETION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:coordinator-internals-fig4:end -->

@@ -1,6 +1,6 @@
 # Memory & Context Builder
 
-See [memory-context selection](../diagrams/canonical-memory-context.png) for the shared visual model.
+See [memory-context selection](../diagrams/flagship/canonical-memory-context.png) for the shared visual model.
 
 Agentweaver maintains persistent memory for each project. Before an eligible agent turn,
 a structured context block is compiled from that memory and injected into the agent's
@@ -183,7 +183,6 @@ alone.
 
 Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory` correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and `memory_export`.
 
-<!-- diagram-context:canonical-memory-context:start -->
 <details id="diagram-context-canonical-memory-context" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -244,4 +243,3 @@ Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `expor
 <tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-memory-context:end -->

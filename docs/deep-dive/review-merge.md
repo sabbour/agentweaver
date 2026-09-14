@@ -12,11 +12,6 @@ The design separates three concerns that are easy to accidentally blur:
 
 That separation is the reason the system can support standalone runs, coordinator child runs, automated reviewers, human approval, request-changes loops, and collective assembly without every path inventing its own safety model.
 
-![Review authorizes; merge still guards: A review-bearing standalone workflow declares its gates; approval alone does not edit Git.](../diagrams/review-merge-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/review-merge-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/review-merge-fig1/v2/iteration-manifest.json. -->
-
 A useful rebuilding rule is: **review approves intent to proceed; merge proves the repository can actually accept the result.** Approval and merge are related, but they are not the same operation.
 
 ## Core Design Invariants
@@ -99,11 +94,6 @@ The important part is the pause. `awaiting_review` is not a UI-only label. It is
 
 Approve and request-changes both start from the same review gate, but they intentionally diverge.
 
-![Review API decision paths: Authorize first. Deliver through the right path. Lock before any merge CAS.](../diagrams/review-merge-fig5.png)
-
-<!-- Editable A5 source: ../diagrams/src/review-merge-fig5.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/review-merge-fig5/v2/iteration-manifest.json. -->
-
 Approval does not edit files. It authorizes the existing reviewed tree to proceed toward merge. Request-changes does edit the future path: it carries reviewer feedback back into the producer's next turn and increments the revision loop.
 
 For `POST /api/runs/{id}/review`, the ordering is explicit (`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:845–1053`):
@@ -149,11 +139,6 @@ The parent coordinator then performs one collective assembly pipeline:
 6. On request-changes, scope structured target files and dependent rebuilds, then let the coordinator explicitly choose in-place revision, fresh dispatch, escalation, or advisory continuation. Do not infer a reset from feedback prose.
 7. On decline, terminalize the coordinator run as declined.
 
-![Collective assembly and review: RED parks durably for a human. REVISE enters explicit steering, not RaiBlocked.](../diagrams/coordinator-internals-fig4.png)
-
-<!-- Editable A5 source: ../diagrams/src/coordinator-internals-fig4.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/coordinator-internals-fig4/v2/iteration-manifest.json. -->
-
 This design avoids a misleading review experience. Reviewing child diffs independently can miss cross-child interactions. The meaningful artifact is the integrated whole, so the human sees and approves the combined output.
 
 ## How Merge Actually Happens
@@ -171,11 +156,6 @@ For a standalone run, the merge coordinator:
 7. On a retryable blocked outcome or internal fail-safe, reverts back to `awaiting_review` when possible.
 
 For coordinator assembly, the integration branch is the **source**, merged into the originating branch. A successful assembly merge terminalizes the coordinator run as completed with an assembly-complete reason rather than as a normal standalone `merged` run. That difference matters: the parent run represents an orchestration outcome, not a single worker's branch.
-
-![Guarded standalone merge: Repository locking precedes CAS; reviewed-tree mismatch and conflicts are not success.](../diagrams/review-merge-fig4.png)
-
-<!-- Editable A5 source: ../diagrams/src/review-merge-fig4.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/review-merge-fig4/v2/iteration-manifest.json. -->
 
 ## Failure Modes and How to Reason About Them
 
@@ -259,7 +239,6 @@ The central design principle is simple: **agents can propose and revise, automat
 - `packages/Agentweaver.AgentRuntime/Workflow/`
 - `packages/Agentweaver.Domain/`
 
-<!-- diagram-context:coordinator-internals-fig4:start -->
 <details id="diagram-context-coordinator-internals-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -312,9 +291,7 @@ The central design principle is simple: **agents can propose and revise, automat
 <tr><td>groups</td><td>CLAIM AND AGGREGATE; AUTHORED CHECKS AND HUMAN WAIT; STEERING, RECOVERY AND COMPLETION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:coordinator-internals-fig4:end -->
 
-<!-- diagram-context:review-merge-fig1:start -->
 <details id="diagram-context-review-merge-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -362,9 +339,7 @@ The central design principle is simple: **agents can propose and revise, automat
 <tr><td>groups</td><td>WORKFLOW AND CANDIDATE; REVIEW ALTERNATIVES; CONTINUATION AND GIT RESULT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:review-merge-fig1:end -->
 
-<!-- diagram-context:review-merge-fig4:start -->
 <details id="diagram-context-review-merge-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -411,9 +386,7 @@ The central design principle is simple: **agents can propose and revise, automat
 <tr><td>groups</td><td>INPUT AND LOCK ADMISSION; STATUS GUARD AND GIT; OUTCOMES AND RELEASE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:review-merge-fig4:end -->
 
-<!-- diagram-context:review-merge-fig5:start -->
 <details id="diagram-context-review-merge-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -461,4 +434,3 @@ The central design principle is simple: **agents can propose and revise, automat
 <tr><td>groups</td><td>ADMISSION AND REPLAY; DELIVERY ALTERNATIVES; CONTINUATION AND MERGE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:review-merge-fig5:end -->

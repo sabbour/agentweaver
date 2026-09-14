@@ -30,12 +30,6 @@ Agentweaver assembles a run's graph from a `WorkflowDefinition` (the declarative
 
 The binder mints a *distinct* executor per logical node, keyed by node id. This is why **chained turns each get their own node**: a workflow with three sequential agent turns produces three separate MAF executors, not one executor invoked three times. Distinct nodes are what make the topology graph legible and what let MAF emit a clean lifecycle event per step. Edges that cross types — `AgentTurnOutput` into a review request, a review decision into a merge input — are expanded into adapter executors so the typed contract is never violated. Binding **fails closed**: a node kind or edge with no executor mapping aborts the build instead of becoming a silent no-op.
 
-![Typed MAF review and merge adapters carry explicit contracts and persisted workflow state](../diagrams/agent-framework-fig1.png)
-
-<!-- Editable source: ../diagrams/src/agent-framework-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec agent-framework-fig1.
-     Review lineage: ../diagrams/reviews/agent-framework-fig1/iteration-manifest.json. -->
-
 ## The AIAgent abstraction and CopilotAIAgent
 
 The leaf unit of work in a MAF graph is an **`AIAgent`**. Hosted execution uses a remote AgentHost proxy at that seam; the pod-side agent wraps the SDK session. The graph remains in the orchestration process. `CopilotAIAgent` is the SDK-backed implementation, not a separate deployed orchestration service.
@@ -110,12 +104,6 @@ A live workflow receives the correlated decision through `SendResponseAsync`. A 
 
 Postgres checkpoints are shared rows. File checkpoints are the SQLite/dev provider choice, not an automatic fallback when production Postgres fails.
 
-![Live correlated responses, deferred delivery and process checkpoint restoration are distinct paths](../diagrams/agent-framework-fig3.png)
-
-<!-- Editable source: ../diagrams/src/agent-framework-fig3.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec agent-framework-fig3.
-     Review lineage: ../diagrams/reviews/agent-framework-fig3/iteration-manifest.json. -->
-
 ## Where Agentweaver deliberately does NOT use MAF (decision D3)
 
 MAF is the right tool for a graph that *pauses for humans and must survive restarts*. It is not the right tool for everything, and Agentweaver draws a deliberate boundary.
@@ -125,12 +113,6 @@ The coordinator's **spec/confirm phase is a MAF workflow**: `draft → RequestPo
 After the human confirms the spec, the coordinator **hands off to a service-driven engine** — *not* a MAF graph (decision **D3**). Subtask dispatch and collective assembly run as background services whose entire state lives in **database rows**: the WorkPlan, the subtask DAG and its dependency edges, child run rows, and assembly status. The assembly pipeline reuses the real executors (RAI, scribe, merge plumbing) but **invokes them directly**, passing a `NoOpWorkflowContext` — a stub `IWorkflowContext` that throws on state operations — precisely to prove these calls do not depend on a live workflow graph.
 
 The reasoning is the core of D3: **MAF checkpoints exist to make in-memory graph state durable across suspension; the dispatch and assembly phases have no in-memory graph state worth checkpointing because their state is already durable in the DB.** A coordinator can dispatch ten children, observe them, and assemble their branches entirely from persisted rows. If the process dies, recovery re-reads those rows and re-arms dispatch — no checkpoint required. Forcing those phases into a MAF graph would add a second source of truth (checkpoint *and* DB rows) that must be kept consistent, for no durability gain. So the boundary is: **MAF where a run suspends on a human and resumes in-memory; service-driven where state is naturally relational and long-lived.**
-
-![Coordinator spec and confirmation hand off from MAF to durable service-driven dispatch and collective assembly](../diagrams/agent-framework-fig2.png)
-
-<!-- Editable source: ../diagrams/src/agent-framework-fig2.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec agent-framework-fig2.
-     Review lineage: ../diagrams/reviews/agent-framework-fig2/iteration-manifest.json. -->
 
 Each **child run**, however, is itself an ordinary MAF run with its own graph — so MAF still orchestrates every leaf of real work. D3 is only about the *coordinator's* dispatch/assembly tier, not the workers it launches.
 
@@ -151,7 +133,6 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 - The coordinator's spec/confirm phase is MAF; dispatch and collective assembly (D3) are service-driven over DB rows, with no MAF graph and a `NoOpWorkflowContext` for direct executor calls.
 - A2A remotes only the `AIAgent` leaf; the MAF graph and all `WorkflowEvent`/`RequestPort` logic stay in the worker.
 
-<!-- diagram-context:agent-framework-fig1:start -->
 <details id="diagram-context-agent-framework-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -196,9 +177,7 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 <tr><td>groups</td><td>REVIEW / STATE; RESPONSE / MERGE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-framework-fig1:end -->
 
-<!-- diagram-context:agent-framework-fig2:start -->
 <details id="diagram-context-agent-framework-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -245,9 +224,7 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 <tr><td>groups</td><td>SPEC HANDOFF; SERVICE-DRIVEN COLLECTIVE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-framework-fig2:end -->
 
-<!-- diagram-context:agent-framework-fig3:start -->
 <details id="diagram-context-agent-framework-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -295,4 +272,3 @@ This is why the MAF-centric design here stays intact under distribution: no MAF 
 <tr><td>groups</td><td>RESPONSE DELIVERY; CHECKPOINT / PROCESS RECOVERY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-framework-fig3:end -->

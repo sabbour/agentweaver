@@ -4,11 +4,6 @@ Coordinator orchestration turns one plain-language goal into a dependency-aware 
 
 Related experience docs: [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
 
-![Coordinator journey: choose an outcome-planning, direct, or unattended start, then plan, dispatch, inspect, steer, and review collective output](../diagrams/canonical-coordinator-journey.png)
-
-<!-- Diagram source: ../diagrams/src/canonical-coordinator-journey.drawio.
-     Shared canonical; changes belong to its owner. -->
-
 Open **Orchestrations** from a project to inspect its coordinator runs and their available **Open**, **Stop**, and **Delete** actions. The previous image was a placeholder, not a product capture; this page describes the implemented controls without presenting it as evidence.
 
 ## The experience in one sentence
@@ -463,7 +458,6 @@ The experience keeps intent, execution, and review distinct. Define Outcome adds
 
 The web UI makes that lifecycle visual and action-oriented. MCP makes it scriptable. Both let the user choose the start mode and retain review and steering controls while the team executes.
 
-
 ## v0.9.5 run page updates
 
 The run page now makes the whole work plan visible after decomposition. Once `coordinator.work_plan` or the persisted work-plan snapshot is available, the graph shows **Outcome plan** followed by **Work plan**, then the subtask graph (`apps/web/src/pages/CoordinatorRunPage.tsx:2224`, `:2255`, `:2272`). This means a user can see the full set of planned subtasks before every child has been dispatched.
@@ -488,7 +482,6 @@ For runnable work, the platform-owned **PreviewStep** follows Build & Test on th
 
 When a runnable subtask is outside that gate, the coordinator includes preview intent in the OutcomeSpec confirmation, dispatches the child with instructions to start and verify the app in its sandbox, and asks the child to include the preview URL in its completion message. The assembled review output should surface all reported URLs near the top in a `Live Previews` table with agent, URL, port, and description. If the sandbox backend cannot provide previews, the assembled output should include local run instructions instead.
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -576,4 +569,3 @@ When a runnable subtask is outside that gate, the coordinator includes preview i
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->

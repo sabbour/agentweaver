@@ -22,13 +22,6 @@ existing pod. The API also validates the generated HTTPS URL; creation alone is
 not readiness. The shared-owned diagram below is a reference, not authority for
 older "creates objects only" labels:
 
-![End-to-end flow: Browser, Preview Gateway, API orchestrator, HTTPRoute, ClusterIP Service, Sandbox pod, TcpPortForwarder, Preview app](../diagrams/sandbox-browser-preview-fig1.png)
-
-<!-- Generated from ../diagrams/src/sandbox-browser-preview-fig1.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 When the user clicks **Preview** and picks a port, `StartPreviewAsync`
 ([`SandboxPreviewService.cs:100`](#source)) does the following:
 
@@ -211,13 +204,6 @@ the UI — via `PreviewRunnerToolProvider` / `PreviewPublishTool`. The model sup
 binding is not itself a cryptographic restriction on a shared service credential:
 the endpoint still performs run access checks.
 
-![Agent-initiated preview (`start_preview`): Agent (in sandbox), API (start_preview endpoint), AgentPreviewGate, Operator / auto-approve, SandboxPreviewService](../diagrams/sandbox-browser-preview-fig2.png)
-
-<!-- Generated from ../diagrams/src/sandbox-browser-preview-fig2.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
    ([`SandboxEndpoints.cs:60`](#source)) and returns the response `preview_url` back to the agent.
 2. **Authorization** requires contributor-level run access, with the explicit
@@ -309,7 +295,6 @@ introduce a separate approval path. Omitted/false policy remains human-gated.
 - [Sandbox pod execution](./sandbox-pod-execution.md) — how the per-run pod is claimed and bound.
 - [Sandbox pods reference](../reference/sandbox-pods.md) — pod naming and the wider sandbox API surface.
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -372,9 +357,7 @@ introduce a separate approval path. Omitted/false policy remains human-gated.
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->
 
-<!-- diagram-context:sandbox-browser-preview-fig2:start -->
 <details id="diagram-context-sandbox-browser-preview-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -409,4 +392,3 @@ introduce a separate approval path. Omitted/false policy remains human-gated.
 <tr><td>notes</td><td>Denial and expiry terminate before publication; expiry supports fresh approval.; Gateway URL only after HTTPS validation; local fallback is API-host loopback.; Process session_id is distinct from the Gateway capability token.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig2:end -->

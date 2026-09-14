@@ -26,7 +26,7 @@ The worker sends turn setup as the first A2A `DataContent` part. This setup cont
 
 AgentHost sends assistant updates and structured `RunEvent` values through the same stream. `RunEventDataPartCodec` serializes the run events, which the worker appends to its local event pipeline.
 
-See the [canonical A2A sequence](../diagrams/canonical-agent-communication-a2a.png). Transport EOF alone is not success: the proxy checks the definitive turn-end marker and structured failures.
+See the canonical A2A sequence. Transport EOF alone is not success: the proxy checks the definitive turn-end marker and structured failures.
 
 ## Warm-pool configuration
 
@@ -34,7 +34,7 @@ AgentHost starts in standby without a run identity. When the API claims a warm p
 
 The provider payload is either `copilotCredential` or `byokProviderConfiguration`. Repository, preview, and MCP broker credentials are optional and purpose-scoped.
 
-The [claim/configure sequence](../diagrams/sandbox-pod-execution-fig6.png) distinguishes listener liveness from configured readiness. `/healthz` returns HTTP 200 with `standby` before configuration and `ready` afterward. `/configure` accepts one configuration per pod; a second attempt returns 409. Other nonexempt requests return 503 before setup completes.
+The claim/configure sequence distinguishes listener liveness from configured readiness. `/healthz` returns HTTP 200 with `standby` before configuration and `ready` afterward. `/configure` accepts one configuration per pod; a second attempt returns 409. Other nonexempt requests return 503 before setup completes.
 
 Production launch supplies a fresh turn bearer. The A2A middleware compares it when a nonempty token is configured; the optional request field is not unconditional endpoint enforcement. `/configure` cannot authenticate with the token it delivers. NetworkPolicy and configured transport protections are separate controls; the additive preview ingress range also includes port 8088 (see [network-policy limitations](./infra-deployment.md#network-policy-model)).
 
@@ -51,12 +51,22 @@ The A2A turn token is unique to the run. A token from one pod cannot authorize a
 - `apps/Agentweaver.AgentHost/Program.cs`
 - `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs`
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Coordinator-to-agent communication and A2A runtime
+
+[![UML sequence showing a caller starting a parent run, the coordinator persisting intent and a work plan, dependency-ready child work executing in AgentHost, collective review and merge, and durable completion observed by the caller.](../diagrams/flagship/canonical-coordinator-runtime-sequence.png)](../diagrams/drawio/generated/flagship/canonical-coordinator-runtime-sequence.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-coordinator-runtime-sequence.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-coordinator-runtime-sequence.drawio)
+<!-- flagship-diagrams:end -->
+
 ## Related reading
 
 - [Sandbox pod execution](./sandbox-pod-execution.md)
 - [AgentHost capability credential delivery](./agent-token-delivery.md)
 
-<!-- diagram-context:canonical-agent-communication-a2a:start -->
 <details id="diagram-context-canonical-agent-communication-a2a" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -90,9 +100,7 @@ The A2A turn token is unique to the run. A token from one pod cannot authorize a
 <tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-a2a:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig6:start -->
 <details id="diagram-context-sandbox-pod-execution-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -138,4 +146,3 @@ The A2A turn token is unique to the run. A token from one pod cannot authorize a
 <tr><td>notes</td><td>Top, middle and bottom rows are successive launch stages.; Repository / preview / broker credentials have separate purposes.; Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig6:end -->

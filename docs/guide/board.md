@@ -11,13 +11,6 @@ the coordinator and agents.
 
 ## The six columns
 
-![The six columns: Backlog, Ready, Active, Problems, Human Review, Done](../diagrams/canonical-board-lifecycle.png)
-
-<!-- Generated from ../diagrams/src/canonical-board-lifecycle.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 | Column | Who controls it | What belongs here |
 |---|---|---|
 | **Backlog** | You | Tasks captured but not yet ready to run |
@@ -133,7 +126,6 @@ Click **Topology** to watch the orchestration in real time — the dependency gr
 
 **Product Managers** use it to capture pm-discovery tasks, track what's in flight, and review the Done column to see completed outcomes.
 
-<!-- diagram-context:canonical-board-lifecycle:start -->
 <details id="diagram-context-canonical-board-lifecycle" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -212,4 +204,13 @@ Click **Topology** to watch the orchestration in real time — the dependency gr
 <tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-board-lifecycle:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Board lifecycle
+
+[![State and projection view showing the only persisted task states Backlog, Ready, and Claimed; atomic coordinator-run reservation; and read-only projection of the linked run into Active, Human Review, Problems, or Done.](../diagrams/flagship/canonical-board-lifecycle.png)](../diagrams/drawio/generated/flagship/canonical-board-lifecycle.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-board-lifecycle.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-board-lifecycle.drawio)
+<!-- flagship-diagrams:end -->

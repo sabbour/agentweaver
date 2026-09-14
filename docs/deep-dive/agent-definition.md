@@ -33,12 +33,6 @@ drifting from the actual tool set.
 
 ## End-to-end flow
 
-![MCP source generates five outputs; the embedded definition is materialized without overwriting an existing project file](../diagrams/agent-definition-fig1.png)
-
-<!-- Editable source: ../diagrams/src/agent-definition-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec agent-definition-fig1.
-     Review lineage: ../diagrams/reviews/agent-definition-fig1/iteration-manifest.json. -->
-
 1. **Source.** Each MCP tool is a method annotated with `[McpServerTool(Name = ...)]` and `[Description(...)]`
    in `apps/Agentweaver.Mcp/Tools/*.cs`. One `Tools.cs` file per category (Backlog, Project, Run, …).
 2. **Generate.** `scripts/gen-docs.mjs` parses those files once (`parseGroups()`, `gen-docs.mjs:115`) into
@@ -123,7 +117,6 @@ Two layers keep the tool index and four agent-definition copies aligned:
 - [Projects & workspaces — Deep Dive](./projects.md) — the project-creation flow this materialization rides on.
 - The generated-vs-curated split and the shared generator are described in `.github/DOCS_SYNC.md`.
 
-<!-- diagram-context:agent-definition-fig1:start -->
 <details id="diagram-context-agent-definition-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -165,4 +158,3 @@ Two layers keep the tool index and four agent-definition copies aligned:
 <tr><td>groups</td><td>GENERATOR INPUTS; OUTPUTS + MATERIALIZATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-definition-fig1:end -->

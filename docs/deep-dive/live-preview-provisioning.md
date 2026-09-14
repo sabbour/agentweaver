@@ -11,13 +11,6 @@ For proxy internals, see [Sandbox browser preview](./sandbox-browser-preview.md)
 
 ## End-to-end flow
 
-![Sequence showing the coordinator resolving and starting a preview command in AgentHost, observing and forwarding the app port, registering a Gateway route, and reporting ready, failed, skipped, or declined outcomes for human review](../diagrams/live-preview-provisioning-fig1.png)
-
-<!-- Generated from ../diagrams/src/live-preview-provisioning-fig1.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The invocation point is in the coordinator assembly Build & Test gate. `CoordinatorAssemblyService` records preview applicability, runs Build & Test, then calls `PreviewStep.RunAsync` before applying the authored gate decision (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:710`, `:753`). `ShouldRunDeterministicPreviewStep` means the step runs for `APPROVED` and `REQUEST_CHANGES` verdicts, and skips only `DECLINED` verdicts or missing service wiring (`CoordinatorAssemblyService.cs:180`).
 
 There is no feature flag. If the service is wired and the verdict is not declined, the preview step runs. Infrastructure that cannot produce a reachable Gateway preview self-skips by emitting `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable` (`apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:83`).
@@ -116,7 +109,6 @@ The older approval-time outcome guard remains as a safety net. If no terminal pr
 - [Sandbox browser preview](./sandbox-browser-preview.md)
 - [Coordinator internals](./coordinator-internals.md)
 
-<!-- diagram-context:live-preview-provisioning-fig1:start -->
 <details id="diagram-context-live-preview-provisioning-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -163,4 +155,3 @@ The older approval-time outcome guard remains as a safety net. If no terminal pr
 <tr><td>notes</td><td>Denial/expiry branch stays private; unresolved commands fail explicitly.; Rows summarize stages; the page retains detailed failure and retry rules.; Resource creation alone is not readiness; API does not probe pod preview ports.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:live-preview-provisioning-fig1:end -->

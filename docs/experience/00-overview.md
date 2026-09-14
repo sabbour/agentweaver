@@ -13,11 +13,6 @@ Agentweaver exposes one product through two front doors:
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
 
-![People use the web UI; assistants use MCP; both reach the authoritative API, which returns state and streams run events](../diagrams/experience-00-overview-fig1.png)
-
-<!-- Editable source: ../diagrams/src/experience-00-overview-fig1.drawio.
-     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
-
 The web UI and MCP server differ in interaction style, not in product intent:
 
 | Surface | Best user | Interaction style | What it is best at |
@@ -138,11 +133,6 @@ Standalone workflow and execution pages are not part of the web UI. Run details 
 
 Most human work starts with a project and ends with review:
 
-![Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …](../diagrams/canonical-coordinator-journey.png)
-
-<!-- Shared editable source: ../diagrams/src/canonical-coordinator-journey.drawio.
-     Exported by the official draw.io Desktop CLI. Changes belong to the shared owner. -->
-
 A typical path looks like this:
 
 1. The user opens **Projects**, creates or selects a project, and lands on **Dashboard**.
@@ -195,11 +185,6 @@ instead of a manually maintained tool count. The table below is a goal map, not 
 ### MCP flow: assistant-driven work
 
 An assistant typically uses MCP in a loop like this:
-
-![Assistant journey: orient, prepare project and team, choose queued pickup or immediate start, inspect progress, and ask the human to review](../diagrams/experience-mcp-client-fig1.png)
-
-<!-- Editable source: ../diagrams/src/experience-mcp-client-fig1.drawio.
-     Shared with mcp-client.md; replaces the merged experience-00-overview-fig3. -->
 
 The assistant can perform long chains quickly: create a project, apply a blueprint, cast a team, capture backlog, start a coordinator, poll topology, inspect artifacts, and submit memory. The human still owns judgment points: confirming outcome specs, approving risky actions, reviewing output, and deciding whether a team decision should become durable memory.
 
@@ -289,7 +274,6 @@ Use this overview as the hub for the experience documentation set:
 - [Operations](./operations.md)
 - [MCP client](./mcp-client.md)
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -377,9 +361,7 @@ Use this overview as the hub for the experience documentation set:
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->
 
-<!-- diagram-context:experience-00-overview-fig1:start -->
 <details id="diagram-context-experience-00-overview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -435,9 +417,7 @@ token to the API.</td></tr>
 <tr><td>groups</td><td>PEOPLE AND CLIENTS; AUTHORITATIVE BACKEND</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-00-overview-fig1:end -->
 
-<!-- diagram-context:experience-mcp-client-fig1:start -->
 <details id="diagram-context-experience-mcp-client-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -490,4 +470,3 @@ Direct: no outcome gate.</td></tr>
 <tr><td>groups</td><td>PREPARE AND CHOOSE; OPERATE AND REVIEW</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-mcp-client-fig1:end -->

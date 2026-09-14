@@ -5,6 +5,7 @@ import { DESIGN_SYSTEM, DESIGN_TOKENS, cardContentMetrics } from './fluent-token
 import { layout as layoutGraph } from './fluent-graph-layout.mjs';
 import { routeFluentGraph, spaceFluentCards } from './fluent-routing.mjs';
 import { groupCaptionMetrics } from './fluent-group-label.mjs';
+import { resolveFluentIcon } from './fluent-icon-catalog.mjs';
 
 export { DESIGN_TOKENS };
 export const DRAWIO_CLI_VERSION = DESIGN_SYSTEM.drawioCliVersion;
@@ -58,6 +59,26 @@ const nativeStyles = {
   bpmn:'shape=mxgraph.bpmn.shape;symbol=general;',networking:'shape=mxgraph.cisco19.router;',
   database:'shape=cylinder3;',cloud:'shape=cloud;',
 };
+const kubernetesPrIcons = {
+  cluster:'cluster',
+  configmap:'cm',
+  custom_resource:'crd',
+  customresource:'crd',
+  daemonset:'ds',
+  deployment:'deploy',
+  job:'job',
+  network_policy:'netpol',
+  networkpolicy:'netpol',
+  node:'node',
+  persistent_volume_claim:'pvc',
+  persistentvolumeclaim:'pvc',
+  pod:'pod',
+  secret:'secret',
+  service:'svc',
+  service_account:'sa',
+  serviceaccount:'sa',
+  statefulset:'sts',
+};
 
 export function nativeShapeStyle(node) {
   let library = node.library ?? node.classification?.replace(/^native:/,'');
@@ -74,18 +95,24 @@ function iconStyle(node, color) {
   const normalizeNative=style=>{
     const shape=style.match(/(?:^|;)shape=([^;]+)/)?.[1]??'';
     if(shape.startsWith('mxgraph.kubernetes.')) {
-      if(!/\.icon2?$/.test(shape))style=style.replace(`shape=${shape};`,`shape=mxgraph.kubernetes.icon2;prIcon=${shape.split('.').at(-1)};kubernetesLabel=0;`);
+      if(!/\.icon2?$/.test(shape)) {
+        const requested=shape.split('.').at(-1).toLowerCase();
+        const prIcon=kubernetesPrIcons[requested]??requested;
+        style=style.replace(`shape=${shape};`,`shape=mxgraph.kubernetes.icon2;prIcon=${prIcon};kubernetesLabel=0;`);
+      }
       return `${style};fillColor=${C.surface};strokeColor=${color};strokeWidth=1.5;`;
     }
     if(shape==='cylinder3')style+='size=6;boundedLbl=1;backgroundOutline=1;';
     return `${style};fillColor=${shape.startsWith('mxgraph.azure')?color:'none'};strokeColor=${color};strokeWidth=1.5;`;
   };
-  if(node.nativeStyle)return normalizeNative(node.nativeStyle);
-  if (node.library || node.shape || node.classification?.startsWith('native:')) {
+  if(node.nativeStyle?.includes('mxgraph.kubernetes.')||node.nativeStyle?.includes('mxgraph.azure')) {
+    return normalizeNative(node.nativeStyle);
+  }
+  if (['azure','kubernetes'].includes(node.library)
+      || ['native:azure','native:kubernetes'].includes(node.classification)) {
     return normalizeNative(nativeShapeStyle(node).style);
   }
-  const name = node.icon ?? 'box';
-  if (!/^(globe|branch|route|window|server|bot|database|key|box)$/.test(name)) throw new Error(`Unknown Fluent icon: ${name}`);
+  const name = resolveFluentIcon(node);
   const svg = readFileSync(new URL(`../../docs/diagrams/drawio/icons/${name}.svg`,import.meta.url),'utf8')
     .replaceAll('currentColor',color);
   return `shape=image;aspect=fixed;image=data:image/svg+xml,${encodeURIComponent(svg)};`;
@@ -126,6 +153,27 @@ export function cardCells(node,box,parent='1',suffix='') {
     `fontFamily=${T.family};fontSize=${T.badgeSize};fontColor=${tone.foreground};`,
   rect(width-100,8,82,22),{value:node.badge.text,parent:id}));
   return cells;
+}
+
+function notationNodeCell(node,box,parent='1') {
+  const id=`node-${clean(node.id)}`;
+  const tone=DESIGN_TOKENS.badges[node.badge?.tone??node.tone??'neutral'];
+  if(!tone) throw new Error(`Unknown semantic tone for ${node.id}`);
+  const shapes={
+    decision:'rhombus;perimeter=rhombusPerimeter;',
+    terminator:'rounded=1;absoluteArcSize=1;arcSize=80;',
+    document:'shape=document;boundedLbl=1;',
+    state:'rounded=1;absoluteArcSize=1;arcSize=28;',
+    initial:'ellipse;aspect=fixed;',
+    final:'ellipse;aspect=fixed;strokeWidth=5;',
+  };
+  const shape=shapes[node.variant];
+  if(!shape) return cardCells(node,box,parent);
+  const detail=node.subLabel?`<div style="font-size:${T.subtitleSize}px;font-weight:400;color:${C.inkMuted};margin-top:5px;">${html(node.subLabel)}</div>`:'';
+  const meta=node.meta?`<div style="font-family:${T.monoFamily};font-size:${T.metaSize}px;color:${C.inkFaint};margin-top:5px;">${html(node.meta)}</div>`:'';
+  const value=`<div style="font-family:${T.family};font-size:${T.titleSize}px;font-weight:600;line-height:1.15;color:${C.ink};text-align:center;">${html(node.label??node.id)}${detail}${meta}</div>`;
+  return [cell(id,'notation-node',`${shape}html=1;whiteSpace=wrap;fillColor=${C.surface};strokeColor=${tone.foreground};strokeWidth=2;shadow=1;fontFamily=${T.family};fontSize=${T.titleSize};fontColor=${C.ink};spacing=16;align=center;verticalAlign=middle;`,
+    rect(box.x,box.y,box.width,box.height),{value,parent})];
 }
 
 function lineStyle({loopback,dashed,arrow=DESIGN_SYSTEM.connectors.arrowType}={}) {
@@ -252,7 +300,7 @@ export function graphSpecToDrawio(spec,{name='diagram'}={}) {
   for(const [id,p] of junctions) cells.push(cell(id,'junction',`ellipse;fillColor=${C.connector};strokeColor=none;`,rect(p.x-diameter/2,p.y-diameter/2,diameter,diameter)));
   for(const node of spec.nodes) {
     const box=cards.get(node.id),parent=node.group?`group-${node.group}`:'1',ancestor=bands.get(parent)?.position??{x:0,y:0};
-    cells.push(...cardCells(node,{...box,x:box.x-ancestor.x,y:box.y-ancestor.y},parent));
+    cells.push(...notationNodeCell(node,{...box,x:box.x-ancestor.x,y:box.y-ancestor.y},parent));
   }
   {
     for(const [id,band] of bands)if(groupSpecs.has(id)) {
@@ -295,6 +343,123 @@ export function graphSpecToDrawio(spec,{name='diagram'}={}) {
   return document(name,spec.title??name,result.canvasWidth,result.canvasHeight,cells,bounds);
 }
 
+const architectureRoleIcons = {
+  actor: 'person',
+  component: 'package',
+  service: 'api',
+  coordinator: 'coordinator',
+  worker: 'worker',
+  datastore: 'state',
+  workspace: 'workspace',
+  external: 'cloud',
+};
+
+export function architectureSpecToDrawio(spec,{name='diagram'}={}) {
+  if(!Array.isArray(spec.layers)||spec.layers.length<2) throw new Error('Architecture spec requires at least two layers');
+  if(!Array.isArray(spec.nodes)||!spec.nodes.length||!Array.isArray(spec.edges)) throw new Error('Architecture spec requires nodes and edges');
+  const nodes=new Map(spec.nodes.map(node=>[node.id,node]));
+  if(nodes.size!==spec.nodes.length||nodes.has(undefined)) throw new Error('Duplicate or missing architecture node id');
+  const assigned=new Set();
+  for(const layer of spec.layers) {
+    if(!Array.isArray(layer.nodes)||!layer.nodes.length) throw new Error(`Architecture layer ${layer.id} is empty`);
+    for(const id of layer.nodes) {
+      if(!nodes.has(id)) throw new Error(`Architecture layer ${layer.id} references unknown node ${id}`);
+      if(assigned.has(id)) throw new Error(`Architecture node ${id} appears in more than one layer`);
+      assigned.add(id);
+    }
+  }
+  if(assigned.size!==nodes.size) throw new Error('Every architecture node must belong to exactly one layer');
+  for(const edge of spec.edges) if(!nodes.has(edge.from)||!nodes.has(edge.to)) throw new Error(`Architecture edge references unknown node: ${edge.from} -> ${edge.to}`);
+
+  const margin=48,laneGap=132,lanePadding=24,laneHeader=64,cardGap=34;
+  const cardWidth=G.cardWidth;
+  const prepared=new Map(spec.nodes.map(node=>[node.id,{
+    ...node,
+    fluentIcon:node.fluentIcon??architectureRoleIcons[node.role??'component']??'package',
+    meta:node.meta??`«${node.role??'component'}»`,
+  }]));
+  const layerSlots=new Map();
+  let maxCards=0;
+  for(const layer of spec.layers) {
+    const occupied=new Set();
+    const slots=new Map();
+    layer.nodes.forEach((id,nodeIndex)=>{
+      const slot=prepared.get(id).slot??nodeIndex;
+      if(!Number.isInteger(slot)||slot<0) throw new Error(`Architecture node ${id} has an invalid slot`);
+      if(occupied.has(slot)) throw new Error(`Architecture layer ${layer.id} assigns more than one node to slot ${slot}`);
+      occupied.add(slot);
+      slots.set(id,slot);
+      maxCards=Math.max(maxCards,slot+1);
+    });
+    layerSlots.set(layer.id,slots);
+  }
+  const maxCardHeight=Math.max(...[...prepared.values()].map(cardContentMetrics).map(metrics=>metrics.height));
+  const laneWidth=cardWidth+lanePadding*2;
+  const laneHeight=laneHeader+maxCards*maxCardHeight+Math.max(0,maxCards-1)*cardGap+lanePadding;
+  const width=margin*2+spec.layers.length*laneWidth+(spec.layers.length-1)*laneGap;
+  const height=margin*2+laneHeight;
+  const cells=[],boxes=new Map(),nodeLayer=new Map();
+
+  spec.layers.forEach((layer,index)=>{
+    const x=margin+index*(laneWidth+laneGap),y=margin;
+    cells.push(cell(`architecture-layer-${clean(layer.id)}`,'group',rounded(C.group1,G.cardRadius,'none'),
+      rect(x,y,laneWidth,laneHeight)));
+    cells.push(textCell(`architecture-layer-${clean(layer.id)}-label`,'group-label',layer.label,
+      x+lanePadding,y+18,laneWidth-lanePadding*2,28,T.titleSize,C.inkStrong,600));
+    layer.nodes.forEach(id=>{
+      const node=prepared.get(id);
+      const cardHeight=cardContentMetrics(node).height;
+      const slot=layerSlots.get(layer.id).get(id);
+      const box={
+        x:x+lanePadding,
+        y:y+laneHeader+slot*(maxCardHeight+cardGap)+(maxCardHeight-cardHeight)/2,
+        width:cardWidth,
+        height:cardHeight,
+      };
+      boxes.set(id,box);
+      nodeLayer.set(id,index);
+      cells.push(...cardCells(node,box));
+    });
+  });
+
+  const outgoing=new Map(),incoming=new Map();
+  for(const edge of spec.edges) {
+    (outgoing.get(edge.from)??outgoing.set(edge.from,[]).get(edge.from)).push(edge);
+    (incoming.get(edge.to)??incoming.set(edge.to,[]).get(edge.to)).push(edge);
+  }
+  spec.edges.forEach((edge,index)=>{
+    const from=boxes.get(edge.from),to=boxes.get(edge.to);
+    const sameLayer=nodeLayer.get(edge.from)===nodeLayer.get(edge.to);
+    const forward=to.x>from.x;
+    const sourceList=outgoing.get(edge.from),targetList=incoming.get(edge.to);
+    const sourcePort=(sourceList.indexOf(edge)+1)/(sourceList.length+1);
+    const targetPort=(targetList.indexOf(edge)+1)/(targetList.length+1);
+    const downward=to.y>from.y;
+    const start=sameLayer
+      ?{x:from.x+from.width/2,y:downward?from.y+from.height:from.y}
+      :{x:forward?from.x+from.width:from.x,y:from.y+from.height*sourcePort};
+    const end=sameLayer
+      ?{x:to.x+to.width/2,y:downward?to.y:to.y+to.height}
+      :{x:forward?to.x:to.x+to.width,y:to.y+to.height*targetPort};
+    const midX=(start.x+end.x)/2;
+    const route=[start,{x:midX,y:start.y},{x:midX,y:end.y},end];
+    const relation=edge.relation??'dependency';
+    const style=lineStyle({
+      dashed:relation==='dependency',
+      arrow:relation==='association'?'none':DESIGN_SYSTEM.connectors.arrowType,
+    })+(sameLayer
+      ?`exitX=0.5;exitY=${downward?1:0};exitPerimeter=0;entryX=0.5;entryY=${downward?0:1};entryPerimeter=0;`
+      :`exitX=${forward?1:0};exitY=${sourcePort};exitPerimeter=0;entryX=${forward?0:1};entryY=${targetPort};entryPerimeter=0;`);
+    cells.push(cell(`architecture-edge-${index}`,'connector',style,points(route.slice(1,-1)),{
+      edge:true,source:`node-${clean(edge.from)}`,target:`node-${clean(edge.to)}`,
+    }));
+    if(edge.label) cells.push(labelCell(`architecture-edge-${index}-label`,edge.label,{
+      x:sameLayer?start.x+76:midX,y:sameLayer?(start.y+end.y)/2:start.y,
+    }));
+  });
+  return document(name,spec.title??name,width,height,cells);
+}
+
 function flatten(steps,depth=0,out=[]) {
   for(const step of steps) {
     if(step.type==='fragment') {
@@ -313,13 +478,20 @@ export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
   if(!Array.isArray(spec.participants)||!spec.participants.length||!Array.isArray(spec.steps)) throw new Error('Sequence requires participants and steps');
   const ids=new Set(spec.participants.map(p=>p.id));
   if(ids.size!==spec.participants.length) throw new Error('Duplicate sequence participant');
-  const steps=flatten(spec.steps),margin=54,gap=56,top=54,h=G.cardThreeLineHeight,stepGap=72;
+  const steps=flatten(spec.steps),margin=54,gap=56,top=54,h=G.cardThreeLineHeight,stepGap=54;
   for(const s of steps) {
     const references=s.type==='message'?[s.from,s.to]:s.type==='activation'?[s.participant]:s.type==='note'?s.over:[];
     for(const id of references) if(!ids.has(id)) throw new Error(`Sequence references unknown participant ${id}`);
   }
   const width=margin*2+spec.participants.length*G.cardWidth+(spec.participants.length-1)*gap;
-  const bottom=top+h+Math.max(220,steps.length*stepGap+60),height=bottom+h+margin;
+  const bodyHeight=steps.reduce((total,step)=>total+(
+    step.type==='activation'?0:
+    step.type==='fragment-start'||step.type==='fragment-section'?42:
+    step.type==='fragment-end'?12:
+    step.type==='note'?84:
+    stepGap
+  ),0);
+  const bottom=top+h+Math.max(220,bodyHeight+76),height=bottom+h+margin;
   const xs=new Map(spec.participants.map((p,i)=>[p.id,margin+G.cardWidth/2+i*(G.cardWidth+gap)]));
   const cells=[],activation=new Map();
   for(const p of spec.participants) {
@@ -359,7 +531,7 @@ export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
     if(s.type==='note') {
       const positions=s.over.map(id=>xs.get(id)),left=Math.min(...positions)-100,right=Math.max(...positions)+100;
       cells.push(cell(`note-${i}`,'note',`shape=note;html=1;whiteSpace=wrap;fillColor=${C.group1};strokeColor=${C.stroke};fontFamily=${T.family};fontSize=${T.metaSize};`,
-        rect(left,y,right-left,54),{value:html(s.label)}));y+=stepGap;return;
+        rect(left,y,right-left,54),{value:html(s.label)}));y+=84;return;
     }
     if(s.type!=='message') throw new Error(`Unsupported sequence step ${s.type}`);
     const from=xs.get(s.from),to=xs.get(s.to),endY=s.from===s.to?y+28:y;
@@ -369,7 +541,7 @@ export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
       points(s.from===s.to?[{x:from+62,y},{x:from+62,y:endY}]:[]),
       {edge:true,source:`message-${i}-from-anchor`,target:`message-${i}-to-anchor`}));
     cells.push(labelCell(`message-${i}-label`,`${spec.autonumber?`${number++}. `:''}${s.label}`,
-      {x:s.from===s.to?from+100:(from+to)/2,y:y-18}));
+      {x:s.from===s.to?from+220:(from+to)/2,y:y-18}));
     y+=stepGap;
   });
   for(const [id,start] of activation) cells.push(cell(`activation-open-${clean(id)}`,'activation',rounded(C.surface,2),
@@ -378,7 +550,9 @@ export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
 }
 
 export function specToDrawio(spec,options) {
-  return spec.kind==='sequence'?sequenceSpecToDrawio(spec,options):graphSpecToDrawio(spec,options);
+  if(spec.kind==='sequence') return sequenceSpecToDrawio(spec,options);
+  if(spec.kind==='architecture') return architectureSpecToDrawio(spec,options);
+  return graphSpecToDrawio(spec,options);
 }
 
 export async function jsonFileToDrawio(sourcePath,options={}) {

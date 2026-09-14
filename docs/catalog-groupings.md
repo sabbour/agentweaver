@@ -122,3 +122,13 @@ This is the recommended starting point for teams shipping a full product.
   See the [canonical blueprint-to-workflow mapping](workflow-library.md#blueprint-workflow-mappings)
   rather than treating every blueprint as `default`.
 - Role IDs use kebab-case and match the `id` field in each role JSON file under `roles/`.
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Blueprint relationships
+
+[![UML component view showing catalog selection, repository suggestion, or model generation producing a Blueprint; the Blueprint owning roster and role definitions while referencing workflows, review policy, and sandbox profile; explicit validation and apply materializing project configuration and a cast team consumed by the coordinator.](diagrams/flagship/canonical-blueprint-relationships.png)](diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-blueprint-relationships.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+<!-- flagship-diagrams:end -->

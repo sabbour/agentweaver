@@ -33,13 +33,6 @@ For a **define-outcome** submission with autopilot off, the coordinator:
 Direct mode skips outcome drafting; explicit autopilot can confirm a define-outcome run
 without a manual pause. Neither is permission to bypass tool or human merge approvals.
 
-![Coordinator journey: Define outcome and confirm, plan and dispatch children, assemble their output, run workflow-dependent collective gates, obtain human review, then merge and record learning](../diagrams/canonical-coordinator-journey.png)
-
-<!-- Generated from ../diagrams/src/canonical-coordinator-journey.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## Key concepts
 
 ### Projects
@@ -152,7 +145,6 @@ The full Agentweaver feature set is available programmatically through an MCP se
 - [Submit your first run](./runs)
 - [Connect an MCP client](./mcp-cli)
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -240,4 +232,3 @@ The full Agentweaver feature set is available programmatically through an MCP se
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->

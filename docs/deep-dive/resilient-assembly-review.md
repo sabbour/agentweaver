@@ -34,11 +34,6 @@ complementary: Fix-A raises the in-place convergence rate; Fix-B guarantees the 
 
 ## End-to-end resilient assembly flow
 
-![Rejected work keeps useful context: A steering decision chooses the effect; rejection does not always rotate the author.](../diagrams/resilient-assembly-review-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/resilient-assembly-review-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/resilient-assembly-review-fig1/v2/iteration-manifest.json. -->
-
 ### Fix-B: budget-exhausted escalation (the headline change)
 
 When `CoordinatorSteeringDecider.DecideAsync` returns `Proceed` (budget exhausted), the coordinator now
@@ -362,7 +357,6 @@ The fix replaces the prose scan with a single machine-readable sentinel:
 - [Coordinator internals](./coordinator-internals.md) — the broader assembly pipeline and collective assembly stage.
 - [Review & merge](./review-merge.md) — the human-review gate mechanics Fix-B escalates into.
 
-<!-- diagram-context:resilient-assembly-review-fig1:start -->
 <details id="diagram-context-resilient-assembly-review-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -412,4 +406,3 @@ The fix replaces the prose scan with a single machine-readable sentinel:
 <tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:resilient-assembly-review-fig1:end -->

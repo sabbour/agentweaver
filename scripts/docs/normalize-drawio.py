@@ -18,7 +18,8 @@ SYSTEM = json.loads((ROOT / "docs/diagrams/drawio/design-system.json").read_text
 CARDS, TYPE, COLORS = SYSTEM["cards"], SYSTEM["typography"], SYSTEM["palette"]
 ROLES = {"card", "surface", "accent", "shadow", "title", "subtitle", "meta", "icon",
          "badge", "group", "group-label", "connector", "junction", "edge-label",
-         "lifeline", "anchor", "activation", "message", "note", "fragment", "section","canvas","layout","label-leader"}
+         "lifeline", "anchor", "activation", "message", "note", "fragment", "section","canvas","layout","label-leader",
+         "notation-node"}
 
 
 def style(cell):
@@ -147,8 +148,10 @@ def analyze(raw, bindings=None):
         if role == "junction" and (w != 5 or h != 5):
             fail("junction-size", identifier, [w, h])
 
-    card_boxes = {i: box(i) for i,c in cells.items() if c.get("fluentRole") == "card"}
+    card_boxes = {i: box(i) for i,c in cells.items() if c.get("fluentRole") in ("card", "notation-node")}
     for identifier,bounds in card_boxes.items():
+        if cells[identifier].get("fluentRole") != "card":
+            continue
         children=[c for c in cells.values() if c.get("parent")==identifier]
         for role,count in (("title",1),("surface",1),("accent",1),("icon",1),("shadow",len(CARDS["shadowLayers"]))):
             if sum(c.get("fluentRole")==role for c in children)!=count:

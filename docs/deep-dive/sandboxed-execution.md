@@ -12,13 +12,6 @@ Live `run_command` registration requires `ShellEnabled` and either real isolatio
 
 Once a backend is selected (see the [sandbox deep dive](./sandbox.md)), a `run_command` invocation flows through the triple-layer governance gate, into the chosen executor, and back out as redacted output events:
 
-![Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …](../diagrams/canonical-sandbox-boundary.png)
-
-<!-- Generated from ../diagrams/src/canonical-sandbox-boundary.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## Executor selection
 
 Executor selection happens at startup via `SandboxExecutorFactory.Create`. The factory probes the host in order and returns the first available executor:
@@ -31,7 +24,7 @@ Executor selection happens at startup via `SandboxExecutorFactory.Create`. The f
 | 4 | `lxc-native-linux` | Linux + `lxc-exec` found at `/usr/local/bin/lxc-exec` or `/usr/bin/lxc-exec` (only when bwrap is unavailable) |
 | 5 | `direct` | Fallback when no isolation backend is available, **or** selected explicitly via `direct: true` in `.agentweaver/settings.yml` |
 
-The API router first chooses Kubernetes versus local from `Sandbox:Backend` and cluster detection. Explicit `local` bypasses cluster selection; selected Kubernetes initialization fails closed. Only then does the local path invoke the factory. See the [host selector](../diagrams/sandbox-fig2.png).
+The API router first chooses Kubernetes versus local from `Sandbox:Backend` and cluster detection. Explicit `local` bypasses cluster selection; selected Kubernetes initialization fails closed. Only then does the local path invoke the factory. See the host selector.
 
 The selected executor is injected into the per-run governance context and GitHub
 Copilot SDK runner. Its key properties are:
@@ -292,7 +285,6 @@ SDK v0.1.1 dev-artifacts builds append the executor binary path as a trailing li
 | --- | --- | --- |
 | T012 | Binary bundling. The spec (FR-034) calls for bundling `wxc-exec.exe` per-arch under `bin/<arch>` for zero-configuration discovery. This is blocked pending redistribution license review for the mxc binaries. Until resolved, operators must set `MXC_BIN_DIR` manually. | Open |
 
-<!-- diagram-context:canonical-sandbox-boundary:start -->
 <details id="diagram-context-canonical-sandbox-boundary" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -354,9 +346,7 @@ SDK v0.1.1 dev-artifacts builds append the executor binary path as a trailing li
 <tr><td>groups</td><td>TOOL SELECTION / POLICY; POINT-OF-USE CONTAINMENT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-boundary:end -->
 
-<!-- diagram-context:sandbox-fig2:start -->
 <details id="diagram-context-sandbox-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -403,4 +393,3 @@ SDK v0.1.1 dev-artifacts builds append the executor binary path as a trailing li
 <tr><td>notes</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.; Kubernetes failure never silently descends into the local ladder.; Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-fig2:end -->

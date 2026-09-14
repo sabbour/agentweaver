@@ -19,12 +19,6 @@ The most important rebuilding idea is **snapshot + stream**:
 
 This gives the UI a robust mental model: the backend is the source of truth; the frontend is a deterministic projection of backend facts.
 
-![App routes and shell providers consume API snapshots and streams to produce browser-only projections](../diagrams/frontend-fig1.png)
-
-<!-- Editable source: ../diagrams/src/frontend-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig1.
-     Review lineage: ../diagrams/reviews/frontend-fig1/iteration-manifest.json. -->
-
 Where this lives:
 
 - `apps/web/`
@@ -97,12 +91,6 @@ Project-scoped routes start with `/projects/:projectId` and represent the work s
 
 All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep orchestration page.
 
-![Explicit App.tsx routes distinguish global destinations, project-scoped paths and redirects](../diagrams/frontend-fig2.png)
-
-<!-- Editable source: ../diagrams/src/frontend-fig2.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig2.
-     Review lineage: ../diagrams/reviews/frontend-fig2/iteration-manifest.json. -->
-
 The shell derives the active project from the URL. When the user moves to a global page, it remembers the last active project in local storage so the project switcher and project-scoped navigation can still point somewhere useful. This is a UX convenience only; the route remains the source of truth for the currently displayed page.
 
 Rebuild principle: routes should describe user intent, not implementation detail. An orchestration detail URL should be directly openable after refresh, and the page should be able to reconstruct its state from route parameters plus backend snapshots.
@@ -160,12 +148,6 @@ This design separates build-time artifacts from deployment-time configuration:
 - Non-HTML assets can be cached aggressively because their built filenames are content-addressed by Vite.
 - HTML and fallback responses should not be treated as immutable because they bootstrap the current app version and runtime config.
 
-![Static SPA hosting, origin-only runtime API configuration and external docs redirects](../diagrams/frontend-fig3.png)
-
-<!-- Editable source: ../diagrams/src/frontend-fig3.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig3.
-     Review lineage: ../diagrams/reviews/frontend-fig3/iteration-manifest.json. -->
-
 Rebuild principle: static hosting should be dumb and predictable. Let the API own API behavior; let the SPA own client behavior; let the host serve files and route unknown non-doc paths back to `index.html` for client-side routing.
 
 Where this lives:
@@ -198,12 +180,6 @@ If multiple API calls reject the same stale bearer token at once, the client per
 shared peer-recovery request and lets all failed calls retry with the recovered token. This
 prevents a burst of concurrent 401 handlers from clearing a token that another call just
 restored.
-
-![Entra sign-in, one-time session exchange, per-tab bearer storage and authenticated API requests](../diagrams/frontend-fig6.png)
-
-<!-- Editable source: ../diagrams/src/frontend-fig6.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig6.
-     Review lineage: ../diagrams/reviews/frontend-fig6/iteration-manifest.json. -->
 
 The stored login is not just display data. The auth gate compares it with the backend-reported login. If the browser has a token for one user but the backend session reports another, the UI clears local session state rather than silently mixing identities.
 
@@ -268,12 +244,6 @@ A run can emit events such as:
 
 The stream hook uses `fetch`, not browser `EventSource`. That is intentional: authenticated streams need custom headers such as `Authorization`, and replay after reconnect benefits from `Last-Event-ID`.
 
-![Authenticated fetch-based SSE, cursor replay, bounded buffering and deterministic UI projections](../diagrams/frontend-fig7.png)
-
-<!-- Editable source: ../diagrams/src/frontend-fig7.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig7.
-     Review lineage: ../diagrams/reviews/frontend-fig7/iteration-manifest.json. -->
-
 The hook keeps a bounded event buffer so a runaway stream does not grow the DOM forever. It recognizes terminal events so completed streams stop reconnecting. It uses reconnect backoff so transient network issues do not immediately fail the page.
 
 ### Reconnect after coordinator confirmation
@@ -305,10 +275,6 @@ Agentweaver solves this by merging independent inputs; opening the stream does n
 The backend side of reconnect is a durable cursor, not a cross-replica live channel.
 The Postgres event provider reads ordered rows after the last delivered sequence;
 the client-side REST seed, buffering and reducer fold remain the separate steps above.
-
-![Durable event delivery: committed Postgres events, cursor polling and ordered SSE frames consumed by web and MCP watchers](../diagrams/canonical-durable-event-stream.png)
-
-<!-- Editable source: ../diagrams/src/canonical-durable-event-stream.drawio; pinned draw.io Desktop export. -->
 
 For embedded single-agent/child runs, the surface resolves run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor when needed, and then merges live stream events over the seed.
 
@@ -356,12 +322,6 @@ Conceptually:
 5. Child runs emit their own events, questions, tool approvals, and terminal states.
 6. The coordinator stream re-projects the all-up lifecycle so the user can monitor and steer from one page.
 7. When children are ready, assembly/review/merge phases progress through coordinator events.
-
-![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Exported from ../diagrams/src/canonical-coordinator-architecture.drawio with the
-     Fluent draw.io template. Edit the source, invoke `docs-diagram-iterate`, then
-     commit the regenerated PNG + .hash.txt. -->
 
 The topology reducer is intentionally thin. It applies server-authored snapshots and deltas, merges subtask status updates, and attaches steering state to existing nodes. It does not invent dependencies or compute topology from scratch. This protects the UI from accidentally disagreeing with backend scheduling rules.
 
@@ -449,7 +409,6 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 - Child questions and tool approvals shown on the coordinator page must be answered against the child run that asked.
 - Keep browser state small. Backend state is authoritative; UI state is a projection.
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -540,9 +499,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-<!-- diagram-context:frontend-fig1:start -->
 <details id="diagram-context-frontend-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -591,9 +548,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>BROWSER · OPERATOR INTENT; BACKEND FACTS · UI PROJECTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:frontend-fig1:end -->
 
-<!-- diagram-context:frontend-fig2:start -->
 <details id="diagram-context-frontend-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -639,9 +594,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>GLOBAL · NO PROJECT PARAMETER; SHARED SHELL + PROJECT ROUTES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:frontend-fig2:end -->
 
-<!-- diagram-context:frontend-fig3:start -->
 <details id="diagram-context-frontend-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -688,9 +641,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>WEB HOST · STATIC DELIVERY; BROWSER · RUNTIME DESTINATIONS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:frontend-fig3:end -->
 
-<!-- diagram-context:frontend-fig6:start -->
 <details id="diagram-context-frontend-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -738,9 +689,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>SIGN-IN · API + ENTRA; SESSION · PER-TAB BROWSER STATE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:frontend-fig6:end -->
 
-<!-- diagram-context:frontend-fig7:start -->
 <details id="diagram-context-frontend-fig7" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -790,4 +739,3 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>groups</td><td>INDEPENDENT INPUTS; MERGE · PROJECT · RECOVER</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:frontend-fig7:end -->

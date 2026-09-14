@@ -19,8 +19,6 @@ branches explicit. It is not the collective workflow definition: collective inpu
 applicable Build & Test gates and coordinator-directed revision follow the
 [coordinator journey](../experience/coordinator-orchestration.md), rather than an invented per-child merge.
 
-![Single-run default workflow with human review, revision branches, merge, PR publication and Scribe](../diagrams/canonical-default-workflow.png)
-
 <!-- guide-review-fig1 merged into canonical-default-workflow; collective behavior is explained separately above. -->
 
 ### Automatic RAI check
@@ -158,7 +156,6 @@ The default workflow places an automatic RAI gate before the run reaches you, fo
 The human approval gate before merge is mandatory. The platform enforces it regardless of how a workflow's other gates are configured.
 :::
 
-<!-- diagram-context:canonical-default-workflow:start -->
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -199,4 +196,3 @@ The human approval gate before merge is mandatory. The platform enforces it rega
 <tr><td>edge-10-label</td><td>blocked</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-default-workflow:end -->

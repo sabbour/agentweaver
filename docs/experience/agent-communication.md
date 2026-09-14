@@ -13,11 +13,6 @@ the [Agent Communication deep dive](../deep-dive/agent-communication.md); for th
 exact tools and endpoints, see the
 [Agent Communication reference](../reference/agent-communication.md).
 
-![Coordinator handoff: goal, OutcomeSpec, WorkPlan, dependent subtasks, and child results returning for assembly](../diagrams/canonical-agent-communication-handoff.png)
-
-<!-- Shared editable source: ../diagrams/src/canonical-agent-communication-handoff.drawio.
-     Exported by the official draw.io Desktop CLI. Changes belong to the shared owner. -->
-
 ---
 
 ## What you watch: three views, no chat
@@ -180,7 +175,6 @@ not peer chat between team members.**
 - [Coordinator orchestration experience](./coordinator-orchestration.md) — the
   coordinator graph, steering, and assembly.
 
-<!-- diagram-context:canonical-agent-communication-handoff:start -->
 <details id="diagram-context-canonical-agent-communication-handoff" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -265,4 +259,3 @@ not peer chat between team members.**
 <tr><td>groups</td><td>Intent → execution contract; Isolated work → collective assembly</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-handoff:end -->

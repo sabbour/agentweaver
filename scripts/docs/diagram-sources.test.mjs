@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -18,16 +18,17 @@ import { DRAWIO_CLI_VERSION } from './drawio-generator.mjs';
 test('discovers JSON and draw.io sources while excluding schemas', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-diagrams-'));
   try {
+    await mkdir(path.join(directory, 'flagship'));
     await Promise.all([
       writeFile(path.join(directory, 'architecture.drawio'), '<mxfile/>'),
-      writeFile(path.join(directory, 'flow.json'), '{}'),
+      writeFile(path.join(directory, 'flagship', 'flow.json'), '{}'),
       writeFile(path.join(directory, 'graph-spec.schema.json'), '{}'),
     ]);
 
     const sources = await listDiagramSources(directory);
-    assert.deepEqual(sources.map(({ name, kind }) => ({ name, kind })), [
-      { name: 'architecture', kind: 'drawio' },
-      { name: 'flow', kind: 'json' },
+    assert.deepEqual(sources.map(({ name, kind, relativeDirectory }) => ({ name, kind, relativeDirectory })), [
+      { name: 'architecture', kind: 'drawio', relativeDirectory: '' },
+      { name: 'flow', kind: 'json', relativeDirectory: 'flagship' },
     ]);
     assert.deepEqual(selectDiagramSources(sources, ['flow']).map((source) => source.name), ['flow']);
   } finally {

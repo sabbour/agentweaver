@@ -18,11 +18,6 @@ A remote leaf turn feeds the existing run timeline and workflow gates. From the 
 
 There is no user-facing execution-mode switch. The topology can show a per-node pod indicator, and an interrupted remote turn can surface a structured failure. Familiar workflow semantics do not mean guaranteed gap-free streaming or invisible recovery.
 
-![Worker-owned workflow, gates, checkpoints, and event recording; A2A carries leaf turns to AgentHost and returns events](../diagrams/canonical-a2a-execution.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/canonical-a2a-execution.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
-
 ## 2. What crosses the transport boundary
 
 Only the **leaf agent turn** moves into a pod. The orchestration graph — including review gates and checkpoint management — **stays in the worker**. So:
@@ -65,11 +60,6 @@ Check the actual transport configuration: the base AgentHost ConfigMap has `Requ
 PoC path, while the production overlay enables mTLS. Do not infer production TLS posture merely from
 the presence of a pod or a bearer token.
 
-![Claim and configure AgentHost, stream a leaf turn, then complete, suspend with conditional release, or report failure for policy-driven recovery](../diagrams/experience-a2a-distributed-agents-fig2.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-a2a-distributed-agents-fig2.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
-
 ## 5. Where you see it: Web UI, MCP, and diagnostics
 
 - **Web UI.** The existing timeline and review/merge surfaces remain. Pod indicators show recorded placement, and provisioning or remote-turn failures can appear in run state.
@@ -80,7 +70,6 @@ the presence of a pod or a bearer token.
 
 The transport dependency is preview-staged even though the checked-in Kubernetes deployments select remote execution. Treat code defaults, deployed configuration, and live cluster health as separate facts. The [A2A reference](../reference/a2a.md) and [A2A bridge deep dive](../deep-dive/a2a-bridge.md) cover the transport contract; neither a preview dependency nor a mode switch promises transparent recovery.
 
-<!-- diagram-context:canonical-a2a-execution:start -->
 <details id="diagram-context-canonical-a2a-execution" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -133,9 +122,7 @@ not transport-level replay.</td></tr>
 <tr><td>groups</td><td>WORKER CONTROL PLANE; LEAF EXECUTION AND DURABILITY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-a2a-execution:end -->
 
-<!-- diagram-context:experience-a2a-distributed-agents-fig2:start -->
 <details id="diagram-context-experience-a2a-distributed-agents-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -188,4 +175,3 @@ side effects may need review.</td></tr>
 <tr><td>groups</td><td>ACQUIRE AND EXECUTE; DISTINCT OUTCOMES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-a2a-distributed-agents-fig2:end -->

@@ -38,19 +38,20 @@ async function materializeDrawio(source) {
     return source.path;
   }
 
-  const outputPath = generatedDrawioPath(generatedDir, source.name);
+  const outputPath = generatedDrawioPath(generatedDir, source.name, source.relativeDirectory);
   const generated = await jsonFileToDrawio(source.path, { name: source.name });
   validateUncompressedDrawio(generated, outputPath);
   requireFluentSource(generated, source.name);
-  await mkdir(generatedDir, { recursive: true });
+  await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, generated);
   console.log(`Generated ${path.relative(repoRoot, outputPath)}`);
   return outputPath;
 }
 
-function exportDrawio(drawioPath, sourceName, formats, commandInfo, { embed = true, execute = execFileSync } = {}) {
+function exportDrawio(drawioPath, source, formats, commandInfo, { embed = true, execute = execFileSync } = {}) {
+  const outputDirectory = path.join(outDir, source.relativeDirectory);
   for (const format of formats) {
-    const outputPath = path.join(outDir, `${sourceName}.${format}`);
+    const outputPath = path.join(outputDirectory, `${source.name}.${format}`);
     const args = [
       ...commandInfo.prefixArgs,
       ...drawioExportArgs(drawioPath, outputPath, format, { embed }),
@@ -63,7 +64,7 @@ function exportDrawio(drawioPath, sourceName, formats, commandInfo, { embed = tr
       }
       throw error;
     }
-    console.log(`Rendered ${sourceName}.${format}`);
+    console.log(`Rendered ${path.join(source.relativeDirectory, `${source.name}.${format}`)}`);
   }
 }
 
@@ -106,16 +107,18 @@ export async function render(
 
   for (const source of sources) {
     const drawioPath = await materializeDrawio(source);
-    exportDrawio(drawioPath, source.name, drawioFormats, commandInfo, { embed, execute });
-    const pngPath = path.join(outDir, `${source.name}.png`);
+    const outputDirectory = path.join(outDir, source.relativeDirectory);
+    await mkdir(outputDirectory, { recursive: true });
+    exportDrawio(drawioPath, source, drawioFormats, commandInfo, { embed, execute });
+    const pngPath = path.join(outputDirectory, `${source.name}.png`);
     const stamp = await createDiagramStamp(
       source,
       drawioPath,
       pngPath,
       { rendererVersion },
     );
-    await writeFile(path.join(outDir, `${source.name}.hash.txt`), `${JSON.stringify(stamp, null, 2)}\n`);
-    console.log(`Wrote ${source.name}.hash.txt`);
+    await writeFile(path.join(outputDirectory, `${source.name}.hash.txt`), `${JSON.stringify(stamp, null, 2)}\n`);
+    console.log(`Wrote ${path.join(source.relativeDirectory, `${source.name}.hash.txt`)}`);
   }
 }
 
@@ -136,8 +139,9 @@ export async function checkSourceArtifacts(
   source,
   { outputDirectory, generatedDirectory },
 ) {
-  const hashFile = path.join(outputDirectory, `${source.name}.hash.txt`);
-  const pngFile = path.join(outputDirectory, `${source.name}.png`);
+  const artifactDirectory = path.join(outputDirectory, source.relativeDirectory ?? '');
+  const hashFile = path.join(artifactDirectory, `${source.name}.hash.txt`);
+  const pngFile = path.join(artifactDirectory, `${source.name}.png`);
   if (!existsSync(hashFile) || !existsSync(pngFile)) {
     return {
       ok: false,
@@ -162,7 +166,7 @@ export async function checkSourceArtifacts(
   }
   let drawioPath = source.path;
   if (source.kind === 'json') {
-    drawioPath = generatedDrawioPath(generatedDirectory, source.name);
+    drawioPath = generatedDrawioPath(generatedDirectory, source.name, source.relativeDirectory);
     const expectedXml = await jsonFileToDrawio(source.path, { name: source.name });
     if (!existsSync(drawioPath) || (await readFile(drawioPath, 'utf8')) !== expectedXml) {
       return {

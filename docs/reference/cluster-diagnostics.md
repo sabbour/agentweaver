@@ -145,7 +145,6 @@ Relationships come from `/api/diagnostics/cluster/topology`, not a `resource_gra
 | `200 OK` | The snapshot was returned. Individual checks can report a non-healthy status. |
 | `401 Unauthorized` | The bearer credential is missing or invalid. |
 
-
 ## Source
 
 | Concern | File |

@@ -37,28 +37,20 @@ Plan and implement, pass QA and RAI, receive rubberduck feedback and a code-revi
 prompt, then pass Build/Test and human review. Revision branches return to implementation;
 decline and safety failure have explicit terminals.
 
-![Software delivery authored graph, including QA, RAI, rubberduck, code-review prompt, Build/Test and human-review branches](diagrams/workflow-software-delivery.png)
-
 ## `bug-fix`
 
 Triage and fix, then QA peer verification, RAI, Build/Test and human review.
 The lighter intake does not remove safety or build gates.
-
-![Bug-fix authored graph with verification, RAI, Build/Test, human approval and revision or decline branches](diagrams/workflow-bug-fix.png)
 
 ## `content-authoring`
 
 Research, draft and edit are prompt steps. RAI precedes human review; approval proceeds
 to a **publish prompt**, not a merge executor. No-change and failure branches remain visible.
 
-![Content authoring graph separating edit and publish prompts from RAI and human-review gates](diagrams/workflow-content-authoring.png)
-
 ## `pm-discovery`
 
 Research, synthesis and stakeholder review are prompts, followed by a distinct human
 gate. Requested changes return to synthesis; approved work reaches the authored Done terminal.
-
-![Product discovery graph with a review prompt, separate human gate and synthesis revision loop](diagrams/workflow-pm-discovery.png)
 
 ## `agent-evaluation`
 
@@ -66,21 +58,15 @@ Evaluation setup, runs and collection are **sequential prompt nodes**, not
 `fan_out`/`fan_in`. The safety gate can request revision, stop unsafe work, finish
 without changes, or allow the report prompt.
 
-![Sequential agent evaluation graph with setup, runs, collection, safety outcomes and report](diagrams/workflow-agent-evaluation.png)
-
 ## `incident-response`
 
 Triage, mitigation and verification are prompts. Human approval leads to the postmortem
 prompt; requested changes return to mitigation and decline terminates without a postmortem.
 
-![Incident response graph with human approval before postmortem and explicit revision and decline](diagrams/workflow-incident-response.png)
-
 ## `infra-ops`
 
 Plan and implement, then DevOps peer validation (`pass`/`fail`), RAI, infrastructure
 peer review and human review (`approved`/`request-changes`/`declined`).
-
-![Infrastructure operations graph preserving validation, RAI, infrastructure and human-review verdicts](diagrams/workflow-infra-ops.png)
 
 ## Blueprint workflow mappings
 
@@ -101,11 +87,6 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 -> Scribe, with explicit no-change, revision, blocked and failure branches. See
 [workflow binding](workflow-binder.md) and [selection](workflow-selection.md).
 
-<!-- Canonical sources: diagrams/src/workflow-*.drawio for the seven images above.
-     Export exact names with draw.io Desktop 31.4.5; per-name pitch/pass evidence is
-     in diagrams/reviews/. The YAML catalog is the semantic authority. -->
-
-<!-- diagram-context:workflow-agent-evaluation:start -->
 <details id="diagram-context-workflow-agent-evaluation" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -135,9 +116,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>sequential-prompts-meta</td><td>agent_evaluation.yaml · nodes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-agent-evaluation:end -->
 
-<!-- diagram-context:workflow-bug-fix:start -->
 <details id="diagram-context-workflow-bug-fix" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -173,9 +152,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>edge-09-label</td><td>review</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-bug-fix:end -->
 
-<!-- diagram-context:workflow-content-authoring:start -->
 <details id="diagram-context-workflow-content-authoring" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -208,9 +185,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>edge-10-label</td><td>declined</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-content-authoring:end -->
 
-<!-- diagram-context:workflow-incident-response:start -->
 <details id="diagram-context-workflow-incident-response" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -240,9 +215,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>Verify</td><td>incident_response.yaml · nodes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-incident-response:end -->
 
-<!-- diagram-context:workflow-infra-ops:start -->
 <details id="diagram-context-workflow-infra-ops" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -280,9 +253,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>edge-11-label</td><td>declined</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-infra-ops:end -->
 
-<!-- diagram-context:workflow-pm-discovery:start -->
 <details id="diagram-context-workflow-pm-discovery" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -314,9 +285,7 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>stakeholder-contract-meta</td><td>review prompt · human-review gate</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-pm-discovery:end -->
 
-<!-- diagram-context:workflow-software-delivery:start -->
 <details id="diagram-context-workflow-software-delivery" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -357,4 +326,13 @@ The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish
 <tr><td>edge-14-label</td><td>declined</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:workflow-software-delivery:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Default workflow
+
+[![Flowchart of the six-stage default workflow: agent production, Responsible AI gate, human review, merge attempt, pull-request publication attempt, and Scribe recording, including revision, no-change, decline, safety, and blocked-merge paths.](diagrams/flagship/canonical-default-workflow.png)](diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-default-workflow.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+<!-- flagship-diagrams:end -->

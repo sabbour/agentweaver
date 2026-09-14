@@ -14,7 +14,7 @@ import { defaultWorkflowLayout } from './default-workflow-layout.mjs';
 import { toSpec } from './workflows-to-graphspec.mjs';
 
 test('native Kubernetes glyphs retain a visible resource inside the Fluent footprint',()=>{
-  const xml=graphSpecToDrawio({nodes:[{id:'pod',label:'Pod',shape:'mxgraph.kubernetes.pod'}],edges:[]});
+  const xml=graphSpecToDrawio({nodes:[{id:'pod',label:'Pod',library:'kubernetes',shape:'mxgraph.kubernetes.pod'}],edges:[]});
   assert.match(xml,/shape=mxgraph.kubernetes.icon2;prIcon=pod;kubernetesLabel=0/);
   assert.match(xml,/fillColor=#fdfbf8;strokeColor=#635c57/);
   assert.equal(inspectFluentSource(xml).status,'passed');

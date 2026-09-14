@@ -18,11 +18,6 @@ verified Coordinator run controls manual promotion, merge, rejection, and active
 decision mutation. That keeps team knowledge cumulative while preserving a deliberate
 write boundary around project policy.
 
-![From proposals to usable context: Verified authorship and trust gates control selection; selected content remains untrusted data.](../diagrams/memory-decisions-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig1/v2/iteration-manifest.json. -->
-
 Where this lives:
 
 - `apps/Agentweaver.Api/Memory`
@@ -249,11 +244,6 @@ The current submission rule is:
 4. If a different agent, or the same agent with different provenance on a pending entry, submits the same slug, allocate a de-collided slug: `original--agent-segment`.
 5. If that candidate already exists, append a counter: `original--agent-segment--2`, then `--3`, and so on. Every numbered candidate loops back through the availability check before insertion.
 
-![Allocate an inbox slug safely: Update only a matching pending author; numbered candidates must be checked again.](../diagrams/memory-decisions-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig2/v2/iteration-manifest.json. -->
-
 This prevents a data-loss bug: if the key were only `(project, slug)` with blind upsert semantics, the second agent to propose "use-postgres" could overwrite the first agent's unrelated proposal. If the key were only `(project, agent, slug)`, both entries could survive in the database but export to the same `.squad/decisions/inbox/use-postgres.md` path and one file would win. De-collision preserves both proposals all the way through the file mirror.
 
 Slug uniqueness is enforced in two layers. The endpoint first selects a free,
@@ -282,7 +272,7 @@ follows; cross-team memory must also be approved. Session context comes last. Al
 selected strings live inside an explicitly untrusted JSON data envelope, so trust
 controls eligibility without turning stored text into prompt instructions.
 
-The shared [context schematic](../diagrams/canonical-memory-context.png) is retained
+The shared [context schematic](../diagrams/flagship/canonical-memory-context.png) is retained
 as a reference. The eligibility table below makes the current trust and provenance
 gates explicit rather than implying that active status or a tag alone is sufficient.
 
@@ -306,11 +296,6 @@ These filters describe prompt selection, not every record returned by the read A
 ## Import and export
 
 Import/export is the bridge between structured database state and human-readable workspace state.
-
-![One authority, asymmetric exchange: The store exports several views; only inbox Markdown imports as pending proposals.](../diagrams/memory-decisions-fig4.png)
-
-<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig4.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig4/v2/iteration-manifest.json. -->
 
 ### Export
 
@@ -491,7 +476,6 @@ To rebuild memory and decision governance from these concepts, implement the sys
 - A file mirror that cannot represent two entries with the same slug is why de-collision exists.
 - Backups that omit `memory.db` omit the team's governance history.
 
-<!-- diagram-context:canonical-memory-context:start -->
 <details id="diagram-context-canonical-memory-context" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -552,9 +536,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-memory-context:end -->
 
-<!-- diagram-context:memory-decisions-fig1:start -->
 <details id="diagram-context-memory-decisions-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -600,9 +582,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>groups</td><td>AUTHORED PROPOSALS; GOVERNANCE ALTERNATIVES; ELIGIBILITY AND PROMPT BOUNDARY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:memory-decisions-fig1:end -->
 
-<!-- diagram-context:memory-decisions-fig2:start -->
 <details id="diagram-context-memory-decisions-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -652,9 +632,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>groups</td><td>REQUESTED IDENTITY; UPDATE OR ALLOCATE; AVAILABILITY LOOP AND INSERT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:memory-decisions-fig2:end -->
 
-<!-- diagram-context:memory-decisions-fig4:start -->
 <details id="diagram-context-memory-decisions-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -697,4 +675,13 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>groups</td><td>AUTHORITATIVE STORE AND POLICY VIEWS; OPERATIONAL FILE VIEWS; PATTERNS AND THE NARROW IMPORT PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:memory-decisions-fig4:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Context compilation and progressive tool disclosure
+
+[![Two-lane data-flow view showing approved decisions, attributed memory, current project and run state, role and workflow constraints, trust and budget filtering, compact context assembly, a shared tool capability registry, progressive disclosure from summaries to schemas and guidance, coordinator versus role-agent slices, and durable observations feeding later runs.](../diagrams/flagship/canonical-memory-context.png)](../diagrams/drawio/generated/flagship/canonical-memory-context.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-memory-context.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-memory-context.drawio)
+<!-- flagship-diagrams:end -->

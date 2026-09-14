@@ -29,9 +29,20 @@ function canonicalize(value) {
 }
 
 export async function listDiagramSources(specsDir) {
-  const entries = await readdir(specsDir);
+  async function filesUnder(directory, relativeDirectory = '') {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const relativePath = path.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) files.push(...await filesUnder(path.join(directory, entry.name), relativePath));
+      else files.push(relativePath);
+    }
+    return files;
+  }
+  const entries = await filesUnder(specsDir);
   const sources = new Map();
-  for (const fileName of entries.sort()) {
+  for (const relativePath of entries) {
+    const fileName = path.basename(relativePath);
     const extension = path.extname(fileName).toLowerCase();
     if (!['.json', '.drawio'].includes(extension) || fileName.endsWith('-spec.schema.json')) continue;
     const name = fileName.slice(0, -extension.length);
@@ -39,7 +50,8 @@ export async function listDiagramSources(specsDir) {
     sources.set(name, {
       name,
       kind: extension === '.drawio' ? 'drawio' : 'json',
-      path: path.join(specsDir, fileName),
+      path: path.join(specsDir, relativePath),
+      relativeDirectory: path.dirname(relativePath) === '.' ? '' : path.dirname(relativePath),
     });
   }
   return [...sources.values()];
@@ -119,8 +131,8 @@ export function parseDiagramStamp(contents, stampPath = 'diagram stamp') {
   return stamp;
 }
 
-export function generatedDrawioPath(generatedDir, name) {
-  return path.join(generatedDir, `${name}.drawio`);
+export function generatedDrawioPath(generatedDir, name, relativeDirectory = '') {
+  return path.join(generatedDir, relativeDirectory, `${name}.drawio`);
 }
 
 export function validateUncompressedDrawio(contents, source = 'draw.io source') {

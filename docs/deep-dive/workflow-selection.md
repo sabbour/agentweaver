@@ -86,10 +86,6 @@ Event and schedule trigger producers are implemented. Subject to automation acti
 
 ## End-to-end flow
 
-![Workflow selection: available request or backlog override, conversational override, singleton or bounded model selection, distinct fallback rules, then code-producing decomposition compatibility](../diagrams/canonical-workflow-selection.png)
-
-<!-- Shared read-only canonical; editable source: ../diagrams/src/canonical-workflow-selection.drawio. -->
-
 ## The workflow selection event
 
 An available explicit override emits `coordinator.workflow_selected` before the count check. The multi-candidate selector path also emits it, and post-decomposition reselection may emit a second event. The event carries:
@@ -117,7 +113,6 @@ Only the automatic singleton/empty-candidate shortcut is silent. The coordinator
 | `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs` | `POST /api/projects/{id}/orchestrations` — passes `workflow_override_id` to `CoordinatorRunService` |
 | `apps/web/src/api/client.ts` | `startOrchestration(projectId, goal, workflowOverrideId?)` — passes `workflow_override_id` in the request body |
 
-<!-- diagram-context:canonical-workflow-selection:start -->
 <details id="diagram-context-canonical-workflow-selection" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -172,4 +167,3 @@ Only the automatic singleton/empty-candidate shortcut is silent. The coordinator
 <tr><td>fallback</td><td>default / standard</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-selection:end -->

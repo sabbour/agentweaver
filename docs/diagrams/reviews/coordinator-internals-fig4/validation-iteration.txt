@@ -1,1 +1,0 @@
-passes must contain at least four entries

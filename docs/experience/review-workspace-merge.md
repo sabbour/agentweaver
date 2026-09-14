@@ -12,11 +12,6 @@ The review surface is intentionally local-first. Agentweaver can complete review
 
 The most important product contract is: **approval binds to candidate content, not just a mutable branch name**. Merge checks that the candidate branch still matches the reviewed tree hash. This does **not** promise that the final destination tree equals the candidate tree: a three-way merge can preserve newer originating-branch content, and centrally consolidated Squad state has special merge handling.
 
-![The mental model: Agent works in run worktree, Candidate commit + tree hash, Diff against originating branch, Human Review, Reviewer decision, Verify reviewed tree hash, Local git merge, Merged, Reviewer feedback, Agent revises same run worktree, Declined, Merge failed or returns to review](../diagrams/experience-review-workspace-merge-fig1.png)
-
-<!-- Diagram source: ../diagrams/src/experience-review-workspace-merge-fig1.drawio.
-     Published PNG path is stable; edit the draw.io source, not the raster. -->
-
 | Review-loop step | Web surface | MCP tool or limit |
 |---|---|---|
 | Check whether review is ready | Orchestration / selected-task timeline | `run_status`, `run_watch` |
@@ -226,11 +221,6 @@ The tool returns paths and file/folder metadata. MCP clients can use the flat li
 
 The path is relative to the workspace and should use forward slashes, such as `src/main.cs`. The response includes content metadata, including binary or too-large signals, so an MCP client can avoid rendering content that is not suitable for inline display.
 
-![`get_project_workspace_file`: Workspace page or MCP client, list_project_workspace_refs, Choose base branch or run worktree, list_project_workspace, Select file, get_project_workspace_file, Read-only source / preview](../diagrams/experience-review-workspace-merge-fig2.png)
-
-<!-- Diagram source: ../diagrams/src/experience-review-workspace-merge-fig2.drawio.
-     Published PNG path is stable; edit the draw.io source, not the raster. -->
-
 ## Merge experience
 
 Merge starts only after approval. In the web UI, approval is **Commit and Merge**. In MCP, approval is `run_review` with `approved: true`. Both feed the same local merge model.
@@ -312,7 +302,6 @@ The **Changes** tab says **This run produced no changes to review.** This usuall
 
 After **Change** → **Send**, the run goes back into progress and later returns to review. The reviewer should inspect the new diff, not rely on the old one. The new tree hash is the candidate that approval binds to.
 
-
 ### Merge conflicts
 
 A merge conflict turns approval into `merge_failed`. Inspect the recorded conflict and any retained artifacts before choosing recovery; worktree retention depends on the execution and cleanup path.
@@ -325,7 +314,6 @@ If the candidate branch changes after review, merge refuses it. The approved con
 
 The REVIEW, WORKSPACE, and MERGE experiences are one local-first flow. Runs create candidate worktrees; reviewers inspect artifacts; workspace browsing provides read-only context; approval authorizes guarded integration of the candidate; request changes starts revision; rejection stops it. MCP provides inspection and binary approve/reject decisions, while the web UI provides feedback-bearing re-review. The former Changes, file-viewer, and Workspace screenshot embeds were placeholders and are omitted until genuine captures are available.
 
-<!-- diagram-context:experience-review-workspace-merge-fig1:start -->
 <details id="diagram-context-experience-review-workspace-merge-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -380,9 +368,7 @@ target and special Squad state.</td></tr>
 <tr><td>groups</td><td>CANDIDATE AND REVIEW; SERVER-AUTHORITATIVE OUTCOMES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-review-workspace-merge-fig1:end -->
 
-<!-- diagram-context:experience-review-workspace-merge-fig2:start -->
 <details id="diagram-context-experience-review-workspace-merge-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -435,4 +421,3 @@ no working-tree mutation.</td></tr>
 <tr><td>groups</td><td>CHOOSE THE REFERENCE; READ THE CONTENT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-review-workspace-merge-fig2:end -->

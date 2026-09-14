@@ -24,10 +24,6 @@ A project run needs an isolated git worktree, a sandboxed execution environment,
 The API owns the durable conversation; the held AgentHost creates a fresh SDK session
 for each turn and uses a separately issued MCP broker token, not the browser's Entra bearer.
 
-![Assistant session boundaries: API-owned conversation, held AgentHost, fresh per-turn SDK session, broker-only MCP access, and durable history](../diagrams/assistant-runtime-fig1.png)
-
-<!-- Editable source: docs/diagrams/src/assistant-runtime-fig1.drawio; grounded lifecycle and broker-token corrections retained. -->
-
 1. **Start.** `POST /api/assistant/runs` creates a run record and, if an initial message was supplied, immediately runs the opening turn. The response returns the `runId` used for every subsequent message.
 2. **Converse.** `POST /api/assistant/runs/{id}/messages` appends the caller's message, runs a turn, and returns the assistant's reply. Each turn is serialized per-run via a semaphore so two messages to the same session can't race.
 3. **Persist.** Every turn appends `AgentMessage` events (role + content) to the same durable event log every other run type uses. This is the only source of truth for a conversation's history — the in-memory cache is purely an optimization.
@@ -98,7 +94,6 @@ Any file system, shell, or code-execution work the assistant needs to do must go
 - [Agent Runtime & Tools — Deep Dive](./agent-runtime.md) — the heavier path used by full project runs
 - [MCP Server — Deep Dive](./mcp-server.md)
 
-<!-- diagram-context:assistant-runtime-fig1:start -->
 <details id="diagram-context-assistant-runtime-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -161,4 +156,3 @@ Any file system, shell, or code-execution work the assistant needs to do must go
 <tr><td>groups</td><td>CONVERSATION CONTROL; DURABILITY / EXECUTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:assistant-runtime-fig1:end -->

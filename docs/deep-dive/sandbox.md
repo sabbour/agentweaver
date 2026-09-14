@@ -29,13 +29,6 @@ Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.Age
 
 Think of every agent action as passing through three concentric boundaries:
 
-![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/canonical-sandbox-boundary.png)
-
-<!-- Generated from ../diagrams/src/canonical-sandbox-boundary.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Each boundary has a different job:
 
 - **Governance boundary:** answers “is this kind of action allowed for this run?” It is intentionally deny-by-default. A tool name must be recognized, and path-bearing arguments must resolve inside the sandbox root.
@@ -136,13 +129,6 @@ Every executor returns the same shape: exit code, stdout, stderr, timeout flag, 
 
 Executor selection is environment-aware:
 
-![Backend selection logic: Need an ISandboxExecutor, Sandbox:Backend set?, Kubernetes executor, Local factory, KUBERNETES_SERVICE_HOST present?, Kubernetes client initializes?, Use SandboxClaim warm-pool pods, Throw: do not fall back, Windows?, processcontainer mxc, WSL2 bwrap/unshare, direct passthrough warning, …](../diagrams/sandbox-fig2.png)
-
-<!-- Generated from ../diagrams/src/sandbox-fig2.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Selected Kubernetes initialization fails closed. The API router first chooses Kubernetes versus local using the explicit backend and cluster detection; `Sandbox:Backend=local` still chooses the local factory inside a cluster.
 
 ### Local backends and their trade-offs
@@ -167,13 +153,6 @@ The retained Kubernetes utility-command API uses claims and pod exec. It is not 
 - A **SandboxWarmPool** keeps ready sandboxes available from that template.
 - A **SandboxClaim** asks the sandbox controller for one sandbox instance for a bounded TTL.
 - The executor waits until the claim is bound to a concrete pod, then uses Kubernetes pod exec to run the command.
-
-![Kubernetes sandbox lifecycle: claims over pods: Agent run, Agentweaver API, SandboxClaim, Sandbox controller, Warm pool, Sandbox pod, Pod registry](../diagrams/sandbox-fig3.png)
-
-<!-- Generated from ../diagrams/src/sandbox-fig3.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ### The agent-sandbox controller (and where MXC fits)
 
@@ -211,7 +190,7 @@ Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `
 
 ### AgentHost warm-pool configure contract
 
-AgentHost uses two standby warm pods. Shipped claims omit `spec.env`; static configuration belongs to the template/config map. Setup waits for one-time `/configure`. See the [claim/configure sequence](../diagrams/sandbox-pod-execution-fig6.png).
+AgentHost uses two standby warm pods. Shipped claims omit `spec.env`; static configuration belongs to the template/config map. Setup waits for one-time `/configure`. See the claim/configure sequence.
 
 Per-run values are delivered by `POST /configure` after the claim binds:
 
@@ -298,13 +277,23 @@ If rebuilding this subsystem from scratch, implement it in this order:
 - **Directory listing has a narrow residual race.** The code documents a filename-only TOCTOU residual risk for listing; file reads/writes use stronger open-and-verify handling.
 - **Output caps apply to command and tool results.** The command/tool output cap in this subsystem is 4 MiB; keep that limit in place so a single large result cannot exhaust memory or flood the event stream. Image or attachment upload paths belong to other components and are out of scope for this repo-owned sandbox subsystem.
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Sandbox boundary
+
+[![Deployment and trust-boundary view showing project sandbox declarations, Kubernetes SandboxClaim admission, the Kata AgentHost pod, point-of-use tool and filesystem checks, authenticated executor IPC, workspace mounts, network enforcement, and separate Key Vault authority.](../diagrams/flagship/canonical-sandbox-boundary.png)](../diagrams/drawio/generated/flagship/canonical-sandbox-boundary.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-sandbox-boundary.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-sandbox-boundary.drawio)
+<!-- flagship-diagrams:end -->
+
 ## See also
 
 - [Sandbox pod execution](./sandbox-pod-execution.md) - pod-local scratch workspaces, Git write-back,
   nested-repository flattening, and the HOME/XDG cache contract.
 - [Sandbox browser preview](./sandbox-browser-preview.md) - exposing a server running inside a run's sandbox pod to the user over a public HTTPS reverse proxy (per-preview HTTPRoute -> per-run ClusterIP Service -> pod).
 
-<!-- diagram-context:canonical-sandbox-boundary:start -->
 <details id="diagram-context-canonical-sandbox-boundary" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -366,9 +355,7 @@ If rebuilding this subsystem from scratch, implement it in this order:
 <tr><td>groups</td><td>TOOL SELECTION / POLICY; POINT-OF-USE CONTAINMENT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-boundary:end -->
 
-<!-- diagram-context:sandbox-fig2:start -->
 <details id="diagram-context-sandbox-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -415,9 +402,7 @@ If rebuilding this subsystem from scratch, implement it in this order:
 <tr><td>notes</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.; Kubernetes failure never silently descends into the local ladder.; Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-fig2:end -->
 
-<!-- diagram-context:sandbox-fig3:start -->
 <details id="diagram-context-sandbox-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -461,9 +446,7 @@ If rebuilding this subsystem from scratch, implement it in this order:
 <tr><td>notes</td><td>Cleanup cards distinguish newly created ad-hoc and run-scoped claims.; AgentHost controlled tools instead use authenticated pod-private PodExec.; SQL run ownership leases are separate from this Kubernetes claim lifecycle.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-fig3:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig6:start -->
 <details id="diagram-context-sandbox-pod-execution-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -509,4 +492,3 @@ If rebuilding this subsystem from scratch, implement it in this order:
 <tr><td>notes</td><td>Top, middle and bottom rows are successive launch stages.; Repository / preview / broker credentials have separate purposes.; Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig6:end -->

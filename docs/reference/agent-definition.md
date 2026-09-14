@@ -1,6 +1,6 @@
 # Agent definition — Reference
 
-See [Source-generated tool map and embedded/downloadable agent definitions](../diagrams/agent-definition-fig1.png) for the shared visual model.
+See Source-generated tool map and embedded/downloadable agent definitions for the shared visual model.
 
 Terse reference for **agent definition generation & per-project materialization**: how the GitHub Copilot
 agent file `.github/agents/agentweaver.agent.md` is generated from the MCP tool source, embedded into the
@@ -106,7 +106,6 @@ agent ("Agentweaver Driver") for that project with no further setup.
 - [MCP tool index](./mcp-tools.md) — the generated list of all `agentweaver-*` tools.
 - [MCP server reference](./mcp.md) — per-tool parameter reference.
 
-<!-- diagram-context:agent-definition-fig1:start -->
 <details id="diagram-context-agent-definition-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -148,4 +147,3 @@ agent ("Agentweaver Driver") for that project with no further setup.
 <tr><td>groups</td><td>GENERATOR INPUTS; OUTPUTS + MATERIALIZATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-definition-fig1:end -->

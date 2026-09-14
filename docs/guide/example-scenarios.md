@@ -94,13 +94,6 @@ records are authoritative; files are inspectable mirrors. See [Team Memory](./te
 
 Use the Kanban board to queue work and let the heartbeat dispatch it.
 
-![Scenario 2 — Pick up a backlog task with the board and heartbeat: Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/canonical-board-lifecycle.png)
-
-<!-- Generated from ../diagrams/src/canonical-board-lifecycle.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 1. **Capture a task** in the Backlog column (`POST /api/projects/{id}/backlog/tasks`). Add a description for context — sharper descriptions produce sharper OutcomeSpecs.
 2. **Rank** the backlog by dragging cards (`POST .../backlog/tasks/{taskId}/reorder`), and optionally pin a workflow per card (`PUT .../backlog/tasks/{taskId}/workflow-override`).
 3. **Move to Ready** when the task is ready to run (`POST .../backlog/tasks/{taskId}/ready`), or send everything at once (`POST .../backlog/ready-all`).
@@ -156,16 +149,8 @@ Everything above is available programmatically through the [MCP server](/referen
 8. **Optionally curate/export knowledge** — `decision_inbox_submit`, `memory_record`,
    `memory_search`, or `memory_export`. Export is not a mandatory final run stage.
 
-![MCP lifecycle: authorize and prepare a project/team; choose coordinator_start with coordinator_outcome_spec_confirm, direct run_task, or heartbeat pickup; observe coordinator_work_plan_get and coordinator_children_get, inspect artifacts, then approve or decline with run_review](../diagrams/guide-example-scenarios-fig3.png)
-
-<!-- Canonical editable source: ../diagrams/src/guide-example-scenarios-fig3.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using
-     npm run docs:render-diagrams -- --spec guide-example-scenarios-fig3.
-     Preserve the PNG, hash, and pitch/pass artifacts together. -->
-
 See the [MCP reference](/reference/mcp) for full tool parameters and the [API reference](/reference/api) for the underlying endpoints.
 
-<!-- diagram-context:canonical-board-lifecycle:start -->
 <details id="diagram-context-canonical-board-lifecycle" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -244,9 +229,7 @@ See the [MCP reference](/reference/mcp) for full tool parameters and the [API re
 <tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-board-lifecycle:end -->
 
-<!-- diagram-context:guide-example-scenarios-fig3:start -->
 <details id="diagram-context-guide-example-scenarios-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -303,4 +286,3 @@ See the [MCP reference](/reference/mcp) for full tool parameters and the [API re
 <tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:guide-example-scenarios-fig3:end -->

@@ -1,6 +1,6 @@
 # Web UI reference
 
-See [Coordinator entry, outcome gate, embedded child inspection and review](../diagrams/canonical-coordinator-journey.png) for the shared visual model.
+See [Coordinator entry, outcome gate, embedded child inspection and review](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
 
 The Agentweaver web UI is a TypeScript React 19 SPA built with Vite. It uses React Router for routing, Fluent UI React Components (Fluent 2) for styling, and React Flow for workflow diagrams. It submits runs, streams live events, shows run details, and records your review decision before anything merges. The browser client keeps all run logic in the API layer.
 
@@ -140,7 +140,6 @@ Subtask status is projected from topology and run events by mapping the subtask 
 
 Each selected assembly gate can have a **loopback back-edge** (`loopback: true`) to the Coordinator. These edges represent rework, not forward pipeline progression, and are excluded from forward-degree/cardinality calculations. The renderer derives labels from the source role, including **RAI flags**, **Request changes**, and a generic **Rework** fallback, and uses dashed/curved back-edge styling. The selected workflow determines the gates; do not assume exactly two loopbacks.
 
-
 #### Subtask node expansion
 
 Subtask nodes (`node_type: "subtask"`) are expandable cards. Each shows the assigned agent, selected model, phase, and a status badge. When a subtask has a `child_graph_ref` (i.e. the coordinator has dispatched that subtask to a child run), clicking **Expand pipeline** fetches the child run's `GraphDescriptor` from `GET /api/runs/{childRunId}/graph` and simultaneously subscribes to the child run's live SSE stream. The inline panel then renders the child pipeline as a horizontal row of node cards — one per node in the child descriptor — connected by arrow separators. Each inline card shows the same status badge, elapsed timer, role text, and optional status message as the full workflow graph. If the descriptor is not yet available (fetch in-flight), a hardcoded fallback pipeline (Agent → Assemble-ready) is shown immediately while the fetch completes.
@@ -255,7 +254,6 @@ Two action buttons appear in the page header:
 
 **Add member** — opens a dialog to select a role from the full catalog and cast a new team member directly, without going through the casting wizard.
 
-
 A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
 
 The sync panel at the bottom of the page shows the pending uncommitted changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
@@ -344,7 +342,6 @@ apps/web/src/
 
 Coordinator and Assistant route boundaries, plus project observability views, are wired from `App.tsx`.
 
-
 ## Current navigation and action boundaries
 
 Routes include `/sessions`, `/settings`, `/assistant`, platform-admin-only `/platform-settings`, project skills/cluster/observability, and `/projects/:projectId/team/:agentName/memory`. Legacy project-session and global-observability URLs redirect.
@@ -353,7 +350,6 @@ Project creation uses Repo App browse → selection code → server-authorized c
 
 Safe-tool auto-approval covers `web_fetch` and `start_preview`; Autopilot handles clarifying questions and launch-time outcome confirmation. Human assembly buttons require a human-review gate, not every assembly-review-requested event. Steer only server-reported steerable runs; terminal failed/declined runs are not universally amendable in place. Child questions/approvals target the actual child. Preview failure remains visible independently of the Build/Test verdict.
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -441,4 +437,3 @@ Safe-tool auto-approval covers `web_fetch` and `start_preview`; Autopilot handle
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->

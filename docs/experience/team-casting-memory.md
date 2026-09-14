@@ -16,11 +16,6 @@ The experience has two loops that reinforce each other:
    database records for future context; exports only mirror state to `.squad/` and
    `.agentweaver/context/` files.
 
-![Cast and confirm a named team, record knowledge, approve eligible records, and compile future context from the database rather than exported files](../diagrams/experience-team-casting-memory-fig1.png)
-
-<!-- Editable source: ../diagrams/src/experience-team-casting-memory-fig1.drawio.
-     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
-
 The user-facing promise is simple: cast a team once, refer to agents by stable names, and let the team carry forward accepted decisions and useful memory instead of restarting from blank context every run.
 
 ## Core concepts
@@ -441,7 +436,6 @@ Run `memory_export` when `.squad/` and `.agentweaver/context/` should reflect st
 - **Memory helps; decisions bind**: memory informs future work, while the decision ledger sets boundaries.
 - **Files are a product surface**: structured state gives reliability, and readable files give transparency.
 
-<!-- diagram-context:experience-team-casting-memory-fig1:start -->
 <details id="diagram-context-experience-team-casting-memory-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -494,4 +488,3 @@ not the compiler authority.</td></tr>
 <tr><td>groups</td><td>TEAM AND KNOWLEDGE GOVERNANCE; AUTHORITATIVE CONTEXT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-team-casting-memory-fig1:end -->

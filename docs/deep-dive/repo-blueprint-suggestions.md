@@ -6,12 +6,6 @@ For the API contract see the [reference](../reference/repo-blueprint-suggestions
 
 ## End-to-end flow
 
-![Anonymous repository metadata feeds deterministic catalog suggestions; caller cancellation propagates](../diagrams/repo-blueprint-suggestions-fig1.png)
-
-<!-- Editable source: ../diagrams/src/repo-blueprint-suggestions-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec repo-blueprint-suggestions-fig1.
-     Review lineage: ../diagrams/reviews/repo-blueprint-suggestions-fig1/iteration-manifest.json. -->
-
 1. **The dialog has a repository.** `CreateFromGitHubDialog` keeps the active repository in `d.sourceRepository` and passes it into the shared `BlueprintPanel`, whose tab strip starts the GitHub flow on `suggested` (`apps/web/src/pages/ProjectGalleryPage.tsx:676`, `apps/web/src/components/BlueprintPicker.tsx:371`).
 2. **The client calls the new endpoint.** `SuggestedBlueprintPanel` calls `apiClient.suggestBlueprint(normalizedRepo)` only when the tab is active and the repo string is non-empty (`apps/web/src/components/BlueprintPicker.tsx:301`, `:305`). The client method posts `{ "repository": "owner/repo" }` to `/blueprints/suggest` (`apps/web/src/api/client.ts:186`).
 3. **The endpoint validates shape and identity.** `POST /api/blueprints/suggest` rejects blank `repository` with `400`, resolves the authenticated caller, and passes `caller.User` to the suggestion service (`apps/Agentweaver.Api/Endpoints/BlueprintEndpoints.cs:53`, `:59`, `:63`).
@@ -64,7 +58,6 @@ into a successful fallback response (`GitHubRepoBlueprintSuggestionService.cs:89
 - [Projects experience](../experience/projects.md)
 - [API reference](../reference/api.md#blueprints)
 
-<!-- diagram-context:repo-blueprint-suggestions-fig1:start -->
 <details id="diagram-context-repo-blueprint-suggestions-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -115,4 +108,3 @@ into a successful fallback response (`GitHubRepoBlueprintSuggestionService.cs:89
 <tr><td>groups</td><td>INPUT + CURRENT CREDENTIAL BOUNDARY; METADATA · MATCHING · OUTCOMES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:repo-blueprint-suggestions-fig1:end -->

@@ -35,13 +35,6 @@ created and driven **inside the Worker process**. The workflow graph ran in-proc
 the sandbox pod was used only to **exec one shell command at a time** through a warm-pool claim.
 The pod was a place to run `run_command`; it was *not* where the agent lived.
 
-![Before pod-per-run: single-Worker-pod execution: Workflow graph, Agent + live Copilot SDK session, In-memory run-event history, Sandbox pod, SSE to clients](../diagrams/canonical-sandbox-pod-evolution.png)
-
-<!-- Generated from ../diagrams/src/canonical-sandbox-pod-evolution.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Every box inside the Worker pod multiplies by concurrent and recent runs. That is why it OOMed, and
 why production had to keep subtasks on one shared in-process owner.
 
@@ -110,13 +103,6 @@ Linux namespace sandbox, or a Kata-isolated Kubernetes pod. The contract itself 
 
 The API router chooses Kubernetes versus local first; the local factory then probes supported local backends. Runtime observability emits `sandbox.selected` with backend, isolation status and reason. The in-pod PodExec client is a separate executor seam.
 
-![API router selects Kubernetes or the local factory; local backends may fall back to direct](../diagrams/sandbox-fig2.png)
-
-<!-- Generated from ../diagrams/src/sandbox-fig2.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The ladder, top to bottom:
 
 - **`processcontainer` (Mxc, Windows)** — the first choice on Windows. `mxc` is Microsoft's open-source
@@ -144,9 +130,7 @@ conditions live in the [Sandbox backends table](../reference/sandbox-setup.md#sa
 
 ### Two seams, one contract, three tiers
 
-![AgentHost and executor use separate PID namespaces inside one Kata pod. Authenticated pod-private IPC reaches the executor; registered workspace and HOME paths define the child mount view, without exposing the PVC root, sibling runs or IPC token.](../diagrams/canonical-pod-process-boundaries.png)
-
-*Editable source: [canonical-pod-process-boundaries.drawio](../diagrams/src/canonical-pod-process-boundaries.drawio).*
+*Editable source: [canonical-pod-process-boundaries.drawio](../diagrams/drawio/generated/flagship/canonical-pod-process-boundaries.drawio).*
 
 The connective idea for pod-per-run is that **the executor abstraction and pod-per-run agent execution are
 the same seam at different deployment tiers — and the A2A agent-turn remoting is orthogonal to both.**
@@ -365,13 +349,6 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
   (the pool to bind) and `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`.
   AgentHost claims omit `spec.env`; static paths, port, and mTLS settings belong to the template/config map. Run identity, turn authentication, and the selected provider payload are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
 
-![How the controller provisions a run's pod: KubernetesSandboxExecutor, SandboxClaim (CR), agent-sandbox controller, SandboxWarmPool, Kata sandbox pod, PodNameRegistry](../diagrams/sandbox-pod-execution-fig6.png)
-
-<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig6.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The executor reads the pod name from `status.sandbox.name` (the agent-sandbox controller's shape) once the
 claim's `Ready` condition is `True`. For pod-per-run AgentHost pods it then polls the pod's `status.podIP` to
 build the A2A endpoint. Agentweaver never deletes pods itself — it deletes the *claim* (or lets the TTL
@@ -420,13 +397,6 @@ happen in a **complete checkout** under `/local-workspace/{run-hash}/{tree-hash}
 8 GiB, disk-backed `emptyDir`: it is local to the claimed pod, is not synchronized to Azure Files, and
 disappears when the pod is released. The shared repository receives changes only through the explicit
 write-back path described below.
-
-![Pod-local execution workspaces: Authoritative repository + worktree, PodLocalWorkspaceManager, Ephemeral checkout, Workspace mode, Build / test / preview, Implementation turn, Cancellable nested-repo scan, Flatten nested repos, Platform alternate index](../diagrams/sandbox-pod-execution-fig4.png)
-
-<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig4.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ##### Materialize and verify before execution
 
@@ -645,13 +615,6 @@ resolves the pod origin, loads the per-run credential, and forwards the decision
 `a2a-sandbox-pod` HTTP client. AgentHost authenticates the request and resolves its local gate. A
 terminal result is mapped to HTTP 200 and the API emits `tool.approval_resolved`; `unknown`, `pending`,
 and unreachable results map to 404, 409, and 503 respectively.
-
-![Returning tool-approval decisions to AgentHost: Operator, Run approval endpoint, Persisted run events, DurableToolApprovalGate, AgentHostApprovalHttpClient, AgentHost pod, In-memory IToolApprovalGate](../diagrams/sandbox-pod-execution-fig7.png)
-
-<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig7.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 | Source | Role |
 | --- | --- |
@@ -1130,13 +1093,6 @@ A claim can stay unbound longer than the coordinator's subtask-stall timeout (`C
 
 The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
-![Provisioning sequence from child dispatch and claim polling through standby listener, one-time configuration, and the first turn, with heartbeats during provisioning](../diagrams/sandbox-pod-execution-fig5.png)
-
-<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig5.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ::: info Legacy states
 The `SubtaskStatus.PendingCapacity` enum, the `subtask.pending_capacity` event, and the amber **⏳ Waiting for capacity** badge are **retained for back-compat only**. New runs never enter `PendingCapacity`; a pre-upgrade subtask stranded in that status is recovered to `pending` and re-attempted. The terminal `capacity_unavailable` detail code is likewise legacy — Kubernetes now absorbs the wait instead of hard-failing.
 :::
@@ -1171,6 +1127,17 @@ Where this lives:
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
 | Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Pod and process boundaries
+
+[![UML deployment view of a SandboxClaim selecting a warm-pool template, a Kata-isolated AgentHost pod with separate AgentHost and executor containers, authenticated IPC, model-controlled child processes, private volumes, shared workspace PVC, and network policy.](../diagrams/flagship/canonical-pod-process-boundaries.png)](../diagrams/drawio/generated/flagship/canonical-pod-process-boundaries.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-pod-process-boundaries.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-pod-process-boundaries.drawio)
+<!-- flagship-diagrams:end -->
+
 ## Related reading
 
 - [Sandbox](./sandbox.md) — the underlying isolation model, claim lifecycle, and hardening.
@@ -1188,7 +1155,6 @@ Where this lives:
 - [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
   `tool.approval_resolved` behavior.
 
-<!-- diagram-context:canonical-sandbox-pod-evolution:start -->
 <details id="diagram-context-canonical-sandbox-pod-evolution" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1221,9 +1187,7 @@ Where this lives:
 <tr><td>notes</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.; P1 can retain one SQLite writer; multiple writers require suitable shared storage.; Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-pod-evolution:end -->
 
-<!-- diagram-context:sandbox-fig2:start -->
 <details id="diagram-context-sandbox-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1270,9 +1234,7 @@ Where this lives:
 <tr><td>notes</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.; Kubernetes failure never silently descends into the local ladder.; Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-fig2:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig4:start -->
 <details id="diagram-context-sandbox-pod-execution-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1315,9 +1277,7 @@ Where this lives:
 <tr><td>notes</td><td>LocalReadOnly limits publication, not ephemeral build/test writes.; Equal-tree and changed-tree outcomes are alternatives.; Source origin is the shared repository; writeback mints no second GitHub token.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig4:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig5:start -->
 <details id="diagram-context-sandbox-pod-execution-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1352,9 +1312,7 @@ Where this lives:
 <tr><td>notes</td><td>Provisioning events distinguish capacity wait from a silent execution stall.; Claim Ready is controller binding, not configured AgentHost readiness.; The configure diagram owns the credential and endpoint-registration sequence.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig5:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig6:start -->
 <details id="diagram-context-sandbox-pod-execution-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1400,9 +1358,7 @@ Where this lives:
 <tr><td>notes</td><td>Top, middle and bottom rows are successive launch stages.; Repository / preview / broker credentials have separate purposes.; Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig6:end -->
 
-<!-- diagram-context:sandbox-pod-execution-fig7:start -->
 <details id="diagram-context-sandbox-pod-execution-fig7" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1439,9 +1395,7 @@ Where this lives:
 <tr><td>notes</td><td>The fallback uses ApprovalHttpClient; arrows summarize request and return.; Configured control auth accepts turn or preview credential; dev can omit both.; Errors and provisional-grant rollback/finalize stay in the consumer prose.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig7:end -->
 
-<!-- diagram-context:canonical-pod-process-boundaries:start -->
 <details id="diagram-context-canonical-pod-process-boundaries" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1485,4 +1439,3 @@ Where this lives:
 <tr><td>notes</td><td>All cards are inside one Kata pod; containers have distinct PID namespaces.; The child view is a mount boundary, not a third container/PID namespace.; Startup rejects same-PID-namespace execution; no model access to IPC secrets.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-pod-process-boundaries:end -->

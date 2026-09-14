@@ -127,12 +127,6 @@ This follows the well-known URI convention for issuers/resources with path compo
 
 This is a standards-compliance and interoperability decision, not a cosmetic duplicate. Some clients probe the suffixed form; serving only the bare form breaks those clients even though the resource itself is `/mcp`.
 
-![MCP discovery, exact-resource consent and PKCE, API-issued broker tokens, MCP validation and API authorization](../diagrams/mcp-server-fig2.png)
-
-<!-- Editable source: ../diagrams/src/mcp-server-fig2.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec mcp-server-fig2.
-     Review lineage: ../diagrams/reviews/mcp-server-fig2/iteration-manifest.json. -->
-
 **Where this lives**
 
 - `apps/Agentweaver.Mcp/Program.cs`
@@ -313,7 +307,6 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 - [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent whose Tool map is generated from these MCP tools.
 - [MCP tool index](../reference/mcp-tools.md) — the generated list of every `agentweaver-*` tool.
 
-<!-- diagram-context:mcp-server-fig2:start -->
 <details id="diagram-context-mcp-server-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -361,4 +354,3 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 <tr><td>groups</td><td>DISCOVERY + API AUTHORIZATION; TOKEN USE + INDEPENDENT API CHECK</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:mcp-server-fig2:end -->

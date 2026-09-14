@@ -18,12 +18,6 @@ Merge and Scribe. Catalog graphs are a separate layer: their YAML does not autho
 Merge, PR or Scribe nodes. Collective assembly owns integration, gates, merge and
 recording; the inspected collective path does not establish automatic PR publication.
 
-![Current built-in default with RAI, human review, merge, publish/reuse PR, Scribe and explicit revision and terminal branches](diagrams/canonical-default-workflow.png)
-
-<!-- Editable source: diagrams/src/canonical-default-workflow.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-default-workflow.
-     Review evidence: diagrams/reviews/canonical-default-workflow/. -->
-
 | File | Responsibility |
 | --- | --- |
 | [`NodeClassifier`](../apps/Agentweaver.Api/Workflows/NodeClassifier.cs) | Maps a `WorkflowNode` to a `NodeKind` from its `type` (+ gate kind), **never** its id. |
@@ -193,7 +187,6 @@ time** (`RejectUnwiredKind`) with a clear `WorkflowBindException`, rather than b
 This is the deliberate
 "load-accepted, runtime-pending" boundary for US1.
 
-<!-- diagram-context:canonical-default-workflow:start -->
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -234,4 +227,3 @@ This is the deliberate
 <tr><td>edge-10-label</td><td>blocked</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-default-workflow:end -->

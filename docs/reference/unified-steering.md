@@ -1,8 +1,8 @@
 # Unified autonomous steering — Reference
 
-See [Bounded autonomy, same-author context fallback and human escalation](../diagrams/resilient-assembly-review-fig1.png) for the shared visual model.
+See Bounded autonomy, same-author context fallback and human escalation for the shared visual model.
 
-See [Persisted feedback, explicit decision and confirmed effect](../diagrams/unified-steering-fig1.png) for the shared visual model.
+See Persisted feedback, explicit decision and confirmed effect for the shared visual model.
 
 Reference for the coordinator-owned steering path. Every correction signal is persisted, surfaced, decided by the coordinator, and then executed according to that decision.
 
@@ -92,7 +92,6 @@ A human `redirect`/`amend`/`send` sent to `POST /api/runs/{id}/steer` while the 
 - [Coordinator reference](./coordinator.md)
 - [Unified autonomous steering — Deep Dive](../deep-dive/unified-steering.md)
 
-<!-- diagram-context:resilient-assembly-review-fig1:start -->
 <details id="diagram-context-resilient-assembly-review-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -142,9 +141,7 @@ A human `redirect`/`amend`/`send` sent to `POST /api/runs/{id}/steer` while the 
 <tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:resilient-assembly-review-fig1:end -->
 
-<!-- diagram-context:unified-steering-fig1:start -->
 <details id="diagram-context-unified-steering-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -191,4 +188,3 @@ A human `redirect`/`amend`/`send` sent to `POST /api/runs/{id}/steer` while the 
 <tr><td>groups</td><td>NORMALIZED FEEDBACK AND DURABLE DIRECTIVE; DECISION AND RESUMABILITY; ALTERNATIVE EFFECTS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:unified-steering-fig1:end -->

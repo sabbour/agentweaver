@@ -57,11 +57,6 @@ The originating branch is the branch the run started from and eventually merges 
 
 ## Per-run worktree model
 
-![Isolated candidates, guarded merge: Runs edit isolated candidates; approval names a tree, not permission to bypass Git guards.](../diagrams/git-integration-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/git-integration-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/git-integration-fig1/v2/iteration-manifest.json. -->
-
 The important invariant is that the base workspace and the run workspace are different surfaces. Each candidate flows from agent edits to a commit, tree hash, and full diff; approval binds to that tree before a guarded merge advances the originating branch. A run can be abandoned, revised, inspected, merged, or cleaned up without requiring the project checkout itself to be the mutable scratchpad.
 
 ## Repository creation and GitHub cloning
@@ -207,11 +202,6 @@ agentweaver/integration/{coordinatorRunId}
 ```
 
 It builds that branch headlessly from the originating branch tip and merges eligible child branches in dependency order. "Headless" means it operates on git trees and refs without checking out the integration branch into a working directory.
-
-![Child content and integration bases: Published branch content crosses child boundaries; a shared mutable checkout does not.](../diagrams/git-integration-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/git-integration-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/git-integration-fig2/v2/iteration-manifest.json. -->
 
 Integration assembly is not the same conflict policy as the final merge. The git helper
 processes the supplied child branches in order, skipping missing or empty branches and
@@ -406,7 +396,6 @@ If rebuilding the git integration subsystem, implement it in this order:
 - Worktree deletes on Azure Files SMB can transiently fail with `Directory not empty`; `WorktreeManager.DeleteDirectoryResilient` retries with backoff and never silently proceeds while the directory still exists (see [Resilient worktree deletion](#resilient-worktree-deletion-on-azure-files-smb)).
 - The GitHub API usage is raw `HttpClient`, not Octokit.
 
-<!-- diagram-context:git-integration-fig1:start -->
 <details id="diagram-context-git-integration-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -453,9 +442,7 @@ If rebuilding the git integration subsystem, implement it in this order:
 <tr><td>groups</td><td>BRANCH AND WORKSPACE; CANDIDATE CONTENT; REVIEWED IDENTITY AND MERGE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:git-integration-fig1:end -->
 
-<!-- diagram-context:git-integration-fig2:start -->
 <details id="diagram-context-git-integration-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -503,4 +490,3 @@ If rebuilding the git integration subsystem, implement it in this order:
 <tr><td>groups</td><td>AUTHORITATIVE INPUTS; ACCUMULATION AND CONFLICT HANDLING; DEPENDENT CHILD OR FINAL REVIEW</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:git-integration-fig2:end -->

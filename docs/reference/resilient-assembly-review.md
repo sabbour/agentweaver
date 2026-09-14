@@ -1,6 +1,6 @@
 # Resilient assembly-review loop — Reference
 
-See [Autonomous budget exhaustion escalates to human review](../diagrams/resilient-assembly-review-fig1.png) for the shared visual model.
+See Autonomous budget exhaustion escalates to human review for the shared visual model.
 
 Terse reference for the **resilient assembly-review loop** introduced in v0.9.17-rc1: configuration knobs,
 coordinator status transitions, emitted events, and the lockout protocol contract. For the conceptual
@@ -169,7 +169,6 @@ indirection) before checking the lock path, so the diagnostics always refer to t
 - [Coordinator reference](./coordinator.md) — the full coordinator status model and event index.
 - [Unified steering reference](./unified-steering.md) — `SteeringSignal`, `SteeringDirection`, and the decider contract.
 
-<!-- diagram-context:resilient-assembly-review-fig1:start -->
 <details id="diagram-context-resilient-assembly-review-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -219,4 +218,3 @@ indirection) before checking the lock path, so the diagnostics always refer to t
 <tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:resilient-assembly-review-fig1:end -->

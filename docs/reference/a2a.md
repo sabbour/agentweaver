@@ -1,6 +1,6 @@
 # A2A Transport — Reference
 
-See [A2A remotes one leaf turn, not team coordination](../diagrams/canonical-agent-communication-a2a.png) for the shared visual model.
+See A2A remotes one leaf turn, not team coordination for the shared visual model.
 
 ::: warning Preview dependency on the hot path
 The checked-in A2A dependencies remain preview packages on the remote-turn path. The client `Microsoft.Agents.AI.A2A` is pinned to `1.19.0-preview.260822.1`; host packages `Microsoft.Agents.AI.Hosting.A2A` and `.AspNetCore` use `1.11.1-preview.260625.1`. Workflow and Copilot integration packages use stable `1.19.0`. These are repository pins, not a statement about every upstream release.
@@ -93,12 +93,6 @@ H1-H7 describe intended security and operational controls. Their implementation 
 | **H6 — No egress broadening** | Ingress does not grant egress. Current sandbox egress includes DNS, explicit platform-service rules, and public HTTPS excluding configured private/link-local ranges; it is not a per-run Git-host-only allowlist. |
 | **H7 — Pinned preview** | Client/host preview versions and lock hashes are pinned separately. in-api is the code fallback; Kubernetes base selects pod-per-run. Startup configuration rollback is not hot reload or a second wire protocol. |
 
-![API and worker call AgentHost through scoped transport and separate authorization gates; the worker owns checkpoints outside the pod, while A2ATurnBridgeAgent routes authorized turns.](../diagrams/reference-a2a-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/reference-a2a-fig1.drawio.
-     Exported with pinned draw.io Desktop 31.4.5 (PNG, scale 2, border 16).
-     Review and iteration manifest: ../diagrams/reviews/reference-a2a-fig1/. -->
-
 Notes on the gates:
 
 - Bearer tokens and mTLS are independent controls; label the configured deployment rather than asserting universal mTLS.
@@ -147,7 +141,6 @@ The executor waits for binding, records the claimed pod and turn token, resolves
 
 See the [A2A bridge deep dive](../deep-dive/a2a-bridge.md) for how these settings interact with checkpointing and resume, and the [distributed-agents experience doc](../experience/a2a-distributed-agents.md) for what they change operationally.
 
-<!-- diagram-context:reference-a2a-fig1:start -->
 <details id="diagram-context-reference-a2a-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -188,9 +181,7 @@ See the [A2A bridge deep dive](../deep-dive/a2a-bridge.md) for how these setting
 <tr><td>Checkpoint manager</td><td>save / resume</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:reference-a2a-fig1:end -->
 
-<!-- diagram-context:canonical-agent-communication-a2a:start -->
 <details id="diagram-context-canonical-agent-communication-a2a" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -224,4 +215,3 @@ See the [A2A bridge deep dive](../deep-dive/a2a-bridge.md) for how these setting
 <tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-a2a:end -->

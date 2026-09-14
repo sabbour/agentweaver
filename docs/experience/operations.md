@@ -18,11 +18,6 @@ Agentweaver operations is a control room, not a general admin console. A user us
 
 The backend remains the source of truth. The web UI renders snapshots, badges, cards, and empty states. MCP tools return the same operational facts as structured results an assistant can summarize or act on.
 
-![Operator inspection through Diagnostics, Heartbeat, Flow, Cluster and Observability; separate account, platform and project settings, with selected MCP tools](../diagrams/experience-operations-fig1.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-operations-fig1.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
-
 The important operating rule is: Agentweaver shows real state. Diagnostics can warn or fail. Heartbeat can be `running`, `waiting_first_tick`, or `disabled`. Flow can be empty. Sandbox policy can prevent shell execution even when the project itself is available.
 
 ## Operations surfaces at a glance
@@ -123,11 +118,6 @@ Checkpoint GC appears as operational state inside diagnostics. The Diagnostics p
 ## Heartbeat experience
 
 Heartbeat answers: **is background automation ticking, and did it act?** The coordinator heartbeat service runs on an interval and drives backlog pickup from Ready into active coordinator work.
-
-![Ready backlog pickup uses an atomic claim; the winner starts coordinator work while lost claims and unavailable projects do not launch duplicate work](../diagrams/experience-workflows-backlog-fig3.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-workflows-backlog-fig3.drawio.
-     Shared Ready-pickup sequence; do not restore the duplicate operations figure. -->
 
 Pickup is not just a timer-to-run arrow. The task must remain eligible, its project must be available,
 and the atomic claim must win before a coordinator run is reserved. A lost claim starts no duplicate
@@ -377,7 +367,6 @@ The page auto-refreshes every 30 seconds by default. When the API is not deploye
 
 - [Token usage monitoring](./token-usage-monitoring.md) — project and app-level AI Credit dashboards, part of the broader operations picture.
 
-<!-- diagram-context:experience-operations-fig1:start -->
 <details id="diagram-context-experience-operations-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -425,9 +414,7 @@ MCP setter is narrower.</td></tr>
 <tr><td>groups</td><td>INSPECT CURRENT STATE; CONFIGURE WITH THE RIGHT AUTHORITY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-operations-fig1:end -->
 
-<!-- diagram-context:experience-workflows-backlog-fig3:start -->
 <details id="diagram-context-experience-workflows-backlog-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -480,4 +467,3 @@ the same captured goal.</td></tr>
 <tr><td>groups</td><td>SELECTION AND ATOMIC RESERVATION; POST-CLAIM OUTCOMES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-workflows-backlog-fig3:end -->

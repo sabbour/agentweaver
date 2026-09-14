@@ -365,19 +365,22 @@ Each agent runs inside a **dedicated git worktree** branched from the project's 
 
 While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
 
-![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/canonical-sandbox-experience.png)
 
-<!-- Generated from ../diagrams/src/canonical-sandbox-experience.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Coordinator journey
+
+[![Activity flow showing intent proposal and confirmation, visible planning, dependency-aware execution, collective review, revision or intervention paths, application of the approved result, and explicit terminal outcomes.](../diagrams/flagship/canonical-coordinator-journey.png)](../diagrams/drawio/generated/flagship/canonical-coordinator-journey.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-coordinator-journey.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-coordinator-journey.drawio)
+<!-- flagship-diagrams:end -->
 
 ## See also
 
 - [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — full algorithm, override hierarchy, and trigger filtering
 - [Coordinator reference — Workflow selection](/reference/coordinator#workflow-selection) — precedence table and API details
 
-<!-- diagram-context:canonical-sandbox-experience:start -->
 <details id="diagram-context-canonical-sandbox-experience" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -439,4 +442,3 @@ While a child is running, its **Changes** and **Files** views refresh automatica
 <tr><td>groups</td><td>ADMIT AND PREPARE; EXECUTE AND RETURN EVIDENCE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-experience:end -->

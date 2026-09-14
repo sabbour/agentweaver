@@ -1,6 +1,6 @@
 # Scaling Data Layer — Reference
 
-See [Cross-replica cursor polling and authoritative sequence allocation](../diagrams/canonical-durable-event-stream.png) for the shared visual model.
+See Cross-replica cursor polling and authoritative sequence allocation for the shared visual model.
 
 This reference is the exhaustive companion to the [Distributed execution & scaling deep dive](../deep-dive/distributed-execution-scaling.md). It documents the data and topology layer of horizontal scaling: the SQLite ↔ Azure Database for PostgreSQL Flexible Server **provider switch**, the store inventory and how the raw stores unify into one context, the leasing schema, the run-event stream, the web/worker deployment topology, provisioning and connectivity, and the configuration flags that gate each phase.
 
@@ -163,12 +163,6 @@ The worker PDB uses `minAvailable: 1`. A 30-second preStop delay and 120-second 
 
 API and worker no longer mount the SQLite data PVC. The `agentweaver-data` RWO claim remains as a rollback resource, not an active PostgreSQL dependency. Both retain the RWX Azure Files workspace at `/workspace`; worker HOME remains `/workspace/.home`. Implementation children execute in pod-local scratch and publish verified Git writeback to authoritative shared worktrees.
 
-![API and worker share PostgreSQL and Azure Files; CPU/memory HPA scales workers, while AgentHost executes in pod-local scratch and publishes a temporary writeback reference without direct database access.](../diagrams/reference-scaling-data-layer-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/reference-scaling-data-layer-fig1.drawio.
-     Exported with pinned draw.io Desktop 31.4.5 (PNG, scale 2, border 16).
-     Review and iteration manifest: ../diagrams/reviews/reference-scaling-data-layer-fig1/. -->
-
 Sandbox pods do not connect directly to PostgreSQL. API and worker mediate durable state. Both can call AgentHost control/A2A endpoints; AgentHost tools call run-scoped API callbacks. API also retains preview and sandbox lifecycle responsibilities.
 
 ## 6. Provisioning & connectivity (Azure PostgreSQL Flexible Server)
@@ -218,7 +212,6 @@ The active worker HPA ranges from two to three replicas, targeting CPU 70% and m
 
 The PostgreSQL migrations assembly and init-container bundle path already exist. API/worker invoke `efbundle --postgres-migrations`; sequencing and backfill remain explicit deployment operations, not effects of a provider flag.
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -309,9 +302,7 @@ The PostgreSQL migrations assembly and init-container bundle path already exist.
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-<!-- diagram-context:reference-scaling-data-layer-fig1:start -->
 <details id="diagram-context-reference-scaling-data-layer-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -352,4 +343,3 @@ The PostgreSQL migrations assembly and init-container bundle path already exist.
 <tr><td>temp-ref</td><td>temp ref</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:reference-scaling-data-layer-fig1:end -->

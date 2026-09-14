@@ -44,13 +44,6 @@ checkout. This mode forbids **write-back**, not local build output. Current Work
 configuration also enables pod-local implementation work; it is not just a future
 seam. Assistant-purpose setup skips project checkout and ordinary agent setup.
 
-![AgentHost lifecycle: bind a warm claim, establish reachability, configure once, complete purpose-specific setup, serve authenticated turns, then retain or release as appropriate](../diagrams/guide-architecture-aks-fig1.png)
-
-<!-- Canonical editable source: ../diagrams/src/guide-architecture-aks-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using
-     npm run docs:render-diagrams -- --spec guide-architecture-aks-fig1.
-     Preserve the PNG, hash, and pitch/pass artifacts together. -->
-
 The first valid `/configure` atomically binds the pod **before** setup finishes.
 Later valid attempts return `409`, including after setup failure. Configuration
 cannot require the turn bearer it delivers; subsequent streamed turns require that
@@ -70,13 +63,6 @@ and release paths, `AgentHostReadinessProbe.cs`, `AgentHostStartupService.cs`, a
 ## Networking flow
 
 ### Inbound request path
-
-![AKS network: application and preview Gateways route through HTTPRoutes and Services to pods; AgentHost has selector-based API/MCP access, DNS, and public-address HTTPS egress with explicit exclusions](../diagrams/canonical-aks-network.png)
-
-<!-- Canonical editable source: ../diagrams/src/canonical-aks-network.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using
-     npm run docs:render-diagrams -- --spec canonical-aks-network.
-     Preserve the PNG, hash, and pitch/pass artifacts together. -->
 
 Both TLS Gateways listen on 443 using `approuting-istio`. Each **Gateway → HTTPRoute →
 Service → pod** chain is explicit. API manages preview resources but is not a browser
@@ -153,13 +139,6 @@ snapshot and fences authority before and after retrieval. It supplies `copilotCr
 through one-time `/configure`, or supplies the selected BYOK configuration.
 Repository credentials, A2A turn tokens, and Assistant MCP tokens remain separate.
 AgentHost does not resolve an ambient user's token or read Key Vault.
-
-![Credential authority: API and Worker federate to the privileged identity; AgentHost has a separate identity without vault roles; CSI app secrets and API runtime OAuth certificates are distinct from run-bound configuration and MCP broker JWTs](../diagrams/guide-architecture-aks-fig5.png)
-
-<!-- Canonical editable source: ../diagrams/src/guide-architecture-aks-fig5.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using
-     npm run docs:render-diagrams -- --spec guide-architecture-aks-fig5.
-     Preserve the PNG, hash, and pitch/pass artifacts together. -->
 
 API and Worker ServiceAccounts federate through AKS OIDC to `agentweaver-api-identity`,
 which has Key Vault **Secrets User and Secrets Officer** grants. Their Kubernetes RBAC
@@ -281,7 +260,6 @@ volumes:
 Data is lost on pod restart. SQLite requires one replica and `Recreate` strategy to
 avoid write contention; this is not a production storage migration procedure.
 
-<!-- diagram-context:canonical-aks-network:start -->
 <details id="diagram-context-canonical-aks-network" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -338,9 +316,7 @@ avoid write contention; this is not a production storage migration procedure.
 <tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-aks-network:end -->
 
-<!-- diagram-context:guide-architecture-aks-fig1:start -->
 <details id="diagram-context-guide-architecture-aks-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -391,9 +367,7 @@ avoid write contention; this is not a production storage migration procedure.
 <tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:guide-architecture-aks-fig1:end -->
 
-<!-- diagram-context:guide-architecture-aks-fig5:start -->
 <details id="diagram-context-guide-architecture-aks-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -443,4 +417,13 @@ avoid write contention; this is not a production storage migration procedure.
 <tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:guide-architecture-aks-fig5:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### AKS deployment
+
+[![Deployment view showing Azure Kubernetes Service, application and preview gateways, API, worker, MCP, and frontend deployments, Sandbox custom resources and Kata AgentHost pods, PostgreSQL, Azure Files, Key Vault, managed identities, and observability.](../diagrams/flagship/canonical-aks-components.png)](../diagrams/drawio/generated/flagship/canonical-aks-components.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-aks-components.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-aks-components.drawio)
+<!-- flagship-diagrams:end -->

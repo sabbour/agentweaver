@@ -9,12 +9,6 @@ The shared [authentication and security overview](deep-dive/auth-security.md)
 owns the OAuth trust-boundary visual. This page retains the protocol and key/session
 operating contract rather than defining another authentication diagram.
 
-![Shared OAuth trust boundary: Entra-backed consent and PKCE produce a broker token, MCP validates it, and the API independently validates forwarded credentials and resource access](diagrams/auth-security-fig4.png)
-
-<!-- Editable canonical source: diagrams/src/auth-security-fig4.drawio.
-     Export with draw.io Desktop 31.4.5 and --spec auth-security-fig4.
-     Review lineage: diagrams/reviews/auth-security-fig4/. -->
-
 Discovery is served from `/.well-known/oauth-authorization-server`. The canonical
 issuer is `Auth:OAuth:PublicOrigin`; the MCP audience is always that exact origin
 plus `/mcp`. Authorization and token requests must each carry that one exact
@@ -139,7 +133,6 @@ validated token to the API. The API accepts broker credentials only on
 `PlatformOrMcp` or `AuthenticatedSelfOrMcp` endpoints and continues to enforce
 endpoint and persisted-resource authorization.
 
-<!-- diagram-context:auth-security-fig4:start -->
 <details id="diagram-context-auth-security-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -201,4 +194,3 @@ endpoint and persisted-resource authorization.
 <tr><td>groups</td><td>BROKER ISSUANCE; VALIDATION AND RESOURCE ACCESS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:auth-security-fig4:end -->

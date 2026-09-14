@@ -25,11 +25,6 @@ If no session exists, the page shows **Sign in with Microsoft Entra ID**. This a
 
 The browser returns through `/auth/entra/callback`. Agentweaver keeps authorization details on the server.
 
-![First-run web UI experience: User, web UI, Agentweaver API, Microsoft Entra ID](../diagrams/experience-onboarding-auth-fig1.png)
-
-<!-- Editable source: ../diagrams/src/experience-onboarding-auth-fig1.drawio.
-     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
-
 For normal web sign-in, the callback returns a one-time exchange code to the frontend.
 The frontend redeems it through `/api/auth/session/exchange`, which issues the browser
 session. Entra's authorization code and the server-held PKCE verifier are a separate
@@ -114,11 +109,6 @@ The MCP OAuth flow has four visible phases:
 2. **Sign-in and consent.** The client opens `/oauth/authorize` in a browser. Without an Entra-backed browser session, the page offers sign-in through `/auth/entra/authorize`; the Entra callback resumes the saved request through `/oauth/resume`. Agentweaver then asks the human to approve the client's requested access. An existing consent can be reused unless the client requests consent again.
 3. **Token issuance.** OpenIddict returns an authorization code to the client's validated redirect URI. The client redeems it at `/oauth/token` with its PKCE verifier, the same redirect URI, and the exact MCP resource. An approved `offline_access` request enables refresh tokens. Denial returns an OAuth error, not access.
 4. **Tool use.** The client calls `/mcp` with `Authorization: Bearer <Agentweaver JWT>`. The MCP server validates the JWT offline using JWKS, then forwards the same bearer token to the API during tool calls.
-
-![MCP broker access: client discovery, Entra browser sign-in and consent, PKCE token exchange, validated MCP calls forwarded to the API](../diagrams/experience-onboarding-auth-fig2.png)
-
-<!-- Editable source: ../diagrams/src/experience-onboarding-auth-fig2.drawio.
-     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
 
 The broker JWT is signed with keyed RS256 and bound to the single exact
 `<public-origin>/mcp` audience. Its subject comes from the Entra browser identity,
@@ -232,7 +222,6 @@ If the browser handoff expires before the user completes GitHub authorization, s
 
 Humans sign in with Entra. They authorize each GitHub capability only when the current task requires it.
 
-<!-- diagram-context:experience-onboarding-auth-fig1:start -->
 <details id="diagram-context-experience-onboarding-auth-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -285,9 +274,7 @@ bound browser callback.</td></tr>
 <tr><td>groups</td><td>BROWSER SIGN-IN; SESSION AND SETUP</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-onboarding-auth-fig1:end -->
 
-<!-- diagram-context:experience-onboarding-auth-fig2:start -->
 <details id="diagram-context-experience-onboarding-auth-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -340,4 +327,3 @@ not raw Entra or GitHub.</td></tr>
 <tr><td>groups</td><td>DISCOVERY AND HUMAN CONSENT; TOKEN AND RESOURCE ENFORCEMENT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-onboarding-auth-fig2:end -->

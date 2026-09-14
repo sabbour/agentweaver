@@ -4,12 +4,6 @@ Project generation model settings let one project choose different GitHub Copilo
 
 ## Flow
 
-![Three project model preferences feed generation consumers without replacing provider admission](../diagrams/project-generation-model-settings-fig1.png)
-
-<!-- Editable source: ../diagrams/src/project-generation-model-settings-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec project-generation-model-settings-fig1.
-     Review lineage: ../diagrams/reviews/project-generation-model-settings-fig1/iteration-manifest.json. -->
-
 ## Stored fields
 
 `ProjectRecord` now stores `BlueprintGenerationModel`, `WorkflowGenerationModel`, and `OutcomeSpecGenerationModel` (`apps/Agentweaver.Api.Data/Memory/ProjectRecord.cs:26`). `MemoryDbContext` maps them to `blueprint_generation_model`, `workflow_generation_model`, and `outcome_spec_generation_model` (`MemoryDbContext.cs:227`). The Postgres migration `20260708040300_AddProjectGenerationModelSettings.cs` adds the database columns; the project response DTO and web `Project` type expose the same snake_case fields (`apps/Agentweaver.Api/Contracts/Dtos.cs:588`; `apps/web/src/api/types.ts:183`).
@@ -48,6 +42,17 @@ The generation paths now preserve the model chosen for the specific project surf
 | Blueprint and workflow generation use | `apps/Agentweaver.Api/Endpoints/BlueprintEndpoints.cs`; `BlueprintService.cs`; `CopilotBlueprintGenerator.cs`; `IBlueprintGenerator.cs` |
 | Outcome-spec generation use | `apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs`; `CoordinatorMessages.cs` |
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Provider admission
+
+[![Guarded flow showing operation and caller authorization, provider and credential resolution, operation policy, protected execution-context acceptance, durable run-boundary capture, point-of-invocation revalidation, and explicit rejection before model calls.](../diagrams/flagship/canonical-provider-admission.png)](../diagrams/drawio/generated/flagship/canonical-provider-admission.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-provider-admission.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-provider-admission.drawio)
+<!-- flagship-diagrams:end -->
+
 ## See also
 
 - [Project generation model settings — Reference](../reference/project-generation-model-settings.md)
@@ -55,7 +60,6 @@ The generation paths now preserve the model chosen for the specific project surf
 - [Repository blueprint suggestions](../experience/repo-blueprint-suggestions.md)
 - [Coordinator & orchestration](../experience/coordinator-orchestration.md)
 
-<!-- diagram-context:project-generation-model-settings-fig1:start -->
 <details id="diagram-context-project-generation-model-settings-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -102,4 +106,3 @@ The generation paths now preserve the model chosen for the specific project surf
 <tr><td>groups</td><td>PERSISTED SELECTION + PRECEDENCE; FLOW CONSUMERS + AUTHORITY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:project-generation-model-settings-fig1:end -->

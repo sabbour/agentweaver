@@ -103,11 +103,6 @@ An effective MCP client does not call tools randomly. It keeps a small mental mo
 
 The best user experience is conversational but auditable: the assistant says what it is about to do, calls the relevant tool, summarizes the returned state, and links the next action to a visible Agentweaver concept such as a project, board card, coordinator gate, child run, or review.
 
-![Assistant journey: prepare project and team, choose queued pickup or immediate start, observe API results through MCP, and obtain human review](../diagrams/experience-mcp-client-fig1.png)
-
-<!-- Editable source: ../diagrams/src/experience-mcp-client-fig1.drawio.
-     Published PNG keeps its stable path; also consumed by 00-overview.md. -->
-
 ## Safety, idempotency, and confirmations
 
 - **Confirmation depends on start mode.** `coordinator_start` defaults to Define Outcome,
@@ -336,7 +331,6 @@ Every successful tool call writes or reads the same state that the UI renders:
 
 The practical pattern is simple: let the assistant use tools for state changes, let `run_watch` keep the conversation live during long operations, and use the UI whenever the user wants a visual board, topology, or review surface alongside the assistant's summary.
 
-<!-- diagram-context:experience-mcp-client-fig1:start -->
 <details id="diagram-context-experience-mcp-client-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -389,4 +383,3 @@ Direct: no outcome gate.</td></tr>
 <tr><td>groups</td><td>PREPARE AND CHOOSE; OPERATE AND REVIEW</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-mcp-client-fig1:end -->

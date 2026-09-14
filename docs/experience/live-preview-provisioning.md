@@ -4,8 +4,6 @@ When a coordinator run reaches **Build & Test**, Agentweaver now tries to show y
 
 For implementation details, see the [deep dive](../deep-dive/live-preview-provisioning.md). For event and endpoint details, see the [reference](../reference/live-preview-provisioning.md).
 
-![Build and Test verdict leads to a platform preview attempt, approval and Gateway publication, without blocking human review on preview failure](../diagrams/live-preview-provisioning-fig1.png)
-
 <!-- Shared diagram: live-preview-provisioning-fig1; consume the declared canonical PNG.
      The deep-dive owner maintains the source and visual validation. -->
 
@@ -67,7 +65,6 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 - [Reviewing and Merging](../guide/review.md#build-test-preview)
 - [Sandbox browser preview](./sandbox-browser-preview.md)
 
-<!-- diagram-context:live-preview-provisioning-fig1:start -->
 <details id="diagram-context-live-preview-provisioning-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -114,4 +111,3 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 <tr><td>notes</td><td>Denial/expiry branch stays private; unresolved commands fail explicitly.; Rows summarize stages; the page retains detailed failure and retry rules.; Resource creation alone is not readiness; API does not probe pod preview ports.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:live-preview-provisioning-fig1:end -->

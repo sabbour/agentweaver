@@ -19,10 +19,6 @@ Domain internals are covered by the focused deep dives for [Auth & security](./a
 
 ## Effective model provider admission
 
-![Provider admission: prepare signed context, accept a matching provider, capture the run boundary, then enforce invocation and live capability fences](../diagrams/canonical-provider-admission.png)
-
-<!-- Editable source: ../diagrams/src/canonical-provider-admission.drawio; pinned draw.io Desktop export. -->
-
 `EffectiveModelProviderResolver` remains the selection authority.
 `AiExecutionPlanService` encrypts caller-, project-, and operation-bound acceptance with an authenticated execution key.
 BYOK configuration fingerprints include execution parameters.
@@ -88,12 +84,6 @@ Queued work then requires fresh submission.
 ## The Host in One Picture
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.
-
-![Startup composition is separate from per-request policy, endpoint roles, domain services, stores and external adapters](../diagrams/canonical-api-host.png)
-
-<!-- Editable source: ../diagrams/src/canonical-api-host.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-api-host.
-     Review lineage: ../diagrams/reviews/canonical-api-host/iteration-manifest.json. -->
 
 The important separation is:
 
@@ -174,12 +164,6 @@ Where this lives: `apps/Agentweaver.Api/Program.cs`.
 ### Problem solved
 
 Endpoints share exception handling, CORS, rate limiting, authentication, and endpoint-policy authorization. Project/resource role checks remain in the endpoint or service that knows the resource.
-
-![Endpoint-classified integrity, authentication and authorization precede handler resource-role checks](../diagrams/api-core-fig4.png)
-
-<!-- Editable source: ../diagrams/src/api-core-fig4.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec api-core-fig4.
-     Review lineage: ../diagrams/reviews/api-core-fig4/iteration-manifest.json. -->
 
 ### Endpoint classification and authentication
 
@@ -278,11 +262,6 @@ Agent runs are long-lived and interactive. The UI needs low-latency updates whil
 
 Agentweaver durably appends events before exposing them to subscribers. Delivery then depends on the selected store and whether this replica has a local run-stream entry:
 
-![EF/Postgres durable sequence: commit before acknowledgement, query after the cursor, poll when empty, and emit ordered SSE frames](../diagrams/canonical-durable-event-stream-sequence.png)
-
-<!-- Shared editable source: ../diagrams/src/canonical-durable-event-stream-sequence.drawio.
-     Exported by draw.io Desktop 31.4.5; shared owner maintains its review lineage. -->
-
 ### Control flow
 
 1. A run event is appended with a run id, sequence, type, and payload.
@@ -380,12 +359,6 @@ Operators need to know whether the host is healthy and what work is happening wi
 
 Diagnostics are live checks assembled server-side:
 
-![Diagnostics query real system checks and return observed status rather than a readiness guarantee](../diagrams/api-core-fig6.png)
-
-<!-- Editable source: ../diagrams/src/api-core-fig6.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec api-core-fig6.
-     Review lineage: ../diagrams/reviews/api-core-fig6/iteration-manifest.json. -->
-
 There are three levels:
 
 - **Public health/readiness** endpoints are cheap and suitable for load balancers.
@@ -455,9 +428,6 @@ A safe extension normally follows this sequence:
 
 The core design goal is not to make every feature small; it is to keep each responsibility in the layer that can own it cleanly.
 
-
-
-<!-- diagram-context:api-core-fig4:start -->
 <details id="diagram-context-api-core-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -507,9 +477,7 @@ The core design goal is not to make every feature small; it is to keep each resp
 <tr><td>groups</td><td>TRANSPORT / CLASSIFICATION; IDENTITY / RESOURCE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:api-core-fig4:end -->
 
-<!-- diagram-context:api-core-fig6:start -->
 <details id="diagram-context-api-core-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -556,9 +524,7 @@ The core design goal is not to make every feature small; it is to keep each resp
 <tr><td>groups</td><td>SYSTEM CHECKS; STATUS / COUNTS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:api-core-fig6:end -->
 
-<!-- diagram-context:canonical-api-host:start -->
 <details id="diagram-context-canonical-api-host" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -611,18 +577,14 @@ The core design goal is not to make every feature small; it is to keep each resp
 <tr><td>scope</td><td>Worker HTTP: healthz / readyz only. Background registrations are not necessarily worker-exclusive.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-api-host:end -->
 
-<!-- diagram-context:canonical-durable-event-stream-sequence:start -->
 <details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
 <tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream-sequence:end -->
 
-<!-- diagram-context:canonical-provider-admission:start -->
 <details id="diagram-context-canonical-provider-admission" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -684,4 +646,3 @@ The core design goal is not to make every feature small; it is to keep each resp
 <tr><td>groups</td><td>PREPARE AND ACCEPT; RUN BOUNDARY AND LIVE FENCES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-provider-admission:end -->

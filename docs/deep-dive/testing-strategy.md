@@ -12,12 +12,6 @@ The test strategy therefore mirrors the architecture from the system overview:
 
 The philosophy is conservative: keep the default suite fast and hermetic, but exercise real infrastructure boundaries wherever correctness depends on them. Tests replace live model calls and external GitHub/network dependencies with deterministic seams, while still using real HTTP routing, real SQLite databases, real git repositories, real workflow state machines, and real sandbox path logic.
 
-![Independent unit, API, workflow, frontend, PostgreSQL, MCP-process and deployed assurance boundaries](../diagrams/testing-strategy-fig1.png)
-
-<!-- Editable source: ../diagrams/src/testing-strategy-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec testing-strategy-fig1.
-     Review lineage: ../diagrams/reviews/testing-strategy-fig1/iteration-manifest.json. -->
-
 Where this lives: `tests/Agentweaver.Tests`, `tests/Agentweaver.Tests/Helpers`, `tests/e2e`, `docs/deep-dive/00-system-overview.md`.
 
 ## The testing pyramid
@@ -49,12 +43,6 @@ The main integration pattern is a custom `WebApplicationFactory<Program>`. Each 
 - explicit test authentication/bypass seams when identity is not the subject;
 - service replacements for live external seams.
 
-![A test configures and substitutes explicit seams before exercising the real in-process API host](../diagrams/testing-strategy-fig4.png)
-
-<!-- Editable source: ../diagrams/src/testing-strategy-fig4.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec testing-strategy-fig4.
-     Review lineage: ../diagrams/reviews/testing-strategy-fig4/iteration-manifest.json. -->
-
 This approach is important because middleware order and DI wiring are part of the contract. A project endpoint test is not merely testing a service method; it verifies that authentication, route binding, JSON naming, service registration, persistence, and response status codes all agree.
 
 There are several specialized factories because different subsystems need different seams:
@@ -76,12 +64,6 @@ Where this lives: `tests/Agentweaver.Tests/Helpers`.
 ## Fakes, fixtures, and real dependencies
 
 Agentweaver tests use fakes deliberately, not casually. A fake is acceptable when it stands at a nondeterministic or external boundary and preserves the shape of the production contract. A fake is not used to skip the behavior being tested.
-
-![Real host, stores, Git and validators versus explicit deterministic model and network test seams](../diagrams/canonical-testing-boundary.png)
-
-<!-- Editable source: ../diagrams/src/canonical-testing-boundary.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-testing-boundary.
-     Review lineage: ../diagrams/reviews/canonical-testing-boundary/iteration-manifest.json. -->
 
 Key patterns:
 
@@ -287,7 +269,6 @@ Start with the contracts, then choose the lightest dependency that can prove eac
 
 The rebuild target is not identical file names. It is the same confidence model: deterministic tests around nondeterministic agents, real persistence for durable claims, real git for repository claims, adversarial tests for security boundaries, and small opt-in live checks for everything that cannot be proven offline.
 
-<!-- diagram-context:canonical-testing-boundary:start -->
 <details id="diagram-context-canonical-testing-boundary" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -333,9 +314,7 @@ The rebuild target is not identical file names. It is the same confidence model:
 <tr><td>groups</td><td>REAL BEHAVIOR / INFRASTRUCTURE; CONTROLLED EXTERNAL SEAMS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-testing-boundary:end -->
 
-<!-- diagram-context:testing-strategy-fig1:start -->
 <details id="diagram-context-testing-strategy-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -380,9 +359,7 @@ The rebuild target is not identical file names. It is the same confidence model:
 <tr><td>groups</td><td>DETERMINISTIC / IN-PROCESS; REAL BOUNDARIES / OPT-IN</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:testing-strategy-fig1:end -->
 
-<!-- diagram-context:testing-strategy-fig4:start -->
 <details id="diagram-context-testing-strategy-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -431,4 +408,3 @@ The rebuild target is not identical file names. It is the same confidence model:
 <tr><td>groups</td><td>FACTORY SETUP; HOST / REQUEST / ASSERT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:testing-strategy-fig4:end -->

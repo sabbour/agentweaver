@@ -21,12 +21,6 @@ and a separate EF memory database. `SqliteDb` is not the production control-plan
 Worktrees remain filesystem state. Postgres checkpoints live in `workflow_checkpoints`; file
 checkpoints are a SQLite/dev choice, not a response to a production database failure.
 
-![Production Postgres EF stores, shared events and checkpoints versus local SQLite stores and file checkpoints](../diagrams/data-persistence-fig1.png)
-
-<!-- Editable source: ../diagrams/src/data-persistence-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec data-persistence-fig1.
-     Review lineage: ../diagrams/reviews/data-persistence-fig1/iteration-manifest.json. -->
-
 ## Design Goals
 
 The persistence design supports durable workflows across production replicas while retaining a low-overhead local development mode:
@@ -225,13 +219,6 @@ The compiler builds context in this order:
 
 This ordering is the most important conceptual rule. Decisions are first because they constrain all work. Session context is last because it is useful but should not override boundaries or durable agent knowledge.
 
-![Decisions, Memory, and Context Assembly: Accepted architectural/scope decisions, Agent core context, High-importance learnings and patterns, Current open session, Compiled prompt context](../diagrams/canonical-memory-context.png)
-
-<!-- Generated from ../diagrams/src/canonical-memory-context.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Decision inbox logic
 
 The inbox is a review buffer between “an agent observed something” and “the team accepts this as durable policy.”
@@ -362,7 +349,6 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 
 - [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — telemetry events, metrics, and traces.
 
-<!-- diagram-context:canonical-memory-context:start -->
 <details id="diagram-context-canonical-memory-context" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -423,9 +409,7 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 <tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-memory-context:end -->
 
-<!-- diagram-context:data-persistence-fig1:start -->
 <details id="diagram-context-data-persistence-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -469,4 +453,3 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 <tr><td>groups</td><td>POSTGRESQL PROVIDER; SQLITE / LOCAL PROVIDER</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:data-persistence-fig1:end -->

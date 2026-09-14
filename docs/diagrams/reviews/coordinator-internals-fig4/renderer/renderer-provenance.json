@@ -1,6 +1,0 @@
-{
-  "version": "31.4.5.0",
-  "official_archive": "https://github.com/jgraph/drawio-desktop/releases/download/v31.4.5/draw.io-31.4.5-windows.zip",
-  "sha256": "d2c6f1eb4ed39fac9bb70fe6a1d359b8b9b01778145d65a68d29554994414207",
-  "reason": "Foreign-owned temporary renderer was cleaned up during pass 4; installed identical pinned build inside exclusive review scope"
-}

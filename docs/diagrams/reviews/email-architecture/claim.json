@@ -1,8 +1,0 @@
-{
-  "owner": "shared-eight-survivors",
-  "name": "email-architecture",
-  "disposition": "retain",
-  "scope": "exclusive_asset_paths only; no global inventory writes",
-  "status": "promoted-and-validated",
-  "raw_research_attachment_caveat": "Supplied summaries saved; original Temp attachments not opened."
-}

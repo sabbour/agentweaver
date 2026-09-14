@@ -2,7 +2,7 @@
 
 AgentHost receives purpose-bound provider and repository capability data through one-time configuration, not ambient user-token stores, mounted token files, or Key Vault. Credential lifetimes differ: Copilot capability expiry is checked, BYOK has no equivalent expiry field, and turn/preview credentials are bound to the run lifecycle.
 
-The A2A turn endpoint uses a separate per-run bearer token. Production `KubernetesSandboxExecutor` mints and sends it during `POST /configure`; `RemoteAgentProxy` sends it with each turn. AgentHost enforces equality when a nonempty token is configured. See the [claim/configure sequence](../diagrams/sandbox-pod-execution-fig6.png).
+The A2A turn endpoint uses a separate per-run bearer token. Production `KubernetesSandboxExecutor` mints and sends it during `POST /configure`; `RemoteAgentProxy` sends it with each turn. AgentHost enforces equality when a nonempty token is configured. See the claim/configure sequence.
 
 ## Provider delivery
 
@@ -47,7 +47,6 @@ Missing, revoked, mismatched, and expired Copilot capabilities fail closed. Neve
 - [Sandbox pod execution](./sandbox-pod-execution.md)
 - [Sandbox pods reference](../reference/sandbox-pods.md)
 
-<!-- diagram-context:sandbox-pod-execution-fig6:start -->
 <details id="diagram-context-sandbox-pod-execution-fig6" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -93,4 +92,3 @@ Missing, revoked, mismatched, and expired Copilot capabilities fail closed. Neve
 <tr><td>notes</td><td>Top, middle and bottom rows are successive launch stages.; Repository / preview / broker credentials have separate purposes.; Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-pod-execution-fig6:end -->

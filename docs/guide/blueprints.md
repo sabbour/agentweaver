@@ -27,3 +27,13 @@ unrostered bespoke roles or bespoke ids that collide with catalog roles.
 
 See [Workflow generation](../workflow-generation.md) for the generation path and [Workflows](./workflows.md)
 for editing and saving generated workflow drafts.
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Blueprint relationships
+
+[![UML component view showing catalog selection, repository suggestion, or model generation producing a Blueprint; the Blueprint owning roster and role definitions while referencing workflows, review policy, and sandbox profile; explicit validation and apply materializing project configuration and a cast team consumed by the coordinator.](../diagrams/flagship/canonical-blueprint-relationships.png)](../diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-blueprint-relationships.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+<!-- flagship-diagrams:end -->

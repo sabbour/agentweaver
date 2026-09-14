@@ -6,7 +6,7 @@ Agentweaver records each run as an ordered, durable stream of facts. The stream 
 
 Each event has a run-local cursor. The normal append path obtains its sequence
 from durable storage before local delivery; subscribers resume from their last
-observed sequence. See the [durable write-through and replay sequence](../diagrams/distributed-execution-scaling-fig4.png).
+observed sequence. See the durable write-through and replay sequence.
 
 Production uses `EfRunEventStream` to write events to PostgreSQL and poll by cursor across replicas. Local development uses `SqliteRunEventStream`. Process-local channels provide local delivery only; they are not the production cross-replica transport.
 
@@ -31,12 +31,22 @@ Use the run stream to explain a specific run. Use `GET /api/projects/{id}/metric
 - `apps/Agentweaver.Api/Infrastructure/AgentWeaverMetrics.cs`
 - `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
 
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Durable events
+
+[![UML sequence showing events committed with a per-run sequence before local notification, SSE replay from Last-Event-ID, live polling with the same cursor, local snapshot delivery, and transport completion distinct from business success.](../diagrams/flagship/canonical-durable-event-stream-sequence.png)](../diagrams/drawio/generated/flagship/canonical-durable-event-stream-sequence.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-durable-event-stream-sequence.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-durable-event-stream-sequence.drawio)
+<!-- flagship-diagrams:end -->
+
 ## Related reading
 
 - [Token usage monitoring](./token-usage-monitoring.md)
 - [Cluster diagnostics reference](../reference/cluster-diagnostics.md)
 
-<!-- diagram-context:distributed-execution-scaling-fig4:start -->
 <details id="diagram-context-distributed-execution-scaling-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -81,4 +91,3 @@ Use the run stream to explain a specific run. Use `GET /api/projects/{id}/metric
 <tr><td>notes</td><td>Rows: write-through / live delivery / reconnect on another replica.; Explicit historic sequence: identical content is idempotent; conflicts fail.; SQL commits before local history update; polling reads the shared table.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:distributed-execution-scaling-fig4:end -->

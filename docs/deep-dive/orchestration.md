@@ -11,12 +11,6 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
-![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Exported from ../diagrams/src/canonical-coordinator-architecture.drawio with the
-     Fluent draw.io template. Edit the source, invoke `docs-diagram-iterate`, then
-     commit the regenerated PNG + .hash.txt. -->
-
 A useful rebuilding rule is: **the coordinator owns intent and coordination; workflows own execution gates.**
 
 Casting and Blueprints feed orchestration with team shape, role charters, and workflow defaults. Blueprint validation accepts only `review_policy: default`; this is not a configurable project review-policy overlay. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
@@ -98,11 +92,6 @@ Each subtask includes its assigned agent, model choice, charter/context, isolati
 
 The plan is a DAG because ordering is a correctness constraint. If subtask B depends on subtask A, B should not start merely because an agent is free. This allows safe parallelism: every tick can dispatch all currently-ready nodes while preserving required sequencing.
 
-![A dependency DAG, not agent chat: Illustrative tasks A-D show readiness; only assemble-ready/completed prerequisites count.](../diagrams/orchestration-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/orchestration-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/orchestration-fig2/v2/iteration-manifest.json. -->
-
 Rebuild guidance: store the plan before dispatch. If the coordinator crashes after planning but before child runs start, it should resume from the persisted WorkPlan rather than ask a model to decompose again.
 
 ### Coordinator Control Flow
@@ -111,11 +100,6 @@ The coordinator flow has two phases:
 
 1. **Model-assisted planning phase** — draft and confirm the OutcomeSpec, select a workflow, decompose the work, and persist the WorkPlan.
 2. **Service-driven execution phase** — dispatch ready subtasks, watch child runs, assemble results, and advance the parent run through review and merge gates.
-
-![Persist the plan before dispatch: Confirmation, selection and decomposition precede durable child dispatch.](../diagrams/orchestration-fig8.png)
-
-<!-- Editable A5 source: ../diagrams/src/orchestration-fig8.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/orchestration-fig8/v2/iteration-manifest.json. -->
 
 The coordinator is designed to be idempotent. If it is asked to orchestrate a run that already has a WorkPlan, it does not create a second plan. That invariant prevents duplicate child runs and conflicting DAGs.
 
@@ -140,11 +124,6 @@ The dispatcher repeatedly asks: **which pending subtasks have all dependencies c
 For each ready subtask, it launches a child run with an isolated working tree and output branch. Child runs are intentionally trimmed: they perform agent work, then stop at an assemble-ready boundary. They do not each perform RAI, human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
 
 When a child reaches assemble-ready/completed, the dispatcher rebuilds the coordinator integration branch from the successful child branches in dependency order. Dependents are then branched from that integration branch, so they can read files produced by their prerequisites without concurrent siblings sharing one mutable git index.
-
-![Child execution and dependency progress: Children publish typed results and branch content; collective review belongs to the parent.](../diagrams/orchestration-fig3.png)
-
-<!-- Editable A5 source: ../diagrams/src/orchestration-fig3.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/orchestration-fig3/v2/iteration-manifest.json. -->
 
 Assembly is where the coordinator turns independent child outputs into one coherent result. This is also where conflicts, missing pieces, and cross-subtask inconsistencies should be detected before the parent enters review and merge gates.
 
@@ -171,10 +150,6 @@ A workflow definition answers:
 - Which event or schedule declarations can initiate backlog work for this workflow?
 
 The shared illustration describes the standalone built-in workflow, not mandatory collective assembly policy. Its current success path is `agent -> rai -> review -> merge -> push-pr -> scribe -> done` (`apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:42–161`); child runs bypass this graph.
-
-![Standalone default workflow: agent work, RAI routing, human review, guarded merge, PR publication, Scribe and terminal outcomes](../diagrams/canonical-default-workflow.png)
-
-<!-- Shared read-only canonical; editable source: ../diagrams/src/canonical-default-workflow.drawio. -->
 
 The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
 
@@ -276,11 +251,6 @@ This is a conceptual, non-exhaustive state machine. It emphasizes externally vis
 
 ### Runtime Sequence
 
-![Execution and observation cooperate: The watcher projects runtime events into durable state; it is not the executing graph.](../diagrams/orchestration-fig9.png)
-
-<!-- Editable A5 source: ../diagrams/src/orchestration-fig9.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/orchestration-fig9/v2/iteration-manifest.json. -->
-
 The watch loop translates live runtime events into persisted run state. This keeps state transitions centralized. The agent produces work; the workflow emits events; the watch loop decides what those events mean for durable status and client-visible stream completion.
 
 ### Event Streaming
@@ -291,10 +261,6 @@ Run events have two purposes:
 2. **Recovery and reconnect** — clients can replay what happened if they disconnect or the process restarts.
 
 The Postgres path appends durably, then reads ordered rows after the subscriber's cursor:
-
-![Durable event streaming: serialize per-run writes, commit RunEvents, poll after the cursor and emit ordered SSE frames](../diagrams/canonical-durable-event-stream.png)
-
-<!-- Editable source: ../diagrams/src/canonical-durable-event-stream.drawio; pinned draw.io Desktop export. -->
 
 `EfRunEventStream` allocates the next sequence under a per-run advisory transaction lock and acknowledges only after commit. Subscribers query `Sequence > cursor` and poll again after 250 ms when no rows are available. A reconnect can therefore land on another API replica without relying on the first replica's channel. The SQLite/local alternative has a bounded process-local channel; that channel is not the Postgres cross-replica delivery mechanism. The SSE endpoint supplies framing and completion behavior.
 
@@ -338,11 +304,6 @@ The heartbeat loop is intentionally simple and repeatable:
 
 The reconciliation, deferred-decision drain, and reaper are separate guarded phases outside the per-project loop (`apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:151–210`).
 
-![One heartbeat tick, two scopes: Pickup runs per project; reconciliation, deferred-spec drain and optional reaping run afterward.](../diagrams/orchestration-fig10.png)
-
-<!-- Editable A5 source: ../diagrams/src/orchestration-fig10.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/orchestration-fig10/v2/iteration-manifest.json. -->
-
 Workflow overrides are allowed at the backlog task level, subject to registry availability and binding—not invocation-kind or trigger-eligibility filtering. Event and schedule producers initiate backlog work upstream; selection considers the valid available workflow set.
 
 ### Why Heartbeat Instead of Immediate Execution?
@@ -377,11 +338,6 @@ The user action then chooses a path:
 - approve and continue to merge,
 - request changes and loop back to agent work,
 - or decline and terminate.
-
-![Review API decision paths: Authorize first. Deliver through the right path. Lock before any merge CAS.](../diagrams/review-merge-fig5.png)
-
-<!-- Editable A5 source: ../diagrams/src/review-merge-fig5.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/review-merge-fig5/v2/iteration-manifest.json. -->
 
 This design keeps review durable and externally controllable. A browser tab can close while a run waits for review; the run state still tells the next client exactly what is needed.
 
@@ -491,7 +447,6 @@ If you were rebuilding Agentweaver orchestration from scratch, implement in this
 
 The central design principle is simple: **persist intent, execute only eligible work, make every gate explicit, and recover by replaying durable state rather than reinterpreting the original request.**
 
-<!-- diagram-context:canonical-default-workflow:start -->
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -532,9 +487,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>edge-10-label</td><td>blocked</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-default-workflow:end -->
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -625,9 +578,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-<!-- diagram-context:orchestration-fig10:start -->
 <details id="diagram-context-orchestration-fig10" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -674,9 +625,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>PROJECT LOOP; PER-PROJECT PICKUP; ONCE AFTER THE PROJECT LOOP</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:orchestration-fig10:end -->
 
-<!-- diagram-context:orchestration-fig2:start -->
 <details id="diagram-context-orchestration-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -721,9 +670,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>DURABLE INTENT AND READINESS; ILLUSTRATIVE PARALLEL ROOTS; ILLUSTRATIVE DEPENDENTS AND HANDOFF</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:orchestration-fig2:end -->
 
-<!-- diagram-context:orchestration-fig3:start -->
 <details id="diagram-context-orchestration-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -772,9 +719,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>DEPENDENCY ADMISSION; TRIMMED CHILD EXECUTION; PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:orchestration-fig3:end -->
 
-<!-- diagram-context:orchestration-fig8:start -->
 <details id="diagram-context-orchestration-fig8" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -822,9 +767,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>INTENT AND REUSE; SELECTION AND DURABLE PLAN; DISPATCH AND COLLECTIVE HANDOFF</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:orchestration-fig8:end -->
 
-<!-- diagram-context:orchestration-fig9:start -->
 <details id="diagram-context-orchestration-fig9" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -872,9 +815,7 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>START AND BIND; RUNTIME AND SUPERVISION; DURABLE PROJECTIONS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:orchestration-fig9:end -->
 
-<!-- diagram-context:review-merge-fig5:start -->
 <details id="diagram-context-review-merge-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -922,4 +863,3 @@ The central design principle is simple: **persist intent, execute only eligible 
 <tr><td>groups</td><td>ADMISSION AND REPLAY; DELIVERY ALTERNATIVES; CONTINUATION AND MERGE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:review-merge-fig5:end -->

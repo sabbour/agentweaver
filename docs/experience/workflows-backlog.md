@@ -6,11 +6,6 @@ Scope: this page covers workflow definition management, backlog intake, Ready pi
 
 Related docs: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md), [Coordinator & orchestration](./coordinator-orchestration.md), [Operations](./operations.md), [Workflow generation](../workflow-generation.md), [Workflow selection](../workflow-selection.md), [Workflow library](../workflow-library.md), [Workflow binder](../workflow-binder.md), and [Workflow engine](../deep-dive/workflow-engine.md).
 
-![Workflows and backlog experience: Capture task, Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/canonical-board-lifecycle.png)
-
-<!-- Diagram source: ../diagrams/src/canonical-board-lifecycle.drawio.
-     Shared canonical; changes belong to its owner. -->
-
 ## The mental model
 
 Agentweaver separates **process definition** from **work intake**.
@@ -94,9 +89,7 @@ If sync finds invalid workflows, they remain visible under **Invalid workflows**
 
 Workflow generation is draft-first. The user clicks **Generate workflow**, describes the pipeline, and receives YAML for review. Nothing is saved to `.agentweaver/workflows/` until the user saves.
 
-![Generating and saving workflows: Describe the workflow you need, workflow_generate, YAML draft, Review in editor, workflow_save, Registry refresh, Workflow appears on Workflows page](../diagrams/canonical-workflow-authoring.png)
-
-<!-- Shared stable figure: ../diagrams/canonical-workflow-authoring.png.
+<!-- Shared stable figure: ../diagrams/flagship/canonical-workflow-authoring.png.
      Source migration and publication belong to its owner; no local fork. -->
 
 ### Web UI generation flow
@@ -208,11 +201,6 @@ These are board buckets, not necessarily workflow nodes. Failed, blocked, declin
 
 Pickup turns Ready tasks into coordinator runs. The heartbeat scans eligible projects and reads their top Ready candidates. **Task claim, coordinator run reservation, and approval-policy snapshot persist in one transaction**; only a won claim activates the reserved run unattended.
 
-![Ready pickup: heartbeat selects candidates, atomic claim and reservation either wins, loses, or finds the project unavailable; only a winner starts unattended](../diagrams/experience-workflows-backlog-fig3.png)
-
-<!-- Diagram source: ../diagrams/src/experience-workflows-backlog-fig3.drawio.
-     Published PNG path is stable; edit the draw.io source, not the raster. -->
-
 A project is eligible when it is active and its workspace is available. Unavailable projects leave Ready tasks untouched with priority preserved. A lost claim (another claimant won or the task moved back to Backlog) makes no new reservation. A won claim prevents duplicate task-to-run reservations; it is not a blanket exactly-once guarantee for every later agent action.
 
 After reservation commits, activation starts the coordinator and schedules unattended confirmation attributed to `CapturedBy`. If activation fails, the service attempts to terminalize the reserved run as **Failed** with `coordinator_start_failed`; the task remains **Claimed**, not silently requeued. Missing/invalid teams or unavailable model-provider authorization can also produce a claimed failed run before activation. Inspect Problems and the recorded reason rather than expecting another heartbeat to retry it automatically.
@@ -316,7 +304,6 @@ Results are capped at 50 items. Duplicate detection is scoped to the same projec
 
 Workflows and backlog make Agentweaver predictable: define the process, queue the work, choose what is Ready, let the heartbeat pick up only committed tasks, and watch every run move through visible stages.
 
-<!-- diagram-context:canonical-board-lifecycle:start -->
 <details id="diagram-context-canonical-board-lifecycle" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -395,9 +382,7 @@ Workflows and backlog make Agentweaver predictable: define the process, queue th
 <tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-board-lifecycle:end -->
 
-<!-- diagram-context:canonical-workflow-authoring:start -->
 <details id="diagram-context-canonical-workflow-authoring" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -467,9 +452,7 @@ Workflows and backlog make Agentweaver predictable: define the process, queue th
 <tr><td>e12</td><td>write succeeded</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-authoring:end -->
 
-<!-- diagram-context:experience-workflows-backlog-fig3:start -->
 <details id="diagram-context-experience-workflows-backlog-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -522,4 +505,3 @@ the same captured goal.</td></tr>
 <tr><td>groups</td><td>SELECTION AND ATOMIC RESERVATION; POST-CLAIM OUTCOMES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-workflows-backlog-fig3:end -->

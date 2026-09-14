@@ -15,13 +15,16 @@ Describe the work you want done. Agentweaver can generate the agent roles, skill
 
 Workflows turn probabilistic agent work into a governed path toward a defined outcome, with the gates and approvals you set. Start and supervise work in the Agentweaver interface or through MCP from an assistant, editor, or CLI.
 
-![Shared system architecture: Entra establishes user identity; purpose-bound GitHub capabilities remain separate. API and worker workloads coordinate AgentHost execution and PostgreSQL state, while MCP forwards authenticated API requests.](docs/diagrams/email-architecture.png)
+<!-- flagship-diagrams:start -->
+## Visual model
 
-<!-- Editable canonical source: docs/diagrams/src/email-architecture.drawio.
-     Export: pinned draw.io Desktop 31.4.5, --spec email-architecture.
-     Research and inspected pitch/pass lineage: docs/diagrams/reviews/email-architecture/.
-     README disposition: reuse this canonical, not a separate architecture image.
-     Both README visuals: docs/diagrams/reviews/canonical-provider-admission/readme-visual-coverage.md. -->
+### System architecture
+
+[![Deployment and component view showing web and MCP clients entering the Agentweaver API, API and worker orchestration authority, isolated AgentHost execution, durable PostgreSQL and Azure Files state, and separate identity, repository, and model-provider dependencies.](docs/diagrams/flagship/canonical-coordinator-architecture.png)](docs/diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+
+[Structured source](docs/diagrams/src/flagship/canonical-coordinator-architecture.json) · [Editable draw.io](docs/diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+<!-- flagship-diagrams:end -->
+
 
 📖 **[Read the documentation](https://sabbour.me/agentweaver/)** or browse the source in [docs/index.md](docs/index.md).
 
@@ -69,7 +72,6 @@ Before you sign in, configure local authentication and model access. The [Gettin
 - [Contribute to Agentweaver](CONTRIBUTING.md)
 - [Plan or publish a release](RELEASING.md)
 
-<!-- diagram-context:email-architecture:start -->
 <details id="diagram-context-email-architecture" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -155,4 +157,3 @@ Before you sign in, configure local authentication and model access. The [Gettin
 <tr><td>groups</td><td>AKS · control and execution workloads; External identity, capabilities, and durable data</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:email-architecture:end -->

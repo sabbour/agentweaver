@@ -1,8 +1,8 @@
 # Coordinator reference
 
-See [Observation, automation, shared review and recoverable orchestration](../diagrams/resilient-assembly-review-fig1.png) for the shared visual model.
+See Observation, automation, shared review and recoverable orchestration for the shared visual model.
 
-See [Roster guard and direct versus defineOutcome launch](../diagrams/canonical-coordinator-journey.png) for the shared visual model.
+See [Roster guard and direct versus defineOutcome launch](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
 
 The Coordinator is a built-in agent (codename Squad) that every team gains automatically. It adds a single new capability on top of the existing single-agent platform: an **orchestration layer**. The coordinator turns a user goal into a confirmed, memory-informed **outcome spec** when outcome-definition mode is selected; Direct plans from the prompt.
 
@@ -93,10 +93,6 @@ Zero/one candidate avoids model selection. With multiple candidates, use process
 The model gets one attempt and one retry. Unusable/ambiguous output falls back to an available default/standard, then a non-code-review candidate, then the first candidate. An outer exception retains the resolved project default.
 
 Automation uses Schedule and Event triggers, not Manual/Heartbeat eligibility. `triggers` is an ordered array; `trigger` is its first-entry compatibility alias. Automation admits backlog work independently of process selection.
-
-![Workflow selection: valid workflows, explicit and conversational overrides, process-fit selection, bounded fallback, and compatibility checks](../diagrams/canonical-workflow-selection.png)
-
-<!-- Canonical editable source: ../diagrams/src/canonical-workflow-selection.drawio; maintained by the shared owner. -->
 
 ### Decomposition and the work plan
 
@@ -274,12 +270,10 @@ The recreated run emits [`coordinator.recovered`](./events.md#coordinator-recove
 - [Web UI reference — Coordinator run and outcome-spec gate](./web.md#coordinator-run-and-outcome-spec-gate)
 - [Project generation model settings](./project-generation-model-settings.md)
 
-
 ## Launch versus heartbeat-pickup defaults
 
 Omitted API/MCP launch options default to false. Persisted project pickup defaults are separate: `pickup_autopilot=true`, `pickup_auto_approve_tools=true`, `max_ready_per_heartbeat=3`. Each claim snapshots the current values. The Coordinator heartbeat defaults enabled at 10 seconds, independently of approval/provisioning wait heartbeats.
 
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -367,9 +361,7 @@ Omitted API/MCP launch options default to false. Persisted project pickup defaul
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->
 
-<!-- diagram-context:canonical-workflow-selection:start -->
 <details id="diagram-context-canonical-workflow-selection" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -424,9 +416,7 @@ Omitted API/MCP launch options default to false. Persisted project pickup defaul
 <tr><td>fallback</td><td>default / standard</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-selection:end -->
 
-<!-- diagram-context:resilient-assembly-review-fig1:start -->
 <details id="diagram-context-resilient-assembly-review-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -476,4 +466,3 @@ Omitted API/MCP launch options default to false. Persisted project pickup defaul
 <tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:resilient-assembly-review-fig1:end -->

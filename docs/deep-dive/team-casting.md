@@ -16,11 +16,6 @@ The design keeps creative choice and persistent state separate. Model-assisted s
 
 Runtime workflow execution is intentionally out of scope here; see [Orchestration](./orchestration.md) for how cast teams are run.
 
-![Compile a proposal before writing a team: Proposal generation may persist a draft; .squad writes wait for guarded confirmation.](../diagrams/team-casting-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/team-casting-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig1/v2/iteration-manifest.json. -->
-
 Where this lives:
 
 - `apps/Agentweaver.Api/Casting`
@@ -188,11 +183,6 @@ Those signals influence **role selection only**. For example, TypeScript plus Re
 If no signals are found, the model is asked for a small general-purpose starting team and the proposal includes a warning.
 
 Universe selection remains deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
-
-![Analyze summaries, not raw source: The model sees bounded signals and a role menu; recognized roles become a deterministic proposal.](../diagrams/team-casting-fig2.png)
-
-<!-- Editable A5 source: ../diagrams/src/team-casting-fig2.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig2/v2/iteration-manifest.json. -->
 
 Where this lives:
 
@@ -422,11 +412,6 @@ seeding and a best-effort `.squad/` auto-commit. This is an ordered series of op
 not one atomic filesystem/event/database/git transaction; a later failure does not
 imply that earlier file writes were rolled back.
 
-![Confirm a team against its revision: Validate proposal and team revision before writes; later side effects are ordered, not atomic.](../diagrams/team-casting-fig3.png)
-
-<!-- Editable A5 source: ../diagrams/src/team-casting-fig3.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig3/v2/iteration-manifest.json. -->
-
 ### What confirmation writes
 
 Confirmation creates or updates:
@@ -602,7 +587,6 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 - Git sync stages only `.squad/`; it does not stage `.agentweaver/context/*`, but callers must keep unrelated entries out of the existing index.
 - Memory import/export is DTO-based so the squad package remains database-agnostic.
 
-<!-- diagram-context:team-casting-fig1:start -->
 <details id="diagram-context-team-casting-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -649,9 +633,7 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 <tr><td>groups</td><td>INTENT AND NAMING CONTEXT; DETERMINISTIC PROPOSAL COMPILATION; GUARDED CONFIRMATION AND SIDE EFFECTS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:team-casting-fig1:end -->
 
-<!-- diagram-context:team-casting-fig2:start -->
 <details id="diagram-context-team-casting-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -698,9 +680,7 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 <tr><td>groups</td><td>LOCAL SCAN BOUNDARY; MODEL-BOUND SUMMARY; VALIDATION AND DETERMINISTIC OUTPUT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:team-casting-fig2:end -->
 
-<!-- diagram-context:team-casting-fig3:start -->
 <details id="diagram-context-team-casting-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -747,4 +727,3 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 <tr><td>groups</td><td>PROPOSAL AND CONCURRENCY ADMISSION; ROSTER SEMANTICS; ORDERED PERSISTENCE AND BEST-EFFORT WORK</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:team-casting-fig3:end -->

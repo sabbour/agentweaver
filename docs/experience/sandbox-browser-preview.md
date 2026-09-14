@@ -10,8 +10,6 @@ This page walks through the user experience. For the API see the
 [reference](../reference/sandbox-browser-preview.md); for how the proxy works under the hood see the
 [deep dive](../deep-dive/sandbox-browser-preview.md).
 
-![API provisions a Service and HTTPRoute; browser preview traffic flows through the Gateway to the run's pod](../diagrams/sandbox-browser-preview-fig1.png)
-
 <!-- Shared diagram: sandbox-browser-preview-fig1; owned by deep-dive-execution.
      Consume the stable canonical PNG; do not edit a local duplicate. -->
 
@@ -128,7 +126,6 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 - [Sandbox pod execution experience](./sandbox-pod-execution.md) — the pod pill and the pod-per-run model.
 - [Runs, board & live inspection](./runs-board-watch.md) — where embedded run inspection lives.
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -191,4 +188,3 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->

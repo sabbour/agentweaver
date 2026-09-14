@@ -1,10 +1,10 @@
 # Agent Communication — Reference
 
-See [Execution transport is below team coordination](../diagrams/canonical-agent-communication-a2a.png) for the shared visual model.
+See Execution transport is below team coordination for the shared visual model.
 
-See [Coordinator-mediated dispatch, observations and steering](../diagrams/canonical-agent-communication-handoff.png) for the shared visual model.
+See Coordinator-mediated dispatch, observations and steering for the shared visual model.
 
-See [Decision inbox, ledger, memory and curation](../diagrams/canonical-agent-communication-shared.png) for the shared visual model.
+See Decision inbox, ledger, memory and curation for the shared visual model.
 
 This reference maps each of Agentweaver's three **agent communication channels**
 to its concrete surfaces: MCP tools and HTTP API endpoints. For the conceptual
@@ -223,7 +223,6 @@ shared-state tools and coordinator tools are identical either way.
 - [A2A bridge deep dive](../deep-dive/a2a-bridge.md) and
   [A2A reference](../reference/a2a.md).
 
-<!-- diagram-context:canonical-agent-communication-handoff:start -->
 <details id="diagram-context-canonical-agent-communication-handoff" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -308,9 +307,7 @@ shared-state tools and coordinator tools are identical either way.
 <tr><td>groups</td><td>Intent → execution contract; Isolated work → collective assembly</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-handoff:end -->
 
-<!-- diagram-context:canonical-agent-communication-a2a:start -->
 <details id="diagram-context-canonical-agent-communication-a2a" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -344,9 +341,7 @@ shared-state tools and coordinator tools are identical either way.
 <tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-a2a:end -->
 
-<!-- diagram-context:canonical-agent-communication-shared:start -->
 <details id="diagram-context-canonical-agent-communication-shared" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -390,4 +385,3 @@ shared-state tools and coordinator tools are identical either way.
 <tr><td>notes</td><td>Rows: shared context / coordinator handoff / execution transport.; Agents can submit inbox proposals or record pending memory through the API.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-shared:end -->

@@ -21,13 +21,6 @@ how the *team* coordinates. The third is how a *single* agent turn is *executed*
 Keeping them distinct is the most important idea in this document: **A2A is
 execution transport, not a way for two agents to talk.**
 
-![Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod](../diagrams/canonical-agent-communication-shared.png)
-
-<!-- Generated from ../diagrams/src/canonical-agent-communication-shared.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## The three channels
 
 | Channel | What it coordinates | Direction | Carrier |
@@ -139,13 +132,6 @@ full decomposition logic is in the
 [Orchestration deep dive](./orchestration.md) and
 [Coordinator Internals](./coordinator-internals.md).
 
-![Decompose: goal → OutcomeSpec → WorkPlan DAG: Goal, OutcomeSpec, WorkPlan, Subtask 1, Subtask 2, Subtask 3, Coordinator](../diagrams/canonical-agent-communication-handoff.png)
-
-<!-- Generated from ../diagrams/src/canonical-agent-communication-handoff.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Dispatch: children run independently, in parallel where safe
 
 For each subtask whose dependencies are satisfied — the **ready frontier** — the
@@ -201,13 +187,6 @@ way: worker, RAI, Rubberduck, Build/Test, and Scribe. The Operator Assistant als
 uses `RemoteAgentProxy` outside that factory. The orchestration graph never crosses the boundary; A2A carries one
 turn's setup, assistant output, and structured run events. A2A is the sole worker→AgentHost wire
 transport for that seam.
-
-![Sequence showing the orchestration graph invoking a RemoteAgentProxy, AgentHost executing one leaf agent turn in a sandbox pod, and streamed turn output returning to the worker](../diagrams/canonical-agent-communication-a2a.png)
-
-<!-- Generated from ../diagrams/src/canonical-agent-communication-a2a.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Why this is **not** Channel A or B:
 
@@ -278,7 +257,7 @@ is the price of keeping policy deliberate.
 
 ## Putting it together
 
-Refer back to the [shared communication overview](../diagrams/canonical-agent-communication-shared.png)
+Refer back to the shared communication overview
 and the [coordinator handoff](#channel-b-coordinator-mediated-handoffs), rather than
 introducing a second recap diagram.
 
@@ -311,7 +290,6 @@ remoted to a pod.** They solve different problems and must not be conflated.
 - [Agent Communication experience](../experience/agent-communication.md) — what
   coordination looks like to a user watching a team work.
 
-<!-- diagram-context:canonical-agent-communication-handoff:start -->
 <details id="diagram-context-canonical-agent-communication-handoff" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -396,9 +374,7 @@ remoted to a pod.** They solve different problems and must not be conflated.
 <tr><td>groups</td><td>Intent → execution contract; Isolated work → collective assembly</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-handoff:end -->
 
-<!-- diagram-context:canonical-agent-communication-a2a:start -->
 <details id="diagram-context-canonical-agent-communication-a2a" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -432,9 +408,7 @@ remoted to a pod.** They solve different problems and must not be conflated.
 <tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-a2a:end -->
 
-<!-- diagram-context:canonical-agent-communication-shared:start -->
 <details id="diagram-context-canonical-agent-communication-shared" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -478,4 +452,3 @@ remoted to a pod.** They solve different problems and must not be conflated.
 <tr><td>notes</td><td>Rows: shared context / coordinator handoff / execution transport.; Agents can submit inbox proposals or record pending memory through the API.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-agent-communication-shared:end -->

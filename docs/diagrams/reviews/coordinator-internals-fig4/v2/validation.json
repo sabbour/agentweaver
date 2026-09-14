@@ -1,9 +1,0 @@
-{
-  "passed": true,
-  "diagram_count": 28,
-  "retired_count": 6,
-  "exact_final_xml_png_matches": 28,
-  "tests": "27",
-  "drift": "passed",
-  "diff_check": "passed"
-}

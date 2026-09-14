@@ -1,2 +1,0 @@
-visible semantic XML: 2359 -> 22532 (9.552x; required 9.000x)
-PASS

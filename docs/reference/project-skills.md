@@ -4,7 +4,7 @@ title: Project skills reference
 
 # Project skills reference
 
-See [Catalog acquisition, idempotent content and progressive disclosure](../diagrams/project-skills-fig1.png) for the shared visual model.
+See Catalog acquisition, idempotent content and progressive disclosure for the shared visual model.
 
 Project skills are exposed through the web UI, REST API, and MCP tools. The web UI uses the same REST
 surface as MCP.
@@ -105,7 +105,6 @@ See the generated [MCP tool index](./mcp-tools.md) for the full authoritative to
 
 Administrators configure trusted marketplace definitions in the API `SkillMarketplaces:Definitions` configuration section. Each definition has a name, GitHub repository, optional subpath/layout note, branch, and `enabled` flag. Disabled or removed definitions disappear from browse results but never delete skills already imported from them. The built-in configuration includes GitHub Awesome Copilot (`github/awesome-copilot` at `skills`) and Azure Skills (`microsoft/skills` at `.github/plugins/azure-skills/skills`). Browse failures return an unavailable-source response and do not modify the project catalog.
 
-
 ## Defaults and project marketplace sources
 
 | REST action | Contract | MCP tool |
@@ -118,7 +117,6 @@ Administrators configure trusted marketplace definitions in the API `SkillMarket
 
 `skill_marketplaces_list`, `skill_marketplace_browse`, and `skill_marketplace_import` discover, preview, and import marketplace candidates. Adding a source does not import or assign skills. Curated names win collisions; project sources cannot shadow them. The import parser's strict HTTPS host rules are distinct from marketplace-source parsing.
 
-<!-- diagram-context:project-skills-fig1:start -->
 <details id="diagram-context-project-skills-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -169,4 +167,3 @@ Administrators configure trusted marketplace definitions in the API `SkillMarket
 <tr><td>groups</td><td>ACQUIRE · VALIDATE · ASSIGN; DELIVERY BRANCHES · EXECUTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:project-skills-fig1:end -->

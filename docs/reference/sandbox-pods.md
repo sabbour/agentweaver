@@ -183,11 +183,6 @@ When preview creation is disabled, the operator start route uses the legacy `kub
 | Ports / caps | 1-65535; defaults 3 per run, 20 per service process. Gateway has its own configured allowed range. |
 | Lifetime | Process-local, no persisted route annotations or session TTL; stop, exit, disposal or run/pod cleanup ends it. |
 
-![Gateway-direct preview: API control, shared Gateway, HTTPRoute, per-preview Service, sandbox forwarder and app](../diagrams/sandbox-browser-preview-fig1.png)
-
-<!-- Canonical target: ../diagrams/src/sandbox-browser-preview-fig1.drawio.
-     The deep-dive-execution owner maintains its export and review evidence. -->
-
 ## Security properties
 
 | Property | Pod-per-run guarantee |
@@ -213,7 +208,6 @@ When preview creation is disabled, the operator start route uses the legacy `kub
 - [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
   coordinator-to-child routing.
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -276,4 +270,3 @@ When preview creation is disabled, the operator start route uses the legacy `kub
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->

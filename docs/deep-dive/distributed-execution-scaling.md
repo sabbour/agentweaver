@@ -30,13 +30,6 @@ Separately, each run's tool, shell, and model execution wants its own isolation 
 
 The key insight is that **memory relief and isolation are the same move**. Relocating the heavy execution — the model SDK session, the in-pod runner, and tool/shell/file execution — into a per-run [sandbox pod](./sandbox-pod-execution.md) simultaneously evicts the dominant per-run footprint from the API process *and* gives each run its own isolated boundary. After the move, the API tier becomes a thin orchestrator: HTTP, event relay, and database. This is the foundation everything else builds on.
 
-![Before and after moving leaf execution into AgentHost while orchestration remains in the worker; database migration is independent](../diagrams/canonical-sandbox-pod-evolution.png)
-
-<!-- Generated from ../diagrams/src/canonical-sandbox-pod-evolution.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## The phased rollout
 
 The current design combines pod-based agent execution, provider-aware persistence, and a web/worker split. `Sandbox:AgentExecutionMode`, `Database:Provider`, and `App:Role` select the runtime topology.
@@ -69,13 +62,6 @@ Once SQLite is gone, the orchestrator's two jobs have very different scaling sha
 
 The intended division is public request handling versus orchestration ownership. Background pickup is independently enabled, so do not interpret this as a hard role-isolation guarantee. A client can observe events through a different web replica using the shared durable stream.
 
-![The web/worker deployment split: Clients, Web pod A, Web pod B, Worker pod A, Worker pod B, Warm AgentHost + CopilotAIAgent, Warm AgentHost + CopilotAIAgent, Azure PostgreSQL](../diagrams/distributed-execution-scaling-fig3.png)
-
-<!-- Generated from ../diagrams/src/distributed-execution-scaling-fig3.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## Durable run leasing
 
 With more than one worker, the central question becomes: **how do identical workers share one pool of runs without duplicate execution?** Durable leases guard both run ownership and coordinator dispatch. A guarded compare-and-set selects one worker to execute each item.
@@ -88,13 +74,6 @@ Leasing rests on a small set of per-row ideas:
 - **Expiry** — a lease deadline. An expired lease is reclaimable by *any* worker even if an owner is still nominally stamped. This is what makes crash recovery automatic: a worker that dies stops renewing, its lease lapses, and another worker re-claims the run.
 - **Heartbeat** — a liveness stamp the owner refreshes while it works, so stalls are visible across the fleet rather than only inside one process.
 - **A fencing token** — increments on successful acquisition. Renew/release require the matching owner/token, and terminal paths check active ownership. This is not a guarantee that every write is atomically fenced or execution is exactly once. Failed renewal logs a warning; it does not itself immediately cancel all work.
-
-![Durable run leasing: Worker A, Worker B, Postgres (run row)](../diagrams/distributed-execution-scaling-fig5.png)
-
-<!-- Generated from ../diagrams/src/distributed-execution-scaling-fig5.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
 
@@ -118,13 +97,6 @@ gaplessness. Subscribers read `Sequence > lastSeen` in order and wait 250 ms onl
 when empty. There is no PostgreSQL `NOTIFY` or cross-replica notification bus.
 Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:224-288`,
 `:409-419`, `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:183-234`.
-
-![Sequence showing a worker mirroring a run event into the shared RunEvents table, one web replica streaming it live, and another replica resuming after the browser reconnects with a cursor](../diagrams/distributed-execution-scaling-fig4.png)
-
-<!-- Generated from ../diagrams/src/distributed-execution-scaling-fig4.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 The process-local `RunStreamStore` still matters for same-replica compatibility and low-latency waiters, but it is no longer a horizontal-scale boundary. If a web replica does not have a local stream entry, `/api/runs/{id}/stream` falls back to `IRunEventStream.SubscribeAsync` with the `Last-Event-ID` cursor and writes the replayed rows as SSE frames. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:416`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:431`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:443`.
 
@@ -154,7 +126,6 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 - [Data & persistence](./data-persistence.md) — the durable domain model the migration carries forward.
 - [Infrastructure & deployment](./infra-deployment.md) and [AKS architecture](../guide/architecture-aks.md) — the cluster this runs on.
 
-<!-- diagram-context:canonical-sandbox-pod-evolution:start -->
 <details id="diagram-context-canonical-sandbox-pod-evolution" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -187,9 +158,7 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 <tr><td>notes</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.; P1 can retain one SQLite writer; multiple writers require suitable shared storage.; Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-pod-evolution:end -->
 
-<!-- diagram-context:distributed-execution-scaling-fig3:start -->
 <details id="diagram-context-distributed-execution-scaling-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -224,9 +193,7 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 <tr><td>notes</td><td>App:Role does not alone disable CoordinatorHeartbeatService pickup.; Backlog-driven KEDA is a proposed alternative, not the active HPA.; SQL run leases and Kubernetes SandboxClaims are different mechanisms.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:distributed-execution-scaling-fig3:end -->
 
-<!-- diagram-context:distributed-execution-scaling-fig4:start -->
 <details id="diagram-context-distributed-execution-scaling-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -271,9 +238,7 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 <tr><td>notes</td><td>Rows: write-through / live delivery / reconnect on another replica.; Explicit historic sequence: identical content is idempotent; conflicts fail.; SQL commits before local history update; polling reads the shared table.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:distributed-execution-scaling-fig4:end -->
 
-<!-- diagram-context:distributed-execution-scaling-fig5:start -->
 <details id="diagram-context-distributed-execution-scaling-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -306,4 +271,3 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 <tr><td>notes</td><td>Stale renew/release fail; terminal paths recheck active ownership.; Failed renewal logs a warning; it does not itself cancel all execution.; Do not infer exactly-once execution or fencing of every application write.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:distributed-execution-scaling-fig5:end -->

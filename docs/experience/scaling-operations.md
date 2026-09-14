@@ -22,11 +22,6 @@ The current operator model separates:
 
 The operator's job after scaling is mostly about the second and third points: making sure enough web pods exist for request load, enough worker pods exist for run backlog, and that runs are being leased and renewed cleanly.
 
-![The mental model: Developer, Web pods (many), Worker pods (many), Managed Postgres, Per-run sandbox pods](../diagrams/experience-scaling-operations-fig1.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-scaling-operations-fig1.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
-
 ## What scaling looks like in practice
 
 ### More pods, in two roles
@@ -93,11 +88,6 @@ A graceful shutdown stops new claims and attempts to release owned leases. The w
 budget keeps at least one worker available; it is not a guarantee that every in-flight turn finishes
 before termination.
 
-![How runs survive replica restarts: Worker A (owns run), Postgres (lease), Worker B](../diagrams/experience-scaling-operations-fig3.png)
-
-<!-- Editable source: ../diagrams/drawio/generated/experience-scaling-operations-fig3.drawio.
-     Published PNG path is stable; visual validation belongs to the diagram owner. -->
-
 Renewal and release match both owner and fencing token. Terminal handlers check current lease ownership
 before updating run state, rejecting a stale owner's terminal outcome. Do not broaden those guards
 into a claim that every filesystem, tool, or external side effect is fenced.
@@ -143,7 +133,6 @@ checkpoint recovery, storage compatibility, and capacity before calling any roll
 - [Configuration](../guide/configuration.md) and the [AKS deployment guide](../guide/deployment-aks.md) — the knobs and the cluster.
 - [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) and [agent communication](../deep-dive/agent-communication.md) — where runs actually execute.
 
-<!-- diagram-context:experience-scaling-operations-fig1:start -->
 <details id="diagram-context-experience-scaling-operations-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -196,9 +185,7 @@ no direct pod DB access.</td></tr>
 <tr><td>groups</td><td>CONTROL-PLANE ROLES; SHARED STATE AND LEAF COMPUTE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-scaling-operations-fig1:end -->
 
-<!-- diagram-context:experience-scaling-operations-fig3:start -->
 <details id="diagram-context-experience-scaling-operations-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -251,4 +238,3 @@ missing checkpoints surface.</td></tr>
 <tr><td>groups</td><td>LEASE OWNERSHIP; STATE-DEPENDENT RECOVERY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:experience-scaling-operations-fig3:end -->

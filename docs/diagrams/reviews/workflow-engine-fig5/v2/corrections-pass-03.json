@@ -1,8 +1,0 @@
-{
-  "routing": "Separate near-parallel lanes and keep labels clear of previously routed connectors",
-  "diagnosis": "Pass-2 native segment style did not remove the planned two-pixel hairpin; waypoint clearance is the cause",
-  "vertices_preserved": true,
-  "relationships_preserved": true,
-  "content_added_or_removed": false,
-  "composition_reopened": false
-}

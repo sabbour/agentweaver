@@ -269,13 +269,6 @@ generation keeps that target repository in the prompt context so the draft acts 
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 
-![Workflow authoring: Describe, generate YAML, validate with at most one server correction, review the valid editor draft, then explicitly save to the project](../diagrams/canonical-workflow-authoring.png)
-
-<!-- Generated from ../diagrams/src/canonical-workflow-authoring.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ::: warning Workflows affect team composition
 A workflow references specific roles by name. If your project's cast doesn't include a role referenced in the workflow, the run will fail validation before it starts. Make sure the workflow's required roles match the agents in your team.
 :::
@@ -299,7 +292,6 @@ When you save a team as a **Blueprint**, the Blueprint bundles the team's roster
 
 → [Agent Teams & Blueprints](./teams)
 
-<!-- diagram-context:canonical-workflow-authoring:start -->
 <details id="diagram-context-canonical-workflow-authoring" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -369,4 +361,13 @@ When you save a team as a **Blueprint**, the Blueprint bundles the team's roster
 <tr><td>e12</td><td>write succeeded</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-authoring:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Default workflow
+
+[![Flowchart of the six-stage default workflow: agent production, Responsible AI gate, human review, merge attempt, pull-request publication attempt, and Scribe recording, including revision, no-change, decline, safety, and blocked-merge paths.](../diagrams/flagship/canonical-default-workflow.png)](../diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-default-workflow.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+<!-- flagship-diagrams:end -->

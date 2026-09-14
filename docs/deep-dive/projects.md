@@ -124,12 +124,6 @@ The workspace provider owns the filesystem boundary for project creation and run
 - **Check mount health**: is the provider's root storage healthy enough for this pod/process to serve requests?
 - **Release**: what should happen to provider-owned runtime resources when the project is deleted?
 
-![Local caller-path and persistent project-ID workspace provisioning with real write probes](../diagrams/projects-fig1.png)
-
-<!-- Editable source: ../diagrams/src/projects-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec projects-fig1.
-     Review lineage: ../diagrams/reviews/projects-fig1/iteration-manifest.json. -->
-
 ### Local filesystem provider
 
 The local provider is optimized for developer machines. The user supplies a working directory path, Agentweaver canonicalizes it, creates it if necessary, and checks that it can write there. Availability is simply whether the directory still exists.
@@ -175,12 +169,6 @@ This design exists because agents are concurrent, stateful, and allowed to modif
 The trade-off is storage complexity. Agentweaver must manage base repositories, worktrees, branch names, availability checks, and cleanup rules. The payoff is that project state remains understandable: base project files are stable, each run has a separate working area, and infrastructure failures can be diagnosed as workspace availability problems rather than mysterious agent behavior.
 
 ## Relationship between projects, runs, workspaces, teams, and sandboxes
-
-![Project defaults and base files relate to independent run worktrees, team context and sandbox execution](../diagrams/projects-fig2.png)
-
-<!-- Editable source: ../diagrams/src/projects-fig2.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec projects-fig2.
-     Review lineage: ../diagrams/reviews/projects-fig2/iteration-manifest.json. -->
 
 ### Runs
 
@@ -299,7 +287,6 @@ If you were rebuilding this subsystem from scratch, implement these pieces in th
 
 - [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent file materialized into each new project at creation time.
 
-<!-- diagram-context:projects-fig1:start -->
 <details id="diagram-context-projects-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -348,9 +335,7 @@ If you were rebuilding this subsystem from scratch, implement these pieces in th
 <tr><td>groups</td><td>REQUEST + PROVIDER POLICY; PROVISION · INITIALIZE · PERSIST</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:projects-fig1:end -->
 
-<!-- diagram-context:projects-fig2:start -->
 <details id="diagram-context-projects-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -395,4 +380,3 @@ If you were rebuilding this subsystem from scratch, implement these pieces in th
 <tr><td>groups</td><td>PROJECT-OWNED CONFIGURATION; RUN-OWNED EXECUTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:projects-fig2:end -->

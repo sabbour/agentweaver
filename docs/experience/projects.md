@@ -284,7 +284,6 @@ The selected section is deep-linked through the URL query.
 
 MCP equivalent: `project_rename`.
 
-
 #### Default model
 
 **Default run model** includes a **GitHub Copilot model** field for Copilot-backed runs.

@@ -12,12 +12,6 @@ The easiest way to understand the system is to separate three concerns:
 
 This separation is deliberate. Models are useful but non-deterministic, so Agentweaver puts workflow authority in deterministic services. Persistent stores define truth. Workflow state determines the next eligible step. Review gates define who can approve. Merge locks control repository changes. Sandbox policy controls tool access. The platform governs the route toward an outcome. It does not claim that model outputs are deterministic.
 
-![Intent, control and execution planes: separate MCP broker boundary, API and worker roles, AgentHost, durable state and workspace](../diagrams/00-system-overview-fig1.png)
-
-<!-- Editable source: ../diagrams/src/00-system-overview-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec 00-system-overview-fig1.
-     Review lineage: ../diagrams/reviews/00-system-overview-fig1/iteration-manifest.json. -->
-
 Repository workflows have identity, state, events, an isolated workspace, and review boundaries. Operator conversations are a distinct run type: they reuse durable identity/events but do not create a repository worktree or review/merge graph.
 
 MCP clients reach a separately authenticated MCP resource server, which forwards broker-authorized
@@ -50,11 +44,6 @@ The trade-off is operational complexity. Worktrees, locks, sandboxes, cleanup, a
 A run is both a state machine and a story. Operators need the live story while it is happening, and recovery needs the durable story after restarts. Agentweaver therefore treats events as write-through: first persist the event, then fan it out to live subscribers.
 
 The invariant is that the durable event log is the source of truth. The in-memory stream is a same-replica optimization; cross-replica watchers read from the shared `RunEvents` table by `Last-Event-ID` cursor. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`.
-
-![EF/Postgres durable delivery: append and commit before acknowledgement, then read ordered rows after the subscriber cursor and poll when empty](../diagrams/canonical-durable-event-stream-sequence.png)
-
-<!-- Shared editable source: ../diagrams/src/canonical-durable-event-stream-sequence.drawio.
-     Exported by draw.io Desktop 31.4.5; shared owner maintains its review lineage. -->
 
 This sequence describes the EF durable subscription. A replica with a local `RunStreamStore`
 entry can instead serve an atomic snapshot and wait for local changes; it is not a universal
@@ -97,12 +86,6 @@ This is the representative **full single-agent workflow**, not the public submis
 trimmed coordinator-child graph. Public `POST /api/runs` is retired (410); new submissions use the
 coordinator. The full graph can end merged, declined, failed, safety-flagged, or with no changes.
 
-![Representative full single-agent workflow, distinct from public coordinator submission and trimmed child graphs](../diagrams/00-system-overview-fig2.png)
-
-<!-- Editable source: ../diagrams/src/00-system-overview-fig2.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec 00-system-overview-fig2.
-     Review lineage: ../diagrams/reviews/00-system-overview-fig2/iteration-manifest.json. -->
-
 ### What each stage is for
 
 1. **Submission and validation** make the task explicit and bind it to a repository, branch, project, requester, model source, and run options. This is the moment an ambiguous user intent becomes a durable run.
@@ -131,12 +114,6 @@ Where this lives: `apps/Agentweaver.Api/Runs`, `apps/Agentweaver.Api/Endpoints`,
 A coordinator run exists for work that is too broad for one linear agent pass. It adds planning, dependency management, parallel child execution in isolated child worktrees, and collective assembly.
 
 The key idea is to move from a vague goal to a confirmed contract before agents start editing. The coordinator first drafts an **OutcomeSpec**: desired outcome, scope, assumptions, and clarifying questions. A human can revise or confirm that spec. Only after confirmation does the system decompose work into a **WorkPlan**: subtasks, dependencies, assigned agents, isolation hints, and assembly strategy.
-
-![Coordinator Run Lifecycle: Human goal or ready backlog item, Draft OutcomeSpec, Human confirms?, Revise spec, Create WorkPlan DAG, Find ready dependency frontier, Dispatch child runs in parallel, Observe child terminal states, All usable outputs ready?, Build integration branch, Review aggregate diff, One human review, …](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Exported from ../diagrams/src/canonical-coordinator-architecture.drawio with the
-     Fluent draw.io template. Edit the source, invoke `docs-diagram-iterate`, then
-     commit the regenerated PNG + .hash.txt. -->
 
 ### Why coordinator children do not each merge
 
@@ -170,11 +147,6 @@ Agentweaver represents work as workflows rather than hard-coded endpoint scripts
 
 The default full workflow is intentionally conservative:
 
-![Workflow Model: Agent, RAI, Terminal: safety blocked, Scribe, Human review, Terminal: declined, Merge, Terminal: done](../diagrams/canonical-default-workflow.png)
-
-<!-- Shared editable source: ../diagrams/src/canonical-default-workflow.drawio.
-     Follow the shared owner's review lineage; do not regenerate a competing copy. -->
-
 The workflow abstraction matters because it gives project authors and future features a vocabulary for changing process without rewriting orchestration primitives. However, Agentweaver does not blindly execute arbitrary graph nodes. Runtime binding classifies nodes by supported type and gate semantics, then maps them to known executors. Unsupported nodes fail closed. That preserves extensibility without allowing a malformed workflow to bypass review, RAI, or merge policy.
 
 Trade-off: workflow graphs add indirection. The payoff is that single-agent runs, coordinator child runs, and future project-authored workflows can share the same execution concepts while choosing different pipelines. For example, coordinator child runs use a trimmed agent-only pipeline because RAI, review, and merge happen later at collective assembly.
@@ -203,12 +175,6 @@ The most important invariant is monotonicity: once a durable event or state tran
 
 Agentweaver's memory system is a structured feedback loop:
 
-![Run-provenanced observations, governed promotion, accepted memory, export and filtered future context](../diagrams/00-system-overview-fig5.png)
-
-<!-- Editable source: ../diagrams/src/00-system-overview-fig5.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec 00-system-overview-fig5.
-     Review lineage: ../diagrams/reviews/00-system-overview-fig5/iteration-manifest.json. -->
-
 This loop separates three categories of knowledge:
 
 - **Session context** — what is currently being worked on and what matters right now.
@@ -227,13 +193,6 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `packages/Agentweaver.Squad/Mem
 ## Sandbox and Tool Governance
 
 Agentweaver treats every model tool call as a request, not a right. The governance stack is layered so a single missed check is less likely to become a workspace escape.
-
-![Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied](../diagrams/canonical-sandbox-boundary.png)
-
-<!-- Generated from ../diagrams/src/canonical-sandbox-boundary.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Key concepts:
 
@@ -262,7 +221,7 @@ Named agents add another layer above providers. A role such as reviewer, planner
 
 In AKS, Agentweaver separates public services, persistent state, secrets, and sandbox execution.
 
-The [shared AKS component map](../diagrams/canonical-aks-components.png) is the stable
+The [shared AKS component map](../diagrams/flagship/canonical-aks-components.png) is the stable
 replacement target. Its legacy image is not embedded here while the shared owner completes
 publication approval. The obsolete API-single-writer/Data-PVC overview image is also withheld.
 The deployment facts below, grounded in the current manifests, remain authoritative.
@@ -332,7 +291,6 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 - Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
 - The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.
 
-<!-- diagram-context:canonical-default-workflow:start -->
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -373,9 +331,7 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>edge-10-label</td><td>blocked</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-default-workflow:end -->
 
-<!-- diagram-context:00-system-overview-fig1:start -->
 <details id="diagram-context-00-system-overview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -425,9 +381,7 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>groups</td><td>INTENT / CONTROL; EXECUTION / STATE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:00-system-overview-fig1:end -->
 
-<!-- diagram-context:00-system-overview-fig2:start -->
 <details id="diagram-context-00-system-overview-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -474,9 +428,7 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>groups</td><td>EXECUTION + SAFETY; REVIEW + OUTCOME</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:00-system-overview-fig2:end -->
 
-<!-- diagram-context:00-system-overview-fig5:start -->
 <details id="diagram-context-00-system-overview-fig5" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -523,9 +475,7 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>groups</td><td>CAPTURE / PROMOTION; COMMITTED STATE / USE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:00-system-overview-fig5:end -->
 
-<!-- diagram-context:canonical-aks-components:start -->
 <details id="diagram-context-canonical-aks-components" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -586,18 +536,14 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>groups</td><td>APPLICATION CONTROL; EXECUTION / DURABLE STATE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-aks-components:end -->
 
-<!-- diagram-context:canonical-durable-event-stream-sequence:start -->
 <details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
 <tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream-sequence:end -->
 
-<!-- diagram-context:canonical-sandbox-boundary:start -->
 <details id="diagram-context-canonical-sandbox-boundary" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -659,4 +605,3 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 <tr><td>groups</td><td>TOOL SELECTION / POLICY; POINT-OF-USE CONTAINMENT</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-sandbox-boundary:end -->

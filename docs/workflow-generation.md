@@ -11,12 +11,6 @@ For the shared describe → validate → review → save journey, see
 [Generate from description](guide/workflows.md#generate-from-description).
 This page keeps the server contract rather than introducing a second authoring diagram.
 
-![Shared authoring journey: generate and validate an unsaved draft, allow one correction, then separately validate, write and reload only after explicit Save](diagrams/canonical-workflow-authoring.png)
-
-<!-- Editable canonical source: diagrams/src/canonical-workflow-authoring.drawio.
-     Export with draw.io Desktop 31.4.5 and --spec canonical-workflow-authoring.
-     Review lineage: diagrams/reviews/canonical-workflow-authoring/a5-final/. -->
-
 This document covers the server-side generation capability behind
 `POST /api/projects/{id}/workflows/generate` (FR-056–FR-061).
 
@@ -168,7 +162,6 @@ task) is documented separately in [workflow-selection.md](workflow-selection.md)
 Unit tests drive `CopilotWorkflowGenerator` with a scripted `IAgentRunner` so the
 prompt → validate → correction pipeline runs without the live model.
 
-<!-- diagram-context:canonical-workflow-authoring:start -->
 <details id="diagram-context-canonical-workflow-authoring" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -238,4 +231,13 @@ prompt → validate → correction pipeline runs without the live model.
 <tr><td>e12</td><td>write succeeded</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-workflow-authoring:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Workflow authoring
+
+[![Flowchart showing one model correction pass, human editing of an unsaved workflow draft, save-time validation, project YAML persistence, registry activation, and distinct pre-write and post-write failures.](diagrams/flagship/canonical-workflow-authoring.png)](diagrams/drawio/generated/flagship/canonical-workflow-authoring.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-workflow-authoring.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-workflow-authoring.drawio)
+<!-- flagship-diagrams:end -->

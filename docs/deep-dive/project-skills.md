@@ -13,12 +13,6 @@ materialization. Agentweaver writes instructions/resources under `.agentweaver/s
 putting the skill's name, description, and path in the prompt. With pod-local/unavailable storage or
 a write failure it inlines full instructions instead; it does not emit a dangling lazy-load pointer.
 
-![Skill acquisition and assignment lead to successful materialization before pointers, or inline delivery when unavailable](../diagrams/project-skills-fig1.png)
-
-<!-- Editable source: ../diagrams/src/project-skills-fig1.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec project-skills-fig1.
-     Review lineage: ../diagrams/reviews/project-skills-fig1/iteration-manifest.json. -->
-
 ## Acquisition
 
 Agentweaver recognizes one-skill-per-folder layouts under `.github/skills`,
@@ -73,7 +67,6 @@ Source: `apps/Agentweaver.Api/Skills/SkillDefaultsService.cs:55-250`.
 - [Project skills reference](../reference/project-skills.md)
 - [MCP tool index](../reference/mcp-tools.md)
 
-<!-- diagram-context:project-skills-fig1:start -->
 <details id="diagram-context-project-skills-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -124,4 +117,3 @@ Source: `apps/Agentweaver.Api/Skills/SkillDefaultsService.cs:55-250`.
 <tr><td>groups</td><td>ACQUIRE · VALIDATE · ASSIGN; DELIVERY BRANCHES · EXECUTION</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:project-skills-fig1:end -->

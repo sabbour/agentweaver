@@ -1,7 +1,0 @@
-{
-  "passed": true,
-  "pages": 702,
-  "all_configured_pages_included": true,
-  "command": "VitePress build(docs) with unchanged site config/theme; output/temp/cache redirected into owned review directory",
-  "output": "docs/diagrams/reviews/reference-a2a-fig1/docs-build"
-}

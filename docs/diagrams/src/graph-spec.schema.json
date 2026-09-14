@@ -45,7 +45,16 @@
           "label": { "type": "string" },
           "subLabel": { "type": "string" },
           "meta": { "type": "string", "description": "Optional monospace third line (ports/protocol/mode)" },
+          "variant": {
+            "type": "string",
+            "enum": ["card", "decision", "terminator", "document", "state", "initial", "final"],
+            "description": "Optional native notation shape. Omit or use card for the Fluent component card."
+          },
           "icon": { "type": "string", "enum": ["globe", "branch", "route", "window", "server", "bot", "database", "key", "box"] },
+          "fluentIcon": {
+            "type": "string",
+            "description": "Optional semantic icon key from iconcloud-fluent-icons.json. Label-based selection is used when omitted."
+          },
           "library": {
             "type": "string",
             "enum": ["azure", "kubernetes", "c4", "uml", "flowchart", "bpmn", "networking", "database", "cloud", "agentweaver"],

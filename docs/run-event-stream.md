@@ -8,21 +8,9 @@ For the scaling story, see [Distributed execution & scaling](./deep-dive/distrib
 
 ## Architecture — shared store, cursor stream
 
-![Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher](diagrams/canonical-durable-event-stream.png)
-
-<!-- Editable source: diagrams/src/canonical-durable-event-stream.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-durable-event-stream.
-     Review records: diagrams/reviews/canonical-durable-event-stream/. -->
-
 The horizontal-scale invariant is simple: **the database log is the source of truth, and the cursor is the replay boundary**. `EfRunEventStream.AppendAsync` writes through before acknowledging (`WriteThroughAsync`), and `SubscribeAsync` repeatedly loads rows whose sequence is greater than the caller's last seen cursor, yielding them in sequence order until a terminal event appears. It drains the full replay batch before stopping, so a diagnostic row persisted immediately after a terminal row is still delivered before the SSE subscription closes. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:180`.
 
 ## Delivery sequence — durable-first, then cursor polling
-
-![EF/Postgres sequence: append and commit, acknowledge assigned sequence, read ordered rows after the cursor, poll on an empty batch, and drain the terminal-containing batch before closing](diagrams/canonical-durable-event-stream-sequence.png)
-
-<!-- Editable source: diagrams/src/canonical-durable-event-stream-sequence.drawio.
-     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-durable-event-stream-sequence.
-     Review records: diagrams/reviews/canonical-durable-event-stream-sequence/. -->
 
 The EF/Postgres path does not switch to an in-process live channel after replay:
 each replica continues reading the shared log. SQLite's compatibility implementation
@@ -71,7 +59,6 @@ Browser refreshes around coordinator gates no longer surface transient `404` or 
 - [Events & observability](./deep-dive/events-observability.md) — event taxonomy and observability model.
 - [Token usage monitoring](./experience/token-usage-monitoring.md) — one UI surface that consumes the same live stream and usage projections.
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -162,13 +149,10 @@ Browser refreshes around coordinator gates no longer surface transient `404` or 
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-<!-- diagram-context:canonical-durable-event-stream-sequence:start -->
 <details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
 <tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream-sequence:end -->

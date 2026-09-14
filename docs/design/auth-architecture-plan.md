@@ -23,12 +23,6 @@
 > Source: `AgentweaverAuthentication.cs:21-59,204-249`,
 > `McpBrokerAuthenticationHandler.cs:66-80`.
 
-![Current authentication boundary: endpoint metadata selects Entra or an eligible scoped handler, then persisted resource authorization gates the protected operation](../diagrams/auth-security-fig1.png)
-
-<!-- Editable canonical source: ../diagrams/src/auth-security-fig1.drawio.
-     Export with draw.io Desktop 31.4.5 and --spec auth-security-fig1.
-     Review lineage: ../diagrams/reviews/auth-security-fig1/. -->
-
 > **Read this first — a premise correction.** The brief for this work assumed Agentweaver
 > runs on the **AKS Istio service mesh add-on** with sidecars and `istiod`. It does not.
 > `scripts/azure/steps/10-create-cluster.mjs:307` provisions the cluster with
@@ -1365,7 +1359,6 @@ review does not have to be re-derived from the diff.
 | **N8** | "MCP OAuth already works in both modes" is inaccurate — the Entra branch returns unconditionally, so MCP tokens are rejected in Entra mode today. | New **A.2.2.2**: the claim is corrected, and the plan **preserves parity** by gating the `McpOAuth` selector branch on `AUTH_MODE=GitHubLegacy`. MCP-in-Entra-mode is called out as a separate feature needing its own spec, roles and review. Matrix row added asserting 401. |
 | **N9** | "`NoResult` lets the next scheme try" is wrong for a policy-scheme forwarding selector. | New **A.2.2.1**: the selector picks exactly one handler; `NoResult` means "anonymous" and is permitted **only** when no `Authorization` header is present. Exhaustive selector table added as test cases. Risk **R5** rewritten. |
 
-<!-- diagram-context:auth-security-fig1:start -->
 <details id="diagram-context-auth-security-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -1428,4 +1421,3 @@ review does not have to be re-derived from the diff.
 <tr><td>groups</td><td>IDENTITY BOUNDARY; AUTHORIZATION BOUNDARY</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:auth-security-fig1:end -->

@@ -6,11 +6,6 @@ For event payloads and routes, see the [reference](../reference/unified-steering
 
 ## Mental model
 
-![One signal, four explicit effects: Durable decisions choose resume, fresh dispatch, human escalation or advisory continuation.](../diagrams/unified-steering-fig1.png)
-
-<!-- Editable A5 source: ../diagrams/src/unified-steering-fig1.drawio; exported with draw.io Desktop 31.4.5.
-     Inspections and arrow trace: ../diagrams/reviews/unified-steering-fig1/v2/iteration-manifest.json. -->
-
 The key invariant is visibility before effect. `CoordinatorSteeringService.SubmitSteeringAsync` persists and queues the signal, emits `coordinator.steering_received`, and does not execute recovery or reset any subtask. `CoordinatorSteeringDecider.DecideAsync` records the action and emits `coordinator.steering_decision` before in-place steering or fresh dispatch runs (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:720–805`; `CoordinatorSteeringDecider.cs:105–272`).
 
 There is no feature flag. Unified steering is the behavior in the assembly path.
@@ -100,7 +95,6 @@ These caps bound **autonomous** convergence, not human participation. A human re
 - [Coordinator internals](./coordinator-internals.md)
 - [Events & observability](./events-observability.md)
 
-<!-- diagram-context:unified-steering-fig1:start -->
 <details id="diagram-context-unified-steering-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -147,4 +141,3 @@ These caps bound **autonomous** convergence, not human participation. A human re
 <tr><td>groups</td><td>NORMALIZED FEEDBACK AND DURABLE DIRECTIVE; DECISION AND RESUMABILITY; ALTERNATIVE EFFECTS</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:unified-steering-fig1:end -->

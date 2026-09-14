@@ -18,7 +18,7 @@ The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentwea
 
 At a high level, Agentweaver is a private application stack behind a public Gateway:
 
-The [shared AKS component map](../diagrams/canonical-aks-components.png) is the
+The [shared AKS component map](../diagrams/flagship/canonical-aks-components.png) is the
 single overview; this page does not keep a competing local copy. Its shared-owner
 refresh must reconcile the baseline worker count (two), actual secret consumers
 (API/worker, not MCP), and the absence of direct AgentHost vault access. Until
@@ -122,13 +122,6 @@ Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/frontend-deployment.
 
 The public routing model is path-based. The Gateway terminates TLS once, then HTTPRoutes select the backend service.
 
-![Request routing logic: Client, Gateway HTTPS listener, HTTPRoute selection, Kubernetes Service, Pod](../diagrams/infra-deployment-fig4.png)
-
-<!-- Generated from ../diagrams/src/infra-deployment-fig4.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The important design detail is **specific routes before the catch-all**. The frontend route matches `/`, so it is intentionally the fallback. More specific API and MCP routes must exist for protocol paths that should not be swallowed by the SPA host.
 
 ### API routes
@@ -162,13 +155,6 @@ Where this lives: `k8s/base/httproute-api.yaml`, `k8s/base/mcp-httproute.yaml`, 
 ## Secrets and workload identity
 
 The secret path is deliberately indirect:
-
-![Secrets and workload identity: Azure Key Vault, Key Vault Secrets User, Kubernetes ServiceAccount, OIDC federated credential, Secrets Store CSI driver, Mounted secret files, Synced Kubernetes Secret, Startup shell exports env vars, API / MCP process](../diagrams/infra-deployment-fig2.png)
-
-<!-- Generated from ../diagrams/src/infra-deployment-fig2.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Separate authorization from secret delivery. API/worker startup reads CSI-mounted
 files, while the application also uses workload-identity-authenticated
@@ -275,13 +261,6 @@ Deployment converges on desired image tags. API, frontend, MCP and AgentHost are
 the four image identities; worker reuses the API image. `AGENTHOST_IMAGE_TAG`
 defaults to `IMAGE_TAG` but may be overridden explicitly.
 
-![Build, retag, deploy, rollout logic: Resolve release variables, Ensure images exist for tag, Build changed images, Retag/import unchanged images, Render manifests with host, ACR, tag, identity, Apply prerequisites, Apply services, gateway, routes, Apply deployments, Wait for rollout and verify](../diagrams/infra-deployment-fig3.png)
-
-<!-- Generated from ../diagrams/src/infra-deployment-fig3.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Why use a single image tag per release?
 
 The four images are developed together. A common default tag simplifies rollout
@@ -365,7 +344,6 @@ Use these paths for implementation details only after the concepts above are cle
 - MCP image/runtime: `apps/Agentweaver.Mcp`.
 - AgentHost image/runtime: `apps/Agentweaver.AgentHost`.
 
-<!-- diagram-context:canonical-aks-components:start -->
 <details id="diagram-context-canonical-aks-components" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -426,9 +404,7 @@ Use these paths for implementation details only after the concepts above are cle
 <tr><td>groups</td><td>APPLICATION CONTROL; EXECUTION / DURABLE STATE</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-aks-components:end -->
 
-<!-- diagram-context:infra-deployment-fig2:start -->
 <details id="diagram-context-infra-deployment-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -474,9 +450,7 @@ Use these paths for implementation details only after the concepts above are cle
 <tr><td>notes</td><td>Top row is authorization, not a secret-data flow.; Key Vault supplies CSI and the application SecretClient path.; MCP and AgentHost are explicitly not CSI secret consumers.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:infra-deployment-fig2:end -->
 
-<!-- diagram-context:infra-deployment-fig3:start -->
 <details id="diagram-context-infra-deployment-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -520,9 +494,7 @@ Use these paths for implementation details only after the concepts above are cle
 <tr><td>notes</td><td>Rows are successive deployment phases, not independent pipelines.; Retag/import is implemented; it is not a future optimization.; Desired tags may differ through the explicit AgentHost override.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:infra-deployment-fig3:end -->
 
-<!-- diagram-context:infra-deployment-fig4:start -->
 <details id="diagram-context-infra-deployment-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -557,4 +529,3 @@ Use these paths for implementation details only after the concepts above are cle
 <tr><td>notes</td><td>API and MCP Services use :8080; worker has no public route.; Backend cards list mutually selected destinations, not a serial pipeline.; Exact OAuth endpoints and discovery variants remain listed in the page.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:infra-deployment-fig4:end -->

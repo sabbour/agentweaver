@@ -1,6 +1,6 @@
 # Sandbox browser preview — Reference
 
-See [Gateway-direct HTTPS capability URL and separate control plane](../diagrams/sandbox-browser-preview-fig1.png) for the shared visual model.
+See Gateway-direct HTTPS capability URL and separate control plane for the shared visual model.
 
 Terse reference for the **sandbox browser preview** API: the routes that start, keep alive, stop, and list a
 live HTTPS preview of a server inside a run's sandbox pod. For the platform-owned Build & Test live-preview
@@ -221,7 +221,6 @@ Gateway routes use a per-preview ClusterIP Service selecting the run's pod. Brow
 
 With preview enabled (AKS default), start returns `preview_url` and `keepalive_url`; disabled-preview kubectl forwarding returns API-host loopback `local_port`. Gateway publication failure does not automatically select kubectl. Approval timeout returns 408 and preserves the supervised process for retry; published lifetime and approval timeout are separate limits.
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -284,4 +283,3 @@ With preview enabled (AKS default), start returns `preview_url` and `keepalive_u
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->

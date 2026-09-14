@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { graphSpecToDrawio } from './drawio-generator.mjs';
+import { graphSpecToDrawio, jsonFileToDrawio } from './drawio-generator.mjs';
 
 const script=fileURLToPath(new URL('./normalize-drawio.py',import.meta.url));
 const sample=()=>graphSpecToDrawio({
@@ -29,20 +29,11 @@ async function inspect(xml,normalize=false) {
 test('calibrated editable card passes explicit role/token validation',async()=>{
   assert.equal((await inspect(sample())).status,'passed');
 });
-test('preserved pilot approval pins every visual and semantic attribute',async()=>{
-  const pilot=await readFile(new URL('../../docs/diagrams/src/canonical-coordinator-architecture.drawio',import.meta.url),'utf8');
-  assert.equal((await inspect(pilot)).status,'passed');
-  for(const changed of [
-    pilot.replace('Coordinator architecture','Changed architecture'),
-    pilot.replace('x="24"','x="25"'),
-    pilot.replace('endArrow=classicThin','endArrow=block'),
-    pilot.replace('source="entry"','source="state"'),
-    pilot.replace('coordinator-pilot-preserved-v1','unapproved-profile'),
-  ]) {
-    assert.notEqual(changed,pilot);
-    assert.ok((await inspect(changed)).errors.some(e=>e.code==='approved-snapshot-mismatch'));
-  }
-  assert.equal((await inspect(pilot,true)).output.trim(),pilot.trim());
+test('flagship coordinator uses the ordinary validated Fluent publication path',async()=>{
+  const source=new URL('../../docs/diagrams/src/flagship/canonical-coordinator-architecture.json',import.meta.url);
+  const xml=await jsonFileToDrawio(fileURLToPath(source),{name:'canonical-coordinator-architecture'});
+  assert.equal((await inspect(xml)).status,'passed');
+  assert.doesNotMatch(xml,/approvedSnapshot=/);
 });
 test('other diagrams cannot borrow the preserved pilot approval',async()=>{
   const forged=sample().replace('<mxfile','<mxfile approvedSnapshot="coordinator-pilot-preserved-v1"');

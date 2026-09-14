@@ -56,13 +56,6 @@ envelope. The worker validates and applies that envelope before ordinary
 commit/diff bookkeeping. A missing or invalid required envelope fails the turn;
 it is not a successful no-change result.
 
-![The life of a run: API endpoint, Run orchestrator, Context compiler, Workflow, Agent turn executor, Turn agent, Provider SDK, Tool/governance plane, Worktree operations, Watch loop / event stream](../diagrams/agent-runtime-fig3.png)
-
-<!-- Generated from ../diagrams/src/agent-runtime-fig3.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Why this shape?
 
 - **The run must be restartable.** Workflows and provider sessions can be checkpointed or reconstructed, so long-running runs survive process boundaries better than a single in-memory method call.
@@ -251,13 +244,6 @@ replica.
 
 The tool should always produce a useful result even when the gate is unavailable or times out: either a denial, a fallback instruction to use best judgment, or an explicit explanation. Silent blocking is not acceptable.
 
-![Human-in-the-loop tools: Model requests capability, Runtime classification, Permission handler, Function invocation, Loopback API call, Governance evaluation, Project API authorization/scope, Execute, Return denial + emit tool.error, String result, Normalized run events](../diagrams/agent-runtime-fig2.png)
-
-<!-- Generated from ../diagrams/src/agent-runtime-fig2.drawio as editable draw.io XML,
-     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Where this lives:
 
 - `packages/Agentweaver.AgentTools`
@@ -296,7 +282,7 @@ Where this lives:
 
 Events are the runtime's shared language. They decouple provider-specific streaming from the rest of Agentweaver.
 
-The [durable stream and cross-replica replay sequence](../diagrams/distributed-execution-scaling-fig4.png)
+The durable stream and cross-replica replay sequence
 owns persistence and cursor delivery; the runtime emits into that pipeline
 rather than moving database ownership into AgentHost.
 
@@ -413,7 +399,6 @@ RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep
 - Scribe should report failure but not invalidate an already-terminal worker run.
 - Both should avoid long-lived session assumptions unless their workflow role changes.
 
-<!-- diagram-context:agent-runtime-fig2:start -->
 <details id="diagram-context-agent-runtime-fig2" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -457,9 +442,7 @@ RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep
 <tr><td>notes</td><td>Native file requests have their own permission/governance checks.; Shell approval can return a retry instruction; URL approval may wait.; The three rows are separate capability paths, not sequential execution.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-runtime-fig2:end -->
 
-<!-- diagram-context:agent-runtime-fig3:start -->
 <details id="diagram-context-agent-runtime-fig3" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -506,9 +489,7 @@ RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep
 <tr><td>notes</td><td>Rows separate admission, remote writeback and final bookkeeping.; Local provider serialization does not prove replacement-pod session restoration.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:agent-runtime-fig3:end -->
 
-<!-- diagram-context:distributed-execution-scaling-fig4:start -->
 <details id="diagram-context-distributed-execution-scaling-fig4" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -553,4 +534,13 @@ RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep
 <tr><td>notes</td><td>Rows: write-through / live delivery / reconnect on another replica.; Explicit historic sequence: identical content is idempotent; conflicts fail.; SQL commits before local history update; polling reads the shared table.</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:distributed-execution-scaling-fig4:end -->
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Context compilation and progressive tool disclosure
+
+[![Two-lane data-flow view showing approved decisions, attributed memory, current project and run state, role and workflow constraints, trust and budget filtering, compact context assembly, a shared tool capability registry, progressive disclosure from summaries to schemas and guidance, coordinator versus role-agent slices, and durable observations feeding later runs.](../diagrams/flagship/canonical-memory-context.png)](../diagrams/drawio/generated/flagship/canonical-memory-context.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-memory-context.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-memory-context.drawio)
+<!-- flagship-diagrams:end -->

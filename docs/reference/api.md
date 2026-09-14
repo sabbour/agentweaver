@@ -1,10 +1,10 @@
 # API reference
 
-See [Gateway preview versus local port-forward fallback and sandbox policy](../diagrams/sandbox-browser-preview-fig1.png) for the shared visual model.
+See Gateway preview versus local port-forward fallback and sandbox policy for the shared visual model.
 
-See [Direct or confirmed launch, DAG dispatch, collective assembly and recovery](../diagrams/canonical-coordinator-journey.png) for the shared visual model.
+See [Direct or confirmed launch, DAG dispatch, collective assembly and recovery](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
 
-See [Durable event ordering, SSE replay and terminal draining](../diagrams/canonical-durable-event-stream.png) for the shared visual model.
+See Durable event ordering, SSE replay and terminal draining for the shared visual model.
 
 The Agentweaver backend is the single source of truth for run lifecycle, streaming, review, and merge. Every client is a thin layer over these endpoints.
 
@@ -1819,17 +1819,11 @@ Returns the assembly workspace tree. Run-authorized (Viewer for inspection; Cont
 
 Returns raw file content from the assembly workspace. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
-
-
 ## Team casting endpoints
 
 The team casting API manages the full lifecycle of AI-assisted agent team composition: listing available scenario groupings, creating and amending casting proposals, confirming a proposal into a live team, and committing the resulting `.squad/` files back to the repository.
 
 Model-assisted casting uses the accepted effective provider through `GenerationModelProviderExecutor`; it is not unconditionally Copilot-only. The request does not select a provider directly. Admission, the accepted BYOK configuration when applicable, and pre-call checks determine execution.
-
-![Provider admission and execution: signed context, accepted provider, private run snapshot, invocation guard and separate live capability fences](../diagrams/canonical-provider-admission.png)
-
-<!-- Editable source: ../diagrams/src/canonical-provider-admission.drawio; pinned draw.io Desktop export. -->
 
 ### GET /api/casting/templates
 
@@ -2242,7 +2236,6 @@ Run events persist through `IRunEventStream`; `RunStreamStore` also maintains lo
 
 Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_blocked and needs_resolution also exist. The prepared `execution_key` authorizes a matching operation/scope and is checked against caller, expiry and provider identity; a provider fingerprint is provenance, not authority. Accepted context is revalidated before model use, separately from run snapshots and capabilities.
 
-<!-- diagram-context:canonical-durable-event-stream:start -->
 <details id="diagram-context-canonical-durable-event-stream">
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -2333,11 +2326,7 @@ Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_
 <tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-durable-event-stream:end -->
 
-
-
-<!-- diagram-context:canonical-coordinator-journey:start -->
 <details id="diagram-context-canonical-coordinator-journey" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -2425,9 +2414,7 @@ Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_
 <tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-coordinator-journey:end -->
 
-<!-- diagram-context:sandbox-browser-preview-fig1:start -->
 <details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -2490,9 +2477,7 @@ Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_
 <tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:sandbox-browser-preview-fig1:end -->
 
-<!-- diagram-context:canonical-provider-admission:start -->
 <details id="diagram-context-canonical-provider-admission" v-pre>
 <summary>Diagram details and constraints</summary>
 <table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
@@ -2554,4 +2539,3 @@ Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_
 <tr><td>groups</td><td>PREPARE AND ACCEPT; RUN BOUNDARY AND LIVE FENCES</td></tr>
 </tbody></table>
 </details>
-<!-- diagram-context:canonical-provider-admission:end -->
