@@ -939,6 +939,12 @@
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )"
         }
       },
+      "agentweaver.aspnetcore": {
+        "type": "Project",
+        "dependencies": {
+          "Azure.Security.KeyVault.Secrets": "[4.11.0, )"
+        }
+      },
       "agentweaver.domain": {
         "type": "Project"
       },

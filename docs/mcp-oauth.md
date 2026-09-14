@@ -42,6 +42,14 @@ replayed, revoked, or client-mismatched token requires a new interactive
 authorization flow. The Agentweaver server cannot repair a client
 configuration that discarded its refresh token.
 
+MCP HTTP session ids use ASP.NET Core Data Protection. Production stores the
+Data Protection key ring in Azure Key Vault with the stable application name
+`agentweaver`. API and MCP replicas share that key ring, so a protected session
+id can survive a pod restart and can move between replicas. If a client sends an
+unknown, expired, or undecryptable MCP session id, the MCP server returns `404`
+and logs an information event without a stack trace. The client must start a
+new MCP session after that response.
+
 The consent page explicitly identifies the Agentweaver browser session before an
 authorization can be approved. It shows the validated Entra display name and email or
 UPN (falling back to the Entra object ID when no email is available). If no

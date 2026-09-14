@@ -19,7 +19,7 @@ export interface ToolCallDetail {
 }
 
 export interface SafeToolValue {
-  state: 'available' | 'redacted' | 'unavailable';
+  state: 'available' | 'redacted' | 'truncated' | 'unavailable';
   text?: string;
 }
 
@@ -51,6 +51,7 @@ function normalizeToolValue(value: unknown, depth: number): { value: unknown; re
   if (depth > maxDepth) return { value: '[Nested value omitted]', redacted: false };
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return { value, redacted: false };
   if (typeof value === 'string') {
+    if (value.includes(REDACTED)) return { value, redacted: true };
     if (value === REDACTED || hasSensitiveValue(value)) return { value: REDACTED, redacted: true };
     if (value.length > maxStringLength) return { value: '[Value omitted: exceeds display limit]', redacted: false };
     const parsed = parseStructuredText(value);
@@ -97,7 +98,10 @@ export function formatSafeToolValue(value: unknown, maximumLength = maxRenderedL
     ? normalized.value
     : JSON.stringify(normalized.value, null, 2);
   if (text.length > maximumLength)
-    return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
+    return {
+      state: 'truncated',
+      text: `${text.slice(0, Math.max(0, maximumLength - 37))}\n… [truncated because too large]`,
+    };
   return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
 

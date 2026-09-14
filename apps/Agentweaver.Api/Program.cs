@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json.Nodes;
+using Agentweaver.AspNetCore.DataProtection;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using k8s;
@@ -263,6 +264,8 @@ else
             "pod replicas and does NOT survive restarts.");
     }
 }
+if (!isWorker)
+    builder.Services.AddAgentweaverDataProtection(builder.Configuration, builder.Environment, keyVaultSecretClient);
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient("entra-oidc")

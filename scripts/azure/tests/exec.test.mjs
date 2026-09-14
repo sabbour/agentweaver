@@ -14,6 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { capture, run, resolveExecutable } from "../lib/exec.mjs";
 
 const DEFINITELY_MISSING_BINARY = "agentweaver-definitely-not-a-real-binary-xyz";
@@ -50,6 +51,33 @@ test("capture: timeout remains an indeterminate failure even with allowFailure",
     capture(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25, allowFailure: true }),
     /timed out after 25ms; remote operation state is unknown and was not retried/,
   );
+});
+
+test("capture: Windows timeout terminates spawned descendants, not only the wrapper", {
+  skip: process.platform !== "win32" ? "Windows-only process-tree behavior" : false,
+}, async () => {
+  const probeFile = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    `.process-tree-timeout-probe-${process.pid}.txt`,
+  );
+  fs.rmSync(probeFile, { force: true });
+  const childScript = `
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(probeFile)}, 'alive'), 300)"], { stdio: "ignore" });
+    child.unref();
+    setTimeout(() => {}, 5000);
+  `;
+
+  try {
+    await assert.rejects(
+      capture(process.execPath, ["-e", childScript], { timeoutMs: 50 }),
+      /timed out after 50ms; remote operation state is unknown and was not retried/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.equal(fs.existsSync(probeFile), false, "the grandchild process must be killed before it writes the probe file");
+  } finally {
+    fs.rmSync(probeFile, { force: true });
+  }
 });
 
 test("resolveExecutable('openssl'): falls back to Git for Windows' bundled usr/bin/openssl.exe when not on PATH directly", {

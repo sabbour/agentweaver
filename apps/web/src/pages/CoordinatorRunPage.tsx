@@ -98,7 +98,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
@@ -259,6 +259,43 @@ interface CoordinatorRunViewState {
   canRetry: boolean;
   canStop: boolean;
   canToggleAutomation: boolean;
+}
+
+const RUN_PROMPT_COLLAPSED_LINES = 4;
+const RUN_PROMPT_TOGGLE_THRESHOLD = 280;
+
+function isLongRunPrompt(prompt: string): boolean {
+  return prompt.length > RUN_PROMPT_TOGGLE_THRESHOLD || prompt.split(/\r\n|\r|\n/).length > RUN_PROMPT_COLLAPSED_LINES;
+}
+
+function formatRunStartedAt(timestamp: number | undefined): string {
+  if (timestamp === undefined) return 'Start time unavailable';
+  const value = new Date(timestamp);
+  return Number.isNaN(value.getTime()) ? 'Start time unavailable' : value.toLocaleString();
+}
+
+function looksLikeInlineShellSnippet(value: string): boolean {
+  const text = value.replace(/^['`]|['`]$/g, '').trim();
+  return /(?:^|\s)(?:node|npm|pnpm|yarn|dotnet|git|gh|curl|sleep|kill)(?:\s|$)/i.test(text)
+    || /\b(?:localhost|pid=\$!|\$pid)\b/i.test(text)
+    || /[;&|]/.test(text);
+}
+
+function renderPromptWithInlineCode(prompt: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const matcher = /(`[^`\r\n]+`|'[^'\r\n]+')/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(prompt)) !== null) {
+    if (match.index > cursor) parts.push(prompt.slice(cursor, match.index));
+    const value = match[0];
+    parts.push(looksLikeInlineShellSnippet(value)
+      ? <code key={`code-${match.index}`}>{value}</code>
+      : value);
+    cursor = match.index + value.length;
+  }
+  if (cursor < prompt.length) parts.push(prompt.slice(cursor));
+  return parts;
 }
 
 const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
@@ -1367,6 +1404,40 @@ const useStyles = makeStyles({
   metaSeparator: {
     color: tokens.colorNeutralForeground4,
   },
+  runPromptBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXS,
+    maxWidth: '76ch',
+    minWidth: 0,
+  },
+  runPromptLabel: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  runPromptBody: {
+    maxWidth: '100%',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    '& code': {
+      fontFamily: tokens.fontFamilyMonospace,
+      fontSize: tokens.fontSizeBase200,
+      padding: `0 ${tokens.spacingHorizontalXXS}`,
+      borderRadius: tokens.borderRadiusSmall,
+      backgroundColor: tokens.colorNeutralBackground3,
+      color: tokens.colorNeutralForeground1,
+    },
+  },
+  runPromptToggle: {
+    minWidth: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+  },
   executionContext: {
     display: 'flex',
     alignItems: 'center',
@@ -2354,6 +2425,10 @@ export function CoordinatorRunPage() {
   }>({ runId: '', startedAt: undefined, endedAt: undefined });
   const runStartedAt = runTimingState.runId === (runId ?? '') ? runTimingState.startedAt : undefined;
   const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
+  const [runPromptExpansion, setRunPromptExpansion] = useState<{ key: string; expanded: boolean }>({
+    key: '',
+    expanded: false,
+  });
 
   const {
     events,
@@ -4051,6 +4126,19 @@ export function CoordinatorRunPage() {
   }, [keepaliveUrl]);
 
   const shortId         = runId && runId.length > 8 ? runId.slice(0, 8) : (runId ?? '');
+  const runStartedLabel = formatRunStartedAt(runStartedAt);
+  const runPrompt = goal && goal.trim() ? goal : undefined;
+  const runPromptKey = `${runId ?? ''}\n${runPrompt ?? ''}`;
+  const runPromptExpanded = runPromptExpansion.key === runPromptKey ? runPromptExpansion.expanded : false;
+  const runPromptIsLong = runPrompt ? isLongRunPrompt(runPrompt) : false;
+  const runPromptClampStyle: CSSProperties | undefined = runPrompt && runPromptIsLong && !runPromptExpanded
+    ? {
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: RUN_PROMPT_COLLAPSED_LINES,
+        overflow: 'hidden',
+      }
+    : undefined;
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
@@ -4988,6 +5076,48 @@ export function CoordinatorRunPage() {
                 )}
               </div>
             </div>
+            <div className={styles.metaRail} data-testid="run-metadata" aria-label="Run identity">
+              <span className={styles.metaItem}>
+                <span className={styles.metaItemStrong}>Run</span>
+                {' '}
+                <span className={styles.metaValue} title={runId}>{runId}</span>
+              </span>
+              <span className={styles.metaSeparator} aria-hidden="true"> · </span>
+              <span className={styles.metaItem}>
+                <span className={styles.metaItemStrong}>Started</span>
+                {' '}
+                <span className={styles.metaValue} title={runStartedLabel}>{runStartedLabel}</span>
+              </span>
+            </div>
+            {runPrompt && (
+              <div className={styles.runPromptBlock} data-testid="run-prompt">
+                <span className={styles.runPromptLabel}>Prompt</span>
+                <div
+                  id="run-prompt-body"
+                  className={styles.runPromptBody}
+                  data-testid="run-prompt-body"
+                  data-expanded={runPromptExpanded ? 'true' : 'false'}
+                  data-collapsed-lines={runPromptIsLong && !runPromptExpanded ? RUN_PROMPT_COLLAPSED_LINES : undefined}
+                  style={runPromptClampStyle}
+                >
+                  {renderPromptWithInlineCode(runPrompt)}
+                </div>
+                {runPromptIsLong && (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    className={styles.runPromptToggle}
+                    onClick={() => setRunPromptExpansion({ key: runPromptKey, expanded: !runPromptExpanded })}
+                    aria-expanded={runPromptExpanded}
+                    aria-controls="run-prompt-body"
+                    aria-label={runPromptExpanded ? 'Show less run prompt' : 'Show more run prompt'}
+                    data-testid="run-prompt-toggle"
+                  >
+                    {runPromptExpanded ? 'Show less' : 'Show more'}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

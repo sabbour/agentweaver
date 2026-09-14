@@ -461,6 +461,171 @@ test("importImagesFromGhcr: fails closed before final tag promotion when one sta
   assert.equal(finalImports.length, 0, "no final deployment tags should be mutated when GHCR preflight fails");
 });
 
+test("importImagesFromGhcr: throttled staged import retries and then succeeds", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const importAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        const count = (importAttempts.get(target) ?? 0) + 1;
+        importAttempts.set(target, count);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight") && count === 1) {
+          const error = new Error("Operation returned an invalid status code 'Too Many Requests'. StatusCode: 429");
+          error.stderr = "TOOMANYREQUESTS: too many requests to registry. Retry-After: 15";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && (args[2] === "untag" || args[2] === "update")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(result.expectedImageDigests["agentweaver-mcp"], digestByImage.get("agentweaver-mcp"));
+  const mcpStageAttempts = [...importAttempts]
+    .filter(([target]) => target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight"))
+    .map(([, count]) => count);
+  assert.deepEqual(mcpStageAttempts, [2]);
+});
+
+test("importImagesFromGhcr: throttled staged import failure names ACR throttling", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight")) {
+          const error = new Error("Operation returned an invalid status code 'Too Many Requests'. StatusCode: 429");
+          error.stderr = "TOOMANYREQUESTS: too many requests to registry. Retry-After: 15";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: `sha256:${String(IMAGE_NAMES.indexOf(image) + 1).repeat(64)}`, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(
+    () => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }),
+    /ACR throttled import of ghcr\.io\/sabbour\/agentweaver-mcp:sha-deadbee into agentweaver-mcp:/,
+  );
+});
+
+test("importImagesFromGhcr: missing staged source image fails with the missing image named", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const importAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        importAttempts.set(target, (importAttempts.get(target) ?? 0) + 1);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight")) {
+          const error = new Error("manifest unknown");
+          error.stderr = "manifest unknown: ghcr.io/sabbour/agentweaver-mcp:sha-deadbee";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: `sha256:${String(IMAGE_NAMES.indexOf(image) + 1).repeat(64)}`, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(
+    () => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }),
+    /source image ghcr\.io\/sabbour\/agentweaver-mcp:sha-deadbee was not found while importing agentweaver-mcp:/,
+  );
+  const mcpStageAttempts = [...importAttempts]
+    .filter(([target]) => target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight"))
+    .map(([, count]) => count);
+  assert.deepEqual(mcpStageAttempts, [1], "missing images must not be retried as throttling");
+});
+
+test("importImagesFromGhcr: staging cleanup timeout uses its own budget and deploy continues", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+    ACR_UNTAG_TIMEOUT_MS: "12345",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const untagTimeouts = [];
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args, opts) => {
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") {
+        untagTimeouts.push(opts.timeoutMs);
+        const error = new Error(`Command timed out after ${opts.timeoutMs}ms; remote operation state is unknown and was not retried`);
+        error.name = "ExecTimeoutError";
+        throw error;
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(result.expectedImageDigests["agentweaver-api"], digestByImage.get("agentweaver-api"));
+  assert.equal(untagTimeouts.length, 4);
+  assert.deepEqual([...new Set(untagTimeouts)], ["12345"]);
+});
+
 test("importImagesFromGhcr: refuses to overwrite a conflicting existing ACR tag without --force", async () => {
   const cfg = {
     ...CFG,

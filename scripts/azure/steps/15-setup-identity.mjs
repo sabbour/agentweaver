@@ -2,12 +2,12 @@
 // (cross-checked against 15-setup-identity.ps1). Read both before changing
 // this file; they must stay in lockstep with this port's behavior.
 //
-// Creates: user-assigned managed identities (one shared by the API and worker
-// service accounts, one dedicated least-privilege identity for AgentHost sandbox
+// Creates: user-assigned managed identities (one shared by the API, MCP, and
+// worker service accounts, one dedicated least-privilege identity for AgentHost sandbox
 // pods with NO Key Vault roles -- issue #471), Key Vault (RBAC-authorized),
-// Key Vault role assignments (API/worker identity only),
+// Key Vault role assignments (API/MCP/worker identity only),
 // OIDC issuer + workload identity on the cluster, and federated credentials for
-// the api, worker, and agent-host service accounts (agent-host on its own
+// the api, mcp, worker, and agent-host service accounts (agent-host on its own
 // dedicated identity).
 //
 // cfg is the resolved variables.mjs output: RESOURCE_GROUP, CLUSTER_NAME,
@@ -243,7 +243,7 @@ export async function run(cfg, opts = {}) {
 
   log.info("");
   log.section("Step 3: Grant Key Vault roles to managed identity");
-  // These roles are granted to the API identity ONLY. The AgentHost identity
+  // These roles are granted to the API/MCP/worker identity ONLY. The AgentHost identity
   // (AGENTHOST_IDENTITY_NAME) is intentionally excluded (issue #471): sandbox pods must have no
   // direct Key Vault access and instead receive the run owner's token via the API /configure broker.
   await createRoleAssignmentIdempotent(
@@ -369,6 +369,35 @@ export async function run(cfg, opts = {}) {
   }
 
   log.info("");
+  log.section("Step 7b: Create federated credential for MCP");
+  const mcpFedCredExists = await exec.capture(
+    "az",
+    ["identity", "federated-credential", "show", "--name", "agentweaver-mcp-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
+    { allowFailure: true },
+  );
+  if (mcpFedCredExists.code !== 0) {
+    await exec.run("az", [
+      "identity",
+      "federated-credential",
+      "create",
+      "--name",
+      "agentweaver-mcp-fedcred",
+      "--identity-name",
+      IDENTITY_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--issuer",
+      OIDC_ISSUER,
+      "--subject",
+      `system:serviceaccount:${cfg.NAMESPACE}:agentweaver-mcp`,
+      "--audience",
+      "api://AzureADTokenExchange",
+    ]);
+  } else {
+    log.ok("MCP federated credential already exists.");
+  }
+
+  log.info("");
   log.section("Step 8: Create federated credential for agent-host (dedicated identity)");
   // issue #471: the agent-host federated credential lives on the DEDICATED, Key-Vault-less
   // AGENTHOST_IDENTITY_NAME — NOT the API identity — so the sandbox's workload-identity token maps to
@@ -434,6 +463,7 @@ export async function run(cfg, opts = {}) {
   log.info("");
   log.info("Federated credentials are now configured on two separate identities:");
   log.info(`  agentweaver-api-identity      / agentweaver-api-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-api`);
+  log.info(`  agentweaver-api-identity      / agentweaver-mcp-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-mcp`);
   log.info(`  agentweaver-api-identity      / agentweaver-worker-fedcred   -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-worker`);
   log.info(`  agentweaver-agenthost-identity / agentweaver-agenthost-fedcred -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-agent-host`);
   log.info("");
