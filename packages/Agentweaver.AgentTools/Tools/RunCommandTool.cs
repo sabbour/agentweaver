@@ -174,7 +174,9 @@ internal sealed class RunCommandTool : ISandboxTool
                         // margin, so the executor's CancelAfter fires first (graceful timed_out:true)
                         // and the watchdog only backstops a hung/unkillable process. Arming both at
                         // the same value made the watchdog win the race and fatally abort the turn.
+                        var toolCallId = ResolveToolCallId(ctx);
                         executionLease = await ctx.ShellExecutionTracker.EnterAsync(
+                            toolCallId,
                             commandHash,
                             TimeSpan.FromMilliseconds(timeout) + ctx.Options.ShellWatchdogGrace,
                             ct).ConfigureAwait(false);
@@ -216,6 +218,11 @@ internal sealed class RunCommandTool : ISandboxTool
         return Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR");
     }
+
+    private static string ResolveToolCallId(SandboxToolContext ctx) =>
+        ctx.CurrentToolCallId?.Invoke()
+        ?? SandboxToolInvocation.CurrentToolCallId
+        ?? Guid.NewGuid().ToString("n");
 
     private static Dictionary<string, string> BuildCommandEnvironment(
         string workingDirectory,

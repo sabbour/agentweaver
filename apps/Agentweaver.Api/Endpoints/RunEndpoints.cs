@@ -3593,7 +3593,7 @@ private static string? PersistedEventStatus(string eventType) => eventType switc
     EventTypes.RunCompleted or EventTypes.MergeCompleted or EventTypes.ToolResult => "success",
     EventTypes.RunFailed or EventTypes.MergeFailed or EventTypes.ToolError or EventTypes.RunError => "error",
     EventTypes.RunDegraded => "degraded",
-    EventTypes.ToolApprovalRequired or EventTypes.ToolApprovalPending => "pending",
+    EventTypes.ToolApprovalRequired or EventTypes.ToolApprovalPending or EventTypes.ToolExecutionPending => "pending",
     EventTypes.ToolApprovalResolved or EventTypes.ToolAutoApproved => "approved",
     _ => null,
 };

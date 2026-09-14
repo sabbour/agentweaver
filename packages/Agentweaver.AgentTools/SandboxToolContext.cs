@@ -57,4 +57,9 @@ public sealed record SandboxToolContext(
     /// </summary>
     string? ApiBaseUrl = null,
     /// <summary>Per-turn Agentweaver API key paired with <see cref="ApiBaseUrl"/>. See its remarks.</summary>
-    string? ApiKey = null);
+    string? ApiKey = null,
+    /// <summary>
+    /// Returns the current tool-call id when the runtime has one in invocation scope. Null in
+    /// direct test/CLI contexts where the tool must mint a local fallback.
+    /// </summary>
+    Func<string?>? CurrentToolCallId = null);

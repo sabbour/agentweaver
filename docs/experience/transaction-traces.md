@@ -57,6 +57,12 @@ For `run_command`, these command details start collapsed and require an explicit
 applies a second, bounded redaction pass before displaying legacy event data, so credentials
 and oversized or deeply nested payloads cannot leak through the inspector.
 
+While a sandboxed `run_command` is still executing, the same run stream carries
+`tool.execution_pending` heartbeats. The trace row and inspector use those correlated,
+output-free events to show **Running** elapsed time for the matching command span until a
+`tool.result` or `tool.error` arrives. The heartbeat deliberately contains only run id, tool-call id,
+tool name, start/deadline timestamps, and elapsed seconds — never command text or command output.
+
 When a tool attempt fails, its inspector shows a bounded, redacted error detail and explains the
 outcome in the context of the run: **Recovered** means the run later completed, **Run active**
 means the final outcome is not yet recorded, and **Run failed** means a terminal failure was
