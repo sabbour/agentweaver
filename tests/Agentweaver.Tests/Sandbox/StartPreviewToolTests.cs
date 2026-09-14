@@ -173,6 +173,43 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
+    public void CreateHttpClient_DisablesItsOwnTimeout_SoTheRegistrationBudgetIsReachable()
+    {
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost", null);
+
+        http.Timeout.Should().Be(
+            Timeout.InfiniteTimeSpan,
+            because: "the linked CancellationTokenSource in Build is the single authority on the " +
+                "registration budget; a finite HttpClient.Timeout races it and wins when it is shorter");
+    }
+
+    [Fact]
+    public void CreateHttpClient_TimeoutIsNotShorterThanTheRegistrationBudget()
+    {
+        // Regression guard for the defect where HttpClient's 100 s default silently pre-empted the
+        // 3-minute RegistrationTimeout. Publishing a preview routinely takes 90-120 s, so the client
+        // aborted a POST that was still succeeding and then reported a 180 s timeout that had never
+        // elapsed. RegistrationTimeout became unreachable dead code.
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost", null);
+
+        var effectiveBudget = http.Timeout == Timeout.InfiniteTimeSpan ? TimeSpan.MaxValue : http.Timeout;
+
+        effectiveBudget.Should().BeGreaterThanOrEqualTo(
+            PreviewPublishTool.RegistrationTimeout,
+            because: "an agent told it has N seconds to register a preview must actually get N seconds");
+    }
+
+    [Fact]
+    public void CreateHttpClient_StillAppliesBaseAddressAndBearerCredential()
+    {
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost/api-root/", "secret-key");
+
+        http.BaseAddress.Should().Be(new Uri("http://localhost/api-root/"));
+        http.DefaultRequestHeaders.Authorization!.Scheme.Should().Be("Bearer");
+        http.DefaultRequestHeaders.Authorization.Parameter.Should().Be("secret-key");
+    }
+
+    [Fact]
     public void BuildSessionConfigTools_WrapsEveryExecutableCustomTool_WhenInstrumentationSupplied()
     {
         // Custom API tools and provider tools must both be routed through the instrumentation
