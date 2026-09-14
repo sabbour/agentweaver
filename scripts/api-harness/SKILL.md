@@ -61,10 +61,20 @@ Two traps make this easy to misdiagnose:
 - `GET /api/version` and `/openapi/v1.yaml` are **unauthenticated**. Fetching
   either successfully proves nothing about auth. Probe an authenticated endpoint
   such as `GET /api/blueprints` and require a non-`401`.
-- Refreshing is **human-only**: `npm run demo:record -- signin` blocks until all
-  Google Chrome windows are closed so it can take the Default profile, and Entra
-  MFA/consent cannot be completed unattended. An agent that finds an expired
-  token must report the blocker and stop, not attempt a workaround.
+- An expired token is **not a blocker**. Refresh it yourself and continue:
+
+  ```powershell
+  npm run demo:record -- signin
+  npm run demo:record -- open
+  ```
+
+  The recorder clicks Agentweaver's own **Sign in with Microsoft Entra ID**
+  button and cached SSO normally completes with no prompt. Do not report the
+  task blocked on authentication before running those commands and observing
+  the result. Only an Entra prompt that actually appears and actually blocks
+  progress justifies stopping for a human — and even then, say exactly what
+  appeared. See
+  [`scripts/demo-recording/README.md`](../demo-recording/README.md#microsoft-entra-boundary-for-agents).
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
