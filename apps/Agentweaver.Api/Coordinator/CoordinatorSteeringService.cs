@@ -34,8 +34,9 @@ public static class SteeringKind
     /// Interrupt/override the coordinator's current plan toward a new instruction. For a live
     /// coordinator, the directive is queued and applied at the target child's next turn boundary;
     /// for a parked coordinator, it resets failed/rai_flagged subtasks and re-arms dispatch.
-    /// When targeting a specific in-progress child, the child is force-completed so the queued
-    /// directive is applied without waiting for a natural boundary.
+    /// When targeting a specific in-progress child, the current child turn may be interrupted so the
+    /// queued directive is applied without waiting for a natural boundary; that interruption is not a
+    /// child failure.
     /// </summary>
     public const string Redirect = "redirect";
 
@@ -1368,10 +1369,12 @@ public sealed class CoordinatorSteeringService
 
     /// <summary>
     /// For a redirect directive targeting a specific in-progress child, force-completes the child's
-    /// stream with <c>run.cancelled</c> so the dispatch loop's observer resolves the child as failed
-    /// and immediately picks up the queued redirect directive (via <see cref="CoordinatorSteeringQueue.TryTakeRedirectForChildAsync"/>).
-    /// Only acts when the child stream entry exists and is not already completed. Does not cancel the
-    /// workflow token (that is <see cref="ApplyStopAsync"/>'s job) — this is a stream-level signal.
+    /// current stream turn with <c>run.cancelled</c> reason <c>steering_redirect</c> so the dispatch
+    /// loop immediately picks up the queued redirect directive (via
+    /// <see cref="CoordinatorSteeringQueue.TryTakeRedirectForChildAsync"/>). The cancellation is a
+    /// steering control signal, not a child failure: the child run row stays in progress and the
+    /// dispatch loop maps this reason to a redirect-only outcome so it cannot cascade dependency
+    /// failures.
     /// </summary>
     private void TryForceCompleteChildForRedirect(string coordinatorRunId, string childRunId, int directiveId)
     {
@@ -1381,21 +1384,15 @@ public sealed class CoordinatorSteeringService
 
         childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_redirect", directiveId });
         _streamStore.Complete(childRunId);
-        if (_runWorkflowFactory is not null)
-            _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
 
-        // Terminalize the child run row in the DB so it no longer shows InProgress forever.
-        // Mirrors the same fix in ApplyStopAsync — the stream-level signal alone does not update
-        // the run store row.
-        if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
-            _ = _runStore.TrySetTerminalStatusAsync(childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_redirect", CancellationToken.None);
-
-        // Also abandon the workflow token so the watch loop exits cleanly.
+        // Abandon the current workflow token so the wedged turn exits. The subsequent revision reuses
+        // this same run/worktree and resets the run row to InProgress; it is never terminalized here.
         _registry.Abandon(childRunId);
 
         // #350: as in ApplyStopAsync, the local token cancel above has no effect on the remote
-        // AgentHost pod — reliably tear it down so a detached turn cannot keep running/emitting
-        // tool.approval_required for a child the coordinator already considers redirected away from.
+        // AgentHost pod. For a stuck tool call, deleting the pod may be the only way to stop the
+        // current turn, but that teardown is not modeled as child failure; the redirect revision keeps
+        // the same run id and worktree.
         _ = ReleaseAgentHostPodSafeAsync(childRunId, CancellationToken.None);
 
         _logger.LogInformation(

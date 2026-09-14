@@ -47,8 +47,9 @@ For that reason, `run_command` is treated as a privileged capability:
 1. The shell tool is only registered when shell execution is enabled and the selected executor is acceptable for the current mode.
 2. Destructive command patterns, or policies that require approval for all shell commands, trigger a human-in-the-loop approval gate before execution.
 3. The command validator rejects malformed shell requests such as missing/invalid working directories, null bytes, or excessive command length.
-4. The command is packaged with the run workspace, timeout, filesystem policy, network flag, and optional run ID.
-5. The selected executor runs it and returns only bounded, redacted stdout/stderr plus an exit code.
+4. `run_command` is for finite commands. Its default execution budget is 30 minutes and can be overridden with `AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS` or a tool-call `timeout_ms`. If the budget expires, Agentweaver cancels the sandbox process and returns a visible `timed_out: true` failure that tells the model to use `start_preview_process` for long-lived preview/dev servers.
+5. The command is packaged with the run workspace, timeout, filesystem policy, network flag, and optional run ID.
+6. The selected executor runs it and returns only bounded, redacted stdout/stderr plus an exit code.
 
 This design does not try to parse every shell command into safe and unsafe subcommands. That would be brittle. Instead, the system validates the shell envelope, requires approval for dangerous patterns, and relies on the executor boundary to contain whatever the shell actually does.
 

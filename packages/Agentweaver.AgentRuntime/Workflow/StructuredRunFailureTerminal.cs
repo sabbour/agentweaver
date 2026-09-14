@@ -12,6 +12,8 @@ internal sealed record StructuredRunFailure(string ErrorCode, string Message, bo
 public static class StructuredRunFailureTerminal
 {
     internal const string InternalErrorCode = "agent_turn_internal_error";
+    private const int MaxCauseCount = 4;
+    private const int MaxCauseLength = 128;
     private const int MaxMessageLength = 512;
     private const int MaxDiagnosticLength = 2048;
     private static readonly HashSet<string> TerminalErrorCodes = new(StringComparer.Ordinal)
@@ -37,6 +39,28 @@ public static class StructuredRunFailureTerminal
         "model_provider_validation_unavailable",
         "shell_execution_timeout",
     };
+    private static readonly HashSet<string> SafeExceptionCauseTypes = new(StringComparer.Ordinal)
+    {
+        "AgentProviderException",
+        "ArgumentException",
+        "DirectoryNotFoundException",
+        "FileNotFoundException",
+        "HttpRequestException",
+        "IOException",
+        "InvalidOperationException",
+        "JsonException",
+        "ModelProviderConnectionRequiredException",
+        "NotSupportedException",
+        "OperationCanceledException",
+        "SocketException",
+        "TaskCanceledException",
+        "TimeoutException",
+        "UnauthorizedAccessException",
+        "WorkflowAgentInfrastructureException",
+    };
+    private static readonly Regex SafeCauseEntryPattern = new(
+        @"\A(?:code|phase|reason|step|tool):[A-Za-z0-9_.:-]{1,112}\z",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly SandboxOutputRedactor DiagnosticRedactor =
         SandboxOutputRedactor.CreateDefault(redactPii: false);
 
@@ -112,6 +136,7 @@ public static class StructuredRunFailureTerminal
 
         string? errorCode = null;
         bool? retryable = null;
+        IReadOnlyList<string>? causeChain = null;
         try
         {
             var payload = runEvent.Payload is JsonElement element
@@ -127,6 +152,9 @@ public static class StructuredRunFailureTerminal
                     else if (property.Name.Equals("retryable", StringComparison.OrdinalIgnoreCase) &&
                              property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         retryable = property.Value.GetBoolean();
+                    else if (property.Name.Equals("causeChain", StringComparison.OrdinalIgnoreCase) &&
+                             property.Value.ValueKind == JsonValueKind.Array)
+                        causeChain = ReadCauseChain(property.Value);
                 }
             }
         }
@@ -140,12 +168,7 @@ public static class StructuredRunFailureTerminal
         return new RunEvent(
             runEvent.Sequence,
             EventTypes.RunFailed,
-            new
-            {
-                message = CreateDiagnosticMessage(errorCode, retryable),
-                errorCode = normalizedCode,
-                retryable,
-            },
+            CreatePayload(normalizedCode, CreateDiagnosticMessage(errorCode, retryable), null, retryable, null, null, causeChain),
             runEvent.TimestampUtc);
     }
 
@@ -179,7 +202,7 @@ public static class StructuredRunFailureTerminal
                 retryable: true,
                 correlationId ?? Guid.NewGuid().ToString("n"),
                 Activity.Current?.TraceId.ToHexString(),
-                BuildCauseChain(exception)),
+                BuildExceptionCauseChain(exception)),
             timestampUtc);
 
     internal static RunEvent CreateFailure(
@@ -243,16 +266,57 @@ public static class StructuredRunFailureTerminal
         if (IsServerGeneratedId(traceId))
             payload["traceId"] = traceId;
         if (causeChain is { Count: > 0 })
-            payload["causeChain"] = causeChain;
+        {
+            var safeCauseChain = NormalizeCauseChain(causeChain);
+            if (safeCauseChain.Count > 0)
+                payload["causeChain"] = safeCauseChain;
+        }
         return payload;
     }
 
-    private static IReadOnlyList<string> BuildCauseChain(Exception exception)
+    public static IReadOnlyList<string> BuildExceptionCauseChain(Exception exception)
     {
         var causes = new List<string>(4);
         for (var current = exception; current is not null && causes.Count < 4; current = current.InnerException)
             causes.Add(current.GetType().Name);
-        return causes;
+        return NormalizeCauseChain(causes);
+    }
+
+    public static IReadOnlyList<string> NormalizeCauseChain(IEnumerable<string> causeChain)
+    {
+        var result = new List<string>(MaxCauseCount);
+        foreach (var cause in causeChain)
+        {
+            var normalized = NormalizeCauseEntry(cause);
+            if (normalized is null || result.Contains(normalized, StringComparer.Ordinal))
+                continue;
+            result.Add(normalized);
+            if (result.Count == MaxCauseCount)
+                break;
+        }
+        return result;
+    }
+
+    public static bool IsSafeCauseEntry(string value) => NormalizeCauseEntry(value) is not null;
+
+    private static IReadOnlyList<string> ReadCauseChain(JsonElement causes) =>
+        NormalizeCauseChain(causes.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString() ?? string.Empty));
+
+    private static string? NormalizeCauseEntry(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim();
+        if (trimmed.Length > MaxCauseLength
+            || SensitiveDataRedactor.ContainsSensitiveValue(trimmed))
+            return null;
+
+        return SafeExceptionCauseTypes.Contains(trimmed) || SafeCauseEntryPattern.IsMatch(trimmed)
+            ? trimmed
+            : null;
     }
 
     private static bool IsServerGeneratedId(string? value) =>
