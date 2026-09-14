@@ -47,6 +47,36 @@ import type { ReactNode } from 'react';
 type TraceTab = 'timeline' | 'attributes' | 'events';
 type BadgeColor = 'subtle' | 'success' | 'warning' | 'danger';
 
+const initialTraceLoadRetryDelaysMs = [500, 1_500] as const;
+
+function shouldAutoRetryInitialTraceFailure(queryError: string | null | undefined): boolean {
+  return !!queryError && /temporarily unavailable|retry shortly|did not respond|dependency failure/i.test(queryError);
+}
+
+function waitForInitialTraceRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(true);
+    }, delayMs);
+    function cleanup() {
+      window.clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+    }
+    function onAbort() {
+      cleanup();
+      resolve(false);
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 const useStyles = makeStyles({
   panel: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -1098,7 +1128,8 @@ export function TransactionTracePanel({
   const { events: liveEvents } = useRunStream(runId);
 
   useEffect(() => {
-    let cancelled = false;
+    const abortController = new AbortController();
+    const isCancelled = () => abortController.signal.aborted;
     traceLoadGeneration.current++;
     const loadTrace = async () => {
       setTraceError(null);
@@ -1109,26 +1140,46 @@ export function TransactionTracePanel({
       setEventsAvailability('idle');
       setSelectedKey(null);
       setExpanded(new Set());
-      try {
-        const next = await apiClient.getRunTraces(runId);
-        if (!cancelled) {
+      for (let attempt = 0; attempt <= initialTraceLoadRetryDelaysMs.length; attempt++) {
+        try {
+          const next = await apiClient.getRunTraces(runId);
+          if (isCancelled()) return;
+          if (shouldAutoRetryInitialTraceFailure(next.queryError) && attempt < initialTraceLoadRetryDelaysMs.length) {
+            const shouldRetry = await waitForInitialTraceRetry(
+              initialTraceLoadRetryDelaysMs[attempt],
+              abortController.signal,
+            );
+            if (!shouldRetry) return;
+            continue;
+          }
           const nextTree = buildTraceTree(next.spans);
           setTrace(next);
           setExpanded(collectExpandableKeys(nextTree, new Set<string>()));
           setSelectedKey(nextTree[0]?.key ?? null);
-        }
-      } catch {
-        if (!cancelled) {
+          setLoading(false);
+          return;
+        } catch {
+          if (isCancelled()) return;
+          if (attempt < initialTraceLoadRetryDelaysMs.length) {
+            const shouldRetry = await waitForInitialTraceRetry(
+              initialTraceLoadRetryDelaysMs[attempt],
+              abortController.signal,
+            );
+            if (!shouldRetry) return;
+            continue;
+          }
           setTrace({ runId, spans: [] });
           setTraceError('The transaction trace could not be loaded. Retry to request it again.');
+          setLoading(false);
+          return;
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     };
     void loadTrace();
-    return () => { cancelled = true; };
+    return () => { abortController.abort(); };
   }, [runId, reloadNonce]);
+
+  const traceFailureMessage = trace.queryError ?? traceError;
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
   const selectedNode = findNode(tree, selectedKey);
@@ -1235,9 +1286,9 @@ export function TransactionTracePanel({
         <Body tone="muted">{subtitle}</Body>
       </header>
 
-      {!loading && (trace.queryError || traceError) && (
+      {!loading && traceFailureMessage && (
         <MessageBar intent="warning">
-          <MessageBarBody>{trace.queryError ?? traceError}</MessageBarBody>
+          <MessageBarBody>{traceFailureMessage}</MessageBarBody>
           <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>
         </MessageBar>
       )}
@@ -1246,10 +1297,10 @@ export function TransactionTracePanel({
         <Spinner label="Loading transaction trace" />
       ) : tree.length === 0 ? (
         <EmptyState
-          title={trace.queryError
+          title={traceFailureMessage
             ? 'Trace spans are temporarily unavailable.'
             : 'No trace data available for this run yet.'}
-          description={trace.queryError
+          description={traceFailureMessage
             ? 'The telemetry source did not return a trace page. This does not mean the run produced no trace data; retry shortly.'
             : undefined}
         />
