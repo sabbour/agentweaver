@@ -43,6 +43,10 @@ import { withRetry } from "../lib/retry.mjs";
 const ACR_MUTATION_ATTEMPTS = 3;
 /** Attempts (initial + retries) for read-only ACR digest queries. */
 const ACR_DIGEST_QUERY_ATTEMPTS = 3;
+/** Cosmetic cleanup must use a short local budget, separate from import. */
+const ACR_UNTAG_TIMEOUT_MS = 60_000;
+/** External registry import preflight is safer one image at a time under ACR throttling. */
+const ACR_IMPORT_CONCURRENCY = 1;
 
 function logRetry({ attempt, attempts, delay, error, label }) {
   const reason = (error?.message || String(error)).split("\n")[0];
@@ -229,6 +233,70 @@ export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = 
 
 function firstLine(value) {
   return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+}
+
+function errorHaystack(error) {
+  return [error?.message, error?.stderr, error?.stdout, error?.name]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function isAcrThrottlingError(error) {
+  const haystack = errorHaystack(error);
+  return (
+    /\btoo many requests\b/.test(haystack)
+    || /\btoomanyrequests\b/.test(haystack)
+    || /\bthrottl/.test(haystack)
+    || /\brate[\s-]*limit/.test(haystack)
+    || /\bretry-after\b/.test(haystack)
+    || /\b(?:http|status(?:\s+code)?|code|error)\D{0,3}\b429\b/.test(haystack)
+    || /\(\s*429\s*\)/.test(haystack)
+  );
+}
+
+function isAcrImportSourceMissing(error) {
+  const haystack = errorHaystack(error);
+  return (
+    /\bmanifest unknown\b/.test(haystack)
+    || /\bmanifest\s+not\s+found\b/.test(haystack)
+    || /\bname unknown\b/.test(haystack)
+    || /\btag\b.*\bnot\s*found\b/.test(haystack)
+    || /\bimage\b.*\bnot\s*found\b/.test(haystack)
+    || /\brepository\b.*\bnot\s*found\b/.test(haystack)
+    || /\bresource\s*not\s*found\b/.test(haystack)
+    || /\bresourcenotfound\b/.test(haystack)
+  );
+}
+
+function copyErrorDetails(target, source) {
+  if (!source) return target;
+  target.stderr = source.stderr;
+  target.stdout = source.stdout;
+  target.code = source.code ?? source.exitCode;
+  target.exitCode = source.exitCode;
+  target.cause = source;
+  return target;
+}
+
+function acrImportFailure(source, image, targetTag, error) {
+  const reason = firstLine(error?.stderr) || firstLine(error?.stdout) || firstLine(error?.message) || String(error);
+  if (isAcrThrottlingError(error)) {
+    return copyErrorDetails(
+      new Error(`ACR throttled import of ${source} into ${image}:${targetTag}: ${reason}`),
+      error,
+    );
+  }
+  if (isAcrImportSourceMissing(error)) {
+    return copyErrorDetails(
+      new Error(`source image ${source} was not found while importing ${image}:${targetTag}: ${reason}`),
+      error,
+    );
+  }
+  return copyErrorDetails(
+    new Error(`ACR import of ${source} into ${image}:${targetTag} failed: ${reason}`),
+    error,
+  );
 }
 
 function isAcrRepositoryImageAbsent({ stdout, stderr }) {
@@ -536,7 +604,9 @@ async function importIntoAcr(source, image, targetTag, cfg, { exec = execDefault
         label: `ACR import ${image}:${targetTag}`,
         onRetry: logRetry,
       },
-    ),
+    ).catch((error) => {
+      throw acrImportFailure(source, image, targetTag, error);
+    }),
   );
 }
 
@@ -595,22 +665,47 @@ async function untagImage(image, tag, cfg, { exec = execDefault } = {}) {
   // otherwise fully successful deployment. Leaking a staging tag is harmless;
   // failing the deploy is not.
   try {
-    await withRetry(
-      () =>
-        exec.capture(
-          "az",
-          ["acr", "repository", "untag", "--name", cfg.ACR_NAME, "--image", `${image}:${tag}`],
-          { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
-        ),
-      {
-        attempts: ACR_MUTATION_ATTEMPTS,
-        label: `ACR untag ${image}:${tag}`,
-        onRetry: logRetry,
-      },
+    const result = await log.withTiming(
+      `ACR staging cleanup ${image}:${tag}`,
+      () => exec.capture(
+        "az",
+        ["acr", "repository", "untag", "--name", cfg.ACR_NAME, "--image", `${image}:${tag}`],
+        { allowFailure: true, timeoutMs: cfg.ACR_UNTAG_TIMEOUT_MS || ACR_UNTAG_TIMEOUT_MS },
+      ),
     );
+    if (result.code !== 0) {
+      const reason = firstLine(result.stderr) || firstLine(result.stdout) || `exit code ${result.code}`;
+      log.warn(`  could not remove staging tag ${image}:${tag} (${reason}); continuing`);
+    }
   } catch (error) {
     log.warn(`  could not remove staging tag ${image}:${tag} (${error.message}); continuing`);
   }
+}
+
+function acrImportConcurrency(cfg) {
+  const value = cfg.ACR_IMPORT_CONCURRENCY || ACR_IMPORT_CONCURRENCY;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new TypeError(`ACR_IMPORT_CONCURRENCY must be a positive integer; received '${value}'.`);
+  }
+  return Math.min(parsed, IMAGES.length);
+}
+
+async function allSettledWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        results[index] = { status: "fulfilled", value: await mapper(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }));
+  return results;
 }
 
 function ghcrStageTag(targetTag) {
@@ -678,6 +773,8 @@ export async function importImagesFromGhcr(cfg, deps = {}) {
   log.field("GHCR owner", resolvedCfg.GHCR_OWNER);
   log.field("GHCR ref", ghcrSource.sourceRef);
   log.info("Preflight strategy: import all four GHCR images into temporary ACR staging tags first, then promote final tags only after every staging import succeeds.");
+  const importConcurrency = acrImportConcurrency(resolvedCfg);
+  log.field("Preflight import concurrency", importConcurrency);
 
   const stagedPlans = IMAGES.map((imageSpec) => ({
     image: imageSpec,
@@ -686,8 +783,10 @@ export async function importImagesFromGhcr(cfg, deps = {}) {
     ghcrRef: ghcrImageReference(resolvedCfg.GHCR_OWNER, imageSpec.name, ghcrSource.sourceRef),
   }));
 
-  const stageResults = await Promise.allSettled(
-    stagedPlans.map(async (plan) => {
+  const stageResults = await allSettledWithConcurrency(
+    stagedPlans,
+    importConcurrency,
+    async (plan) => {
       await importIntoAcr(plan.ghcrRef, plan.image.name, plan.stageTag, resolvedCfg, { exec, ghcrAuth: true });
       const stageDigest = await waitForAcrRepositoryDigest(plan.image.name, plan.stageTag, resolvedCfg, { exec, sleep });
       if (!stageDigest) {
@@ -695,7 +794,7 @@ export async function importImagesFromGhcr(cfg, deps = {}) {
       }
       log.field(`${plan.image.name} staged digest`, stageDigest);
       return { ...plan, stageDigest };
-    }),
+    },
   );
 
   const stageFailures = [];
@@ -791,6 +890,8 @@ export async function importImagesFromCustomSources(cfg, deps = {}) {
     "IMAGE_SOURCE=custom is an explicit trust boundary override: the deploy will import exactly the image refs you supplied. Use only registries and images you trust.",
   );
   log.info("Preflight strategy: import all four custom images into temporary ACR staging tags first, then promote final tags only after every staging import succeeds.");
+  const importConcurrency = acrImportConcurrency(resolvedCfg);
+  log.field("Preflight import concurrency", importConcurrency);
 
   const stagedPlans = IMAGES.map((imageSpec) => ({
     image: imageSpec,
@@ -799,8 +900,10 @@ export async function importImagesFromCustomSources(cfg, deps = {}) {
     sourceImage: customImageReferenceFor(imageSpec, resolvedCfg),
   }));
 
-  const stageResults = await Promise.allSettled(
-    stagedPlans.map(async (plan) => {
+  const stageResults = await allSettledWithConcurrency(
+    stagedPlans,
+    importConcurrency,
+    async (plan) => {
       await importIntoAcr(plan.sourceImage, plan.image.name, plan.stageTag, resolvedCfg, { exec });
       const stageDigest = await waitForAcrRepositoryDigest(plan.image.name, plan.stageTag, resolvedCfg, { exec, sleep });
       if (!stageDigest) {
@@ -808,7 +911,7 @@ export async function importImagesFromCustomSources(cfg, deps = {}) {
       }
       log.field(`${plan.image.name} staged digest`, stageDigest);
       return { ...plan, stageDigest };
-    }),
+    },
   );
 
   const stageFailures = [];
