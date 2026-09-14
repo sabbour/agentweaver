@@ -32,6 +32,32 @@ The command resolver no longer pins `PORT=3000` or appends `--port`. It may add 
 
 Readiness is intentionally split by trust boundary: AgentHost proves the app and forwarder are reachable from inside the sandbox pod, then the API publishes the Gateway route. The first true data-path check outside the pod is through the returned Gateway hostname, the only source admitted by `sandbox-allow-preview-ingress` for TCP `3000-9000`.
 
+## Publication lease
+
+Publication takes 90-120 s and its terminal `sandbox.preview_ready` batch commits only while the
+run row is still active. Without a lease, an agent that finished its work inside that window
+cancelled its own preview: the run's completion token tore down the publication, and the preview
+process stopped with reason `preview_not_published`.
+
+Every publication path therefore claims a run-level lease before its slow work
+(`IRunStore.TryBeginPreviewPublicationAsync`). The lease is a column on the run row, so it is
+visible to all API replicas. While it is held, `PreviewPublicationLeaseRunStore` defers every
+transition that can make the run terminal, and `preview_ready` keeps its ordering before the
+terminal event. A refused lease means the run is already terminal, and publication aborts with the
+same conflict it reported before.
+
+The wait is bounded twice. The lease carries its own expiry, so a replica that crashes
+mid-publication cannot park a run. A separate deferral cap releases a waiting transition even if a
+lease is renewed. `PreviewStep` also releases the lease around the preview approval wait, so a run
+is never held open while an operator decides.
+
+`PreviewPublicationLeaseRunStore` deliberately wraps `RunActiveClaimGuardedRunStore` from the
+outside. That store's per-run claim is also taken by the conditional `preview_ready` append, so
+waiting while holding it would deadlock against the publication being waited for. Callers that need
+the guarded store in the chain use `RunStoreChain.Find<T>` instead of a direct cast
+(`apps/Agentweaver.Api/Infrastructure/PreviewPublicationLeaseRunStore.cs`,
+`IRunStoreDecorator.cs`).
+
 ## Gateway and lifetime alignment
 
 On success, registration creates the same Gateway HTTPRoute / Service chain described in [Sandbox browser preview](./sandbox-browser-preview.md), but it also records `preview_runner_session_id` on both the `preview_ready` payload and the HTTPRoute annotations (`PreviewStep.cs:249`, `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:670`). That id is distinct from `session_id`, which remains the Gateway capability token. Listing active sessions uses a label-selector pod-existence check under the same isolation rule, not an API-to-sandbox TCP liveness check (`SandboxPreviewService.cs:399`, `:768`).

@@ -143,7 +143,7 @@ public sealed class RunStreamEntry
         }
         else
         {
-            if (runStore is not RunActiveClaimGuardedRunStore guarded)
+            if (RunStoreChain.Find<RunActiveClaimGuardedRunStore>(runStore) is not { } guarded)
                 throw new InvalidOperationException("In-memory conditional events require the guarded run store.");
             if (!await guarded.TryWhileRunActiveAsync(RunId.Parse(_runId), () =>
             {

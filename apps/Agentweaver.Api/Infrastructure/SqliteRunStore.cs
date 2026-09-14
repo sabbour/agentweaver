@@ -423,6 +423,48 @@ public sealed class SqliteRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryBeginPreviewPublicationAsync(
+        RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_until = $leaseUntil
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$leaseUntil", Ts(leaseUntil));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    public async Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            "UPDATE runs SET preview_publication_lease_until = NULL WHERE run_id = $runId;",
+            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(
+        RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT preview_publication_lease_until FROM runs WHERE run_id = $runId;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var value = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return value is null || value is DBNull
+            ? null
+            : DateTimeOffset.TryParse(
+                value.ToString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+                ? parsed
+                : null;
+    }
+
     public async Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default)
     {
         // CAS: only the replica that still sees this run as in_progress parks it dormant. Deliberately
