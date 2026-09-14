@@ -54,11 +54,12 @@ tokens never leave the API. Access tokens last eight hours by default. Clients u
 | `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
 | `Auth:OAuth:EnableClaudeHostedClient` | `true` | Registers the built-in no-secret public client `agentweaver-claude` for only `https://claude.ai/api/mcp/auth_callback`; set to `false` to remove Claude hosted connector support |
 
-The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
-It accepts only Agentweaver broker JWTs for `mcp:invoke`.
 | `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
 | `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. The proxy must forward the original HTTPS scheme and public host before Agentweaver authenticates the request. AKS deployment derives this from the cluster pod CIDRs. |
 | `Auth:OAuth:Clients` | empty | Additional statically known public clients. Every client uses exact redirect matching, no secret, and S256 PKCE. Client IDs must be unique; different clients may share an exact callback except for Claude's reserved hosted callback. |
+
+The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
+It accepts only Agentweaver broker JWTs for `mcp:invoke`.
 
 The resource identifier is always the exact canonical origin plus `/mcp`; it
 cannot be configured independently or inferred from request headers. Production
@@ -306,7 +307,7 @@ or used for unattended work until its registration has zero permissions.
 | --- | --- | --- |
 | `Auth:CopilotApp:ClientId` | none | Copilot GitHub App OAuth client ID; must differ from `Auth:RepoApp:ClientId` |
 | `Auth:CopilotApp:ClientSecret` | none | Copilot App OAuth client secret; store in user-secrets or Key Vault |
-| `Auth:CopilotApp:CallbackUrl` | none | Exact shared callback URL ending in `/auth/github/copilot-app/callback` for both Copilot OAuth flows |
+| `Auth:CopilotApp:CallbackUrl` | none | Exact shared callback URL ending in `/auth/github/copilot-app/callback` for project, platform, and personal-user Copilot OAuth completion |
 | `Auth:CopilotApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
 | `Auth:CopilotApp:Slug` | none | GitHub App slug used for the required live registration check |
 | `Auth:CopilotApp:ApiUrl` | `https://api.github.com` | GitHub API origin used to check the public App registration |
@@ -314,18 +315,17 @@ or used for unattended work until its registration has zero permissions.
 | `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
 | `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
 
-Since v0.23.1, one unified callback serves exactly two Copilot OAuth completion
-flows: the project-scoped flow and the deployment-wide **platform-default
-Copilot** flow used when no BYOK provider is saved. The MCP browser handoff is
-an entry point into the project-scoped flow, not a third completion flow.
+The unified callback serves three Copilot OAuth completion scopes: project,
+platform-default, and personal-user. The MCP browser handoff enters the project-scoped
+flow; it is not another completion scope.
 
-Both flows persist a durable Copilot binding in Agentweaver's credential store. Runs do not use
-an ambient browser user's GitHub token, and the permission-free Copilot App does not require a
-GitHub App installation or repository-selection screen. A project binding is project-scoped; if
-no project binding exists, the active platform provider supplies both interactive and unattended
-AI access. An active BYOK provider is valid for both modes and does not require Copilot
-authorization. Platform-default Copilot consent applies to every inheriting user, project, and
-background run, but grants no repository access.
+Each flow persists a durable binding in Agentweaver's credential store. Runs do not use
+an ambient browser user's GitHub token, and the permission-free Copilot App has no
+installation or repository-selection screen. Project bindings take precedence over
+platform providers and fail closed when unusable. Without a project binding, project
+work inherits platform BYOK, then platform-default Copilot. Personal chat uses platform
+BYOK, personal BYOK, then personal Copilot, never platform-default Copilot. Repository
+authorization remains separate. See [Provider hierarchy](./authentication#provider-hierarchy).
 
 ```
 https://<public-host>/auth/github/copilot-app/callback
@@ -335,7 +335,7 @@ Register that exact URL on the Copilot GitHub App with wildcard matching
 disabled. GitHub currently allows up to 10 callback URLs. Apps created before
 2026-08-03 with one callback URL may have wildcard matching enabled by default;
 explicitly inspect and disable it for exact matching. The server
-disambiguates the two flows using persisted OAuth `state`. The platform binding
+disambiguates the three scopes using persisted OAuth `state`. The platform binding
 remains singleton platform state, separate from every project binding.
 
 This registration is independent of both the Repo GitHub App callback
@@ -354,8 +354,8 @@ match a sibling path, so wildcard matching cannot make the retired
 3. Upgrade every shared deployment to v0.23.1 or later. After the final older
    deployment stops, allow at least 15 minutes for pending authorization
    transactions to drain.
-4. Verify all three entry points on deployed staging: project-scoped, MCP
-   browser handoff into the project-scoped flow, and platform-default. Then
+4. Verify project, platform-default, and personal-user completion on deployed staging,
+   plus the MCP browser handoff into the project-scoped flow. Then
    remove the retired exact callback.
 
 Local end-to-end OAuth may be impossible when the Entra app permits only
@@ -435,7 +435,7 @@ the Key Vault CSI `SecretProviderClass`.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | Model name used for GitHub Copilot runs. The token comes from the signed-in user's OAuth session — no API key is needed. |
+| `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | Model name used for GitHub Copilot runs. Credentials come from the selected durable provider authority through the run/purpose-bound execution contract, not an ambient browser OAuth session. |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary. When empty (the default), the SDK auto-resolves its bundled runtime from `bin/.../runtimes/{rid}/native/copilot`. Set this only when auto-resolution can't find a runtime for the host RID. Grounded in `apps/Agentweaver.Api/appsettings.json` and `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. |
 | `Generation:Model` | `gpt-5.6-sol` | Global fallback for server-side blueprint, skill, workflow, and coordinator outcome-spec generation. Does not change normal project/run agent execution models. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback for blueprint generation when a project has no `blueprint_generation_model`. |

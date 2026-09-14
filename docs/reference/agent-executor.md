@@ -2,6 +2,8 @@
 title: Agent eXecutor (AX) Comparison
 ---
 
+> **AX claims unverified in this repository-only review.** Treat AX API, roadmap, isolation, oversubscription, and effort comparisons below as hypotheses requiring dated primary-source validation, not deployed Agentweaver facts.
+
 # Agent eXecutor (AX) Comparison
 
 Agent eXecutor (AX) is Google's open-source distributed agent runtime. This comparison helps clarify where AX overlaps with Agentweaver, where the two systems operate at different layers, and when each approach is the better fit.
@@ -33,9 +35,9 @@ AX supplies several primitives Agentweaver does not have first-class:
 
 - **Explicit resumption protocol.** AX's `--last-seq` cursor and `ConversationId` give durable session identity across disconnects, harness restarts, and *compute migrations*. Agentweaver has cursor-based SSE replay from `RunEvents`, but no notion of moving a live run between machines.
 - **Cross-machine distribution & session portability.** AX sessions are location-independent actors; a run can survive a worker being drained.
-- **Framework-agnosticism.** The harness plug-in system lets you bring your own model/runtime. Agentweaver is currently welded to the GitHub Copilot A2A agent.
+- **Provider boundary.** Agentweaver uses A2A for remote AgentHost turns, but supports a snapshot-bound Copilot capability or BYOK provider configuration.
 - **Pluggable event-log backends** rather than a single PostgreSQL schema.
-- **Scale.** Agentweaver's AgentHost warm pool is fixed-size (×2 standby per cluster). AX on Agent Substrate reportedly reaches ~30× oversubscription — attractive for large coordinator runs fanning out many parallel child agents across the WorkPlan DAG.
+- **Scale.** The warm pool requests two standby replicas; this is not a total-run capacity ceiling. Worker HPA is separate, currently two to three replicas. An AX oversubscription advantage remains an unverified hypothesis.
 
 ### What maps naturally
 
@@ -60,30 +62,26 @@ The conceptual alignment is strong at the *single-run* level. The natural integr
 
 **d) WorkPlan DAG dispatch.** AX has **no multi-agent orchestration**. The entire coordinator — `CoordinatorDispatchService`, `SubtaskFrontier` (ready/in-flight/blocked/done tracking), and `CoordinatorAssemblyService` — stays in Agentweaver and simply swaps direct Kubernetes calls for AX lifecycle RPCs. *No AX help here; unchanged.*
 
-**e) Git worktree management.** AX has no git awareness. `WorktreeManager` (branch/checkout/write, integration-branch build, child-wins conflict resolution) is untouched. The worktree still lives on the Azure Files RWX PVC — but AX actors must have that PVC mounted. *Low effort (mount plumbing).*
+**Workspace contract.** Agentweaver owns branch/assembly/merge semantics. Implementation turns use verified pod-local writable checkouts and prepared Git writeback; assembly Build/Test uses a local read-only checkout. An AX adapter would have to preserve commit/tree verification and writeback, not necessarily mount a shared writable PVC.
 
 **f) Human review gate + steering.** AX's human-in-the-loop ("tool call approvals from harnesses") is a **roadmap item, not implemented**. Agentweaver's `OutcomeSpec` review policy (RAI → rubberduck → human approve/request-changes/decline) and `CoordinatorSteeringService` (`Send`/`Redirect`/`Amend`, `assembly_blocked` steering-wait loop) have no AX equivalent and remain Agentweaver-native.
 
-**g) Isolation model.** Agentweaver uses **Kata VM** (hardware boundary). AX+Substrate assumes **gVisor** (its `ateom-gvisor` component). For code-executing agents, gVisor is a weaker threat model. Options: accept gVisor, or set a `kata-containers` runtime class on Substrate workers — technically possible on Kubernetes but fights Substrate's gVisor assumption. *Medium effort / risk.*
+**Isolation hypothesis.** An adapter must preserve execution isolation and filesystem boundaries. AX runtime defaults, gVisor assumptions, and Kata compatibility require separate dated validation; this review establishes neither an isolation regression nor an effort estimate.
 
-**h) Authentication / Key Vault.** AgentHost receives per-user GitHub tokens brokered by the API in `/configure`; the sandbox identity itself has no Key Vault access (issue #471). This delivery path must be preserved: AX actor worker pods need the same brokered-token wiring and workload-identity annotations. *Low effort, but mandatory.*
+**Run capability boundary.** AgentHost receives one-time configuration containing a live `copilotCredential` or BYOK configuration. Repository/MCP credentials are separate purpose-scoped values. A hypothetical AX activation path must preserve these boundaries without ambient user-token lookup.
 
-### Effort estimate and assessment
+### Assessment: hypothesis only
 
-- **Thin integration (low effort):** harness plug-in wrapping the Copilot A2A client; PVC mount; Workload Identity annotations; SSE fed from the event log.
-- **Meaningful rearchitecture (medium effort):** PostgreSQL event-log adapter for AX; compute lifecycle migration from `/configure` to `Resume`/`Suspend`; isolation-runtime decision.
-- **Current blockers:** human-in-the-loop approvals (roadmap only) — so review gate and steering **cannot** move onto AX; the weaker default isolation model; and AX offering nothing for DAG orchestration, git, assembly, or merge.
+An AX spike must validate lifecycle, recovery, provider-capability delivery, event persistence, verified workspace writeback and isolation. DAG dispatch, assembly, review, steering and persistence remain Agentweaver responsibilities unless an adapter proves otherwise. The repository establishes neither a two-run ceiling nor lack of cross-replica durable checkpoints. AX performance and effort claims require dated primary evidence.
 
-**Verdict.** AX is a credible *single-session substrate*: its resumption, portability, and oversubscription directly address Agentweaver's fixed warm-pool ceiling and lack of cross-machine durability. But roughly half of Agentweaver's value — DAG coordination, git worktree/assembly, review policy, steering — lives entirely above AX's abstraction and stays put. The genuine win (elastic, migratable child-run compute) is real, but it is gated on building a PostgreSQL event-log adapter and resolving the Kata-vs-gVisor isolation regression. **Today the impedance mismatch and the unimplemented human-in-the-loop feature outweigh the gains for a code-executing, review-gated platform.** AX is worth prototyping as the compute/resumption layer for child runs at scale — not as a wholesale replacement for the coordinator.
-
-| Component | Current (Agentweaver-native) | With AX | Effort |
+| Component | Current (Agentweaver-native) | With AX | Unverified AX effort estimate |
 |---|---|---|---|
 | Child-run compute | AgentHost pod, `SandboxClaim` + `POST /configure` | AX actor, `Resume`/`Suspend` on Substrate | Medium |
-| Warm pool / scale | Fixed ×2 standby per cluster | AX actors, ~30× oversubscription | Medium |
+| Warm pool / scale | Two standby pods; separate worker HPA | AX actors, ~30× oversubscription | Medium |
 | Event persistence | `RunEvents` PostgreSQL, multi-replica fan-out | AX event log **+ required PostgreSQL adapter** | Medium |
 | Client streaming | SSE cursor replay | SSE fed from adapter, or gRPC↔SSE gateway | Low–Medium |
 | DAG orchestration | Coordinator, `SubtaskFrontier`, Assembly | Unchanged (no AX equivalent) | None (stays) |
-| Git worktree / merge | `WorktreeManager`, integration branch | Unchanged; PVC mounted into AX actor | Low |
-| Review gate + steering | `OutcomeSpec` policy, `CoordinatorSteeringService` | **Blocked** — AX HITL is roadmap-only | N/A |
-| Isolation | Kata VM (hardware boundary) | gVisor default, or Kata runtime class | Medium / risk |
-| Auth / secrets | API brokers per-user token in `/configure`; sandbox has no KV access (issue #471) | Same brokered path, on AX worker pods | Low |
+| Git worktree / merge | `WorktreeManager`, integration branch | Preserve verified source and writeback contracts | Low |
+| Review gate + steering | `OutcomeSpec` policy, `CoordinatorSteeringService` | Agentweaver-native; AX support unverified | N/A |
+| Isolation | Kata VM (hardware boundary) | Isolation compatibility to validate | Medium / risk |
+| Auth / secrets | One-time run capability or BYOK; separate repository/MCP credentials | Adapter must preserve capability boundaries | Low |

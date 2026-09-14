@@ -9,7 +9,7 @@ This reference covers the AKS setup used by the deployment scripts. The live in-
 | `agent-sandbox` controller | `scripts/azure/steps/10-create-cluster.mjs` | Installs CRDs in API group `extensions.agents.x-k8s.io`. |
 | `SandboxTemplate/agentweaver-agent-host` | `k8s/base/sandbox-template-agenthost.yaml` | Defines the Kata-isolated AgentHost pod: image, service account, workspace PVC, config, A2A port `8088`. |
 | `SandboxWarmPool/agentweaver-agent-host` | `k8s/base/sandbox-warmpool-agenthost.yaml` | Keeps AgentHost pods pre-warmed for fast run startup. |
-| `SandboxClaim` | created per run by the API/worker | Binds one warm AgentHost pod for a run, then releases it on completion/suspend. |
+| `SandboxClaim` | created per run by the API/worker | Binds one warm AgentHost pod for a run, then releases it on completion/suspend unless active-preview retention defers cleanup. |
 
 ## Install order
 
@@ -49,7 +49,7 @@ and `configmap-agenthost.yaml` until that is verified.
 | AgentHost warm pool ref | `agentweaver-agent-host` |
 | RuntimeClass | `kata-vm-isolation` |
 | AgentHost image | `${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}` |
-| Key Vault URI | `https://${KEYVAULT_NAME}.vault.azure.net/` |
+| Run capability delivery | One-time `/configure` with a live snapshot-bound `copilotCredential` or BYOK configuration; repository capability is separate. Sandbox identity is not permission to read user secrets. |
 | Workspace | PVC `agentweaver-workspace`, mounted at `/workspace` |
 
 The AgentHost image is built by `npm run azure:deploy-from-local` (or `azure:provision-infra`) from
@@ -81,4 +81,4 @@ sandboxwarmpool.extensions.agents.x-k8s.io/agentweaver-agent-host
 | Pods stay Pending | `kubectl get runtimeclass`, `kubectl describe node`, and `katapool` capacity |
 | Image pull failure | image tag matches `AGENTHOST_IMAGE_TAG` and ACR is attached to AKS |
 | `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `npm run azure:verify` |
-| Token delivery fails | service account `agentweaver-agent-host` has workload identity federation to the dedicated `agentweaver-agenthost-identity`; the run owner's GitHub token is brokered by the API in `/configure` (`gitHubAccessToken`) — the sandbox identity has no Key Vault access (issue #471) |
+| AgentHost cannot authenticate | Verify that the immutable run capability is live, API-side redemption succeeds, and `/configure` carries `copilotCredential` in Copilot mode plus a separate `repositoryAccessToken` when needed. BYOK uses its provider configuration. Missing/expired capability fails before readiness; identity federation is not a user-secret fallback. |

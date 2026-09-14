@@ -1,6 +1,10 @@
 # Coordinator reference
 
-The Coordinator is a built-in agent (codename Squad) that every team gains automatically. It adds a single new capability on top of the existing single-agent platform: an **orchestration layer**. The coordinator turns a user goal into a confirmed, memory-informed **outcome spec** before any work begins.
+See Observation, automation, shared review and recoverable orchestration for the shared visual model.
+
+See [Roster guard and direct versus defineOutcome launch](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
+
+The Coordinator is a built-in agent (codename Squad) that every team gains automatically. It adds a single new capability on top of the existing single-agent platform: an **orchestration layer**. The coordinator turns a user goal into a confirmed, memory-informed **outcome spec** when outcome-definition mode is selected; Direct plans from the prompt.
 
 The coordinator is itself an observable, streamed, human-accountable run (`agent_name: "Coordinator"`, no parent run). It does not perform domain work itself — it only orchestrates and persists artifacts into the existing memory store.
 
@@ -29,18 +33,21 @@ The coordinator is orchestration-only. It MUST NOT reimplement any platform capa
 | Scribe / session logging | Scribe executor | Reuses it; never re-logs sessions itself |
 | Memory and decisions | Memory store | Reads context; persists the outcome spec (and later the work plan); injects active decisions into child workers |
 
-Because of this non-redundancy contract, the coordinator's charter describes only orchestration behavior — read memories and decisions for context, draft and confirm an outcome spec, and (in later phases) decompose, dispatch, observe, and hand off. It does not re-specify RAI, casting, memory governance, sandboxing, review, merge, or scribe. A deployment-wide BYOK provider is used when active. Otherwise, the coordinator uses GitHub Copilot.
+Because of this non-redundancy contract, the coordinator's charter describes only orchestration behavior — read memories and decisions for context, draft and confirm an outcome spec, and then decompose, dispatch, observe, and hand off. It does not re-specify RAI, casting, memory governance, sandboxing, review, merge, or scribe. A deployment-wide BYOK provider is used when active. Otherwise, the coordinator uses GitHub Copilot.
 
-## The Phase 1 outcome-spec flow
+## Launch modes and outcome definition
 
-A coordinator run drafts a confirmable restatement of the goal and blocks all dispatch until a human confirms it.
+<a id="the-phase-1-outcome-spec-flow"></a>
 
-1. **Start.** A goal is submitted for a project. The coordinator run begins and emits `coordinator.started` carrying the `goal`. The project's working directory, default branch, and the authenticated caller become the run's repository path, originating branch, and submitting user.
-2. **Draft.** The coordinator reads the project's existing memories and decision-inbox entries as grounding context, then drafts an **outcome spec**: a desired outcome, scope, assumptions, and any scoped clarifying questions. Drafting is **roster/capability-aware** and **goal-breadth-faithful**: the drafter reads the project's `.squad` roster (dispatchable members only — Scribe, Ralph, RAI, and Build & Test are excluded) and injects a terse `TEAM CAPABILITIES` list plus a `SCOPE BREADTH` instruction so the drafted outcome enumerates the intermediate deliverables a full-journey goal asks for (e.g. research, PM, PRD, UX, build) while a narrow goal stays lean. The roster is only a capability **filter**; the goal's own words are the breadth **driver**, and the guidance is added outside the untrusted-goal fences (`apps/Agentweaver.Api/Coordinator/CopilotCoordinatorSpecDrafter.cs:165`, `:205`, `:229`).
-3. **Suspend at the gate.** The outcome spec is persisted with status `awaiting_confirmation`, and the run emits `coordinator.outcome_spec` and suspends at the confirmation gate. No decomposition or child dispatch occurs here — the run blocks until the human confirms or revises.
-4. **Confirm or revise.**
-   - **Confirm** advances the spec to status `confirmed`, emits `coordinator.outcome_spec.confirmed`, and resumes the run. In Phase 1 the run then terminates (decomposition and dispatch are later phases), followed by `run.completed`.
-   - **Revise** re-drafts the spec using human feedback and re-suspends at the gate, emitting a fresh `coordinator.outcome_spec`.
+Coordinator launch has three relevant cases:
+
+| Launch | Behavior |
+|---|---|
+| `defineOutcome`, Autopilot off | Draft/persist a spec, then wait for confirmation or revision. |
+| `defineOutcome`, launch Autopilot on | Draft, then confirm unattended through the normal seam on behalf of the accountable user. |
+| `direct` | Persist a confirmed prompt-backed spec and plan directly, without a model-drafted outcome or confirmation RequestPort. |
+
+Confirmation advances into selection, decomposition, dispatch, steering and collective assembly; it is not orchestration completion. Direct mode and Autopilot do not remove workflow review/merge requirements or grant arbitrary tool permissions.
 
 ### Outcome spec fields
 
@@ -56,7 +63,7 @@ A coordinator run drafts a confirmable restatement of the goal and blocks all di
 
 ## The human confirmation gate
 
-The gate is the safety property of the flow: **no subagent work is dispatched before a human confirms the outcome spec.** A named human stays accountable for the run. The gate is reachable from both mandated clients at parity:
+Interactive defineOutcome pauses for the named accountable human. Direct skips that drafted-outcome gate; launch Autopilot confirms unattended on behalf of the accountable user. UI and MCP expose the same confirmation/revision seam.
 
 - **Web UI** — the coordinator run page renders the outcome-spec panel with Confirm and Request-changes actions and an explicit "no work is dispatched until you confirm" notice. See the [Web UI reference](./web.md#coordinator-run-and-outcome-spec-gate).
 - **MCP server** — the `coordinator_*` tools start, read, confirm, and revise the spec; `run_watch` on the coordinator run id streams the live drafting. See the [MCP server reference](./mcp.md#coordinator).
@@ -67,74 +74,25 @@ Web client edge states are intentionally visible. Before the coordinator has per
 
 ## Phase 2 orchestration
 
-Confirming the outcome spec carries the coordinator run through Phase 2: **confirm -> select workflow -> decompose -> dispatch -> observe -> steer**. No work begins before confirmation, so the Phase 1 gate stays the single safety property.
+Coordinator launch has three relevant cases:
 
-### Workflow selection: how the coordinator picks the process to run
+| Launch | Behavior |
+|---|---|
+| `defineOutcome`, Autopilot off | Draft/persist a spec, then wait for confirmation or revision. |
+| `defineOutcome`, launch Autopilot on | Draft, then confirm unattended through the normal seam on behalf of the accountable user. |
+| `direct` | Persist a confirmed prompt-backed spec and plan directly, without a model-drafted outcome or confirmation RequestPort. |
 
-Before it decomposes anything, the coordinator decides **which workflow** (which run pipeline) the work should follow. The selection algorithm is `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs`). It is deterministic-first: hard rules narrow the candidate set, and an LLM is consulted only as a last step when more than one candidate genuinely fits.
+Confirmation advances into selection, decomposition, dispatch, steering and collective assembly; it is not orchestration completion. Direct mode and Autopilot do not remove workflow review/merge requirements or grant arbitrary tool permissions.
 
-The algorithm runs in this order:
+### Workflow selection
 
-1. **Resolve the project default first.** `WorkflowRegistry.ResolveDefault(project)` produces the project's effective default (the project's `DefaultWorkflowId` when valid, else the built-in `default`). It is held as the deterministic fallback this method returns whenever a later step throws or nothing is eligible.
-2. **Build the available list.** `WorkflowRegistry.GetOrLoad(project).Available` (validation-passing workflows) is ordered **default first**, then by id (`StringComparer.Ordinal`). The first entry is, by convention, the deterministic fallback for the selector.
-3. **Resolve the invocation kind.** `ResolveInvocationKindAsync` maps the run's origin to a `WorkflowInvocationKind`: a run stamped `RunOrigin.BacklogPickup` (the heartbeat picked up a Ready task) becomes `WorkflowInvocationKind.Heartbeat`; every other origin — and any lookup failure — becomes `WorkflowInvocationKind.Manual`.
-4. **Honor a request-level or backlog task override (if eligible).** The `StartOrchestrationRequest.workflow_override_id` (dialog override) takes precedence over the backlog task pin. If either carries a `WorkflowOverrideId`, that workflow is used **only if** it exists in the available set **and** its trigger is eligible for this invocation (`WorkflowTriggerEvaluator.IsEligible`). An unavailable or trigger-ineligible override is logged and ignored, and selection continues.
-5. **Filter by trigger eligibility.** The available list is reduced to workflows whose declared trigger matches the invocation kind via `WorkflowTriggerEvaluator.IsEligible`.
-6. **No eligible candidate → project default.** If nothing passes the trigger filter, the project default is returned (never a trigger-mismatched workflow).
-7. **Exactly one eligible candidate → use it.** A single eligible workflow is used directly, with no model call and no selection event.
-8. **Multiple eligible candidates → resolve the pick.** A `WorkflowSelectionContext` is built (project id, goal, roster role titles, the eligible definitions, and the set of custom/project workflow ids). Then:
-   - An explicit human override `use <workflow-id>` in the latest revise feedback wins (`WorkflowSelector.TryParseOverride`); the chosen workflow is returned and a selection event is emitted (`wasAutoSelected: false`).
-   - Otherwise the LLM-backed `WorkflowSelector.SelectAsync` picks by process fit; the result (and its rationale) is returned and a selection event is emitted (`wasAutoSelected: true`).
+Workflow selection is trigger-agnostic. Resolve the project default as outer exception fallback, then load all valid workflows, ordered with that default first and then by ID. Honor a resolvable explicit request override, otherwise the backlog override; an unavailable explicit ID is logged and selection continues. Honor conversational `use <workflow-id>` feedback against the complete available set.
 
-#### Trigger taxonomy (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs`)
+Zero/one candidate avoids model selection. With multiple candidates, use process-fit selection and persist/emit its rationale. After decomposition, validate compatibility: explicitly selected code-producing workflows without Build & Test are honored with a warning; automatic selections are reselected or replaced by a suitable platform fallback.
 
-Every workflow declares exactly one `WorkflowTrigger { Type, Event }`:
+The model gets one attempt and one retry. Unusable/ambiguous output falls back to an available default/standard, then a non-code-review candidate, then the first candidate. An outer exception retains the resolved project default.
 
-| `WorkflowTriggerType` | Meaning | Eligible for |
-| --- | --- | --- |
-| `Manual` | A person or client explicitly starts the run. | `Manual` invocations only. |
-| `Heartbeat` | The coordinator heartbeat picks up Ready work. | `Heartbeat` invocations only. |
-| `Event` | The workflow starts on a declared `WorkflowEventType`. The only supported event is `TaskAddedToReady`. | `Heartbeat` invocations (a task entering Ready *is* that event). |
-
-#### Trigger filtering (`apps/Agentweaver.Api/Workflows/WorkflowTriggerEvaluator.cs`)
-
-`WorkflowTriggerEvaluator.IsEligible(trigger, kind)` is the hard boundary applied before any model call:
-
-- `Manual` invocation → only `Manual`-trigger workflows.
-- `Heartbeat` invocation → `Heartbeat`-trigger workflows **or** `Event`-trigger workflows whose event is `TaskAddedToReady`.
-
-`WorkflowTriggerEvaluator.Filter` preserves input order, so the default-first ordering survives filtering.
-
-#### Override mechanisms
-
-| Channel | Source | Resolution |
-| --- | --- | --- |
-| **Dialog override** | `StartOrchestrationRequest.workflow_override_id`, set in the **Start task** dialog. | Step 4: checked first, before the backlog task pin. Used only when the workflow exists and is trigger-eligible. |
-| **Backlog task override** | `BacklogTask.WorkflowOverrideId`, set before pickup. | Step 4: used when no dialog override is present. Used only when the workflow exists and is trigger-eligible. `CoordinatorPickupService` additionally prepends `use <id>` to the goal text so the conversational path also sees it. |
-| **Conversational override** | A human message matching `use <workflow-id>` in the revise feedback. | Step 8: `WorkflowSelector.TryParseOverride` matches the pattern; the requested workflow wins if it is among the eligible candidates. |
-
-**Precedence order (highest to lowest):** dialog override → backlog-task pin → conversational `use {workflow-id}` → LLM auto-select → project default.
-
-An override never escapes the candidate safety boundary: it cannot run a workflow the registry cannot resolve or the trigger evaluator rejects.
-
-#### The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`)
-
-`WorkflowSelector.SelectAsync` is reached only with two or more eligible candidates and no explicit override:
-
-- If `AvailableWorkflows.Count == 1` it returns the default with no model call.
-- Otherwise it builds a process-fit prompt and calls `IWorkflowSelectionModel.CompleteAsync`. The production implementation is `CopilotWorkflowSelectionModel`, a Copilot completion wrapper whose failures return `null`.
-- The model must reply with JSON `{ "selected": "<id>", "rationale": "<why>" }`. A `null`/unparseable response, an unknown id, or a thrown exception all fall back deterministically to the first candidate (the project default), with a rationale that explains the fallback.
-
-Whenever the multi-candidate path runs, the coordinator emits a `coordinator.workflow_selected` event (`EmitWorkflowSelectedEvent`) carrying `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, an `overrideHint` (`Reply 'use {other-id}' to change...`), and the list of `available` workflows. If `SelectWorkflowAsync` throws anywhere, it logs a warning and returns the resolved project default so the caller always knows which workflow it is planning against.
-
-![The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`): SelectWorkflowAsync, ResolveDefault, GetOrLoad.Available, ResolveInvocationKindAsync, Backlog WorkflowOverrideId, Use override workflow, Filter by, Eligible count, Return project default, Use the only candidate, Revise feedback, Use requested workflow, …](../diagrams/canonical-workflow-selection.png)
-
-<!-- Rendered from ../diagrams/src/canonical-workflow-selection.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-The selected workflow is not only recorded for display: it becomes prompt context for decomposition so the resulting subtask graph mirrors the intended process shape. The run workflow factory later resolves the effective workflow again when it builds the executable graph, so a stale planning pick can never become unchecked runtime execution.
+Automation uses Schedule and Event triggers, not Manual/Heartbeat eligibility. `triggers` is an ordered array; `trigger` is its first-entry compatibility alias. Automation admits backlog work independently of process selection.
 
 ### Decomposition and the work plan
 
@@ -190,7 +148,7 @@ The coordinator dispatches subtasks as first-class **child runs** parented by th
 - A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.
 - A failed, blocked, or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
 
-Each child worker is dispatched with its charter (catalog or bespoke inline charter) plus the project's active **architectural/scope decisions** — compiled by `MemoryContextCompiler.CompileDecisionsAsync` and injected as the `## Boundaries and Decisions` block. Children deliberately do **not** receive the full four-layer memory stack (core context, learnings, session), which duplicated the charter and carried artifact-write instructions that broke inside a child worktree; only the non-negotiable decisions reach them, ensuring scope constraints bind the agents doing the actual work. See the [Memory reference](./memory.md#coordinator-child-workers--decisions-only).
+Child workers receive charters plus active, approved architectural/scope decisions from `CompileDecisionsAsync`. Stored context is emitted as an `agentweaver.untrusted-context.v1` JSON envelope under `## Untrusted Project Context Data`, never trusted instructions. This path excludes the full memory/session stack.
 
 A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatcher can also mark a pending dependent `blocked` when an upstream prerequisite stalls and therefore never satisfies its dependency. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
 
@@ -246,7 +204,7 @@ An in-flight agent turn cannot be interrupted mid-turn under the run model, so o
 
 ### Asking the human: ask_question
 
-Agents do not silently guess when they hit a material decision or an action that needs permission. They call the `ask_question(question)` tool, which suspends the agent and bubbles the question to a human (see [events.md](events.md#ask_question-bubbling) for the event/endpoint mechanics).
+Agents do not silently guess when they hit a material decision or an action that needs permission. They call the `ask_question(question)` tool, which suspends the agent and bubbles the question to a human (see [events.md](events.md#ask-question-bubbling) for the event/endpoint mechanics).
 
 - **During decomposition**, the coordinator itself calls `ask_question` to clarify ambiguous scope or plan details with the user before finalizing the work plan, then proceeds once it has the answer.
 - **For running children**, the coordinator's child watcher re-projects each child's `agent.question_asked` onto the coordinator stream as `coordinator.child_question`, and each child's `tool.approval_required` as `coordinator.child_approval_required`, attributing both to the originating `childRunId` and `subtaskId`. The accountable human answers the question against the child run (`POST /api/runs/{childRunId}/questions/{requestId}/answer`) and grants/denies the gated action via the child run's tool-approval endpoints. Re-projection runs alongside the terminal-event mapping and does not change it.
@@ -299,15 +257,212 @@ On startup, after the generic restart sweep has failed any stranded child runs, 
 | `assembling`, `in_review` | Reset the plan to `awaiting_assembly` and re-run the (idempotent) assembly core — it rebuilds the integration branch and re-arms the human-review gate. Review decisions submitted to a different replica during the review window are held as deferred decisions and consumed by the owner pipeline after the gate is armed. |
 | `complete` / `assembly_*` | Settle the run row to its matching terminal `RunStatus` (a crash between the plan write and the run finalize). |
 
-The recreated run emits [`coordinator.recovered`](./events.md#coordinatorrecovered) and the re-armed engine re-emits its topology / assembly snapshots, so the live view renders immediately on reconnect. Every engine entry point is idempotent (in-memory guard + DB CAS), so re-arming is safe.
+The recreated run emits [`coordinator.recovered`](./events.md#coordinator-recovered) and the re-armed engine re-emits its topology / assembly snapshots, so the live view renders immediately on reconnect. Every engine entry point is idempotent (in-memory guard + DB CAS), so re-arming is safe.
 
 ## Related references
 
-- [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — concept, end-to-end algorithm, and mermaid flow for the full selection + override hierarchy
+- [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — concept, end-to-end algorithm, and shared workflow-selection diagram for the full selection + override hierarchy
 - [API reference — Coordinator endpoints](./api.md#coordinator-endpoints)
 - [API reference — The orchestration lifecycle](./api.md#the-orchestration-lifecycle)
 - [Events reference — `coordinator.*` and `subtask.*` events](./events.md)
 - [MCP server reference — Coordinator tools](./mcp.md#coordinator)
-- [Web UI reference — Coordinator orchestration and topology view](./web.md#coordinator-orchestration-and-topology-view)
+- [Web UI reference — Coordinator orchestration and topology view](./web.md#coordinator-orchestration-and-unified-graph-view)
 - [Web UI reference — Coordinator run and outcome-spec gate](./web.md#coordinator-run-and-outcome-spec-gate)
 - [Project generation model settings](./project-generation-model-settings.md)
+
+## Launch versus heartbeat-pickup defaults
+
+Omitted API/MCP launch options default to false. Persisted project pickup defaults are separate: `pickup_autopilot=true`, `pickup_auto_approve_tools=true`, `max_ready_per_heartbeat=3`. Each claim snapshots the current values. The Coordinator heartbeat defaults enabled at 10 seconds, independently of approval/provisioning wait heartbeats.
+
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-workflow-selection" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Workflow selection</td></tr>
+<tr><td>subtitle</td><td>Trigger-agnostic • explicit choices precede singleton</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Post-decomposition Build &amp; Test compatibility is a separate check (executor:407–494).</td></tr>
+<tr><td>Load candidates</td><td>Load candidates</td></tr>
+<tr><td>Load candidates</td><td>Project default ordered first</td></tr>
+<tr><td>Load candidates</td><td>registry.Available</td></tr>
+<tr><td>Explicit override?</td><td>Explicit override?</td></tr>
+<tr><td>Explicit override?</td><td>Dialog value, else backlog pin</td></tr>
+<tr><td>Explicit override?</td><td>must be available</td></tr>
+<tr><td>Conversational choice?</td><td>Conversational choice?</td></tr>
+<tr><td>Conversational choice?</td><td>Revision feedback: use {id}</td></tr>
+<tr><td>Candidate count</td><td>Candidate count</td></tr>
+<tr><td>Candidate count</td><td>Only automatic selection</td></tr>
+<tr><td>Candidate count</td><td>0 / 1 / multiple</td></tr>
+<tr><td>Ask selection model</td><td>Ask selection model</td></tr>
+<tr><td>Ask selection model</td><td>Goal + roles + process fit</td></tr>
+<tr><td>Ask selection model</td><td>maximum 2 attempts</td></tr>
+<tr><td>Usable candidate?</td><td>Usable candidate?</td></tr>
+<tr><td>Usable candidate?</td><td>Parse / normalize / prose match</td></tr>
+<tr><td>Usable candidate?</td><td>reject unknown choices</td></tr>
+<tr><td>Selected workflow</td><td>Selected workflow</td></tr>
+<tr><td>Selected workflow</td><td>Emit selection + rationale</td></tr>
+<tr><td>Selected workflow</td><td>workflow_selected</td></tr>
+<tr><td>Explicit choice</td><td>Explicit choice</td></tr>
+<tr><td>Explicit choice</td><td>Emit selection</td></tr>
+<tr><td>Explicit choice</td><td>not auto-selected</td></tr>
+<tr><td>Silent choice</td><td>Silent choice</td></tr>
+<tr><td>Silent choice</td><td>One: candidate</td></tr>
+<tr><td>Silent choice</td><td>Zero: project default</td></tr>
+<tr><td>Model fallback</td><td>Model fallback</td></tr>
+<tr><td>Model fallback</td><td>default / standard then non-code-review</td></tr>
+<tr><td>Model fallback</td><td>else first candidate</td></tr>
+<tr><td>Outer fallback</td><td>Outer fallback</td></tr>
+<tr><td>Outer fallback</td><td>Project default</td></tr>
+<tr><td>Outer fallback</td><td>when catch permits</td></tr>
+<tr><td>edge-02-label</td><td>available</td></tr>
+<tr><td>edge-03-label</td><td>absent / invalid</td></tr>
+<tr><td>edge-06-label</td><td>0 or 1</td></tr>
+<tr><td>edge-07-label</td><td>2+</td></tr>
+<tr><td>edge-08-label</td><td>response</td></tr>
+<tr><td>edge-09-label</td><td>exception</td></tr>
+<tr><td>edge-10-label</td><td>accepted</td></tr>
+<tr><td>edge-11-label</td><td>retry once</td></tr>
+<tr><td>edge-12-label</td><td>2 unusable</td></tr>
+<tr><td>edge-13-label</td><td>emit choice</td></tr>
+<tr><td>edge-14-label</td><td>outer catch</td></tr>
+<tr><td>fallback</td><td>default / standard</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-resilient-assembly-review-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Rejected work keeps useful context</td></tr>
+<tr><td>takeaway</td><td>A steering decision chooses the effect; rejection does not always rotate the author.</td></tr>
+<tr><td>group-title-0</td><td>FEEDBACK AND SCOPE</td></tr>
+<tr><td>group-title-1</td><td>BOUNDED DIRECTION</td></tr>
+<tr><td>group-title-2</td><td>AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+<tr><td>Gate request-changes</td><td>Gate request-changes</td></tr>
+<tr><td>Gate request-changes</td><td>Structured target-file hints</td></tr>
+<tr><td>Gate request-changes</td><td>not prose-inferred blame</td></tr>
+<tr><td>Implicated + dependent</td><td>Implicated + dependent</td></tr>
+<tr><td>Implicated + dependent</td><td>Rebuild closure without blame</td></tr>
+<tr><td>Implicated + dependent</td><td>structured TARGET_FILES</td></tr>
+<tr><td>Signal + decision</td><td>Signal + decision</td></tr>
+<tr><td>Signal + decision</td><td>Persist explicit direction</td></tr>
+<tr><td>Signal + decision</td><td>accumulated context</td></tr>
+<tr><td>In-place revision</td><td>In-place revision</td></tr>
+<tr><td>In-place revision</td><td>Same author and session</td></tr>
+<tr><td>In-place revision</td><td>no reset-to-pending</td></tr>
+<tr><td>Fresh dispatch</td><td>Fresh dispatch</td></tr>
+<tr><td>Fresh dispatch</td><td>Scoped author selection</td></tr>
+<tr><td>Fresh dispatch</td><td>handoff with context</td></tr>
+<tr><td>No alternate author</td><td>No alternate author</td></tr>
+<tr><td>No alternate author</td><td>Context permits same author</td></tr>
+<tr><td>No alternate author</td><td>bounded conscious fallback</td></tr>
+<tr><td>Human escalation</td><td>Human escalation</td></tr>
+<tr><td>Human escalation</td><td>No context or budget left</td></tr>
+<tr><td>Human escalation</td><td>durable review request</td></tr>
+<tr><td>Human decision</td><td>Human decision</td></tr>
+<tr><td>Human decision</td><td>Approve, change or decline</td></tr>
+<tr><td>Human decision</td><td>no wall-clock timeout</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Fresh autonomous budget</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Only human changes reset it</td></tr>
+<tr><td>Fresh autonomous budget</td><td>no human-round-trip cap</td></tr>
+<tr><td>e0</td><td>scope</td></tr>
+<tr><td>e1</td><td>signal</td></tr>
+<tr><td>e2</td><td>resume</td></tr>
+<tr><td>e3</td><td>fresh</td></tr>
+<tr><td>e4</td><td>no alt</td></tr>
+<tr><td>e5</td><td>context</td></tr>
+<tr><td>e6</td><td>no context</td></tr>
+<tr><td>e7</td><td>Proceed</td></tr>
+<tr><td>e8</td><td>await</td></tr>
+<tr><td>e9</td><td>changes</td></tr>
+<tr><td>e10</td><td>retry</td></tr>
+<tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+</tbody></table>
+</details>

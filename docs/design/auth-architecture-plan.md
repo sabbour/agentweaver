@@ -1,17 +1,27 @@
 # Auth architecture plan: retiring the hand-rolled auth middleware
 
-- **Status:** Layer 3 implemented (scheme-based API cutover); MCP process cutover remains layer 4
+- **Status:** Historical migration plan; named API schemes and OpenIddict MCP validation are implemented
 - **Author:** Tank (Squad)
 - **Date:** 2026-08-02
-- **Revised:** 2026-08-02, after rubber-duck review — see [A.8](#a8-review-log) for what changed
+- **Revised:** 2026-08-02, after rubber-duck review — see [A.8](#a-8-review-log) for what changed
 - **Scope:** `apps/Agentweaver.Api` request authentication, the AKS ingress/mesh boundary,
   and an evaluation of [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy).
 
 > **Implementation note (2026-09-02).** The approved layered implementation removed the
 > temporary dual-pipeline flag before landing. The API now uses named ASP.NET authentication
 > schemes and endpoint-bound authorization policies directly. Historical sections below
-> describe the pre-cutover system and the earlier migration proposal. The MCP process keeps
-> its existing validation until layer 4.
+> describe the pre-cutover system and the earlier migration proposal. The MCP process now
+> validates through OpenIddict discovery/JWKS and checks the configured broker issuer,
+> exact `/mcp` resource, keyed RS256 signature and `mcp:invoke` scope. See
+> [current MCP OAuth](../mcp-oauth.md).
+>
+> **Current selector:** endpoint metadata selects internal-service, constrained run-capability,
+> eligible broker-bearer or eligible browser-session authentication; otherwise Entra is used.
+> Authentication is followed by endpoint and persisted-resource authorization. The
+> GitHubLegacy, raw `/user` validation, organization middleware, denylist and flag-gated
+> selector examples below are historical, not supported sign-in paths or current architecture.
+> Source: `AgentweaverAuthentication.cs:21-59,204-249`,
+> `McpBrokerAuthenticationHandler.cs:66-80`.
 
 > **Read this first — a premise correction.** The brief for this work assumed Agentweaver
 > runs on the **AKS Istio service mesh add-on** with sidecars and `istiod`. It does not.
@@ -288,7 +298,7 @@ platform roles and the org allow-list become **authorization policies**. This de
 and 401-vs-403 semantics. It is a bigger blast radius than Phase 1 and it, not the mesh, is
 the highest-value structural cleanup available.
 
-**→ The full execution plan for this phase is [Appendix A](#appendix-a-phase-15-execution-plan)
+**→ The full execution plan for this phase is [Appendix A](#appendix-a-phase-1-5-execution-plan)
 at the end of this document.**
 
 ---
@@ -483,7 +493,7 @@ to pay for itself.
 | # | Work | Effort | Prereq | Recommendation |
 |---|---|---|---|---|
 | 1 | **Honour `AllowAnonymous` endpoint metadata**; default-deny; explicit `UseRouting()`; single `PublicPaths` source shared with the OpenAPI transformer; enumerate-all-endpoints regression test | **S** | none | **Do now.** Eliminates the bug class outright. |
-| 2 | **Convert to real authentication schemes + authorization policies** (`AuthenticationHandler` per scheme; `PlatformAccess` / org checks become policies; delete all three middlewares) — **full execution plan in [Appendix A](#appendix-a-phase-15-execution-plan)** | **M–L** (3 PRs, flag-gated cutover) | Phase 1 | **Do next.** Highest structural value; keeps everything in-process and testable. |
+| 2 | **Convert to real authentication schemes + authorization policies** (`AuthenticationHandler` per scheme; `PlatformAccess` / org checks become policies; delete all three middlewares) — **full execution plan in [Appendix A](#appendix-a-phase-1-5-execution-plan)** | **M–L** (3 PRs, flag-gated cutover) | Phase 1 | **Do next.** Highest structural value; keeps everything in-process and testable. |
 | 3 | Istio `RequestAuthentication` + `AuthorizationPolicy` for `AUTH_MODE=Entra`, generated from OpenAPI, applied conditionally via the `30-deploy.mjs` + `FILE_RESOURCES` pattern | **L** | **Cluster migration off `approuting-istio` onto the Istio service-mesh add-on** | **Defer.** Only if the mesh is adopted for its own reasons. |
 | 4 | oauth2-proxy | **L** | Phase 3 infra + ext_authz validation | **Do not adopt.** Revisit only under §4.3's conditions. |
 
@@ -1348,3 +1358,66 @@ review does not have to be re-derived from the diff.
 | **N7** | PR 3 would delete `HttpContext.Items` while `HttpContextAuthenticatedOwnerContext` still reads it. | New **A.2.5.3**: both direct readers (including the string-literal one at `GitHubOrgAuthorizationMiddleware.cs:117`, invisible to a `CallerItemKey` search) are migrated in **PR 1**, with a repo-wide grep guard test gating PR 3. New risk **R12**. |
 | **N8** | "MCP OAuth already works in both modes" is inaccurate — the Entra branch returns unconditionally, so MCP tokens are rejected in Entra mode today. | New **A.2.2.2**: the claim is corrected, and the plan **preserves parity** by gating the `McpOAuth` selector branch on `AUTH_MODE=GitHubLegacy`. MCP-in-Entra-mode is called out as a separate feature needing its own spec, roles and review. Matrix row added asserting 401. |
 | **N9** | "`NoResult` lets the next scheme try" is wrong for a policy-scheme forwarding selector. | New **A.2.2.1**: the selector picks exactly one handler; `NoResult` means "anonymous" and is permitted **only** when no `Authorization` header is present. Exhaustive selector table added as test cases. Risk **R5** rewritten. |
+
+<details id="diagram-context-auth-security-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Authenticate, then authorize</td></tr>
+<tr><td>takeaway</td><td>Endpoint metadata selects a credential handler; persisted permissions decide resource access.</td></tr>
+<tr><td>group-title0</td><td>IDENTITY BOUNDARY</td></tr>
+<tr><td>group-title1</td><td>AUTHORIZATION BOUNDARY</td></tr>
+<tr><td>Protected request</td><td>Protected request</td></tr>
+<tr><td>Protected request</td><td>Endpoint classification</td></tr>
+<tr><td>Protected request</td><td>Read endpoint metadata</td></tr>
+<tr><td>Protected request</td><td>Read bearer / browser cookie</td></tr>
+<tr><td>Protected request</td><td>No GitHubLegacy scheme</td></tr>
+<tr><td>Scheme selector</td><td>Scheme selector</td></tr>
+<tr><td>Scheme selector</td><td>Ordered, not permissive</td></tr>
+<tr><td>Scheme selector</td><td>Internal / run first</td></tr>
+<tr><td>Scheme selector</td><td>Broker / cookie if eligible</td></tr>
+<tr><td>Scheme selector</td><td>Entra is the default</td></tr>
+<tr><td>Entra handler</td><td>Entra handler</td></tr>
+<tr><td>Entra handler</td><td>Platform caller identity</td></tr>
+<tr><td>Entra handler</td><td>Validate tenant + audience</td></tr>
+<tr><td>Entra handler</td><td>Map subject and app roles</td></tr>
+<tr><td>Entra handler</td><td>Invalid identity: reject</td></tr>
+<tr><td>Scoped handlers</td><td>Scoped handlers</td></tr>
+<tr><td>Scoped handlers</td><td>Metadata-limited alternatives</td></tr>
+<tr><td>Scoped handlers</td><td>Internal key • run capability</td></tr>
+<tr><td>Scoped handlers</td><td>Broker token • browser session</td></tr>
+<tr><td>Scoped handlers</td><td>Not a fallback chain</td></tr>
+<tr><td>Resource authorizer</td><td>Resource authorizer</td></tr>
+<tr><td>Resource authorizer</td><td>After authentication</td></tr>
+<tr><td>Resource authorizer</td><td>Read persisted membership</td></tr>
+<tr><td>Resource authorizer</td><td>Enforce platform / project role</td></tr>
+<tr><td>Resource authorizer</td><td>Caller ≠ resource grant</td></tr>
+<tr><td>Protected operation</td><td>Protected operation</td></tr>
+<tr><td>Protected operation</td><td>Authorized resource scope</td></tr>
+<tr><td>Protected operation</td><td>Project, run or self endpoint</td></tr>
+<tr><td>Protected operation</td><td>Deny insufficient permission</td></tr>
+<tr><td>Protected operation</td><td>Capability ≠ identity</td></tr>
+<tr><td>relation-0</td><td>1 classify</td></tr>
+<tr><td>relation-1</td><td>2 otherwise</td></tr>
+<tr><td>relation-2</td><td>3 eligible</td></tr>
+<tr><td>relation-3</td><td>4 authenticated</td></tr>
+<tr><td>relation-4</td><td>5 authenticated</td></tr>
+<tr><td>relation-5</td><td>6 authorized</td></tr>
+<tr><td>assurance</td><td>GitHub connections are execution capabilities, never platform identity. Unclassified endpoints fail closed.</td></tr>
+<tr><td>assurance-0-label</td><td>Endpoint eligibility</td></tr>
+<tr><td>assurance-0-fact</td><td>Cookies and broker tokens are scoped.</td></tr>
+<tr><td>assurance-0-source</td><td>AgentweaverAuthentication.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Resource authority</td></tr>
+<tr><td>assurance-1-fact</td><td>Project membership comes from storage.</td></tr>
+<tr><td>assurance-1-source</td><td>ProjectAuthorization.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Separate capability</td></tr>
+<tr><td>assurance-2-fact</td><td>GitHub Apps do not sign users in.</td></tr>
+<tr><td>assurance-2-source</td><td>LegacyOAuthRetirementTests.cs</td></tr>
+<tr><td>n0</td><td>Read endpoint metadata; Read bearer / browser cookie</td></tr>
+<tr><td>n1</td><td>Internal / run first; Broker / cookie if eligible</td></tr>
+<tr><td>n2</td><td>Validate tenant + audience; Map subject and app roles</td></tr>
+<tr><td>n3</td><td>Internal key • run capability; Broker token • browser session</td></tr>
+<tr><td>n4</td><td>Read persisted membership; Enforce platform / project role</td></tr>
+<tr><td>n5</td><td>Project, run or self endpoint; Deny insufficient permission</td></tr>
+<tr><td>groups</td><td>IDENTITY BOUNDARY; AUTHORIZATION BOUNDARY</td></tr>
+</tbody></table>
+</details>

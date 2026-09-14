@@ -1,0 +1,149 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Governed orchestration, isolated execution",
+  "alt": "Deployment and component view showing web and MCP clients entering the Agentweaver API, API and worker orchestration authority, isolated AgentHost execution, durable PostgreSQL and Azure Files state, and separate identity, repository, and model-provider dependencies.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "icon": "box",
+      "id": "clients",
+      "label": "Web UI and clients",
+      "subLabel": "Submit, inspect, steer, and review",
+      "fluentIcon": "person",
+      "badge": "Clients"
+    },
+    {
+      "icon": "box",
+      "id": "mcp",
+      "label": "MCP server",
+      "subLabel": "Authenticated tool adapter",
+      "fluentIcon": "mcp",
+      "badge": "Deployment",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.deployment"
+    },
+    {
+      "icon": "box",
+      "id": "api",
+      "label": "API",
+      "subLabel": "Admission, state, review, and events",
+      "fluentIcon": "api",
+      "badge": "Deployment",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.deployment"
+    },
+    {
+      "icon": "box",
+      "id": "worker",
+      "label": "Worker",
+      "subLabel": "Planning and background orchestration",
+      "fluentIcon": "coordinator",
+      "badge": "Deployment",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.deployment"
+    },
+    {
+      "icon": "box",
+      "id": "agenthost",
+      "label": "AgentHost pod",
+      "subLabel": "Constrained leaf turns and tools",
+      "fluentIcon": "sandbox",
+      "badge": "Kata pod",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.pod"
+    },
+    {
+      "icon": "box",
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "subLabel": "Plans, runs, events, and leases",
+      "fluentIcon": "state",
+      "badge": "Azure DB",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/databases/Azure_Database_PostgreSQL_Server.svg;imageAspect=1"
+    },
+    {
+      "icon": "box",
+      "id": "workspace",
+      "label": "Azure Files workspace",
+      "subLabel": "Repositories, branches, and artifacts",
+      "fluentIcon": "workspace",
+      "badge": "Shared files",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/storage/Storage_Accounts.svg;imageAspect=1"
+    },
+    {
+      "icon": "box",
+      "id": "entra",
+      "label": "Microsoft Entra ID",
+      "subLabel": "Browser identity and platform roles",
+      "fluentIcon": "identity",
+      "badge": "Identity",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1"
+    },
+    {
+      "icon": "box",
+      "id": "models",
+      "label": "GitHub and model providers",
+      "subLabel": "Purpose-bound external execution dependencies",
+      "fluentIcon": "model",
+      "badge": "Provider"
+    }
+  ],
+  "edges": [
+    {
+      "from": "clients",
+      "to": "api",
+      "label": "HTTPS / SSE"
+    },
+    {
+      "from": "clients",
+      "to": "mcp",
+      "label": "MCP tools"
+    },
+    {
+      "from": "api",
+      "to": "agenthost",
+      "label": "configure / callbacks"
+    },
+    {
+      "from": "worker",
+      "to": "agenthost",
+      "label": "authenticated A2A leaf turns"
+    },
+    {
+      "from": "api",
+      "to": "postgres",
+      "label": "state and events"
+    },
+    {
+      "from": "worker",
+      "to": "postgres",
+      "label": "plans and leases"
+    },
+    {
+      "from": "worker",
+      "to": "workspace",
+      "label": "worktrees / assembly"
+    },
+    {
+      "from": "agenthost",
+      "to": "workspace",
+      "label": "scoped mount"
+    },
+    {
+      "from": "api",
+      "to": "entra",
+      "label": "authenticate"
+    },
+    {
+      "from": "agenthost",
+      "to": "models",
+      "label": "provider-bound calls"
+    }
+  ]
+}

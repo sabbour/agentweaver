@@ -16,7 +16,7 @@ isolation model — filesystem containment, governance, executor selection, and 
 | Flag | Values | Default | Effect |
 |---|---|---|---|
 | `Sandbox:AgentExecutionMode` | `in-api`, `pod-per-run` | `in-api` | `in-api` runs the agent turn in-process in the API/worker (today's behavior, the **rollback path**). `pod-per-run` relocates each run's agent turn into its own Kata-isolated sandbox pod via the A2A bridge. |
-| `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the pod back to the warm pool. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
+| `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the claim and deletes the used pod so the pool replenishes capacity; an active preview can defer release. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
 | `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` | Positive integer seconds | `300` | Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the active-run map. The effective grace is the larger of this value and `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds + 30` seconds. |
 | `AgentHost:ExecutionScratchRoot` | Absolute path | `/local-workspace` | Root of the disk-backed emptyDir used for pod-local execution workspaces and package caches. |
 | `AgentHost:ExecutionScratchMinimumFreeBytes` | Non-negative integer bytes | `8589934592` (8 GiB) | Minimum available scratch space required before AgentHost prepares a local workspace. Failure returns typed reason `insufficient_ephemeral_storage`. |
@@ -48,16 +48,16 @@ turns) rather than only ad-hoc shell commands.
 |---|---|
 | Runtime class | `kata-vm-isolation` — a VM boundary around the container, so each run's secret and execution live inside a per-run microVM and are destroyed with it. |
 | Identity | Dedicated sandbox service account federated to `agentweaver-agenthost-identity`, a managed identity with **no Key Vault role assignments** (issue #471). **Workload identity** (federated OIDC) projects **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token — but it grants no vault access, so the sandbox cannot read any user's secrets. |
-| Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
+| Cluster API access | Current pod infrastructure enables service-account automount; the model-execution sidecar masks `/var/run/secrets/kubernetes.io/serviceaccount`. The whole pod is not universally tokenless. |
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. No separate per-run template or per-run warm pool is created for AgentHost. A claim that stays unbound (pod **Pending**) while Kubernetes schedules is a legitimate wait — there is no app-side capacity pre-check — surfaced on the child run's stream via `sandbox.provisioning_pending` heartbeats (issue #217). |
-| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus the workspace descriptor, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
+| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run identity, a live Copilot capability or BYOK configuration, separate purpose-scoped credentials, and the execution-workspace descriptor, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
 | Transient API resilience | The idempotent claim create and the bind/IP polls (`WaitForBoundAsync`, `GetPodIpAsync`) retry transient Kubernetes API faults up to `MaxK8sAttempts` (3 total) with exponential backoff + jitter (`ExecuteK8sWithRetryAsync`): connection resets (`SocketException 104`/`IOException`/`HttpRequestException`), `429`/`5xx`, and `HttpClient` timeouts. `409 Conflict` is **not** treated as transient — it is attempt-aware to preserve idempotency (a retry-`409` = our own create that committed before a reset, so the claim is configured, not reused). Caller cancellation is never retried. The non-idempotent `POST /configure` is intentionally excluded (issue #230). |
 | A2A turn authentication | Run launch generates a 256-bit random turn bearer token, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its configured run token. |
 | Tool-approval return path | When the API-side durable approval gate reports `Unknown`, pod-per-run mode forwards the grant/deny to the owning AgentHost pod's authenticated root endpoint so its in-memory gate can resolve. |
-| Per-pod resources | AgentHost requests `500m` CPU, `1Gi` memory, and `1Gi` ephemeral storage; limits are `2000m`, `4Gi`, and `8Gi`. The lower storage request avoids reserving the full workspace budget for each warm standby replica. |
+| Resources | AgentHost: requests 300m CPU/1Gi, limits 800m/2Gi. Execution sidecar: requests 700m/2Gi, limits 1200m/4Gi. Each requests 1Gi and limits 4Gi ephemeral storage; shared execution scratch is capped at 8Gi. |
 | Quota | Namespace `ResourceQuota` (`k8s/base/quota.yaml`) bounds only **object counts** — pod count, sandbox-claim count, PVCs, and storage. It no longer caps CPU/memory: Kubernetes schedules on pod requests and the cluster autoscaler owns headroom, so a **Pending** pod waits for the pool to scale rather than being rejected on admission (issue #217). The object-count caps are **raised deliberately** via a reviewed manifest change, never a live patch. |
-| Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
-| Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |
+| Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; a pod can outlive execution while an active preview retains it; release and orphan cleanup resume after durable retention evidence expires. |
+| Egress | Default-deny with explicit API/MCP/DNS paths and public HTTPS excluding private/link-local ranges; not a per-run Git-host-only allowlist. No direct PostgreSQL access. |
 | Storage | Mounts the **shared workspace volume** plus a dedicated disk-backed `execution-scratch` emptyDir at `/local-workspace` (`sizeLimit: 8Gi`) for pod-local execution. Assembly Build/Test and preview use `LocalReadOnly`; implementation turns use `LocalWritable` and publish through the verified Git write-back flow. Existing disk-backed `tmp` and `home` emptyDirs remain separate. |
 
 ### Orphan reaper creation grace
@@ -150,17 +150,13 @@ A run's executing pod name is tracked so the UI can show *where* a run is runnin
   - the **run graph endpoint** (`GET /api/runs/{id}/graph`) populates an **`executionPodName`** field on
     each node from the registry, so a per-run/per-node pod name overrides the global fallback as the
     pod-per-run rollout begins carrying the correct per-pod value automatically.
-- The frontend resolves `node.executionPodName ?? globalPodName` and renders it as a small pod pill
-  (the "executing pod name" surfaced on agent boxes). The pill renders **only on Kubernetes** — when not
-  running in-cluster (`kubernetes: false`) or when the pod name is null, nothing is shown, so local/dev
-  runs stay clean. See the [experience doc](../experience/sandbox-pod-execution.md#what-the-pod-pill-is)
-  for the rendered behavior.
+- `GET /api/system/runtime` reports the host/API pod, not a fallback execution attribution for coordinator children. Child and workflow nodes use topology `executionPodName` or null; an unbound child must not be labelled as executing on the API pod.
 
 | Field | Source | Meaning |
 |---|---|---|
 | `kubernetes` | `GET /api/system/runtime` | Whether the backend is running inside Kubernetes; gates whether any pod pill is shown. |
-| `podName` (global) | `GET /api/system/runtime` | The host/API pod name — the fallback pill when no per-node value exists. |
-| `executionPodName` (per node) | `GET /api/runs/{id}/graph`, topology deltas, `subtask.*` events | The bound sandbox pod name for that run/node, from `PodNameRegistry`; overrides the global fallback. |
+| `podName` | API/host pod identity, not fallback attribution for a Coordinator child. |
+| `executionPodName` | Authoritative bound execution pod for this run/node, or null. |
 
 > The same `PodNameRegistry` also lets preview/port-forward tooling locate a run's pod. That preview
 > path is documented in the [Sandbox deep dive](../deep-dive/sandbox.md#why-run-ids-map-to-pod-names) and,
@@ -173,66 +169,19 @@ A run's executing pod name is tracked so the UI can show *where* a run is runnin
 > [Deep Dive](../deep-dive/sandbox-browser-preview.md). The summary below stays here for context within the
 > sandbox-pods surface.
 
-A **preview port-forward** exposes a port of a run's sandbox pod back through the API, so an operator can
-reach a server the agent started **inside** the pod (a dev server, a built app, a debug endpoint) as a
-live preview scoped to that one run's pod. `PortForwardService` shells out to
-`kubectl port-forward --address 127.0.0.1 pod/{podName} :{targetPort} -n {namespace}` (it does **not** use
-the Kubernetes API), parses the `Forwarding from 127.0.0.1:<port> ->` line to learn the local port, and
-probes loopback TCP until ready. The pod is the same one `KubernetesSandboxExecutor` provisions through
-the [agent-sandbox controller](../deep-dive/sandbox.md#the-agent-sandbox-controller-and-where-mxc-fits) —
-the preview tunnels into *that* pod, not an MXC local sandbox.
+With `Sandbox:Preview:Enabled=true`, the API creates Gateway-direct HTTPS routing to the run's sandbox and returns `preview_url` and `keepalive_url`. Browser traffic bypasses the API. See the [sandbox browser preview reference](./sandbox-browser-preview.md) for authorization, approval, publication, keepalive and stop semantics.
 
-This surface is **Kubernetes-only**: it tunnels through the [Kubernetes claim backend](./sandbox-setup.md#kubernetes-in-cluster)'s
-pod, located by run id via the [`PodNameRegistry`](#pod-naming-and-the-executing-pod-surface). On local/dev
-backends (no claim pod) there is nothing to forward, and the start call fails with a conflict — *"the run
-must be `in_progress` with an active Kubernetes sandbox"*. Every call also verifies the run exists and the
-caller owns it (`403`/`404` otherwise).
+Viewer can list previews; Contributor/Owner can start, retry, keep alive or stop them. Legacy non-project runs retain submitting-principal ownership; trusted internal agent callbacks are explicitly scoped exceptions.
 
-### Endpoints
+When preview creation is disabled, the operator start route uses the legacy `kubectl` implementation. This is not an automatic fallback after Gateway publication failure.
 
-| Method & path | Body | Returns | Effect |
-|---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "targetPort": <1..65535> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's target port to a loopback port on the API, and returns the new session. `429` when a session cap is hit; `409` when the run has no active sandbox pod. |
-| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists the active preview sessions for the run. |
-| `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Stops the identified session and tears down its tunnel. |
-
-### `PortForwardSessionDto`
-
-| Field | Meaning |
+| Disabled-preview fallback | Scope |
 |---|---|
-| `session_id` | Identifier for this preview session; used as `{sessionId}` to stop it via `DELETE`. |
-| `local_port` | The loopback port **on the API host** that `kubectl` bound; what the API forwards from. The backend returns this port, **not** a public URL. |
-| `target_port` | The port **inside** the sandbox pod that is being forwarded. |
-| `pod_name` | The bound sandbox pod the tunnel targets (from `PodNameRegistry`). |
-| `started_at` | When the session started. |
-| `preview_url` / `previewUrl` | **Web-only, optional.** The frontend reads these to render an embedded iframe, but the backend does **not** currently populate them; the UI explicitly says so when no proxied URL is returned. |
-
-### Behavior
-
-- **Per-port, explicit.** A session forwards one target port; opening another preview is a second
-  `POST`. Sessions are listed and stopped individually.
-- **Scoped to the run's pod.** A session can only reach *that* run's sandbox pod — the run id resolves to a
-  single bound pod, so a preview never crosses into another run's pod.
-- **Inbound only, no egress widening.** The tunnel is an inbound path the operator opens to the pod; it
-  does **not** alter the pod's default-deny egress allowlist (see [Security properties](#security-properties)).
-- **Capped per run and globally.** Default **3** concurrent sessions per run
-  (`Sandbox:PortForward:MaxConcurrentSessionsPerRun`, fallback `:MaxPerRun`) and **20** globally
-  (`Sandbox:PortForward:MaxConcurrentSessionsGlobal`, fallback `:MaxGlobal`); exceeding either raises
-  `PortForwardLimitExceededException` → `429`.
-- **In-memory, no TTL.** Sessions live only in `PortForwardService`'s in-process maps (`_sessions` /
-  `_sessionsByRun`); there is no expiry timer. They end only on explicit `DELETE`, run end (via
-  `RunWatchLoopService`, which also unregisters the pod), the `kubectl` process exiting on its own, or
-  `Dispose()` at shutdown.
-- **Bounded by the pod.** A session is only valid while the run's pod is bound; releasing or replacing the
-  pod (suspend/resume, run end) ends forwarding, and a new preview must be started against the re-claimed
-  pod.
-
-![Behavior: User / operator, API (SandboxEndpoints), PortForwardService, PodNameRegistry, kubectl, Sandbox pod (run-bound)](../diagrams/reference-sandbox-pods-fig1.png)
-
-<!-- Rendered from ../diagrams/src/reference-sandbox-pods-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+| Bound pod required | Uses the process's `PodNameRegistry`; a local executor without a Kubernetes pod has nothing to forward. |
+| `kubectl port-forward --address 127.0.0.1 pod/{pod} :{targetPort} -n {namespace}` | Binds loopback on the **API host**. A remote browser's localhost is not that host. |
+| `local_port` | No public preview URL; arrange an appropriate local/operator connection separately. |
+| Ports / caps | 1-65535; defaults 3 per run, 20 per service process. Gateway has its own configured allowed range. |
+| Lifetime | Process-local, no persisted route annotations or session TTL; stop, exit, disposal or run/pod cleanup ends it. |
 
 ## Security properties
 
@@ -240,12 +189,12 @@ caller owns it (`403`/`404` otherwise).
 |---|---|
 | Execution isolation | Each run's agent turn, tools, shell, and file ops run in the run's **own Kata-isolated pod** (`kata-vm-isolation`), not a shared process. |
 | Control-plane isolation | The orchestration graph, HITL decisions, and run record stay in the **worker**; a compromised pod cannot alter *what happens next*. |
-| Credential blast radius | The pod holds **only a short-lived, run-scoped credential** — never a broker key, never refresh material, never another run's or user's scope. There is **no `CapabilityTokenService`** and no central token broker. |
+| Capability boundary | The API's `GitHubCapabilityBroker` fences immutable purpose-bound snapshots before and after redemption. AgentHost receives the bounded capability through `/configure`, without ambient Key Vault/filesystem user-secret lookup. |
 | A2A turn auth | `message:stream` requires `Authorization: Bearer {per-run token}`. The token is delivered only to the claimed AgentHost pod via `/configure` and removed from the registry when the pod is released. |
 | GitHub token exposure | **Brokered by the API for the configured run owner only** and delivered in the one-time `/configure` call, then cached in memory for the pod lifetime; the sandbox identity has **no Key Vault access** (issue #471), and no CSI user-token file or shared workspace copy exists. |
-| Egress | **Default-deny** with a narrow allowlist: model endpoint, the API/worker bridge endpoint, and the run's legitimate git remote(s). The **database is not reachable** from sandbox pods — all run-state I/O flows through the worker. |
+| Egress | Default-deny with explicit API/MCP/DNS paths and public HTTPS excluding private/link-local ranges; not a per-run Git-host-only allowlist. No direct PostgreSQL access. |
 | At rest / past run | Token material does not persist past the pod lifetime; no per-run Secret/SPC is created, and the bearer token is no longer written to `SandboxClaim.spec.env` in etcd. |
-| Reversibility | The whole mode is gated by `Sandbox:AgentExecutionMode`; flipping to `in-api` restores in-process execution with no redeploy. |
+| Reversibility | Change `Sandbox:AgentExecutionMode` to in-api through the normal configuration rollout; startup DI wiring is not hot reloaded. |
 
 ## Related reference
 
@@ -258,3 +207,66 @@ caller owns it (`403`/`404` otherwise).
   that expose a pod-internal server over a public HTTPS reverse proxy.
 - [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
   coordinator-to-child routing.
+
+<details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Preview readiness follows the public path</td></tr>
+<tr><td>takeaway</td><td>Provision the route, then probe its exact HTTPS URL; object creation alone is not ready.</td></tr>
+<tr><td>group-title0</td><td>CONTROL: PROVISION + PROBE</td></tr>
+<tr><td>group-title1</td><td>GATEWAY DATA PATH</td></tr>
+<tr><td>Preview API</td><td>Preview API</td></tr>
+<tr><td>Preview API</td><td>Resolve bound SandboxClaim</td></tr>
+<tr><td>Preview API</td><td>Patch run selector on pod</td></tr>
+<tr><td>Preview API</td><td>Create Service + HTTPRoute</td></tr>
+<tr><td>Preview API</td><td>State from cluster, not cache</td></tr>
+<tr><td>Publication probe</td><td>Publication probe</td></tr>
+<tr><td>Publication probe</td><td>Exact generated HTTPS URL</td></tr>
+<tr><td>Publication probe</td><td>Wait for managed DNS</td></tr>
+<tr><td>Publication probe</td><td>Check Gateway + application</td></tr>
+<tr><td>Publication probe</td><td>Only then return ready</td></tr>
+<tr><td>Browser preview</td><td>Browser preview</td></tr>
+<tr><td>Browser preview</td><td>Open the returned URL</td></tr>
+<tr><td>Browser preview</td><td>Run-scoped capability host</td></tr>
+<tr><td>Browser preview</td><td>Keepalive via API</td></tr>
+<tr><td>Browser preview</td><td>Iframe: no-referrer</td></tr>
+<tr><td>Preview Gateway</td><td>Preview Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>Separate shared Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPS host match</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPRoute selects Service</td></tr>
+<tr><td>Preview Gateway</td><td>Not API port-forward</td></tr>
+<tr><td>ClusterIP Service</td><td>ClusterIP Service</td></tr>
+<tr><td>ClusterIP Service</td><td>Per-preview target selector</td></tr>
+<tr><td>ClusterIP Service</td><td>Service :80 → public port</td></tr>
+<tr><td>ClusterIP Service</td><td>Routes to bound sandbox pod</td></tr>
+<tr><td>ClusterIP Service</td><td>Allowed ports 3000–9000</td></tr>
+<tr><td>Sandbox preview app</td><td>Sandbox preview app</td></tr>
+<tr><td>Sandbox preview app</td><td>AgentHost pod-local path</td></tr>
+<tr><td>Sandbox preview app</td><td>Live preview: TCP forwarder</td></tr>
+<tr><td>Sandbox preview app</td><td>0.0.0.0 → loopback app</td></tr>
+<tr><td>Sandbox preview app</td><td>Manual: chosen target port</td></tr>
+<tr><td>relation-0</td><td>1 after create</td></tr>
+<tr><td>relation-1</td><td>2 ready URL</td></tr>
+<tr><td>relation-2</td><td>3 HTTPS probe</td></tr>
+<tr><td>relation-3</td><td>4 HTTPS</td></tr>
+<tr><td>relation-4</td><td>5 route</td></tr>
+<tr><td>relation-5</td><td>6 public port</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.</td></tr>
+<tr><td>assurance-0-label</td><td>Public readiness</td></tr>
+<tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
+<tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Rollback on failure</td></tr>
+<tr><td>assurance-1-fact</td><td>Unpublish failed preview resources.</td></tr>
+<tr><td>assurance-1-source</td><td>SandboxPreviewPublicationTests.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Separate ingress</td></tr>
+<tr><td>assurance-2-fact</td><td>DNS managed externally, not by API.</td></tr>
+<tr><td>assurance-2-source</td><td>gateway-preview.yaml</td></tr>
+<tr><td>n0</td><td>Patch run selector on pod; Create Service + HTTPRoute</td></tr>
+<tr><td>n1</td><td>Wait for managed DNS; Check Gateway + application</td></tr>
+<tr><td>n2</td><td>Run-scoped capability host; Keepalive via API</td></tr>
+<tr><td>n3</td><td>HTTPS host match; HTTPRoute selects Service</td></tr>
+<tr><td>n4</td><td>Service :80 → public port; Routes to bound sandbox pod</td></tr>
+<tr><td>n5</td><td>Live preview: TCP forwarder; 0.0.0.0 → loopback app</td></tr>
+<tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
+</tbody></table>
+</details>

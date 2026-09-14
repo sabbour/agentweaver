@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "area": "workflows",
+  "diagrams": [
+    {
+      "name": "workflow-agent-evaluation",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-agent-evaluation.drawio",
+        "drawio": "docs/diagrams/src/workflow-agent-evaluation.drawio",
+        "png": "docs/diagrams/workflow-agent-evaluation.png",
+        "hash": "docs/diagrams/workflow-agent-evaluation.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-bug-fix",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-bug-fix.drawio",
+        "drawio": "docs/diagrams/src/workflow-bug-fix.drawio",
+        "png": "docs/diagrams/workflow-bug-fix.png",
+        "hash": "docs/diagrams/workflow-bug-fix.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-content-authoring",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-content-authoring.drawio",
+        "drawio": "docs/diagrams/src/workflow-content-authoring.drawio",
+        "png": "docs/diagrams/workflow-content-authoring.png",
+        "hash": "docs/diagrams/workflow-content-authoring.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig1",
+      "area": "workflows",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig1.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig1.drawio",
+        "png": "docs/diagrams/workflow-engine-fig1.png",
+        "hash": "docs/diagrams/workflow-engine-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig11",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig11.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig11.drawio",
+        "png": "docs/diagrams/workflow-engine-fig11.png",
+        "hash": "docs/diagrams/workflow-engine-fig11.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig2",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig2.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig2.drawio",
+        "png": "docs/diagrams/workflow-engine-fig2.png",
+        "hash": "docs/diagrams/workflow-engine-fig2.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig4",
+      "area": "workflows",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig4.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig4.drawio",
+        "png": "docs/diagrams/workflow-engine-fig4.png",
+        "hash": "docs/diagrams/workflow-engine-fig4.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig5",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig5.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig5.drawio",
+        "png": "docs/diagrams/workflow-engine-fig5.png",
+        "hash": "docs/diagrams/workflow-engine-fig5.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-engine-fig9",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-engine-fig9.drawio",
+        "drawio": "docs/diagrams/src/workflow-engine-fig9.drawio",
+        "png": "docs/diagrams/workflow-engine-fig9.png",
+        "hash": "docs/diagrams/workflow-engine-fig9.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-incident-response",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-incident-response.drawio",
+        "drawio": "docs/diagrams/src/workflow-incident-response.drawio",
+        "png": "docs/diagrams/workflow-incident-response.png",
+        "hash": "docs/diagrams/workflow-incident-response.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-infra-ops",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-infra-ops.drawio",
+        "drawio": "docs/diagrams/src/workflow-infra-ops.drawio",
+        "png": "docs/diagrams/workflow-infra-ops.png",
+        "hash": "docs/diagrams/workflow-infra-ops.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-pm-discovery",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-pm-discovery.drawio",
+        "drawio": "docs/diagrams/src/workflow-pm-discovery.drawio",
+        "png": "docs/diagrams/workflow-pm-discovery.png",
+        "hash": "docs/diagrams/workflow-pm-discovery.hash.txt"
+      }
+    },
+    {
+      "name": "workflow-software-delivery",
+      "area": "workflows",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/workflow-software-delivery.drawio",
+        "drawio": "docs/diagrams/src/workflow-software-delivery.drawio",
+        "png": "docs/diagrams/workflow-software-delivery.png",
+        "hash": "docs/diagrams/workflow-software-delivery.hash.txt"
+      }
+    }
+  ]
+}

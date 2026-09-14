@@ -22,11 +22,8 @@ The project record and the workspace are separate. Renaming changes the record, 
 
 The **Project Gallery** is the landing page. The page title is **Projects** with the subtitle **Your Agentweaver projects.** It is where users scan work, create projects, and switch projects.
 
-![Project Gallery page with project cards and creation buttons](/screenshots/projects-gallery.png)
-
-> 📸 **Screenshot — `projects-gallery.png`**
-> *Shows:* the Projects page titled "Projects" / "Your Agentweaver projects." with at least one project card (each card shows an **Available** or **Unavailable** status badge and an **Open** button), highlighting the **Create blank project** and **Create from GitHub** buttons in the header.
-> *Path:* Sign in → navigate to `/projects`.
+Open `/projects` to inspect the current gallery. Project cards reflect stored origin and
+workspace availability; they do not prove a live GitHub connection.
 
 When projects exist, the toolbar shows:
 
@@ -77,12 +74,6 @@ Creation starts from the gallery. Users choose a blank repository or a GitHub-ba
 
 **Create blank project** starts a new Git repository under Agentweaver's control. The dialog title is **Create blank project**.
 
-![Create blank project dialog with Name and Repository folder fields](/screenshots/create-blank-project-dialog.png)
-
-> 📸 **Screenshot — `create-blank-project-dialog.png`**
-> *Shows:* the **Create blank project** dialog with the **Name** field (placeholder "My project") and the **Repository folder** field auto-filled (slugified) from the project name, plus the **Cancel** and **Create** buttons (the **Create** button reads **Creating** with a spinner while submitting).
-> *Path:* `/projects` → click **Create blank project**.
-
 Required fields:
 
 - **Name** with placeholder **My project**
@@ -98,23 +89,21 @@ Creation is for a new controlled workspace. The target directory must be empty o
 
 **Create from GitHub** clones a repository and records its GitHub origin. The dialog title is **Create project from GitHub**.
 
-![Create project from GitHub dialog with Organization and Source repository pickers](/screenshots/create-from-github-dialog.png)
-
-> 📸 **Screenshot — `create-from-github-dialog.png`**
-> *Shows:* the **Create project from GitHub** dialog with project fields and the repository picker. If access is missing, the authorization action appears.
-> *Path:* `/projects` → click **Create from GitHub**.
-
 Required fields:
 
 - **Name**
 - **Source repository**
 - **Repository folder**, unless the workspace is auto-assigned
 
-The repository column offers three ways to choose a source:
+Select a source available through your **Repo App authorization**. The paste field is
+explicitly labeled **Paste a repository that the Repo App can access** and offers
+**Use repository**; it is hidden when a connection is required
+(`apps/web/src/pages/ProjectGalleryPage.tsx:707`).
 
-- **Search repositories** — a freeform combobox that accepts any `owner/repo` or GitHub URL and lists repositories from the selected account (`apps/web/src/pages/ProjectGalleryPage.tsx:725`).
-- **My organizations** — the signed-in user appears with a **You** badge alongside the organizations they belong to; selecting a source reloads that account's repositories, and a **Show more / Show less** toggle appears once there are more than five (`ProjectGalleryPage.tsx:766`, `:779`).
-- **Or paste any repository** — a direct `owner/repo` field and **Go →** button that works even without a connected account (`ProjectGalleryPage.tsx:793`).
+Before creating the project, the browser loads authorized repository selections,
+matches the selected repository, and issues a short-lived `repository_selection_code`.
+That code, not an arbitrary URL or repository identifier, is sent in the create request
+(`ProjectGalleryPage.tsx:259-266`). Pasting a name cannot bypass access.
 
 If repository access is not ready, the dialog says:
 
@@ -217,39 +206,26 @@ For a custom inline blueprint:
 
 The mutual exclusivity rule is intentional. If both `blueprint_id` and `blueprint` are supplied, Agentweaver rejects the request rather than guessing which starting point should win.
 
-## Project board home
+## Opening a project and its Board
 
-Clicking **Open** lands on the project board home. This is the day-to-day work surface, not the metrics dashboard.
+Clicking **Open** navigates to `/projects/:projectId`, the **Dashboard**.
+**Board** is a separate destination at `/projects/:projectId/board`
+(`apps/web/src/App.tsx:103-108`).
 
-The page title is the project name. The subtitle is:
+Use Board for intake and work requiring attention: Backlog, Ready, Active, and Done
+are the main lanes; Human Review and Problems are separate attention groups.
+Run inspection happens in the orchestration page and selected task's **Agent session**
+panel, not retired standalone Workflow or Execution pages. See
+[Runs, board & watch](./runs-board-watch.md).
 
-> Backlog, Ready, and in-flight work.
-
-If the project is unavailable, the page warns:
-
-> This project is unavailable. The working directory may have moved or become inaccessible.
-
-The warning links to project Settings.
-
-The main content is the board, followed by **Runs**. The runs list shows status, task text, start time, and navigation into execution details. Normal runs have **Workflow**. Coordinator orchestrations have **Topology**. Non-terminal runs can show **Abandon**. Terminal runs can be deleted from the list.
-
-When there are no runs, the page says:
-
-> No runs yet. Start one above.
-
-The board home answers, "What is happening in this project right now?" The dashboard answers, "How is this project performing?"
+Workspace availability is separate from these navigation choices. If the workspace cannot
+be reached, inspect the project record and Settings rather than assuming the record is gone.
 
 ## Project Dashboard
 
 The project Dashboard summarizes delivery metrics. The title is **Dashboard** and the subtitle is:
 
 > Delivery metrics and the agent leaderboard.
-
-![Project Dashboard with throughput chart and agent leaderboard](/screenshots/project-dashboard.png)
-
-> 📸 **Screenshot — `project-dashboard.png`**
-> *Shows:* the **Dashboard** page titled "Dashboard" / "Delivery metrics and the agent leaderboard.", the **Refresh** button with last-updated time, the **Throughput (last 30 days)** section, and the **Agent leaderboard** table (`aria-label="Agent leaderboard"`).
-> *Path:* `/projects` → open a project → land on `/projects/:projectId`.
 
 It refreshes every 30 seconds and includes **Refresh**. When data is loaded, the header shows the last updated time and a refresh countdown.
 
@@ -261,11 +237,14 @@ Summary cards show:
 - **Runs total**
 - **Tasks done (7d)**
 
-The **Throughput (last 30 days)** chart has **Created** and **Done** series. If there is no data, it says:
+Use the range control to interpret throughput and usage in context rather than treating
+all metrics as fixed 30-day totals (`apps/web/src/pages/DashboardPage.tsx:881`).
+The throughput chart has **Created** and **Done** series. If there is no data, it says:
 
 > No throughput data yet.
 
-The **Agent leaderboard** shows agent, role, runs this week, runs total, success rate, and average duration. The UI defines success rate as:
+The **Agent leaderboard** includes agent/role, run counts, success rate, duration, and
+AI credit usage (`apps/web/src/pages/DashboardPage.tsx:1018`). The UI defines success rate as:
 
 > Success rate = successful terminal runs / terminal runs (queued, waiting-review, and in-progress excluded).
 
@@ -281,18 +260,19 @@ Project Settings changes the project record and project policies. The title is *
 
 > Project configuration and pickup behavior.
 
-![Project Settings page with General, Sandbox policy, Review policy, and Danger Zone sections](/screenshots/project-settings.png)
+Open `/projects/:projectId/settings`. Project settings include:
 
-> 📸 **Screenshot — `project-settings.png`**
-> *Shows:* the **Project settings** page with the left rail sections **General** (project name, default model), **Sandbox policy**, **Review policy**, and **Danger Zone**, with the **General** section selected (the active section is deep-linked through the URL query).
-> *Path:* open a project → click **Settings** in the left rail → `/projects/:projectId/settings`.
-
-The left rail sections are:
-
-- **General** — project name and default model
+- **General** — project name, deployment AI source information, default run model, and generation models
+- **Access** — project membership and platform-role context
+- **Repository** — connect or create the project's GitHub repository
+- **Background** — unattended readiness and activation controls
 - **Sandbox policy** — command execution and reachability
-- **Review policy** — review gates for project work
 - **Danger Zone** — irreversible project action
+
+Other project controls include unattended readiness and preview policy. Model access is a
+prerequisite, not something enabled by typing a model ID. Preview approval and lifetime
+defaults are 1440 minutes (24 hours); inspect the actual project values rather than assuming
+a universal 30-minute expiry.
 
 The selected section is deep-linked through the URL query.
 
@@ -304,10 +284,14 @@ The selected section is deep-linked through the URL query.
 
 MCP equivalent: `project_rename`.
 
-
 #### Default model
 
-**Default model** sets the model used by default for future runs. In the web UI, the field is **GitHub Copilot model** and is free-text — enter any model id from the GitHub Copilot catalog (e.g. `claude-sonnet-5`). Leave the field **empty** to use "Auto (coordinator picks)": the coordinator selects a model per subtask using per-role defaults, and different subtasks may use different models. Success shows **Model settings saved.**
+**Default run model** includes a **GitHub Copilot model** field for Copilot-backed runs.
+Leave it blank to use the service default; the placeholder describes **Auto (coordinator
+picks)**. This field does not select or authorize the deployment's AI provider. The
+**AI source** section points to **Platform settings**, while project generation overrides
+are separate fields (`apps/web/src/pages/ProjectSettingsPage.tsx:920-1041`).
+Success shows **Model settings saved.**
 
 MCP equivalent: `project_configure`.
 
@@ -328,17 +312,19 @@ global generation default. Invalid model IDs are rejected with the name of the i
 
 The action is **Save** and success shows **Sandbox policy saved.** Blueprint selection can set the initial sandbox posture; Settings is where users inspect and adjust it later.
 
-### Review policy
+### Access, repository, and background work
 
-**Review policy** chooses which review steps gate project work. The section includes **Sync**, the active policy summary, and policy cards.
+**Access** shows project membership and Entra platform-role context. Platform roles are
+changed in Entra, not by granting GitHub capability consent.
 
-Cards can show **Active**, **Built-in**, **Custom**, **Valid**, and **Invalid** badges, plus policy description, review step chips such as **Rubberduck**, **RAI**, and **Human review**, source, validation errors, and **Set as active** for valid inactive policies.
+**Repository** offers **Set up repository access** for a local project. Repository access is
+optional for local agent work and required for publishing to GitHub. **Background** shows
+unattended prerequisites and activation controls.
 
-If none are found, the page says:
-
-> No review policies found. Sync to load from .agentweaver/review-policies/.
-
-Blueprints can choose the initial review policy. Settings controls the active policy after creation.
+The current Settings rail does **not** include a Review policy tab
+(`apps/web/src/pages/ProjectSettingsPage.tsx:159-196`). Blueprints and workflow/review
+definitions still describe review behavior; inspect the actual run's gates in the
+orchestration view rather than looking for a retired settings panel.
 
 ### Danger Zone
 
@@ -385,7 +371,7 @@ This is expected. **Delete project** stays disabled until **I understand this is
 | User intent | Web action | MCP tool |
 |---|---|---|
 | Start empty | **Create blank project** | `project_create` |
-| Start from GitHub | **Create from GitHub** | Use web UI for current full repository-linking flow |
+| Start from GitHub | **Create from GitHub** | `github_repository_selections_list`, `github_repository_selection_issue`, then `project_create` with the selection code |
 | Apply a ready operating model | Select predefined **Blueprint** | `list_blueprints`, then `project_create` with `blueprint_id` |
 | Generate an operating model | **Generate blueprint** | `blueprint_generate`, then `project_create` with inline `blueprint` |
 | See projects | Project Gallery | `project_list` |
@@ -407,4 +393,4 @@ The result is a concrete project experience: named repositories with visible sta
 
 ## See also
 
-- [Agent definition (User Guide)](./agent-definition.md) — the GitHub Copilot agent file that lands in every project you create.
+- [Agent definition (User Guide)](./agent-definition.md) — best-effort, non-overwriting creation of a GitHub Copilot agent file.

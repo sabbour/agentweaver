@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "area": "canonical",
+  "diagrams": [
+    {
+      "name": "canonical-a2a-execution",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-a2a-execution.drawio",
+        "drawio": "docs/diagrams/src/canonical-a2a-execution.drawio",
+        "png": "docs/diagrams/canonical-a2a-execution.png",
+        "hash": "docs/diagrams/canonical-a2a-execution.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-agent-communication-a2a",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-agent-communication-a2a.drawio",
+        "drawio": "docs/diagrams/src/canonical-agent-communication-a2a.drawio",
+        "png": "docs/diagrams/canonical-agent-communication-a2a.png",
+        "hash": "docs/diagrams/canonical-agent-communication-a2a.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-agent-communication-handoff",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-agent-communication-handoff.drawio",
+        "drawio": "docs/diagrams/src/canonical-agent-communication-handoff.drawio",
+        "png": "docs/diagrams/canonical-agent-communication-handoff.png",
+        "hash": "docs/diagrams/canonical-agent-communication-handoff.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-agent-communication-shared",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-agent-communication-shared.drawio",
+        "drawio": "docs/diagrams/src/canonical-agent-communication-shared.drawio",
+        "png": "docs/diagrams/canonical-agent-communication-shared.png",
+        "hash": "docs/diagrams/canonical-agent-communication-shared.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-aks-components",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-aks-components.drawio",
+        "drawio": "docs/diagrams/src/canonical-aks-components.drawio",
+        "png": "docs/diagrams/canonical-aks-components.png",
+        "hash": "docs/diagrams/canonical-aks-components.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-aks-network",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-aks-network.drawio",
+        "drawio": "docs/diagrams/src/canonical-aks-network.drawio",
+        "png": "docs/diagrams/canonical-aks-network.png",
+        "hash": "docs/diagrams/canonical-aks-network.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-api-host",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-api-host.drawio",
+        "drawio": "docs/diagrams/src/canonical-api-host.drawio",
+        "png": "docs/diagrams/canonical-api-host.png",
+        "hash": "docs/diagrams/canonical-api-host.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-board-lifecycle",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-board-lifecycle.drawio",
+        "drawio": "docs/diagrams/src/canonical-board-lifecycle.drawio",
+        "png": "docs/diagrams/canonical-board-lifecycle.png",
+        "hash": "docs/diagrams/canonical-board-lifecycle.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-coordinator-architecture",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-coordinator-architecture.drawio",
+        "drawio": "docs/diagrams/src/canonical-coordinator-architecture.drawio",
+        "png": "docs/diagrams/canonical-coordinator-architecture.png",
+        "hash": "docs/diagrams/canonical-coordinator-architecture.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-coordinator-journey",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-coordinator-journey.drawio",
+        "drawio": "docs/diagrams/src/canonical-coordinator-journey.drawio",
+        "png": "docs/diagrams/canonical-coordinator-journey.png",
+        "hash": "docs/diagrams/canonical-coordinator-journey.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-default-workflow",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-default-workflow.drawio",
+        "drawio": "docs/diagrams/src/canonical-default-workflow.drawio",
+        "png": "docs/diagrams/canonical-default-workflow.png",
+        "hash": "docs/diagrams/canonical-default-workflow.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-durable-event-stream",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-durable-event-stream.drawio",
+        "drawio": "docs/diagrams/src/canonical-durable-event-stream.drawio",
+        "png": "docs/diagrams/canonical-durable-event-stream.png",
+        "hash": "docs/diagrams/canonical-durable-event-stream.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-durable-event-stream-sequence",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-durable-event-stream-sequence.drawio",
+        "drawio": "docs/diagrams/src/canonical-durable-event-stream-sequence.drawio",
+        "png": "docs/diagrams/canonical-durable-event-stream-sequence.png",
+        "hash": "docs/diagrams/canonical-durable-event-stream-sequence.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-memory-context",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-memory-context.drawio",
+        "drawio": "docs/diagrams/src/canonical-memory-context.drawio",
+        "png": "docs/diagrams/canonical-memory-context.png",
+        "hash": "docs/diagrams/canonical-memory-context.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-pod-process-boundaries",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-pod-process-boundaries.drawio",
+        "drawio": "docs/diagrams/src/canonical-pod-process-boundaries.drawio",
+        "png": "docs/diagrams/canonical-pod-process-boundaries.png",
+        "hash": "docs/diagrams/canonical-pod-process-boundaries.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-provider-admission",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-provider-admission.drawio",
+        "drawio": "docs/diagrams/src/canonical-provider-admission.drawio",
+        "png": "docs/diagrams/canonical-provider-admission.png",
+        "hash": "docs/diagrams/canonical-provider-admission.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-sandbox-boundary",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-sandbox-boundary.drawio",
+        "drawio": "docs/diagrams/src/canonical-sandbox-boundary.drawio",
+        "png": "docs/diagrams/canonical-sandbox-boundary.png",
+        "hash": "docs/diagrams/canonical-sandbox-boundary.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-sandbox-experience",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-sandbox-experience.drawio",
+        "drawio": "docs/diagrams/src/canonical-sandbox-experience.drawio",
+        "png": "docs/diagrams/canonical-sandbox-experience.png",
+        "hash": "docs/diagrams/canonical-sandbox-experience.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-sandbox-pod-evolution",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-sandbox-pod-evolution.drawio",
+        "drawio": "docs/diagrams/src/canonical-sandbox-pod-evolution.drawio",
+        "png": "docs/diagrams/canonical-sandbox-pod-evolution.png",
+        "hash": "docs/diagrams/canonical-sandbox-pod-evolution.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-testing-boundary",
+      "area": "canonical",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-testing-boundary.drawio",
+        "drawio": "docs/diagrams/src/canonical-testing-boundary.drawio",
+        "png": "docs/diagrams/canonical-testing-boundary.png",
+        "hash": "docs/diagrams/canonical-testing-boundary.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-workflow-authoring",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-workflow-authoring.drawio",
+        "drawio": "docs/diagrams/src/canonical-workflow-authoring.drawio",
+        "png": "docs/diagrams/canonical-workflow-authoring.png",
+        "hash": "docs/diagrams/canonical-workflow-authoring.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-workflow-invocation",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-workflow-invocation.drawio",
+        "drawio": "docs/diagrams/src/canonical-workflow-invocation.drawio",
+        "png": "docs/diagrams/canonical-workflow-invocation.png",
+        "hash": "docs/diagrams/canonical-workflow-invocation.hash.txt"
+      }
+    },
+    {
+      "name": "canonical-workflow-selection",
+      "area": "canonical",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/canonical-workflow-selection.drawio",
+        "drawio": "docs/diagrams/src/canonical-workflow-selection.drawio",
+        "png": "docs/diagrams/canonical-workflow-selection.png",
+        "hash": "docs/diagrams/canonical-workflow-selection.hash.txt"
+      }
+    }
+  ]
+}

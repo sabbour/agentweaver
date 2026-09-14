@@ -1,0 +1,139 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "AKS deployment: application services, isolated execution, and Azure persistence",
+  "alt": "Deployment view showing Azure Kubernetes Service, application and preview gateways, API, worker, MCP, and frontend deployments, Sandbox custom resources and Kata AgentHost pods, PostgreSQL, Azure Files, Key Vault, managed identities, and observability.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "aks",
+      "label": "Azure Kubernetes Service",
+      "subLabel": "Cilium, workload identity, and Kata capacity",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1",
+      "badge": "AKS"
+    },
+    {
+      "id": "gateway",
+      "label": "Application and preview Gateways",
+      "subLabel": "HTTPS routes for product and sandbox previews",
+      "icon": "box",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.service",
+      "badge": "Gateway"
+    },
+    {
+      "id": "api",
+      "label": "Application deployments",
+      "subLabel": "API, worker, MCP, and frontend workloads",
+      "icon": "box",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.deployment",
+      "badge": "Deployments"
+    },
+    {
+      "id": "claims",
+      "label": "SandboxClaim and warm pool",
+      "subLabel": "Controller-managed run allocation",
+      "icon": "box",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.custom_resource",
+      "badge": "CRDs"
+    },
+    {
+      "id": "pods",
+      "label": "Kata AgentHost pods",
+      "subLabel": "Two-container isolated execution",
+      "icon": "box",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.pod",
+      "badge": "Pods"
+    },
+    {
+      "id": "workspace-pvc",
+      "label": "Workspace PVC",
+      "subLabel": "RWX mount provisioned through Azure Files CSI",
+      "icon": "box",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.persistent_volume_claim",
+      "badge": "PVC"
+    },
+    {
+      "id": "postgres",
+      "label": "PostgreSQL Flexible Server",
+      "subLabel": "Application state, plans, events, and leases",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/databases/Azure_Database_PostgreSQL_Server.svg;imageAspect=1",
+      "badge": "Database"
+    },
+    {
+      "id": "files",
+      "label": "Azure Files",
+      "subLabel": "Shared repositories, branches, and artifacts",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/storage/Storage_Accounts.svg;imageAspect=1",
+      "badge": "Files"
+    },
+    {
+      "id": "vault",
+      "label": "Azure Key Vault",
+      "subLabel": "Managed identities authorize application secret access",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "badge": "Secrets"
+    }
+  ],
+  "edges": [
+    {
+      "from": "aks",
+      "to": "api",
+      "label": "hosts"
+    },
+    {
+      "from": "gateway",
+      "to": "api",
+      "label": "product, web, and MCP HTTPS"
+    },
+    {
+      "from": "gateway",
+      "to": "pods",
+      "label": "preview routes"
+    },
+    {
+      "from": "api",
+      "to": "claims",
+      "label": "create / manage"
+    },
+    {
+      "from": "claims",
+      "to": "pods",
+      "label": "bind"
+    },
+    {
+      "from": "api",
+      "to": "postgres",
+      "label": "state and events"
+    },
+    {
+      "from": "api",
+      "to": "workspace-pvc",
+      "label": "mount"
+    },
+    {
+      "from": "pods",
+      "to": "workspace-pvc",
+      "label": "scoped mount"
+    },
+    {
+      "from": "workspace-pvc",
+      "to": "files",
+      "label": "CSI provision"
+    }
+  ]
+}

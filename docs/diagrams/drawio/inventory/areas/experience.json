@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "area": "experience",
+  "diagrams": [
+    {
+      "name": "experience-00-overview-fig1",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-00-overview-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-00-overview-fig1.drawio",
+        "png": "docs/diagrams/experience-00-overview-fig1.png",
+        "hash": "docs/diagrams/experience-00-overview-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-a2a-distributed-agents-fig2",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-a2a-distributed-agents-fig2.drawio",
+        "drawio": "docs/diagrams/src/experience-a2a-distributed-agents-fig2.drawio",
+        "png": "docs/diagrams/experience-a2a-distributed-agents-fig2.png",
+        "hash": "docs/diagrams/experience-a2a-distributed-agents-fig2.hash.txt"
+      }
+    },
+    {
+      "name": "experience-mcp-client-fig1",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-mcp-client-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-mcp-client-fig1.drawio",
+        "png": "docs/diagrams/experience-mcp-client-fig1.png",
+        "hash": "docs/diagrams/experience-mcp-client-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-onboarding-auth-fig1",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-onboarding-auth-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-onboarding-auth-fig1.drawio",
+        "png": "docs/diagrams/experience-onboarding-auth-fig1.png",
+        "hash": "docs/diagrams/experience-onboarding-auth-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-onboarding-auth-fig2",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-onboarding-auth-fig2.drawio",
+        "drawio": "docs/diagrams/src/experience-onboarding-auth-fig2.drawio",
+        "png": "docs/diagrams/experience-onboarding-auth-fig2.png",
+        "hash": "docs/diagrams/experience-onboarding-auth-fig2.hash.txt"
+      }
+    },
+    {
+      "name": "experience-operations-fig1",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-operations-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-operations-fig1.drawio",
+        "png": "docs/diagrams/experience-operations-fig1.png",
+        "hash": "docs/diagrams/experience-operations-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-review-workspace-merge-fig1",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-review-workspace-merge-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-review-workspace-merge-fig1.drawio",
+        "png": "docs/diagrams/experience-review-workspace-merge-fig1.png",
+        "hash": "docs/diagrams/experience-review-workspace-merge-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-review-workspace-merge-fig2",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-review-workspace-merge-fig2.drawio",
+        "drawio": "docs/diagrams/src/experience-review-workspace-merge-fig2.drawio",
+        "png": "docs/diagrams/experience-review-workspace-merge-fig2.png",
+        "hash": "docs/diagrams/experience-review-workspace-merge-fig2.hash.txt"
+      }
+    },
+    {
+      "name": "experience-sandbox-pod-execution-fig3",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-sandbox-pod-execution-fig3.drawio",
+        "drawio": "docs/diagrams/src/experience-sandbox-pod-execution-fig3.drawio",
+        "png": "docs/diagrams/experience-sandbox-pod-execution-fig3.png",
+        "hash": "docs/diagrams/experience-sandbox-pod-execution-fig3.hash.txt"
+      }
+    },
+    {
+      "name": "experience-scaling-operations-fig1",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-scaling-operations-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-scaling-operations-fig1.drawio",
+        "png": "docs/diagrams/experience-scaling-operations-fig1.png",
+        "hash": "docs/diagrams/experience-scaling-operations-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-scaling-operations-fig3",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-scaling-operations-fig3.drawio",
+        "drawio": "docs/diagrams/src/experience-scaling-operations-fig3.drawio",
+        "png": "docs/diagrams/experience-scaling-operations-fig3.png",
+        "hash": "docs/diagrams/experience-scaling-operations-fig3.hash.txt"
+      }
+    },
+    {
+      "name": "experience-team-casting-memory-fig1",
+      "area": "experience",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-team-casting-memory-fig1.drawio",
+        "drawio": "docs/diagrams/src/experience-team-casting-memory-fig1.drawio",
+        "png": "docs/diagrams/experience-team-casting-memory-fig1.png",
+        "hash": "docs/diagrams/experience-team-casting-memory-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "experience-workflows-backlog-fig3",
+      "area": "experience",
+      "disposition": "retain",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/experience-workflows-backlog-fig3.drawio",
+        "drawio": "docs/diagrams/src/experience-workflows-backlog-fig3.drawio",
+        "png": "docs/diagrams/experience-workflows-backlog-fig3.png",
+        "hash": "docs/diagrams/experience-workflows-backlog-fig3.hash.txt"
+      }
+    }
+  ]
+}

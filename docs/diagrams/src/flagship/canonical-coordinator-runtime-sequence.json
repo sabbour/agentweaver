@@ -1,0 +1,168 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "One parent run: admission to collective completion",
+  "alt": "UML sequence showing a caller starting a parent run, the coordinator persisting intent and a work plan, dependency-ready child work executing in AgentHost, collective review and merge, and durable completion observed by the caller.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "caller",
+      "label": "Caller or reviewer",
+      "subLabel": "Start, steer, and decide",
+      "icon": "box",
+      "fluentIcon": "person",
+      "badge": "Participant"
+    },
+    {
+      "id": "api",
+      "label": "API and coordinator",
+      "subLabel": "Admission, planning, dispatch, and assembly",
+      "icon": "box",
+      "fluentIcon": "mcp",
+      "badge": "Participant"
+    },
+    {
+      "id": "host",
+      "label": "AgentHost / A2A role agent",
+      "subLabel": "Authenticated isolated leaf execution",
+      "icon": "box",
+      "fluentIcon": "sandbox",
+      "badge": "Participant",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.pod"
+    },
+    {
+      "id": "store",
+      "label": "Durable state",
+      "subLabel": "Runs, plans, events, and artifacts",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": "Participant"
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "caller",
+      "to": "api",
+      "label": "Submit goal"
+    },
+    {
+      "type": "activation",
+      "participant": "api",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "api",
+      "label": "Admit and activate parent run"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "store",
+      "label": "Persist confirmed intent and work plan"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "caller",
+      "label": "201 run ID — not completion",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "dependency-ready waves",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "api",
+              "to": "store",
+              "label": "Read eligible frontier"
+            },
+            {
+              "type": "message",
+              "from": "api",
+              "to": "host",
+              "label": "Start authenticated A2A child turn"
+            },
+            {
+              "type": "activation",
+              "participant": "host",
+              "action": "start"
+            },
+            {
+              "type": "message",
+              "from": "host",
+              "to": "api",
+              "label": "Stream A2A evidence and assemble-ready result",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "activation",
+              "participant": "host",
+              "action": "end"
+            },
+            {
+              "type": "message",
+              "from": "api",
+              "to": "store",
+              "label": "Persist child outcome and events"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "store",
+      "label": "Persist integrated candidate and review request"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "caller",
+      "label": "Present one collective candidate",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "caller",
+      "to": "api",
+      "label": "Approve, revise, or decline"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "api",
+      "label": "Deliver durable review decision"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "store",
+      "label": "Merge, record, and terminalize parent"
+    },
+    {
+      "type": "activation",
+      "participant": "api",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "caller",
+      "label": "Replay final state and artifacts",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

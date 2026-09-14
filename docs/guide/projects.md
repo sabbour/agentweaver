@@ -10,8 +10,6 @@ A **Project** contains local agent work, runs, teams, and memory. A GitHub repos
 
 When you open Agentweaver, the first screen is the **Project Gallery** — a grid of cards, one per project.
 
-![Project Gallery](/guide/images/project-gallery.png)
-
 Each card shows:
 
 - **Project name**
@@ -36,13 +34,11 @@ Two creation paths are available from the Project Gallery toolbar:
 
 1. Select **Create blank project**.
 2. Enter a **Name** for the project.
-3. Enter a **Repository folder** name. If the server has a configured data directory, the field shows it as a prefix — you only need to type the folder name inside it. Otherwise, enter a full absolute path to a git repository on the machine running the Agentweaver server.
+3. Enter a **Repository folder** name. If the server has a configured data directory, the field shows it as a prefix — you only need to type the folder name inside it. Otherwise, enter a full absolute path to a new or empty directory on the machine running the Agentweaver server.
 4. Optionally choose a **Blueprint** to pre-equip the project with a team, one or more workflows, a review policy, and a sandbox profile. The blank dialog offers the same blueprint step as the GitHub dialog: a **Templates** tab to pick an existing catalog blueprint and a **Generate** tab to describe a goal and generate a custom one. To start empty, use the **No blueprint** action in the dialog footer. See [Blueprints](./blueprints) for details.
 5. Select **Create project**.
 
 Agentweaver creates a local git repository. Local agent work can continue without GitHub repository access.
-
-![Create blank project dialog](/guide/images/create-blank-project.png)
 
 ::: warning Directory must be empty or new
 The chosen directory must be empty or not yet exist. Agentweaver will not overwrite or adopt an existing non-empty directory.
@@ -66,8 +62,6 @@ repositories, use **Open GitHub installation settings** beside the relevant pers
 organization account to change that installation's repository access. Multiple
 installations remain one combined repository list, with a separate settings action for
 each account.
-
-![Create from GitHub dialog](/guide/images/create-from-github.png)
 
 ::: tip Repository access
 If repository access is not ready, select **Authorize repository access**. Agentweaver returns you to the current task after authorization.

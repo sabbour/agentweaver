@@ -2,6 +2,9 @@
   <img src="docs/public/agentweaver.png" alt="Agentweaver logo" width="128" />
 </p>
 
+<!-- Retained repository brand asset, also used by the documentation site.
+     This logo is not an architecture diagram and has no draw.io conversion. -->
+
 # Agentweaver
 
 > ⚠️ **Alpha software.** Agentweaver is under active development. Expect breaking changes and incomplete features. Do not use it in production.
@@ -12,7 +15,16 @@ Describe the work you want done. Agentweaver can generate the agent roles, skill
 
 Workflows turn probabilistic agent work into a governed path toward a defined outcome, with the gates and approvals you set. Start and supervise work in the Agentweaver interface or through MCP from an assistant, editor, or CLI.
 
-![Architecture diagram: Clients connect through identity and authorization services to the API control plane. The API coordinates workflows, git services, catalog and memory, and sandboxed AgentHost execution on AKS. PostgreSQL, Key Vault, Git repositories, and model providers provide durable state and external services.](docs/public/pitch-architecture.png)
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### System architecture
+
+[![Deployment and component view showing web and MCP clients entering the Agentweaver API, API and worker orchestration authority, isolated AgentHost execution, durable PostgreSQL and Azure Files state, and separate identity, repository, and model-provider dependencies.](docs/diagrams/flagship/canonical-coordinator-architecture.png)](docs/diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+
+[Structured source](docs/diagrams/src/flagship/canonical-coordinator-architecture.json) · [Editable draw.io](docs/diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio)
+<!-- flagship-diagrams:end -->
+
 
 📖 **[Read the documentation](https://sabbour.me/agentweaver/)** or browse the source in [docs/index.md](docs/index.md).
 
@@ -59,3 +71,89 @@ Before you sign in, configure local authentication and model access. The [Gettin
 - [Understand the architecture](docs/guide/architecture-aks.md)
 - [Contribute to Agentweaver](CONTRIBUTING.md)
 - [Plan or publish a release](RELEASING.md)
+
+<details id="diagram-context-email-architecture" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Identity, control, and execution</td></tr>
+<tr><td>subtitle</td><td>Entra authenticates people; GitHub capabilities authorize purpose-bound repository access.</td></tr>
+<tr><td>group-title0</td><td>AKS · control and execution workloads</td></tr>
+<tr><td>group-title1</td><td>External services</td></tr>
+<tr><td>API + worker</td><td>API + worker</td></tr>
+<tr><td>API + worker</td><td>Control plane services</td></tr>
+<tr><td>API + worker</td><td>Postgres + CSI mounted data</td></tr>
+<tr><td>MCP service</td><td>MCP service</td></tr>
+<tr><td>MCP service</td><td>Authenticated tool surface</td></tr>
+<tr><td>MCP service</td><td>HTTP API client</td></tr>
+<tr><td>AgentHost pod</td><td>AgentHost pod</td></tr>
+<tr><td>AgentHost pod</td><td>Constrained turn execution</td></tr>
+<tr><td>AgentHost pod</td><td>per-run bearer / sandbox</td></tr>
+<tr><td>Microsoft Entra</td><td>Microsoft Entra</td></tr>
+<tr><td>Microsoft Entra</td><td>User identity</td></tr>
+<tr><td>Microsoft Entra</td><td>sign-in / sessions / roles</td></tr>
+<tr><td>GitHub</td><td>GitHub</td></tr>
+<tr><td>GitHub</td><td>Purpose-bound capabilities</td></tr>
+<tr><td>GitHub</td><td>repository authorization</td></tr>
+<tr><td>PostgreSQL</td><td>PostgreSQL</td></tr>
+<tr><td>PostgreSQL</td><td>Shared durable state</td></tr>
+<tr><td>PostgreSQL</td><td>API + worker persistence</td></tr>
+<tr><td>e1</td><td>HTTP</td></tr>
+<tr><td>e2</td><td>configure / A2A</td></tr>
+<tr><td>e3</td><td>identity</td></tr>
+<tr><td>e4</td><td>capability</td></tr>
+<tr><td>e5</td><td>read / write</td></tr>
+<tr><td>assurance-title</td><td>TRUST FLOWS ARE DELIBERATELY DISTINCT</td></tr>
+<tr><td>assurance-line1</td><td>GitHub authorization constrains repository credentials used during execution; Entra establishes user identity.</td></tr>
+<tr><td>assurance-line2</td><td>API and worker use PostgreSQL and CSI-mounted storage. MCP is an API client, not another database owner.</td></tr>
+<tr><td>API + worker</td><td>Services</td></tr>
+<tr><td>API + worker</td><td>Data</td></tr>
+<tr><td>API + worker</td><td>Postgres persistence</td></tr>
+<tr><td>API + worker</td><td>Files</td></tr>
+<tr><td>API + worker</td><td>CSI-mounted storage</td></tr>
+<tr><td>API + worker</td><td>Control</td></tr>
+<tr><td>API + worker</td><td>Configure + A2A</td></tr>
+<tr><td>MCP service</td><td>Surface</td></tr>
+<tr><td>MCP service</td><td>Authenticated tools</td></tr>
+<tr><td>MCP service</td><td>Credential</td></tr>
+<tr><td>MCP service</td><td>Validated broker token</td></tr>
+<tr><td>MCP service</td><td>Downstream</td></tr>
+<tr><td>MCP service</td><td>HTTP API</td></tr>
+<tr><td>MCP service</td><td>Storage</td></tr>
+<tr><td>MCP service</td><td>No database connector</td></tr>
+<tr><td>AgentHost pod</td><td>Host</td></tr>
+<tr><td>AgentHost pod</td><td>AgentHost workload</td></tr>
+<tr><td>AgentHost pod</td><td>Transport</td></tr>
+<tr><td>AgentHost pod</td><td>Authenticated A2A</td></tr>
+<tr><td>AgentHost pod</td><td>Constrained repo access</td></tr>
+<tr><td>AgentHost pod</td><td>Scope</td></tr>
+<tr><td>AgentHost pod</td><td>Bound to execution</td></tr>
+<tr><td>Microsoft Entra</td><td>Role</td></tr>
+<tr><td>Microsoft Entra</td><td>User authentication</td></tr>
+<tr><td>Microsoft Entra</td><td>Methods</td></tr>
+<tr><td>Microsoft Entra</td><td>Sign-in / sessions</td></tr>
+<tr><td>Microsoft Entra</td><td>Access</td></tr>
+<tr><td>Microsoft Entra</td><td>Role authorization</td></tr>
+<tr><td>Microsoft Entra</td><td>Not</td></tr>
+<tr><td>Microsoft Entra</td><td>Repository authority</td></tr>
+<tr><td>GitHub</td><td>Repository capability</td></tr>
+<tr><td>GitHub</td><td>Grant</td></tr>
+<tr><td>GitHub</td><td>Purpose-bound access</td></tr>
+<tr><td>GitHub</td><td>Delivery</td></tr>
+<tr><td>GitHub</td><td>Constrained credentials</td></tr>
+<tr><td>GitHub</td><td>Product sign-in</td></tr>
+<tr><td>PostgreSQL</td><td>Durable persistence</td></tr>
+<tr><td>PostgreSQL</td><td>Writers</td></tr>
+<tr><td>PostgreSQL</td><td>Stores</td></tr>
+<tr><td>PostgreSQL</td><td>Runs / events / projects</td></tr>
+<tr><td>PostgreSQL</td><td>Separate</td></tr>
+<tr><td>PostgreSQL</td><td>CSI-mounted files</td></tr>
+<tr><td>api</td><td>API hosts execution orchestration; MCP calls API; no MCP database</td></tr>
+<tr><td>mcp</td><td>Broker-token validation; No database connector from MCP</td></tr>
+<tr><td>sandbox</td><td>Worker configures and streams A2A; Repository credential flow exists</td></tr>
+<tr><td>entra</td><td>Authentication is not repo authority; Distinct from GitHub capability grants</td></tr>
+<tr><td>github</td><td>Constrained credentials can reach execution; Not a credential-free sandbox</td></tr>
+<tr><td>postgres</td><td>Run state / events / project data; CSI storage serves mounted files</td></tr>
+<tr><td>notes</td><td>TRUST FLOWS ARE DELIBERATELY DISTINCT; GitHub authorization constrains repository credentials used during execution; Entra establishes user identity.; API and worker use PostgreSQL and CSI-mounted storage. MCP is an API client, not another database owner.</td></tr>
+<tr><td>groups</td><td>AKS · control and execution workloads; External identity, capabilities, and durable data</td></tr>
+</tbody></table>
+</details>

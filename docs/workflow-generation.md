@@ -7,6 +7,10 @@ describes the pipeline they need, and the server returns a validated
 and an explicit save. Nothing is written to `.agentweaver/workflows/` until the
 user saves.
 
+For the shared describe → validate → review → save journey, see
+[Generate from description](guide/workflows.md#generate-from-description).
+This page keeps the server contract rather than introducing a second authoring diagram.
+
 This document covers the server-side generation capability behind
 `POST /api/projects/{id}/workflows/generate` (FR-056–FR-061).
 
@@ -15,8 +19,9 @@ This document covers the server-side generation capability behind
 | Piece | Responsibility |
 |-------|----------------|
 | `IWorkflowGenerator` | The seam: `GenerateAsync(WorkflowGenerationRequest) → WorkflowGenerationResult`. Returns a draft; never persists. |
-| `CopilotWorkflowGenerator` | Production implementation: builds the prompt, calls GitHub Copilot via `IAgentRunner`, validates, and runs one correction pass. |
+| `CopilotWorkflowGenerator` | Builds the prompt, resolves the effective generation provider via `GenerationModelProviderExecutor`, calls `IAgentRunner`, validates, and runs one correction pass. |
 | `WorkflowDefinitionLoader` | Validates the model output with the **same** schema/structural rules the runtime loader enforces. |
+| `RunWorkflowGraphBinder.ValidateBindable` | Dry-runs runtime binding after schema validation; rejects loadable but unrunnable node/edge combinations. |
 | `WorkflowDefinitionEndpoints` | Hosts the `POST .../workflows/generate` endpoint; resolves the project's cast roles and maps results/errors to HTTP. |
 
 All prompt construction, schema context, and LLM invocation live **server-side**
@@ -34,8 +39,10 @@ Body: { "description": "string" }
 → 403                       // caller is not the project owner
 ```
 
-The response YAML is a draft — identical content is returned to the MCP server and
-the Web UI (FR-059). The model provider is fixed to GitHub Copilot (Principle II).
+The response YAML is a draft — the MCP server and Web UI use the same server-side
+generation contract (FR-059). The production provider can be Copilot or BYOK; the class
+name is not a provider guarantee. Prepare the `workflow_generation` AI execution context
+and send its `execution_key` in `If-Model-Provider-Key` for the guarded request.
 For GitHub-backed projects, the server also passes the project's source repository
 into the generation prompt so generated node prompts keep acting against that repo.
 
@@ -45,23 +52,24 @@ The generation prompt is assembled in `CopilotWorkflowGenerator.BuildPrompt` and
 contains:
 
 1. **Schema description** — the top-level keys (`id`, `name`, `description`,
-   `version`, `trigger`, `start`, `nodes`, `edges`) and their required-ness.
-2. **Node-type vocabulary with runtime semantics** — `agent`/`prompt`,
-   `peer_review`/`review`, `check`, `merge`, `scribe`, `serial`, `fan_out`,
-   `fan_in`, `rai`, `terminal`, each with a one-line description of what it does at
-   runtime.
+   `version`, `triggers`, `start`, `nodes`, `edges`) and their required-ness.
+   Legacy singular `trigger` input remains supported.
+2. **Node-type vocabulary with runtime semantics** — `prompt`, `peer_review`,
+   `build_test`, `check`, and `terminal`. The prompt explains platform-owned
+   `merge`/`scribe` but tells the model not to author them. It explicitly forbids
+   `serial`, `fan_out`, `fan_in`, and `coordinator_composed`, which load but cannot bind.
 3. **Validation rules** — required fields, edge/`start` node-reference integrity,
    `check` nodes needing `branches:` with a matching outgoing edge per verdict, and
-   `serial` `steps:` referencing real nodes. These mirror `WorkflowDefinitionLoader`
-   so the model is guided toward output that will validate.
+   the binder's supported runtime topology. Schema acceptance alone is insufficient.
 4. **Available roles** — the project's **actual cast roles** when a team exists,
    otherwise the full catalog (FR-061). Constraining the `agent`/`role` fields to
    castable roles keeps the generated workflow immediately runnable without
    role-not-found errors at build time.
 5. **Few-shot examples** — the library workflows, preferring the canonical
-   `software-delivery`, `bug-fix`, and `agent-evaluation` patterns (read from
-   `packages/Agentweaver.Squad/Catalog/Resources/workflows/`). These demonstrate
-   correct structure, gate routing, and complete verdict branching.
+   `software-delivery` and `bug-fix` patterns from `CatalogConformanceSnapshot`.
+   If neither is present, the generator takes up to three valid non-default library
+   workflows. Current YAML lives in `packages/Agentweaver.Squad/Catalog/Resources/workflows/`;
+   `agent-evaluation` is sequential prompt work, not a parallel fan-out example.
 6. **Target repository context** — fenced as untrusted data
    (`<<<TARGET_REPOSITORY>>>` … `<<<END_TARGET_REPOSITORY>>>`). The generator
    receives the project source repository and also extracts GitHub URLs from the
@@ -74,8 +82,9 @@ contains:
 
 ## Correction pass (FR-060)
 
-The generator validates the model output against `WorkflowDefinitionLoader` (the
-same rules as the runtime). On the **first** failure it makes **exactly one** more
+The generator validates with `WorkflowDefinitionLoader`, then
+`RunWorkflowGraphBinder.ValidateBindable`. Editing a built-in workflow must also
+produce a project-owned copy with a new id. On the **first** failure it makes **exactly one** more
 model call:
 
 ```
@@ -152,3 +161,83 @@ task) is documented separately in [workflow-selection.md](workflow-selection.md)
 
 Unit tests drive `CopilotWorkflowGenerator` with a scripted `IAgentRunner` so the
 prompt → validate → correction pipeline runs without the live model.
+
+<details id="diagram-context-canonical-workflow-authoring" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Workflow authoring</td></tr>
+<tr><td>takeaway</td><td>Generate a draft. Review it. Save deliberately.</td></tr>
+<tr><td>generation-boundary</td><td>1 GENERATE + REVIEW / No workflow file is saved</td></tr>
+<tr><td>persistence-boundary</td><td>2 EXPLICIT SAVE / Project workspace + registry</td></tr>
+<tr><td>Authorize request</td><td>Authorize request</td></tr>
+<tr><td>Authorize request</td><td>Project ownership + AI execution plan</td></tr>
+<tr><td>Authorize request</td><td>POST …/workflows/generate</td></tr>
+<tr><td>Authorize request</td><td>Description required</td></tr>
+<tr><td>Prompt context</td><td>Prompt context</td></tr>
+<tr><td>Prompt context</td><td>Roles, schema, examples</td></tr>
+<tr><td>Prompt context</td><td>Project model override</td></tr>
+<tr><td>Prompt context</td><td>Catalog fallback</td></tr>
+<tr><td>Generate candidate</td><td>Generate candidate</td></tr>
+<tr><td>Generate candidate</td><td>CopilotWorkflowGenerator</td></tr>
+<tr><td>Generate candidate</td><td>Model returns YAML, not a saved file</td></tr>
+<tr><td>Generate candidate</td><td>Create or edit</td></tr>
+<tr><td>Validate candidate</td><td>Validate candidate</td></tr>
+<tr><td>Validate candidate</td><td>WorkflowDefinitionLoader + binder dry-run</td></tr>
+<tr><td>Validate candidate</td><td>Structure AND runtime bindability</td></tr>
+<tr><td>Validate candidate</td><td>Strip fences; ensure id</td></tr>
+<tr><td>One correction</td><td>One correction</td></tr>
+<tr><td>One correction</td><td>Failed YAML + error</td></tr>
+<tr><td>One correction</td><td>Re-run same checks</td></tr>
+<tr><td>One correction</td><td>No third attempt</td></tr>
+<tr><td>Explicit error</td><td>Explicit error</td></tr>
+<tr><td>Explicit error</td><td>Second invalid result</td></tr>
+<tr><td>Explicit error</td><td>400 · not persisted</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Review &amp; edit draft</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Human edits YAML or the visual graph</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Valid draft stays unsaved</td></tr>
+<tr><td>Save: validate again</td><td>Save: validate again</td></tr>
+<tr><td>Save: validate again</td><td>Parse + structure + route id + binder</td></tr>
+<tr><td>Save: validate again</td><td>PUT …/workflows/{workflowId}</td></tr>
+<tr><td>Save: validate again</td><td>Ownership required</td></tr>
+<tr><td>Reject save</td><td>Reject save</td></tr>
+<tr><td>Reject save</td><td>Parse / id / bind error</td></tr>
+<tr><td>Reject save</td><td>400 or 422 · no write</td></tr>
+<tr><td>Reject save</td><td>Fix the draft</td></tr>
+<tr><td>Write project YAML</td><td>Write project YAML</td></tr>
+<tr><td>Write project YAML</td><td>Resolve the path inside the workspace</td></tr>
+<tr><td>Write project YAML</td><td>.agentweaver/workflows/{id}.yaml</td></tr>
+<tr><td>Write project YAML</td><td>Contained-path guard</td></tr>
+<tr><td>Write can fail</td><td>Write can fail</td></tr>
+<tr><td>Write can fail</td><td>Path guard or file I/O</td></tr>
+<tr><td>Write can fail</td><td>400 / 500 · stop here</td></tr>
+<tr><td>Write can fail</td><td>No success response</td></tr>
+<tr><td>Sync → definition</td><td>Sync → definition</td></tr>
+<tr><td>Sync → definition</td><td>Extend allowed set if needed; reload</td></tr>
+<tr><td>Sync → definition</td><td>Return saved detail on success</td></tr>
+<tr><td>Reload failure</td><td>Reload failure</td></tr>
+<tr><td>Reload failure</td><td>Written, not available</td></tr>
+<tr><td>Reload failure</td><td>422 / 500 · file may exist</td></tr>
+<tr><td>e01</td><td>permitted</td></tr>
+<tr><td>e02</td><td>grounds prompt</td></tr>
+<tr><td>e03</td><td>candidate YAML</td></tr>
+<tr><td>e04</td><td>valid; unsaved</td></tr>
+<tr><td>e05</td><td>first invalid</td></tr>
+<tr><td>e06</td><td>one repair</td></tr>
+<tr><td>e07</td><td>invalid again</td></tr>
+<tr><td>e08</td><td>explicit Save</td></tr>
+<tr><td>e09</td><td>invalid</td></tr>
+<tr><td>e10</td><td>checks pass</td></tr>
+<tr><td>e11</td><td>failure</td></tr>
+<tr><td>e12</td><td>write succeeded</td></tr>
+</tbody></table>
+</details>
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Workflow authoring
+
+[![Flowchart showing one model correction pass, human editing of an unsaved workflow draft, save-time validation, project YAML persistence, registry activation, and distinct pre-write and post-write failures.](diagrams/flagship/canonical-workflow-authoring.png)](diagrams/drawio/generated/flagship/canonical-workflow-authoring.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-workflow-authoring.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-workflow-authoring.drawio)
+<!-- flagship-diagrams:end -->

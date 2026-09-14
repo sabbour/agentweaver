@@ -10,6 +10,7 @@ name: CI
 #   - node scripts/ci/validate.mjs --profile ci --area node,harness
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
+#   - node scripts/ci/validate.mjs --profile ci --area diagrams
 # .NET tests are split by stable product namespaces and explicit isolation categories. This keeps
 # the seven required shard contexts stable while parallelizing the real work.
 #
@@ -103,7 +104,6 @@ jobs:
               - '.github/workflows/ci.yml'
             diagrams:
               - 'docs/diagrams/**'
-              - 'docs/diagram-renderer/**'
               - 'README.md'
               - 'docs/guide/architecture-aks.md'
               - 'scripts/docs/**'
@@ -300,6 +300,27 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: node scripts/ci/validate.mjs --profile ci --area docs
+
+  diagram-checks:
+    name: Documentation diagrams
+    needs: changes
+    if: needs.changes.outputs.diagrams == 'true' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install diagram tooling dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
+
+      - name: Test generators and verify rendered artifact stamps
+        run: node scripts/ci/validate.mjs --profile ci --area diagrams
 
   changeset-advisory:
     name: Changeset advisory
