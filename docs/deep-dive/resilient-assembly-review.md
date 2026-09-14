@@ -2,8 +2,8 @@
 
 Shipped in **v0.9.17-rc1**, the resilient assembly-review loop eliminates the `assembly_blocked` dead-end that
 previously stranded coordinator runs when the autonomous steering budget was exhausted. It also makes every
-phase of the review cycle more robust: revisions carry full accumulated context, a rejected author's work is
-handed to a different agent (not discarded), and child-turn commit faults now surface as typed, recoverable
+phase of the review cycle more robust: revisions carry accumulated context, resumable rejected work can
+stay with its author while fresh-dispatch decisions attempt a context-preserving handoff, and child-turn commit faults surface as typed, recoverable
 events instead of silent stream-drain failures.
 
 For config keys and status codes see the [reference](../reference/resilient-assembly-review.md). For the
@@ -34,13 +34,6 @@ complementary: Fix-A raises the in-place convergence rate; Fix-B guarantees the 
 
 ## End-to-end resilient assembly flow
 
-![End-to-end resilient assembly flow: Assembling, Assembly gate, In-place revision, Conscious dispatch_fresh, Lockout handoff, Alternate eligible, Degrade to same-author, Budget OK?, Escalate to, Human reviews, Approve → merge, Decline → terminal, …](../diagrams/resilient-assembly-review-fig1.png)
-
-<!-- Rendered from ../diagrams/src/resilient-assembly-review-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Fix-B: budget-exhausted escalation (the headline change)
 
 When `CoordinatorSteeringDecider.DecideAsync` returns `Proceed` (budget exhausted), the coordinator now
@@ -49,20 +42,21 @@ calls `EscalateToHumanReviewAsync`, which mirrors the existing `human-review` ga
 1. **Guarded CAS transition** — `CoordinatorAssemblyStore.TryEscalateToInReviewAsync` does an
    `ExecuteUpdateAsync` `WHERE Status ∈ {AssemblySteering, Assembling} → InReview, stage "review"`. A
    concurrent replica that already set `InReview` no-ops (no double-escalation).
-2. **Durable review-request** — `UpsertReviewRequestAsync` persists the escalation with reason
-   `steering_budget_exhausted` and all accumulated gate feedback (bounded to 32 directives × 2000
-   characters each, built by `BuildAccumulatedGateFeedbackAsync`) before settling the directive. A crash
-   after the write recovers via the existing `planStatus == InReview → ResumeInReviewAsync` path at
-   `CoordinatorAssemblyService.cs:532`; no new recovery code is needed.
+2. **Durable review-request** — `UpsertReviewRequestAsync` persists the owner, integration branch, and tree
+   hash before settling the directive. The review-requested **event** carries the escalation reason and
+   accumulated gate feedback (bounded to 32 directives × 2000 characters by
+   `BuildAccumulatedGateFeedbackAsync`); those are not fields on the review row. Recovery uses
+   `InReview → ResumeInReviewAsync` without rebuilding an already-recorded review artifact
+   (`CoordinatorAssemblyService.cs:1321–1357`, `:2882–2986`).
 3. **Settle the directive** — `MarkDirectiveAppliedAsync` is called only after the review request is
    durably open. The human then owns the loop; the directive is never blocked on how long the human takes.
 4. **Live-await** — `AwaitReviewDecisionAsync` → `ApplyReviewDecisionAsync`. Approve → merge → complete.
-   Decline → `assembly_declined` terminal. Request-changes → **unconditional** budget reset + fresh steering
+   Decline → `assembly_declined` terminal. Request-changes → **unconditional** budget reset + a new steering
    loop (below).
 
 The emit sequence:
-- `coordinator.steering_decision { decision="proceed", escalation="human_review" }`
-- `coordinator.assembly_review_requested { gateKind="human-review", reason="steering_budget_exhausted", treeHash, integrationBranch, includedSubtaskIds }`
+- `coordinator.steering_decision` records the chosen direction and rationale.
+- `coordinator.assembly_review_requested { gateKind="human-review", escalated=true, reason, treeHash, integrationBranch, accumulatedFeedback }` carries the escalation rationale; the normal authored-gate event has a different payload.
 
 This is the same event the human-review gate emits on the normal happy path, so the UI opens the same
 review card with the exhaustion reason visible.
@@ -200,7 +194,7 @@ implicated subtask (the `(SubtaskId, DependsOnSubtaskId)` edges walked in revers
 
 | Set | Members | Author lockout? | Why |
 |---|---|---|---|
-| **Implicated** (lockout set) | reviewer-named subtasks only (`ScopeImplicatedSubtasks`) | **Yes** | only these authors produced a rejected artifact |
+| **Implicated** (potential lockout set) | reviewer-named subtasks, or the observable contributor fallback (`ScopeImplicatedSubtasks`) | **Only if fresh-dispatch rotation is selected and feasible** | resumable revisions retain their author; unrelated authors must not be locked out |
 | **Re-dispatch** set | implicated ∪ transitive dependents (`implicated.Concat(TransitiveDependents)`) | dependents: **No** | a dependent did nothing wrong but must rebuild against the revised contract |
 
 Locking out a blameless dependent's author would re-create the very roster-exhaustion deadlock #223 exists
@@ -224,10 +218,13 @@ executor (`RequestChangesAsync`) use the **same** `ScopeImplicatedSubtasks` + `T
 and the persisted steering directive carries the implicated set so a crash-recovery re-drive recomputes an
 identical re-dispatch closure from the same plan edges.
 
-### Strict reviewer-rejection lockout
+### Resumability-aware reviewer rejection
 
-A **rejection** (any gate source with severity `request-changes`) triggers the lockout protocol, scoped to
-the **implicated** subtasks only (#223 — the reviewer-named set, never every file-toucher):
+A **rejection** (gate feedback with severity `request-changes`) first goes through the decider.
+`InPlaceSteer` resumes the same author's session without lockout; `DispatchFresh` attempts the rotation
+protocol below, scoped to the **implicated** subtasks only (structured targets, or the documented broad
+fallback). There is no post-decision override forcing every rejection to rotate
+(`CoordinatorAssemblyService.cs:2323–2370`; `CoordinatorAssemblyServiceTests.cs:1090–1130`):
 
 1. For each implicated subtask, the current author is atomically appended to `Subtask.LockedOutAgents` (a
    dormant column that existed in the schema since the initial migration but was never read/written; no new
@@ -241,8 +238,8 @@ the **implicated** subtasks only (#223 — the reviewer-named set, never every f
 4. The re-dispatched child honors the FIX 2 terminal-emission invariant identically (same conditional
    edge routing; same one-terminal guarantee).
 
-The implicated subtasks' **transitive dependents** are additionally re-dispatched to rebuild against the
-revised contract, but their authors are **never** locked out (#223).
+The implicated subtasks' already-satisfied **transitive dependents** are additionally re-dispatched as needed
+to rebuild against the revised contract, but their authors are **never** locked out (#223).
 
 #### Single-eligible-agent deadlock: degrade vs. escalate (#233)
 
@@ -275,9 +272,9 @@ This makes the pod-per-run single-eligible path consistent with the already-acce
 `InPlaceSteer` (same author, context preserved, no lockout — `PodPerRunResumabilityProbe`). A single-role
 rejection now self-heals with a same-author revision instead of parking at a human on round one.
 
-**Advisory / steer feedback (not a rejection)** keeps the same agent in place via the normal
-`in_place_steer` path (`StartRevisionAsync`). The lockout disposition is derived from
-`(source, severity)`: `request-changes` from a reviewer ⇒ rejection; everything else ⇒ guidance.
+**Advisory** is a surfaced no-op that continues the gate loop without resetting work. **In-place steering**
+is a separate executable decision and can apply to rejected work when resumable. Source/severity describes
+the feedback, but direction determines whether revision stays in place or attempts rotation.
 
 ### RAI verdict contract: a machine-readable sentinel, not prose (#231)
 
@@ -307,9 +304,16 @@ The fix replaces the prose scan with a single machine-readable sentinel:
   **still** unparseable, the executor **fails safe to a blocking `RED`** (reason `unparseable_after_reask`,
   emitted as `run.rai_error`) rather than silently passing a `YELLOW`/`GREEN` — a rare, visible, recoverable
   false-block is strictly preferable to shipping a real `RED` (credentials, PII, harmful content).
-- **A genuine RED still blocks.** A `RED` from the sentinel or 🔴 sets `ContentSafetyFlagged` on the turn
-  output, which the collective-assembly pipeline (`RunRaiAsync`) surfaces as `SafetyFlagged`, routing the
-  coordinator into `RaiBlockAsync` — the safety block is unchanged; only the *parsing* is now deterministic.
+- **A genuine RED stops autonomous progress, not the coordinator's recoverability.** Sentinel RED or 🔴
+  sets `ContentSafetyFlagged`; `RunRaiAsync` surfaces `SafetyFlagged`. Collective assembly calls
+  `ParkRaiRedAtHumanReviewAsync`, persists the reviewed branch/tree, and waits in `in_review` /
+  `awaiting_review` with `reason: rai_red` for approve, request-changes, or decline. It does **not**
+  call a terminal `RaiBlockAsync` (`CoordinatorAssemblyService.cs:1131–1136`, `:3757–3795`).
+- **REVISE is distinct from RED.** It surfaces `RevisionRequested` and routes through explicit steering.
+  A resumable target can revise in place; a fresh-dispatch decision attempts scoped rotation; exhausted
+  autonomy (`Proceed`) durably escalates to human review instead of terminal `RaiBlocked`
+  (`CollectiveAssemblyPipeline.cs:133–136`; `CoordinatorAssemblyService.cs:1139–1146`, `:2372–2388`).
+  These are collective-assembly semantics, not a claim that standalone workflow RAI terminal edges changed.
 - The surfaced rationale/feedback (`ExtractRationale` / `ExtractFeedback`) deliberately **skip** the sentinel
   line, so the human sees the explanation instead of a degenerate `VERDICT: REVISE`.
 
@@ -330,7 +334,7 @@ The fix replaces the prose scan with a single machine-readable sentinel:
 | #223 structured `TARGET_FILES:` parser `ReviewTargetFiles.Parse` / `IsDirectiveLine` | `packages/Agentweaver.AgentRuntime/Workflow/ReviewTargetFiles.cs` |
 | #231 RAI verdict sentinel prompt + one-re-ask → fail-safe-RED flow `HandleAsync`, `ReAskPrompt`, reason `unparseable_after_reask` | `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs` |
 | #231 sentinel-only parse `TryParseVerdict` / `TryParseSentinelVerdict` / `TryParseSentinelLine` / `TryParseEmojiVerdict`; sentinel-skipping `ExtractRationale` / `ExtractFeedback` | `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs` |
-| #231 verdict consumption at the gate: `RunRaiAsync` (→ `SafetyFlagged`), RAI gate → `RaiBlockAsync` | `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs`; `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
+| Verdict consumption: `RunRaiAsync` → `SafetyFlagged` / `RevisionRequested`; RED → durable human review, REVISE → steering | `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:133–136`; `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1131–1146`, `:3757–3795` |
 | Reviewer `TARGET_FILES:` emission | `packages/Agentweaver.AgentRuntime/Workflow/RubberduckTurnExecutor.cs`; `BuildTestTurnExecutor.cs` |
 | `coordinator.assembly_implicated_scope_fallback` event constant | `packages/Agentweaver.Domain/EventTypes.cs` |
 | `TryEscalateToInReviewAsync`, `IncrementHumanReviewRoundTripAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` |
@@ -352,3 +356,53 @@ The fix replaces the prose scan with a single machine-readable sentinel:
 - [Unified autonomous steering](./unified-steering.md) — the `SteeringSignal` and `CoordinatorSteeringDecider` that route assembly feedback.
 - [Coordinator internals](./coordinator-internals.md) — the broader assembly pipeline and collective assembly stage.
 - [Review & merge](./review-merge.md) — the human-review gate mechanics Fix-B escalates into.
+
+<details id="diagram-context-resilient-assembly-review-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Rejected work keeps useful context</td></tr>
+<tr><td>takeaway</td><td>A steering decision chooses the effect; rejection does not always rotate the author.</td></tr>
+<tr><td>group-title-0</td><td>FEEDBACK AND SCOPE</td></tr>
+<tr><td>group-title-1</td><td>BOUNDED DIRECTION</td></tr>
+<tr><td>group-title-2</td><td>AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+<tr><td>Gate request-changes</td><td>Gate request-changes</td></tr>
+<tr><td>Gate request-changes</td><td>Structured target-file hints</td></tr>
+<tr><td>Gate request-changes</td><td>not prose-inferred blame</td></tr>
+<tr><td>Implicated + dependent</td><td>Implicated + dependent</td></tr>
+<tr><td>Implicated + dependent</td><td>Rebuild closure without blame</td></tr>
+<tr><td>Implicated + dependent</td><td>structured TARGET_FILES</td></tr>
+<tr><td>Signal + decision</td><td>Signal + decision</td></tr>
+<tr><td>Signal + decision</td><td>Persist explicit direction</td></tr>
+<tr><td>Signal + decision</td><td>accumulated context</td></tr>
+<tr><td>In-place revision</td><td>In-place revision</td></tr>
+<tr><td>In-place revision</td><td>Same author and session</td></tr>
+<tr><td>In-place revision</td><td>no reset-to-pending</td></tr>
+<tr><td>Fresh dispatch</td><td>Fresh dispatch</td></tr>
+<tr><td>Fresh dispatch</td><td>Scoped author selection</td></tr>
+<tr><td>Fresh dispatch</td><td>handoff with context</td></tr>
+<tr><td>No alternate author</td><td>No alternate author</td></tr>
+<tr><td>No alternate author</td><td>Context permits same author</td></tr>
+<tr><td>No alternate author</td><td>bounded conscious fallback</td></tr>
+<tr><td>Human escalation</td><td>Human escalation</td></tr>
+<tr><td>Human escalation</td><td>No context or budget left</td></tr>
+<tr><td>Human escalation</td><td>durable review request</td></tr>
+<tr><td>Human decision</td><td>Human decision</td></tr>
+<tr><td>Human decision</td><td>Approve, change or decline</td></tr>
+<tr><td>Human decision</td><td>no wall-clock timeout</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Fresh autonomous budget</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Only human changes reset it</td></tr>
+<tr><td>Fresh autonomous budget</td><td>no human-round-trip cap</td></tr>
+<tr><td>e0</td><td>scope</td></tr>
+<tr><td>e1</td><td>signal</td></tr>
+<tr><td>e2</td><td>resume</td></tr>
+<tr><td>e3</td><td>fresh</td></tr>
+<tr><td>e4</td><td>no alt</td></tr>
+<tr><td>e5</td><td>context</td></tr>
+<tr><td>e6</td><td>no context</td></tr>
+<tr><td>e7</td><td>Proceed</td></tr>
+<tr><td>e8</td><td>await</td></tr>
+<tr><td>e9</td><td>changes</td></tr>
+<tr><td>e10</td><td>retry</td></tr>
+<tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+</tbody></table>
+</details>

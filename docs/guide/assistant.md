@@ -32,11 +32,12 @@ token for the exact MCP resource and sends it only to the per-turn Assistant run
 Entra bearer is never sent to MCP. Repository and Copilot capabilities use their respective GitHub
 App authorizations, so you do not need to sign in again inside the conversation.
 
-When Agentweaver is configured to run assistant turns in an **AgentHost pod**, start the
-session from a project that has its GitHub Copilot App connected. The pod is created only after
-Agentweaver captures a short-lived capability bound to that project and session; it never falls
-back to a machine or ambient GitHub credential. If the connection is missing, the session stays
-unstarted and the app offers the project connection action instead.
+For **AgentHost** execution, Agentweaver revalidates the accepted `assistant_turn` execution
+plan before launching the turn. A project Copilot connection is not a prerequisite for a personal
+conversation. Personal sessions resolve platform BYOK, then personal BYOK, then personal
+Copilot; they do not borrow platform-default Copilot or an ambient machine credential.
+See the [provider hierarchy](./authentication#provider-hierarchy) for the separate project
+and personal authority boundaries.
 
 ## Resuming a session
 
@@ -44,8 +45,8 @@ Sessions persist. Close the tab, come back a day later, or get routed to a diffe
 
 Under the hood this works by durably replaying the conversation's persisted message history rather than depending on any single process keeping the conversation in memory (see [Assistant runtime — Deep Dive](/deep-dive/assistant-runtime) for the mechanism). Practically, this means:
 
-- A session **idle for 30 minutes** is marked completed automatically, but sending a new message to it resumes it — nothing is lost.
-- You can have up to **3 sessions actively in progress** at once; resuming an existing one never counts against that limit.
+- A session **idle for 30 minutes** is parked as **Idle**, not completed. Sending a new message resumes the same durable conversation.
+- The configured default is **5 sessions actively in progress** per user; resuming an existing conversation does not create another session.
 
 ## Deleting a session
 

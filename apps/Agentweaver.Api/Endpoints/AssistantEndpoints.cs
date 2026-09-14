@@ -120,7 +120,12 @@ public static class AssistantEndpoints
                 logger.LogError(ex, "Failed to start operator assistant run.");
                 return Results.Problem("Failed to start operator assistant run.", statusCode: StatusCodes.Status500InternalServerError);
             }
-        }).AuthenticatedPlatform();
+        })
+            .AuthenticatedPlatform()
+            .RequiresAiExecutionContext(
+                "assistant_turn",
+                required: false,
+                condition: "when the request carries a message and defer_first_turn is not set");
 
         // GET /api/assistant/runs — list the caller's own operator conversations, newest-first. Scoped
         // to the authenticated caller (never leaks other users' runs). Optional ?limit= caps the count.
@@ -220,7 +225,9 @@ public static class AssistantEndpoints
                 logger.LogError(ex, "Failed to run operator assistant turn.");
                 return Results.Problem("Failed to run operator assistant turn.", statusCode: StatusCodes.Status500InternalServerError);
             }
-        }).AuthenticatedPlatform();
+        })
+            .AuthenticatedPlatform()
+            .RequiresAiExecutionContext("assistant_turn");
     }
 
     internal static int ProviderFailureStatus(AgentProviderException exception) =>

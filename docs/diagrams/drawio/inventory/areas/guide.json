@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "area": "guide",
+  "diagrams": [
+    {
+      "name": "guide-architecture-aks-fig1",
+      "area": "guide",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/guide-architecture-aks-fig1.drawio",
+        "drawio": "docs/diagrams/src/guide-architecture-aks-fig1.drawio",
+        "png": "docs/diagrams/guide-architecture-aks-fig1.png",
+        "hash": "docs/diagrams/guide-architecture-aks-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "guide-architecture-aks-fig5",
+      "area": "guide",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/guide-architecture-aks-fig5.drawio",
+        "drawio": "docs/diagrams/src/guide-architecture-aks-fig5.drawio",
+        "png": "docs/diagrams/guide-architecture-aks-fig5.png",
+        "hash": "docs/diagrams/guide-architecture-aks-fig5.hash.txt"
+      }
+    },
+    {
+      "name": "guide-example-scenarios-fig3",
+      "area": "guide",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/guide-example-scenarios-fig3.drawio",
+        "drawio": "docs/diagrams/src/guide-example-scenarios-fig3.drawio",
+        "png": "docs/diagrams/guide-example-scenarios-fig3.png",
+        "hash": "docs/diagrams/guide-example-scenarios-fig3.hash.txt"
+      }
+    }
+  ]
+}

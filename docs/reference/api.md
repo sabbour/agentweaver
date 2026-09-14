@@ -1,5 +1,11 @@
 # API reference
 
+See Gateway preview versus local port-forward fallback and sandbox policy for the shared visual model.
+
+See [Direct or confirmed launch, DAG dispatch, collective assembly and recovery](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
+
+See Durable event ordering, SSE replay and terminal draining for the shared visual model.
+
 The Agentweaver backend is the single source of truth for run lifecycle, streaming, review, and merge. Every client is a thin layer over these endpoints.
 
 - Base path: `/api`
@@ -115,7 +121,7 @@ another operation if the endpoint's documented operation is rejected; treat that
 API contract error and stop the affected flow safely.
 
 Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped. Each summary also includes `coordinator_status`: for a coordinator run (`agent_name: "Coordinator"`, no parent) this is the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`); it is `null` for normal runs. A companion `coordinator_status_reason` (the coordinator run's `result`, scoped to coordinator rows) carries the human-readable terminal/failure detail so the UI can render "Failed: &lt;reason&gt;". Children are excluded from this list. The UI should render `coordinator_status` (plus `coordinator_status_reason`) for coordinator rows so a long-running assembly does not show as a bare `in_progress` and a terminal failure does not show as an unexplained `failed`.
-The standalone project-scoped workflow-run detail endpoint (`GET /api/projects/{id}/runs/{workflowRunId}`) has been removed with the retired standalone run pages. Use owner-scoped `/api/runs/{id}` and child run endpoints for embedded coordinator panels.
+The standalone project-scoped workflow-run detail endpoint (`GET /api/projects/{id}/runs/{workflowRunId}`) has been removed with the retired standalone run pages. Use project-role-authorized `/api/runs/{id}` and child run endpoints for embedded coordinator panels.
 
 Run control state is durable. Shell approvals/denials, tool approval requests, run-scoped/always allow policies, child-to-parent approval inheritance, `ask_question` answers, `auto-approve`, and `autopilot` are replayed from persisted run events. That means approval, answer, and toggle requests may land on any API replica and still be observed by the worker that owns the run.
 
@@ -556,7 +562,7 @@ Returns the plain text banner `Agentweaver API`.
 
 ### GET /api/runs/{id}
 
-Returns the current state of a run. Only the submitting user may access their own runs; non-owners receive `403 Forbidden`.
+Persisted project-scoped runs inherit their stored project's access: Viewer permits inspection; Contributor permits run control, review, approval, questions and steering; Owner permits project administration. Authorization uses persisted `ProjectId`, not caller-supplied context or the submitting-user string. Legacy runs without a project retain submitting-user ownership; dangling project references fail closed. Unauthorized ordinary-run SSE access returns `404` to hide existence.
 
 Response `200 OK`:
 
@@ -623,7 +629,7 @@ Errors: `400` invalid run id; `404` run not found; `403` caller is not the run o
 
 ### GET /api/runs/{id}/stream
 
-Streams the run's events over SSE. Requires a valid bearer key and run ownership — a non-owner receives `404` (no existence leak). Each frame carries the per-run `sequence` as the SSE `id` and the event payload as `data`:
+Streams the run's events over SSE. Requires valid authentication and Viewer access to the run's persisted project (legacy run ownership otherwise) — an unauthorized caller receives `404` (no existence leak). Each frame carries the per-run `sequence` as the SSE `id` and the event payload as `data`:
 
 ```text
 id: 3
@@ -640,9 +646,9 @@ data: {}
 
 The stream ends with a synthetic `done` frame (no `id`) after the terminal event.
 
-Set `Last-Event-ID` to the last sequence you received. The server resumes from that point in the in-memory event buffer. Reconnection works while the run's entry is retained in memory (up to 256 completed runs; in-progress entries are evicted after approximately two hours of inactivity). `awaiting_review` runs and any run actively being merged are exempt from inactivity eviction — entries for those runs stay in memory until a terminal review decision is recorded. After a process restart, stream entries for `awaiting_review` runs are re-created so the review endpoint can still emit events to reconnected clients; any run interrupted mid-merge is reverted to `awaiting_review` and also gets a fresh entry.
+Set `Last-Event-ID` to the last per-run sequence received. SQLite uses `SqliteRunEventStream`; PostgreSQL uses `EfRunEventStream`. SSE serves a retained local entry when available, otherwise durable replay-and-tail, including another producer's events. Restart or local-entry eviction does not erase persisted history.
 
-After a process restart, the in-memory event history is lost. If the run already completed, the endpoint replays the stored final result as a single `agent.message` event and closes the stream. If the run was still in progress at restart, recovery marks it as failed and the stream returns `done` immediately with no events.
+Durable subscribers drain the full loaded replay batch before terminating, including persisted diagnostics after a terminal event. `coordinator.assembly_blocked` is not terminal. A `done` frame ends a connection, not necessarily a parked or human-gated run.
 
 Response headers:
 
@@ -652,7 +658,7 @@ Response headers:
 
 ### POST /api/runs/{id}/review
 
-Records a human review decision. Only the run owner may submit a decision. Non-owners receive `403 Forbidden`.
+Records a human review decision. Submitting a decision requires Contributor access to the run's persisted project, or legacy run ownership. Insufficient access returns `403 Forbidden`.
 
 Request:
 
@@ -751,7 +757,7 @@ Replays persisted Copilot SDK session events for a terminal run. The session is 
 
 ### GET /api/runs/{id}/graph
 
-Returns the workflow graph descriptor for the run, describing the node/edge topology so a client can render the live workflow without hardcoding it. The descriptor is built from the same code that wires the MAF workflow (no runtime reflection). Owner-scoped Bearer auth. Coordinator runs (`parent_run_id == null`, driven by the built-in Coordinator agent, with a persisted work plan) return the `coordinator` variant (see below); child runs (`parent_run_id != null`) return the `child` variant; all others return the `full` variant.
+Returns the workflow graph descriptor for the run, describing the node/edge topology so a client can render the live workflow without hardcoding it. The descriptor is built from the same code that wires the MAF workflow (no runtime reflection). Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise) Bearer auth. Coordinator runs (`parent_run_id == null`, driven by the built-in Coordinator agent, with a persisted work plan) return the `coordinator` variant (see below); child runs (`parent_run_id != null`) return the `child` variant; all others return the `full` variant.
 
 Response `200 OK` — a `GraphDescriptor`:
 
@@ -776,12 +782,14 @@ Response `200 OK` — a `GraphDescriptor`:
 
 #### Coordinator variant
 
-When the run is a coordinator run, the descriptor is built from its work plan (`graph_id` = `coordinator:{coordinatorRunId}`, `start_node_id` = `coordinator`) so the same generic renderer can draw the coordinator, its fan-out subtask children, and the PLANNED Phase 3 collective-assembly stage. It is shape-only — runtime status is NOT baked in (project it from the `subtask.*` / `coordinator.topology` streams).
+Coordinator graph descriptors combine work-plan topology with persisted status. Nodes may include `status`, `status_reason`, and `terminal_stage`; subtask state also arrives through `coordinator.topology`. Selected-workflow assembly gates become `kind: "live"` when reached, even though their stable IDs start with `planned:assembly-`. Failure projection uses the terminal stage so failure-scribe does not mark never-run gates as executed. Delegated plans leave skipped nodes planned with delegated status.
+
+Leaf subtasks connect to the first selected gate (or merge if none); the gates form a chain followed by merge and Scribe. Each selected gate has a coordinator loopback, excluded from forward degree calculations. Fixed gate lists are examples for a particular workflow, not a universal RAI-only pipeline.
 
 - Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
 - One node per subtask, id `plan:subtask-{id}` (`node_type: "subtask"`, `role: "subtask"`, `kind: "live"`). Subtask nodes carry rich display fields as OPTIONAL snake_case properties (omitted when null): `agent`, `model`, `phase`, `isolation`, `child_run_id`. Once the subtask's child run is dispatched, `child_graph_ref` is `run:{childRunId}` so the client can expand the child's own graph via `GET /api/runs/{childRunId}/graph`; it is `null` until dispatched.
-- PLANNED collective-assembly nodes (`kind: "planned"`): `planned:assembly-rai` (`node_type: "agent"`, `role: "rai"`), `planned:assembly-review` (`node_type: "gate"`, `role: "review"`), `planned:assembly-merge` (`node_type: "action"`, `role: "merge"`), `planned:assembly-scribe` (`node_type: "agent"`, `role: "scribe"`).
-- Edges: `coordinator` → each root subtask; dependency edges `plan:subtask-{dependsOn}` → `plan:subtask-{dependent}`; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain `assembly-rai` → `assembly-review` → `assembly-merge` → `assembly-scribe`. Two loopback back-edges (`loopback: true`) close the cycle: `planned:assembly-rai` → `coordinator` and `planned:assembly-review` → `coordinator`, reflecting that an RAI flag or a human-review request-changes re-dispatches affected subtasks through the coordinator. All forward edges are `loopback: false`. `cardinality` is `fanout`/`fanin` by forward (non-loopback) degree; loopback edges are always `direct` and are excluded from the degree counts so they do not distort fan-out/fan-in.
+- Assembly nodes are resolved from the selected workflow. Stable `planned:assembly-*` IDs become live when reached; optional status/reason/terminal-stage fields describe persisted execution. Merge and Scribe follow the gates.
+- Edges connect Coordinator to root subtasks, prerequisite to dependent subtasks, and each leaf to the first selected assembly gate (or merge). Gates chain into merge and Scribe. Every selected gate has a Coordinator loopback; forward degree/cardinality excludes those direct loopbacks.
 
 ```json
 {
@@ -1022,16 +1030,16 @@ Errors: `404` unknown session id, or one that's been permanently closed/deleted 
 
 ## Sandbox port-forward endpoints
 
-These endpoints back the Kubernetes sandbox preview feature by running `kubectl port-forward` to the sandbox pod for a run. They are owner-scoped like other run endpoints.
+These run-scoped endpoints manage browser previews. Gateway-direct HTTPS is primary when enabled; kubectl forwarding is only the disabled-preview API-host loopback fallback.
 
 ### POST /api/runs/{runId}/sandbox/port-forward
 
-Starts a port-forward session from a random local port to the sandbox pod's target port.
+With `Sandbox:Preview:Enabled=true`, start provisions Gateway-direct routing through a per-preview HTTPRoute and ClusterIP Service to the sandbox, returning `preview_url` and `keepalive_url`. With preview disabled it starts `kubectl port-forward` on API-host loopback; that address is not automatically reachable from a remote browser. Contributor starts/stops; Viewer lists. The `target_port` request first validates 1-65535; Gateway also applies its configured allowed range. The `pf-*`/`local_port` response below describes only the disabled-preview fallback.
 
 Request:
 
 ```json
-{ "targetPort": 3000 }
+{ "target_port": 3000 }
 ```
 
 Response `200 OK`:
@@ -1327,7 +1335,7 @@ Reports the terminal outcome of a `run_command` invocation. **Planned — not ye
 
 ## Project endpoints
 
-All project endpoints are caller-owned unless explicitly documented as public metadata. Creating a project records the authenticated caller as `owner`; listing returns only that caller's projects; project-scoped mutation and child-resource endpoints require that same ownership. Non-owned resources return `403 Forbidden` or `404 Not Found` depending on the endpoint's existence-leak behavior.
+Projects are role-based: creation establishes ownership and listing returns caller-visible projects. Inspection requires Viewer; supported operational mutations/orchestration require Contributor; administration, including provider settings, role assignments, rename and deletion, requires Owner. Personal Assistant sessions retain their separate caller-ownership rules.
 
 ### POST /api/projects
 
@@ -1488,7 +1496,7 @@ Deprecated direct project-run submission route. It returns `410 Gone`; use `POST
 
 ## Coordinator endpoints
 
-The Coordinator agent can either start directly from a goal or draft a confirmable outcome spec for a goal and suspend at a confirmation gate. These endpoints are a thin HTTP layer over `CoordinatorRunService`; all orchestration lives in the service. A coordinator run is an ordinary run (`agent_name: "Coordinator"`, no parent), so its events stream from `GET /api/runs/{id}/stream` and it is owner-scoped like any other run.
+The Coordinator agent can either start directly from a goal or draft a confirmable outcome spec for a goal and suspend at a confirmation gate. These endpoints are a thin HTTP layer over `CoordinatorRunService`; all orchestration lives in the service. A coordinator run is an ordinary run (`agent_name: "Coordinator"`, no parent), so its events stream from `GET /api/runs/{id}/stream` and it is authorized from its persisted project like other project runs.
 
 ### POST /api/projects/{id}/orchestrations
 
@@ -1502,7 +1510,7 @@ Request:
 {
   "goal": "Make the onboarding flow resumable across sessions",
   "modelId": null,
-  "start_mode": "define_outcome",
+  "start_mode": "defineOutcome",
   "auto_approve_tools": false,
   "autopilot": false
 }
@@ -1512,7 +1520,7 @@ Request:
 | --- | --- | --- | --- |
 | `goal` | string | Yes | The user's prompt/outcome for the coordinator. |
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
-| `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
+| `start_mode` | `"direct"` or `"defineOutcome"` | No | Optional launch mode; `define_outcome` remains an accepted compatibility alias. Omit or use `"defineOutcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without model-drafting or pausing to confirm an outcome; a confirmed prompt-backed spec is still persisted. Direct still enforces child tool approvals, assembly review, and merge gates. |
 | `auto_approve_tools` | bool | No | Auto-approve only repository-defined safe tools for the coordinator and its children. Currently this covers `web_fetch` and `start_preview`. Preview auto-approval bypasses only the human wait; invalid ports, exited/unreachable preview processes, sandbox ownership, and publication failures still fail normally. It does not bypass arbitrary shell, destructive, privileged, secret-bearing, or unrelated network approvals. Defaults to `false`. The legacy `autoApproveTools` alias remains accepted. |
 | `autopilot` | bool | No | Launch with Autopilot ON: auto-answers clarifying questions **and**, in `defineOutcome` mode, auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`. Does NOT auto-grant tool approvals. Cascades to children. Defaults to `false`. |
 
@@ -1554,7 +1562,7 @@ Response `201 Created` (with `Location: /api/runs/{runId}`):
 
 ### GET /api/runs/{id}/outcome-spec
 
-Returns the current persisted outcome spec for a coordinator run. Owner-scoped.
+Returns the current persisted outcome spec for a coordinator run. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 Response `200 OK`:
 
@@ -1586,7 +1594,7 @@ Response `200 OK`:
 
 ### POST /api/runs/{id}/outcome-spec/confirm
 
-Confirms the drafted outcome spec, resuming the suspended coordinator run. Owner-scoped. No request body.
+Confirms the drafted outcome spec, resuming the suspended coordinator run. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). No request body.
 
 Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{id}/outcome-spec`, or `null` if not yet readable).
 
@@ -1598,7 +1606,7 @@ Response `200 OK` with the current outcome spec (same shape as `GET /api/runs/{i
 
 ### POST /api/runs/{id}/outcome-spec/revise
 
-Requests a revision of the drafted outcome spec. The coordinator re-drafts using the feedback and re-suspends at the gate. Owner-scoped.
+Requests a revision of the drafted outcome spec. The coordinator re-drafts using the feedback and re-suspends at the gate. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 Request:
 
@@ -1624,7 +1632,7 @@ Confirming the outcome spec advances the coordinator run through Phase 2: **conf
 
 ### GET /api/runs/{coordinatorRunId}/work-plan
 
-Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Before asynchronous decomposition persists the plan, returns `404 Not Found` with `error: "work_plan_not_found"`; for an existing coordinator run, clients should treat this as a not-ready state and retry on their normal bounded refresh cadence.
+Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). Before asynchronous decomposition persists the plan, returns `404 Not Found` with `error: "work_plan_not_found"`; for an existing coordinator run, clients should treat this as a not-ready state and retry on their normal bounded refresh cadence.
 
 Response `200 OK`:
 
@@ -1670,7 +1678,7 @@ Response `200 OK`:
 
 ### GET /api/runs/{coordinatorRunId}/children
 
-Lists the child runs dispatched by a coordinator run, one row per subtask that has a child run, each paired with its subtask status. Owner-scoped. Empty array when nothing has been dispatched.
+Lists the child runs dispatched by a coordinator run, one row per subtask that has a child run, each paired with its subtask status. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). Empty array when nothing has been dispatched.
 
 Response `200 OK`:
 
@@ -1708,7 +1716,7 @@ Response `200 OK`:
 
 ### POST /api/runs/{coordinatorRunId}/steer
 
-Creates a steering directive that the coordinator relays to one or more running subagents. Owner-scoped.
+Creates a steering directive that the coordinator relays to one or more running subagents. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 Request:
 
@@ -1742,7 +1750,7 @@ A `stop` takes effect immediately: it cancels the targeted child run's in-flight
 
 **Steering at the assembly review gate (#226).** When the run is parked at the collective human-review gate (`run.status == awaiting_review`, `coordinator_steerable == true`), `redirect`/`amend`/`send` are intercepted and delivered to the parked assembly loop instead of the child-turn queue (previously they returned `queued` but were silently dropped):
 
-- `redirect` / `amend` → delivered as a request-changes review decision through the **same** mechanism as [`POST /assembly/review`](#post-apirunscoordinatorrunidassemblyreview) with `request_changes: true` — the parked loop re-dispatches the implicated subtasks (`#223` file-scoped implication + transitive dependents) and **unconditionally** resets the steering budget. With no target files the scope defaults to all contributors; set `targetChildRunId` to narrow to that subtask ∪ its co-touching subtasks. Settles `relayed` (or `deferred`, below).
+- `redirect` / `amend` → delivered as a request-changes review decision through the **same** mechanism as [`POST /assembly/review`](#post-api-runs-coordinatorrunid-assembly-review) with `request_changes: true` — the parked loop re-dispatches the implicated subtasks (`#223` file-scoped implication + transitive dependents) and **unconditionally** resets the steering budget. With no target files the scope defaults to all contributors; set `targetChildRunId` to narrow to that subtask ∪ its co-touching subtasks. Settles `relayed` (or `deferred`, below).
 - `send` → an advisory note on the coordinator timeline; the gate stays armed with no decision and no budget reset. Settles `applied`.
 
 In all cases the directive reaches a definite terminal status and is **never** left silently `queued`. When the review gate is armed on a **different** API replica, the decision is durably persisted for the owning replica's poller to drain: the directive status is `deferred` and the endpoint returns **`202 Accepted`** instead of `201 Created` (mirroring the `/assembly/review` deferred response).
@@ -1754,7 +1762,7 @@ In all cases the directive reaches a definite terminal status and is **never** l
 
 ### POST /api/runs/{coordinatorRunId}/assembly/review
 
-The ONE collective human-review gate for Phase 3 collective assembly (Feature 008). After every child subtask finishes, the coordinator builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs a collective RAI pass over the aggregate diff, then suspends here for one human decision over the **combined** output of all agents. Mirrors `POST /api/runs/{id}/review` (owner-scoped, at-most-once) but `{id}` is the **coordinator** run id, and the decision is delivered to the service-driven gate the collective pipeline is awaiting. Owner-scoped.
+The ONE collective human-review gate for Phase 3 collective assembly (Feature 008). After every child subtask finishes, the coordinator builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs the selected workflow's automated gates over the aggregate diff, then suspends here for one human decision over the **combined** output of all agents. Mirrors `POST /api/runs/{id}/review` (run-authorized, at-most-once) but `{id}` is the **coordinator** run id, and the decision is delivered to the service-driven gate the collective pipeline is awaiting. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 In multi-replica deployments, the reviewer may submit this request to any API replica. If the receiving replica does not own the in-memory assembly pipeline but the durable work plan is still `in_review` at assembly stage `review`, the decision is stored as a deferred decision for the owner replica to pick up and apply to the armed gate. A duplicate submit while that deferred decision exists returns the same accepted response rather than replacing the original decision.
 
@@ -1797,27 +1805,25 @@ Response `200 OK`:
 
 ### GET /api/runs/{id}/assembly/files
 
-Lists files in the coordinator assembly workspace. Owner-scoped. Returns an empty array before assembly creates the integration branch; this is a normal planning/dispatch state.
+Lists files in the coordinator assembly workspace. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). Returns an empty array before assembly creates the integration branch; this is a normal planning/dispatch state.
 
 ### GET /api/runs/{id}/assembly/files/{**path}
 
-Returns diff/content metadata for a specific file in the assembly workspace. Owner-scoped.
+Returns diff/content metadata for a specific file in the assembly workspace. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 ### GET /api/runs/{id}/assembly/workspace
 
-Returns the assembly workspace tree. Owner-scoped.
+Returns the assembly workspace tree. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 ### GET /api/runs/{id}/assembly/content/{**path}
 
-Returns raw file content from the assembly workspace. Owner-scoped.
-
-
+Returns raw file content from the assembly workspace. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise).
 
 ## Team casting endpoints
 
 The team casting API manages the full lifecycle of AI-assisted agent team composition: listing available scenario groupings, creating and amending casting proposals, confirming a proposal into a live team, and committing the resulting `.squad/` files back to the repository.
 
-The provider for model-assisted casting is always GitHub Copilot. No provider field is accepted on casting requests.
+Model-assisted casting uses the accepted effective provider through `GenerationModelProviderExecutor`; it is not unconditionally Copilot-only. The request does not select a provider directly. Admission, the accepted BYOK configuration when applicable, and pre-call checks determine execution.
 
 ### GET /api/casting/templates
 
@@ -2186,7 +2192,7 @@ SQLite tables are created on startup with WAL enabled:
 | `projects` | Project records with name, origin, working directory, default branch, owner, provider settings, and state |
 | `github_tokens` | Per-user GitHub tokens stored by the OS credential store (not a SQLite table — managed by `OsCredentialStoreGitHubTokenStore`) |
 
-The run's event stream is held in memory by `RunStreamStore` and is not persisted to SQLite. After a process restart, the granular event history is unavailable — only the final `result` text survives. Completed runs are persisted via the Copilot SDK session store (session ID = `agentweaver-run-{runId}`). The `GET /api/runs/{id}/history` endpoint replays persisted session events for terminal runs.
+Run events persist through `IRunEventStream`; `RunStreamStore` also maintains local delivery state. `/events` supplies persisted events, `/stream` supplies streaming/replay, and `/history` is separate persisted session history. The final-result `agent.message` fallback is legacy compatibility for completed runs lacking event rows, not the normal restart contract.
 
 ## Configuration keys
 
@@ -2223,7 +2229,314 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
 | `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
+| `AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS` | `1800` | Environment override for the sandboxed `run_command` default execution budget. `run_command` is for finite commands; use `start_preview_process` for long-lived preview/dev servers. |
 | `Generation:Model` | `gpt-5.6-sol` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |
 | `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback when a project has no `workflow_generation_model`. |
 | `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback when a project has no `outcome_spec_generation_model`. |
+
+Work-plan status examples are not exhaustive: delegated, assembly_steering, rai_blocked and needs_resolution also exist. The prepared `execution_key` authorizes a matching operation/scope and is checked against caller, expiry and provider identity; a provider fingerprint is provenance, not authority. Accepted context is revalidated before model use, separately from run snapshots and capabilities.
+
+<details id="diagram-context-canonical-durable-event-stream">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Postgres is the event relay</td></tr>
+<tr><td>subtitle</td><td>Any API replica can serve a cursor over durable RunEvents—no sticky session required.</td></tr>
+<tr><td>group-title0</td><td>Write path · replica A</td></tr>
+<tr><td>group-title1</td><td>Read path · replica B</td></tr>
+<tr><td>Run producer</td><td>Run producer</td></tr>
+<tr><td>Run producer</td><td>Append a structured event</td></tr>
+<tr><td>Run producer</td><td>runId + type + payload</td></tr>
+<tr><td>EF event stream</td><td>EF event stream</td></tr>
+<tr><td>EF event stream</td><td>Serialize writes per run</td></tr>
+<tr><td>EF event stream</td><td>pg_advisory_xact_lock</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>Shared PostgreSQL table</td></tr>
+<tr><td>RunEvents</td><td>(RunId, Sequence)</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web / MCP watcher</td></tr>
+<tr><td>Web / MCP watcher</td><td>Consume ordered events</td></tr>
+<tr><td>Web / MCP watcher</td><td>last delivered cursor</td></tr>
+<tr><td>SSE endpoint</td><td>SSE endpoint</td></tr>
+<tr><td>SSE endpoint</td><td>Emit id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>ordered response frames</td></tr>
+<tr><td>EF subscriber</td><td>EF subscriber</td></tr>
+<tr><td>EF subscriber</td><td>Read Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>idle poll: 250 ms</td></tr>
+<tr><td>e1</td><td>append</td></tr>
+<tr><td>e2</td><td>commit</td></tr>
+<tr><td>e3</td><td>ordered batch</td></tr>
+<tr><td>e4</td><td>yield</td></tr>
+<tr><td>e5</td><td>SSE frames</td></tr>
+<tr><td>assurance-title</td><td>POSTGRES LANE ONLY</td></tr>
+<tr><td>assurance-line1</td><td>SQLite register-channel / replay / tail is a separate implementation—not this architecture.</td></tr>
+<tr><td>assurance-line2</td><td>Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>Run producer</td><td>Input</td></tr>
+<tr><td>Run producer</td><td>RunStreamEntry</td></tr>
+<tr><td>Run producer</td><td>Identity</td></tr>
+<tr><td>Run producer</td><td>runId + event type</td></tr>
+<tr><td>Run producer</td><td>Body</td></tr>
+<tr><td>Run producer</td><td>Structured payload</td></tr>
+<tr><td>Run producer</td><td>Ack</td></tr>
+<tr><td>Run producer</td><td>After durable commit</td></tr>
+<tr><td>EF event stream</td><td>Lock</td></tr>
+<tr><td>EF event stream</td><td>Per-run advisory lock</td></tr>
+<tr><td>EF event stream</td><td>Next</td></tr>
+<tr><td>EF event stream</td><td>MAX(Sequence) + 1</td></tr>
+<tr><td>EF event stream</td><td>Write</td></tr>
+<tr><td>EF event stream</td><td>Save transaction</td></tr>
+<tr><td>EF event stream</td><td>Commit</td></tr>
+<tr><td>EF event stream</td><td>Before acknowledgement</td></tr>
+<tr><td>RunEvents</td><td>Table</td></tr>
+<tr><td>RunEvents</td><td>Key</td></tr>
+<tr><td>RunEvents</td><td>RunId + Sequence</td></tr>
+<tr><td>RunEvents</td><td>Order</td></tr>
+<tr><td>RunEvents</td><td>Ascending sequence</td></tr>
+<tr><td>RunEvents</td><td>Reuse</td></tr>
+<tr><td>RunEvents</td><td>Same type / payload</td></tr>
+<tr><td>Web / MCP watcher</td><td>Client</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web or MCP</td></tr>
+<tr><td>Web / MCP watcher</td><td>Resume</td></tr>
+<tr><td>Web / MCP watcher</td><td>Last delivered cursor</td></tr>
+<tr><td>Web / MCP watcher</td><td>Replica</td></tr>
+<tr><td>Web / MCP watcher</td><td>No sticky requirement</td></tr>
+<tr><td>Web / MCP watcher</td><td>History</td></tr>
+<tr><td>Web / MCP watcher</td><td>Durable ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Frame</td></tr>
+<tr><td>SSE endpoint</td><td>id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>Cursor</td></tr>
+<tr><td>SSE endpoint</td><td>Last-Event-ID</td></tr>
+<tr><td>SSE endpoint</td><td>Delivery</td></tr>
+<tr><td>SSE endpoint</td><td>Yield ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Close</td></tr>
+<tr><td>SSE endpoint</td><td>After batch is drained</td></tr>
+<tr><td>EF subscriber</td><td>Query</td></tr>
+<tr><td>EF subscriber</td><td>Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>Idle</td></tr>
+<tr><td>EF subscriber</td><td>Poll after 250 ms</td></tr>
+<tr><td>EF subscriber</td><td>State</td></tr>
+<tr><td>EF subscriber</td><td>Shared durable table</td></tr>
+<tr><td>EF subscriber</td><td>Blocked</td></tr>
+<tr><td>EF subscriber</td><td>Retryable: keep open</td></tr>
+<tr><td>producer</td><td>Coordinator or run execution; Acknowledgement follows commit</td></tr>
+<tr><td>append</td><td>Allocate MAX(Sequence) + 1; Save and commit transaction</td></tr>
+<tr><td>store</td><td>Cross-replica ordered history; Explicit duplicates must match payload</td></tr>
+<tr><td>client</td><td>Reconnect from the cursor; No local channel dependency</td></tr>
+<tr><td>sse</td><td>Cursor advances after delivery; Drain batch before terminal close</td></tr>
+<tr><td>reader</td><td>Query the shared durable table; Retryable assembly_blocked stays open</td></tr>
+<tr><td>notes</td><td>POSTGRES LANE ONLY; SQLite register-channel / replay / tail is a separate implementation—not this architecture.; Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Preview readiness follows the public path</td></tr>
+<tr><td>takeaway</td><td>Provision the route, then probe its exact HTTPS URL; object creation alone is not ready.</td></tr>
+<tr><td>group-title0</td><td>CONTROL: PROVISION + PROBE</td></tr>
+<tr><td>group-title1</td><td>GATEWAY DATA PATH</td></tr>
+<tr><td>Preview API</td><td>Preview API</td></tr>
+<tr><td>Preview API</td><td>Resolve bound SandboxClaim</td></tr>
+<tr><td>Preview API</td><td>Patch run selector on pod</td></tr>
+<tr><td>Preview API</td><td>Create Service + HTTPRoute</td></tr>
+<tr><td>Preview API</td><td>State from cluster, not cache</td></tr>
+<tr><td>Publication probe</td><td>Publication probe</td></tr>
+<tr><td>Publication probe</td><td>Exact generated HTTPS URL</td></tr>
+<tr><td>Publication probe</td><td>Wait for managed DNS</td></tr>
+<tr><td>Publication probe</td><td>Check Gateway + application</td></tr>
+<tr><td>Publication probe</td><td>Only then return ready</td></tr>
+<tr><td>Browser preview</td><td>Browser preview</td></tr>
+<tr><td>Browser preview</td><td>Open the returned URL</td></tr>
+<tr><td>Browser preview</td><td>Run-scoped capability host</td></tr>
+<tr><td>Browser preview</td><td>Keepalive via API</td></tr>
+<tr><td>Browser preview</td><td>Iframe: no-referrer</td></tr>
+<tr><td>Preview Gateway</td><td>Preview Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>Separate shared Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPS host match</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPRoute selects Service</td></tr>
+<tr><td>Preview Gateway</td><td>Not API port-forward</td></tr>
+<tr><td>ClusterIP Service</td><td>ClusterIP Service</td></tr>
+<tr><td>ClusterIP Service</td><td>Per-preview target selector</td></tr>
+<tr><td>ClusterIP Service</td><td>Service :80 → public port</td></tr>
+<tr><td>ClusterIP Service</td><td>Routes to bound sandbox pod</td></tr>
+<tr><td>ClusterIP Service</td><td>Allowed ports 3000–9000</td></tr>
+<tr><td>Sandbox preview app</td><td>Sandbox preview app</td></tr>
+<tr><td>Sandbox preview app</td><td>AgentHost pod-local path</td></tr>
+<tr><td>Sandbox preview app</td><td>Live preview: TCP forwarder</td></tr>
+<tr><td>Sandbox preview app</td><td>0.0.0.0 → loopback app</td></tr>
+<tr><td>Sandbox preview app</td><td>Manual: chosen target port</td></tr>
+<tr><td>relation-0</td><td>1 after create</td></tr>
+<tr><td>relation-1</td><td>2 ready URL</td></tr>
+<tr><td>relation-2</td><td>3 HTTPS probe</td></tr>
+<tr><td>relation-3</td><td>4 HTTPS</td></tr>
+<tr><td>relation-4</td><td>5 route</td></tr>
+<tr><td>relation-5</td><td>6 public port</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.</td></tr>
+<tr><td>assurance-0-label</td><td>Public readiness</td></tr>
+<tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
+<tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Rollback on failure</td></tr>
+<tr><td>assurance-1-fact</td><td>Unpublish failed preview resources.</td></tr>
+<tr><td>assurance-1-source</td><td>SandboxPreviewPublicationTests.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Separate ingress</td></tr>
+<tr><td>assurance-2-fact</td><td>DNS managed externally, not by API.</td></tr>
+<tr><td>assurance-2-source</td><td>gateway-preview.yaml</td></tr>
+<tr><td>n0</td><td>Patch run selector on pod; Create Service + HTTPRoute</td></tr>
+<tr><td>n1</td><td>Wait for managed DNS; Check Gateway + application</td></tr>
+<tr><td>n2</td><td>Run-scoped capability host; Keepalive via API</td></tr>
+<tr><td>n3</td><td>HTTPS host match; HTTPRoute selects Service</td></tr>
+<tr><td>n4</td><td>Service :80 → public port; Routes to bound sandbox pod</td></tr>
+<tr><td>n5</td><td>Live preview: TCP forwarder; 0.0.0.0 → loopback app</td></tr>
+<tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-provider-admission" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Accept a provider before invoking it</td></tr>
+<tr><td>takeaway</td><td>Signed admission context freezes execution choice; live capability checks remain separate.</td></tr>
+<tr><td>group-title0</td><td>PREPARE AND ACCEPT</td></tr>
+<tr><td>group-title1</td><td>RUN BOUNDARY AND LIVE FENCES</td></tr>
+<tr><td>Prepare context</td><td>Prepare context</td></tr>
+<tr><td>Prepare context</td><td>Resolve effective provider</td></tr>
+<tr><td>Prepare context</td><td>Bind operation + project</td></tr>
+<tr><td>Prepare context</td><td>Bind subject + provider key</td></tr>
+<tr><td>Prepare context</td><td>Signed • expires in 5 min</td></tr>
+<tr><td>Accept request</td><td>Accept request</td></tr>
+<tr><td>Accept request</td><td>Re-resolve and compare</td></tr>
+<tr><td>Accept request</td><td>Verify signature + expiry</td></tr>
+<tr><td>Accept request</td><td>Reject mismatched context</td></tr>
+<tr><td>Accept request</td><td>Replacement context on error</td></tr>
+<tr><td>Accepted plan</td><td>Accepted plan</td></tr>
+<tr><td>Accepted plan</td><td>One execution provider</td></tr>
+<tr><td>Accepted plan</td><td>Freeze BYOK configuration</td></tr>
+<tr><td>Accepted plan</td><td>Provider choice is immutable</td></tr>
+<tr><td>Accepted plan</td><td>Copilot OR BYOK</td></tr>
+<tr><td>Run snapshot</td><td>Run snapshot</td></tr>
+<tr><td>Run snapshot</td><td>Private durable ownership</td></tr>
+<tr><td>Run snapshot</td><td>Database owner → secret ref</td></tr>
+<tr><td>Run snapshot</td><td>Secret store holds snapshot</td></tr>
+<tr><td>Run snapshot</td><td>Child / retry inheritance</td></tr>
+<tr><td>Invocation guard</td><td>Invocation guard</td></tr>
+<tr><td>Invocation guard</td><td>Check accepted run boundary</td></tr>
+<tr><td>Invocation guard</td><td>Match operation and provider</td></tr>
+<tr><td>Invocation guard</td><td>Reject inconsistent execution</td></tr>
+<tr><td>Invocation guard</td><td>No silent provider fallback</td></tr>
+<tr><td>Capability fences</td><td>Capability fences</td></tr>
+<tr><td>Capability fences</td><td>Separate live permission checks</td></tr>
+<tr><td>Capability fences</td><td>Before / after mint or read</td></tr>
+<tr><td>Capability fences</td><td>Reject revoked or changed grant</td></tr>
+<tr><td>Capability fences</td><td>Snapshot is not a bypass</td></tr>
+<tr><td>relation-0</td><td>1 signed context</td></tr>
+<tr><td>relation-1</td><td>2 match</td></tr>
+<tr><td>relation-2</td><td>3 capture</td></tr>
+<tr><td>relation-3</td><td>4 load boundary</td></tr>
+<tr><td>relation-4</td><td>5 Copilot capability</td></tr>
+<tr><td>assurance</td><td>Mismatch rejects with replacement context. A frozen provider snapshot does not bypass live GitHub capability fences.</td></tr>
+<tr><td>assurance-0-label</td><td>Prepared key</td></tr>
+<tr><td>assurance-0-fact</td><td>Five minutes; operation / subject bound.</td></tr>
+<tr><td>assurance-0-source</td><td>AiExecutionPlanService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Private snapshot</td></tr>
+<tr><td>assurance-1-fact</td><td>DB ownership points to secret storage.</td></tr>
+<tr><td>assurance-1-source</td><td>RunModelProviderSnapshotStore.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Live capability</td></tr>
+<tr><td>assurance-2-fact</td><td>Recheck before and after mint / read.</td></tr>
+<tr><td>assurance-2-source</td><td>GitHubCapabilityBroker.cs</td></tr>
+<tr><td>n0</td><td>Bind operation + project; Bind subject + provider key</td></tr>
+<tr><td>n1</td><td>Verify signature + expiry; Reject mismatched context</td></tr>
+<tr><td>n2</td><td>Freeze BYOK configuration; Provider choice is immutable</td></tr>
+<tr><td>n3</td><td>Database owner → secret ref; Secret store holds snapshot</td></tr>
+<tr><td>n4</td><td>Match operation and provider; Reject inconsistent execution</td></tr>
+<tr><td>n5</td><td>Before / after mint or read; Reject revoked or changed grant</td></tr>
+<tr><td>groups</td><td>PREPARE AND ACCEPT; RUN BOUNDARY AND LIVE FENCES</td></tr>
+</tbody></table>
+</details>

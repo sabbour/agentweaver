@@ -1,211 +1,188 @@
 #!/usr/bin/env node
-// Builds docs/diagram-renderer (a small Vite + React Flow app, see that
-// folder's README) and uses Playwright to screenshot each
-// docs/diagrams/src/*.json graph or sequence spec as a static PNG, replacing the old
-// mermaid-cli pipeline. See scripts/docs/render-diagrams.mjs for the
-// npm-facing entry point (render vs. --check) that calls into this module.
+// Browser-free draw.io generation and export pipeline. JSON graph/sequence
+// inputs are converted to editable, uncompressed draw.io XML before the
+// official draw.io Desktop CLI exports documentation assets.
 
-import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, createReadStream, statSync } from 'node:fs';
-import http from 'node:http';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { chromium } from 'playwright';
+import {
+  diagramSourceHash,
+  createDiagramStamp,
+  drawioExportArgs,
+  fileHash,
+  generatedDrawioPath,
+  listDiagramSources,
+  parseDiagramStamp,
+  resolveDrawioCommand,
+  selectDiagramSources,
+  validateUncompressedDrawio,
+  verifyDrawioVersion,
+} from './diagram-sources.mjs';
+import { DRAWIO_CLI_VERSION, jsonFileToDrawio } from './drawio-generator.mjs';
+import { requireFluentSource } from './fluent-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const specsDir = path.join(repoRoot, 'docs', 'diagrams', 'src');
 const outDir = path.join(repoRoot, 'docs', 'diagrams');
-const rendererDir = path.join(repoRoot, 'docs', 'diagram-renderer');
-const rendererPublicSpecsDir = path.join(rendererDir, 'public', 'specs');
-const rendererPublicLogoPath = path.join(rendererDir, 'public', 'agentweaver.png');
-const rendererDistDir = path.join(rendererDir, 'dist');
-const websiteLogoPath = path.join(repoRoot, 'apps', 'web', 'public', 'agentweaver.png');
+const generatedDir = path.join(repoRoot, 'docs', 'diagrams', 'drawio', 'generated');
 
-const DPR = 2; // export at 2x for crisp embeds on high-DPI displays
-const SCREENSHOT_WRITE_ATTEMPTS = 4;
+async function materializeDrawio(source) {
+  if (source.kind === 'drawio') {
+    const raw = await readFile(source.path, 'utf8');
+    validateUncompressedDrawio(raw, source.path);
+    requireFluentSource(raw, source.name);
+    return source.path;
+  }
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const outputPath = generatedDrawioPath(generatedDir, source.name, source.relativeDirectory);
+  const generated = await jsonFileToDrawio(source.path, { name: source.name });
+  validateUncompressedDrawio(generated, outputPath);
+  requireFluentSource(generated, source.name);
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, generated);
+  console.log(`Generated ${path.relative(repoRoot, outputPath)}`);
+  return outputPath;
 }
 
-async function captureScreenshot(element, outPath) {
-  for (let attempt = 1; attempt <= SCREENSHOT_WRITE_ATTEMPTS; attempt += 1) {
+function exportDrawio(drawioPath, source, formats, commandInfo, { embed = true, execute = execFileSync } = {}) {
+  const outputDirectory = path.join(outDir, source.relativeDirectory);
+  for (const format of formats) {
+    const outputPath = path.join(outputDirectory, `${source.name}.${format}`);
+    const args = [
+      ...commandInfo.prefixArgs,
+      ...drawioExportArgs(drawioPath, outputPath, format, { embed }),
+    ];
     try {
-      await element.screenshot({ path: outPath });
-      return;
+      execute(commandInfo.command, args, { cwd: repoRoot, stdio: 'inherit', shell: false });
     } catch (error) {
-      const canRetry = error?.code === 'UNKNOWN' && error?.syscall === 'open';
-      if (!canRetry || attempt === SCREENSHOT_WRITE_ATTEMPTS) throw error;
-      console.warn(`Retrying ${path.basename(outPath)} after transient screenshot write failure (${attempt}/${SCREENSHOT_WRITE_ATTEMPTS})`);
-      await delay(attempt * 250);
-    }
-  }
-}
-
-async function listSpecNames() {
-  const entries = await readdir(specsDir);
-  return entries
-    .filter((f) => f.endsWith('.json') && !f.endsWith('-spec.schema.json'))
-    .map((f) => f.replace(/\.json$/, ''))
-    .sort();
-}
-
-async function selectSpecNames(requestedNames) {
-  const availableNames = await listSpecNames();
-  if (!requestedNames?.length) return availableNames;
-
-  const available = new Set(availableNames);
-  const names = [...new Set(requestedNames)].sort();
-  const missing = names.filter((name) => !available.has(name));
-  if (missing.length) {
-    throw new Error(`Diagram spec not found: ${missing.join(', ')}`);
-  }
-  return names;
-}
-
-function npmBin() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
-}
-
-async function buildRendererApp(specNames) {
-  await rm(rendererPublicSpecsDir, { recursive: true, force: true });
-  await mkdir(rendererPublicSpecsDir, { recursive: true });
-  for (const name of specNames) {
-    await cp(path.join(specsDir, `${name}.json`), path.join(rendererPublicSpecsDir, `${name}.json`));
-  }
-  const hasWebsiteLogo = existsSync(websiteLogoPath);
-  if (hasWebsiteLogo) {
-    await cp(websiteLogoPath, rendererPublicLogoPath);
-  }
-
-  try {
-    if (!existsSync(path.join(rendererDir, 'node_modules'))) {
-      execFileSync(npmBin(), ['install'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
-    }
-    execFileSync(npmBin(), ['run', 'build'], { cwd: rendererDir, stdio: 'inherit', shell: process.platform === 'win32' });
-  } finally {
-    if (hasWebsiteLogo) {
-      await rm(rendererPublicLogoPath, { force: true });
-    }
-  }
-}
-
-const MIME = {
-  '.html': 'text/html',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-};
-
-// A static file server, not file://, because Chromium blocks `fetch()`
-// against file: URLs (the built app fetches its own /specs/*.json at
-// runtime) -- an http origin sidesteps that CORS restriction entirely.
-function serveDist(dir) {
-  return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      const urlPath = decodeURIComponent(req.url.split('?')[0]);
-      const filePath = path.join(dir, urlPath === '/' ? 'index.html' : urlPath);
-      if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-        res.writeHead(404);
-        res.end();
-        return;
+      if (error?.code === 'ENOENT') {
+        throw new Error('draw.io Desktop CLI was not found. Install the pinned version or pass --drawio-cli <path>.');
       }
-      const ext = path.extname(filePath);
-      res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' });
-      createReadStream(filePath).pipe(res);
-    });
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
-
-async function captureAll(specNames) {
-  await buildRendererApp(specNames);
-
-  const server = await serveDist(rendererDistDir);
-  const { port } = server.address();
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage({ deviceScaleFactor: DPR });
-
-    for (const name of specNames) {
-      await page.goto(`http://127.0.0.1:${port}/?spec=${encodeURIComponent(name)}`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000,
-      });
-      await page.waitForSelector('#diagram-root[data-diagram-ready="true"]', { timeout: 60000 });
-      const el = await page.$('#diagram-root');
-      const outPath = path.join(outDir, `${name}.png`);
-      await captureScreenshot(el, outPath);
-      console.log(`Rendered ${name}.png`);
+      throw error;
     }
-  } finally {
-    await browser.close();
-    server.close();
+    console.log(`Rendered ${path.join(source.relativeDirectory, `${source.name}.${format}`)}`);
   }
 }
 
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    return Object.keys(value)
-      .sort()
-      .reduce((acc, k) => {
-        acc[k] = canonicalize(value[k]);
-        return acc;
-      }, {});
+export async function render(
+  requestedNames,
+  {
+    drawioFormats = ['png'],
+    drawioCli,
+    embed = true,
+    allowVersionMismatch = false,
+    execute = execFileSync,
+  } = {},
+) {
+  const sources = selectDiagramSources(await listDiagramSources(specsDir), requestedNames);
+  const commandInfo = resolveDrawioCommand({ explicitPath: drawioCli });
+  const rendererVersion = verifyDrawioVersion(
+    commandInfo,
+    { execute, allowMismatch: allowVersionMismatch },
+  );
+  if (rendererVersion !== DRAWIO_CLI_VERSION) {
+    throw new Error(
+      `draw.io Desktop CLI ${rendererVersion} cannot write canonical diagram outputs or stamps; `
+      + `use the pinned ${DRAWIO_CLI_VERSION} renderer. --allow-version-mismatch is for version probes only.`,
+    );
   }
-  return value;
-}
 
-async function specHash(name) {
-  const raw = await readFile(path.join(specsDir, `${name}.json`), 'utf8');
-  const canonical = JSON.stringify(canonicalize(JSON.parse(raw)));
-  const { createHash } = await import('node:crypto');
-  return createHash('sha256').update(canonical).digest('hex');
-}
+  // Validate the entire selected batch before materializing or replacing any output.
+  const blocked=[];
+  for(const source of sources) {
+    try {
+      const raw=source.kind==='json'
+        ? await jsonFileToDrawio(source.path,{name:source.name})
+        : await readFile(source.path,'utf8');
+      requireFluentSource(raw,source.name);
+    } catch(error) {
+      blocked.push(error.message);
+    }
+  }
+  if(blocked.length) throw new Error(`Batch publication blocked before any writes:\n${blocked.join('\n')}`);
 
-export async function render(requestedNames) {
-  const specNames = await selectSpecNames(requestedNames);
-  await captureAll(specNames);
-  for (const name of specNames) {
-    const hash = await specHash(name);
-    await writeFile(path.join(outDir, `${name}.hash.txt`), `${hash}\n`);
-    console.log(`Wrote ${name}.hash.txt`);
+  for (const source of sources) {
+    const drawioPath = await materializeDrawio(source);
+    const outputDirectory = path.join(outDir, source.relativeDirectory);
+    await mkdir(outputDirectory, { recursive: true });
+    exportDrawio(drawioPath, source, drawioFormats, commandInfo, { embed, execute });
+    const pngPath = path.join(outputDirectory, `${source.name}.png`);
+    const stamp = await createDiagramStamp(
+      source,
+      drawioPath,
+      pngPath,
+      { rendererVersion },
+    );
+    await writeFile(path.join(outputDirectory, `${source.name}.hash.txt`), `${JSON.stringify(stamp, null, 2)}\n`);
+    console.log(`Wrote ${path.join(source.relativeDirectory, `${source.name}.hash.txt`)}`);
   }
 }
 
-// Fast, browser-free drift check: a graph-spec's committed PNG is trusted to
-// still be accurate as long as the spec's content hash matches the hash
-// recorded the last time someone ran `npm run docs:render-diagrams`. This
-// deliberately does NOT re-render and diff pixels/geometry in CI -- Trinity's
-// earlier mermaid-cli drift check re-rendered on every CI run and compared
-// SVG geometry, which broke because mmdc's layout geometry (viewBox, path
-// coordinates) depends on the host's installed font metrics and differs
-// between Windows and Linux runners even for byte-identical input. Comparing
-// a content hash sidesteps that class of bug entirely: it only fails when the
-// *spec* (nodes/edges/labels) actually changed since the PNG was last built.
 export async function check(requestedNames) {
-  const specNames = await selectSpecNames(requestedNames);
+  const sources = selectDiagramSources(await listDiagramSources(specsDir), requestedNames);
   let drift = false;
-  for (const name of specNames) {
-    const hash = await specHash(name);
-    const hashFile = path.join(outDir, `${name}.hash.txt`);
-    const pngFile = path.join(outDir, `${name}.png`);
-    if (!existsSync(hashFile) || !existsSync(pngFile)) {
-      console.error(`Missing rendered output for ${name}: run "npm run docs:render-diagrams" and commit the result.`);
+  for (const source of sources) {
+    const result = await checkSourceArtifacts(source, { outputDirectory: outDir, generatedDirectory: generatedDir });
+    if (!result.ok) {
+      console.error(result.message);
       drift = true;
-      continue;
-    }
-    const committed = (await readFile(hashFile, 'utf8')).trim();
-    if (committed !== hash) {
-      console.error(`Diagram drift detected: ${name}.json changed since ${name}.png was last rendered. Run "npm run docs:render-diagrams" and commit the result.`);
-      drift = true;
-    } else {
-      console.log(`OK: ${name}.png is in sync with ${name}.json`);
-    }
+    } else console.log(result.message);
   }
   return !drift;
+}
+
+export async function checkSourceArtifacts(
+  source,
+  { outputDirectory, generatedDirectory },
+) {
+  const artifactDirectory = path.join(outputDirectory, source.relativeDirectory ?? '');
+  const hashFile = path.join(artifactDirectory, `${source.name}.hash.txt`);
+  const pngFile = path.join(artifactDirectory, `${source.name}.png`);
+  if (!existsSync(hashFile) || !existsSync(pngFile)) {
+    return {
+      ok: false,
+      message: `Missing rendered output for ${source.name}: run "npm run docs:render-diagrams" and commit the result.`,
+    };
+  }
+  let committed;
+  try {
+    committed = parseDiagramStamp(await readFile(hashFile, 'utf8'), hashFile);
+  } catch (error) {
+    return {
+      ok: false,
+      message: error.message,
+    };
+  }
+  const sourceHash = await diagramSourceHash(source);
+  if (committed.source.sha256 !== sourceHash) {
+    return {
+      ok: false,
+      message: `Diagram drift detected: ${path.basename(source.path)} changed since ${source.name}.png was last rendered. Run "npm run docs:render-diagrams" and commit the result.`,
+    };
+  }
+  let drawioPath = source.path;
+  if (source.kind === 'json') {
+    drawioPath = generatedDrawioPath(generatedDirectory, source.name, source.relativeDirectory);
+    const expectedXml = await jsonFileToDrawio(source.path, { name: source.name });
+    if (!existsSync(drawioPath) || (await readFile(drawioPath, 'utf8')) !== expectedXml) {
+      return {
+        ok: false,
+        message: `Editable draw.io source is stale for ${source.name}: run "npm run docs:render-diagrams" and commit ${drawioPath}.`,
+      };
+    }
+  }
+  if (committed.drawio.sha256 !== await fileHash(drawioPath)) {
+    return { ok: false, message: `Draw.io XML drift detected for ${source.name}; re-export the diagram.` };
+  }
+  if (committed.png.sha256 !== await fileHash(pngFile)) {
+    return { ok: false, message: `PNG drift detected for ${source.name}; re-export the diagram with draw.io Desktop.` };
+  }
+  return {
+    ok: true,
+    message: `OK: ${source.name}.png and editable draw.io source are in sync with ${path.basename(source.path)}`,
+  };
 }

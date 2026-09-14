@@ -10,7 +10,9 @@ Use these settings when a project needs a different model for planning surfaces:
 - **Workflow generation model** — the model used when blueprint generation says no library workflow fits and Agentweaver drafts a custom workflow.
 - **Outcome spec generation model** — the model that drafts the coordinator's initial outcome plan before dispatch.
 
-Leave a field blank to inherit the global generation default shown in the UI (`apps/web/src/pages/ProjectSettingsPage.tsx:540`). Blank values are saved as `null` (`ProjectSettingsPage.tsx:342`).
+Leave a field blank to inherit the global generation default shown in the UI
+(`apps/web/src/pages/ProjectSettingsPage.tsx:991`). Blank values are saved as `null`
+(`ProjectSettingsPage.tsx:646-648`).
 
 ## Model provider prerequisite
 
@@ -27,17 +29,14 @@ If no source is ready, select **Set up model provider**. If setup is unavailable
 ## Step by step
 
 1. Open a project and go to **Settings**.
-2. In **Generation models**, fill one or more model id fields: **Blueprint generation model**, **Workflow generation model**, or **Outcome spec generation model** (`ProjectSettingsPage.tsx:538`).
-3. Click **Save**. The browser sends `PUT /api/projects/{id}/provider-settings` with the three generation fields and preserves the existing default provider settings (`ProjectSettingsPage.tsx:334`).
-4. If the save succeeds, the page shows **Generation model settings saved.** (`ProjectSettingsPage.tsx:586`).
-5. To inherit defaults again, click **Reset to inherit**. The UI saves all three generation fields as `null` (`ProjectSettingsPage.tsx:566`, `:342`).
-
-
-![Project settings page showing generation model fields](/screenshots/project-generation-model-settings.png)
-
-> 📸 **Screenshot — `project-generation-model-settings.png`**
-> *Shows:* **Project settings** with the **Generation models** section, the three fields **Blueprint generation model**, **Workflow generation model**, and **Outcome spec generation model**, plus **Save** and **Reset to inherit**.
-> *Path:* Sign in → open a project → **Settings** → scroll to **Generation models**.
+2. In **General → Generation models**, fill one or more model ID fields: **Blueprint
+   generation model**, **Workflow generation model**, or **Outcome spec generation model**.
+3. Click **Save generation models**. The browser sends `PUT /api/projects/{id}/provider-settings`
+   with the generation fields and preserves the default provider settings
+   (`ProjectSettingsPage.tsx:636-650`).
+4. If the save succeeds, the page shows **Generation model settings saved.**
+5. To inherit again, click **Reset to inherit defaults**. The UI saves the three
+   generation fields as `null` (`ProjectSettingsPage.tsx:991-1050`).
 
 ## What changes after save
 

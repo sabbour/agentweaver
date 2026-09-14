@@ -1,6 +1,9 @@
 # Repository blueprint suggestions
 
-The **Suggested** tab appears in **Create project from GitHub** after a repository is selected or pasted. It analyzes the repository and recommends one catalog blueprint so users can start with a sensible team, workflow, review policy, and sandbox posture without writing a generation prompt.
+The **Suggested** tab in **Create project from GitHub** recommends a catalog blueprint
+from repository signals. Repository selection is constrained by the caller's Repo App
+authorization; entering a name is not an access grant. Suggestions help choose a team,
+workflow, review policy, and sandbox posture without writing a generation prompt.
 
 For the API contract see the [reference](../reference/repo-blueprint-suggestions.md); for the implementation flow see the [deep dive](../deep-dive/repo-blueprint-suggestions.md).
 
@@ -18,23 +21,25 @@ If no repository is selected, the card says **Select a repository first** and ex
 ## Step by step
 
 1. Click **Create from GitHub**.
-2. Choose a repository from search/recent/account results, or paste an `owner/repo` value. The account list starts with the signed-in user's personal account, shown as `@{login}` with a **You** badge, then lists organizations; selecting any account reloads its repositories (`apps/web/src/pages/ProjectGalleryPage.tsx:471`, `:501`, `:642`, `:645`). Selecting a repo autofills the project name and folder slug when those fields have not been edited (`ProjectGalleryPage.tsx:559`).
+2. Connect the Repo App if required, then select an available repository. The paste field
+   accepts a repository **the Repo App can access**, not an arbitrary unauthenticated
+   source (`apps/web/src/pages/ProjectGalleryPage.tsx:707`).
 3. Stay on **Suggested**. The panel shows **Analyzing repository...** while `apiClient.suggestBlueprint` calls `POST /api/blueprints/suggest` (`BlueprintPicker.tsx:305`).
 4. Review the **Recommended** card. It shows the blueprint name, rationale, roster chips, agent count, and confidence percentage (`BlueprintPicker.tsx:337`).
 5. Expand details to see repository signals such as description, topics, languages, root files, and issues-enabled (`BlueprintPicker.tsx:350`).
 6. Click **Use this blueprint** to apply it. If the recommendation is not right, click **View all templates →** to switch to **Templates**, or choose **Generate** for a custom blueprint (`BlueprintPicker.tsx:350`, `:352`, `:371`).
 
-
-![Create from GitHub dialog showing the Suggested blueprint recommendation](/screenshots/repo-blueprint-suggestions.png)
-
-> 📸 **Screenshot — `repo-blueprint-suggestions.png`**
-> *Shows:* **Create project from GitHub** with a selected or pasted repository, the **Suggested** blueprint tab, the **Recommended** card, rationale, roster chips, confidence percentage, and repository signals.
-> *Path:* Sign in → `/projects` → **Create from GitHub** → choose or paste a repository → stay on **Suggested**.
-7. Click **Create project**. The create request carries the chosen catalog blueprint id or generated inline blueprint through the existing project creation path (`BlueprintPicker.tsx:371`).
+7. Create the project. The browser verifies the repository against authorized selections
+   and obtains a `repository_selection_code`; creation carries that code plus the chosen
+   catalog blueprint ID or generated inline blueprint (`ProjectGalleryPage.tsx:259-268`).
 
 ## How the recommendation is chosen
 
-The recommendation is a catalog match, not a model-generated blueprint. The API reads GitHub metadata, languages, and root files using the submitting user's GitHub token, builds display signals, then maps AI/LLM repos, docs/content repos, product/design repos, and code repos to catalog blueprint ids (`apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs:51`, `:132`, `:149`).
+The recommendation is a **deterministic catalog match**, not a model-generated blueprint.
+The service resolves GitHub access server-side, reads metadata, languages, and root files,
+builds display signals, and maps them to catalog blueprint IDs
+(`apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs:51-83`, `:142`).
+This best-effort suggestion neither grants repository access nor persists a new blueprint.
 
 That means the recommendation is fast and predictable. If you want a bespoke team or workflow from a written description, switch to **Generate** and click **Generate blueprint** (`apps/web/src/components/BlueprintPicker.tsx:236`).
 
@@ -42,9 +47,13 @@ That means the recommendation is fast and predictable. If you want a bespoke tea
 
 If repository analysis cannot run, the experience does not block project creation. The panel shows a warning such as **Repository analysis unavailable. Choose a template instead.** and offers **View all templates →**, which switches to the shared **Templates** tab (`BlueprintPicker.tsx:323`, `:371`). The same fallback appears for invalid repository strings, unavailable GitHub metadata, network failures, and service fallback responses (`GitHubRepoBlueprintSuggestionService.cs:89`, `:93`).
 
-## Personal repositories
+## Repository access boundary
 
-The GitHub picker now includes personal repositories, not only organization repositories. `GET /api/github/accounts` returns the authenticated user first with `type: "user"`, and the UI labels that entry **You** (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`; `apps/web/src/pages/ProjectGalleryPage.tsx:642`). `GET /api/github/repos?account=<login>` uses GitHub `/user/repos?affiliation=owner` when the account is the signed-in user, so search, recent repositories, and manual selection all surface personal repositories too (`AuthEndpoints.cs:295`, `:333`; `apps/web/src/api/client.ts:267`).
+Use the Repo App-authorized selection list for both personal and organization repositories.
+Creation requires a caller-bound, short-lived, single-use selection code. A successful
+metadata suggestion is not proof that creation is authorized; the create-time selection
+check still applies. If analysis fails, Templates remains available, but GitHub-backed
+creation still requires repository access.
 
 ## Related reading
 

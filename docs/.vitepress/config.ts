@@ -81,6 +81,7 @@ export default withMermaid({
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Operations Guide', link: '/guide/operations' },
             { text: 'Validation workflow', link: '/guide/validation' },
+            { text: 'Diagram authoring', link: '/guide/diagram-authoring' },
             { text: 'GitHub connections cutover validation', link: '/guide/fleet-cutover-validation' },
             { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
             { text: 'AKS Architecture', link: '/guide/architecture-aks' },

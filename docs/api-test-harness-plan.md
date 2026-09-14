@@ -8,7 +8,48 @@
 
 _Last updated: 2026-07-14 — author: Tank (Backend Engineer)_
 
-> **Status: design spec.** Unlike the UI and MCP specs, the harness this document
+## Current implementation contract
+
+This section supersedes the July migration, rollout, launcher, and driver-path
+proposals below. The API, UI, MCP, shared persona, and shared judge packages now
+exist. The historical test counts and staging results are not a current test run.
+
+| Concern | Current implementation |
+| --- | --- |
+| Persona definition | `scripts/persona-briefs/index.mjs` resolves shared `personas/*.md` cores and `surfaces/*.{api,ui,mcp}.md` adapters. `generate-core.mjs` and `generate-adapter.mjs` assemble prompts; they do not call a model. |
+| Live API persona | `.github/agents/persona-actor.agent.md` specifies one direct Node `fetch` action at a time against live OpenAPI, with response-grounded pushback. There is no current `agent-driver/tools.mjs` API wrapper. |
+| Structural API check | `scripts/api-harness/run-persona.mjs` supports `generated-artifacts-seam`, a fixed conformance check, not persona behavior or a substitute for independent quality judgment. |
+| API authentication | `scripts/api-harness/lib/auth-providers/recorder-session.mjs` reads the target-matched captured Agentweaver session in memory. Missing/expired/wrong-origin state requires login renewal; a raw GitHub token is not Agentweaver sign-in. |
+| Approval driving | The old `lib/approvals.mjs`/`lib/approval-judge.mjs` wrapper is removed. The current PersonaActor contract requires inspecting real gate evidence, refusing blind approvals, and stopping at the brief's boundary. Resolving a gate is not an end-of-run quality PASS. |
+| Evidence and judge | Surface adapters normalize captured turns. `scripts/harness-judge/core.mjs` fences redacted evidence as untrusted data, validates required metadata, and validates the returned verdict against the shared schema. The agent-native Judge has no tools; supplemental logs must be supplied as evidence, not fetched by the Judge. |
+| Command judge | The optional command path uses a restricted child-process environment, timeout and bounded retries. It is not an OS sandbox: the configured command remains trusted. Failure produces an explicit `CANNOT_DETERMINE` verdict, not an omitted result. |
+| Network boundary | `scripts/harness-shared/target-guard.mjs` accepts HTTPS hosts, permits HTTP only on loopback, and rejects URL userinfo/fragments. API calls are same-origin and reject redirects. TLS bypasses and hostname-based production classification are not supported. |
+
+The shared layout is navigation, not another architecture diagram:
+
+```text
+scripts/persona-briefs/
+  index.mjs, persona-schema.mjs, catalog.json
+  generate-core.mjs, generate-adapter.mjs
+  personas/, surfaces/
+scripts/harness-judge/
+  core.mjs, verdict-schema.mjs, save-verdict.mjs, meta-aggregate.mjs
+  adapters/api.mjs, adapters/ui.mjs, adapters/mcp.mjs
+  JUDGE.ui.md, JUDGE.mcp.md
+scripts/api-harness/JUDGE.api.md
+```
+
+`core.mjs` accepts supplied methodology; the historical shared `JUDGE.md` tree below
+is not a claim that such a file exists. The executable verdict contract is
+`scripts/harness-judge/verdict-schema.mjs`; the UI and MCP plans reuse it rather
+than maintain their own example schemas. Join keys include `timestamp`, and the
+frustration labels are `none`, `mild`, `moderate`, `severe`, `abandoned`, and
+`not_assessed` (null score). See [§3](#3-verdict-schema--p0-p1-and-a-required-frustration-dimension)
+for the shared field description.
+
+## Historical July 2026 design and rollout
+
+> **Historical status at authoring.** Unlike the UI and MCP specs, the harness this document
 > describes **already exists and runs** — it is `scripts/api-harness/` (renamed from
 > `scripts/persona-harness/` under the naming convention below), the
 > primary API-driven E2E track for issue #1, live-verified across three personas
@@ -28,9 +69,8 @@ _Last updated: 2026-07-14 — author: Tank (Backend Engineer)_
 > **This document supersedes the harness-architecture description in
 > `docs/e2e-harness-plan.md`.** That older plan predates the three-harness split and
 > the full self-improvement vision; its autopilot/Squad-dispatch operating rules,
-> release cadence, and methodology still stand and are unchanged. Only the
-> *harness-architecture* portion is superseded here (a one-line pointer has been
-> added to that file's Workstream 1).
+> methodology are preserved as dated history, not current deployment or release
+> instructions. Current release policy is [RELEASING.md](../RELEASING.md).
 
 ---
 
@@ -114,6 +154,8 @@ but to **attribute** the other harnesses' experience findings to a layer.
 > this section for the coordinator to reconcile **before** the shared packages are
 > extracted.
 
+<a id="1-shared-persona--brief-format--define-personas-once-surface-agnostically"></a>
+
 ### 1. Shared persona / brief format — define personas ONCE, surface-agnostically
 
 **Recommendation:** each persona is defined **once** in a new shared package
@@ -185,6 +227,8 @@ Until the extraction lands, the API harness keeps using its local `briefs/` unch
 (it is the currently-running production track); the move happens at a safe checkpoint
 (see [Rollout](#rollout--migration-plan)), never as a concurrent edit while the harness is
 mid-flight.
+
+<a id="2-judge-architecture--one-shared-judge-core--thin-api-evidence-adapter-option-a"></a>
 
 ### 2. Judge architecture — ONE shared judge core + thin API evidence adapter (option a)
 
@@ -305,6 +349,8 @@ prompt via `core.mjs`, executes the pluggable judge command under timeout/retry,
 the result against `verdict-schema.mjs`, and writes either the real verdict or the
 fallback `CANNOT_DETERMINE`/`judgeError` verdict — deterministically, with no silent holes.
 
+<a id="3-verdict-schema--p0-p1-and-a-required-frustration-dimension"></a>
+
 ### 3. Verdict schema — P0, P1, AND a required frustration dimension
 
 Judging is not just pass/fail. The canonical `agentweaver.persona-judge-verdict/v1` schema
@@ -329,12 +375,12 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
   "personaCoreVersion": "jordan@2",       // persona core (personas/jordan.md) version
   "targetRevision": "agentweaver@v0.9.52+sha", // deployment/revision under test — stale deploys never compared
   "runId": "run_01J…",                    // fresh per run — diagnostic correlation only, NOT a repro handle
-  "at": "2026-07-14T18:22:41Z",           // run timestamp
+  "timestamp": "2026-07-14T18:22:41Z",    // required ISO-8601 run timestamp
 
-  "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
-  "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
+  "p0": { "verdict": "PASS | FAIL | CANNOT_DETERMINE", "evidence": "..." },
+  "p1": { "verdict": "PASS | PARTIAL | FAIL | CANNOT_DETERMINE", "evidence": "...", "criteriaCoverage": [ ] },
   "frustration": {                         // REQUIRED — emotional/UX assessment from evidence
-    "level": "none | low | moderate | high | abandoned | not_assessed",   // ordinal; "abandoned" = persona gave up; "not_assessed" = insufficient evidence to judge
+    "level": "none | mild | moderate | severe | abandoned | not_assessed",   // ordinal; "abandoned" = persona gave up; "not_assessed" = insufficient evidence to judge
     "score": 0,                            // 0-4 mirror of level for meta-aggregate trend math; null for "not_assessed" (excluded from aggregate stats)
     "signals": [                           // OBSERVED evidence the level is grounded in (never invented)
       { "kind": "<signal>", "evidence": "<transcript turn refs / quote>" }
@@ -370,9 +416,9 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
   harness is the ground-truth layer, its most important outputs are P0 (did the mechanics
   work) and P1 (was the produced content good). Its frustration read is real but is used
   mainly to **anchor** the experience-layer harnesses' frustration reads: if Jordan is
-  `abandoned` via UI but `low` via API for the same scenario, that pinpoints a
-  browser-experience defect with a working backend; a persona frustrated on **every**
-  surface points at a core product/model problem.
+  `abandoned` via UI but `mild` via API for the same joined scenario, that suggests a
+  browser-experience issue to reproduce; it does not prove causality or complete backend
+  correctness. Frustration on **every** surface likewise requires a fresh-run investigation.
 
 ### 3a. Cross-surface join key — meta-aggregate MUST NOT blindly pool a directory
 
@@ -395,7 +441,7 @@ and meta-aggregate compares **only** verdicts that share the right slice of it:
 | `adapterVersion` / `personaCoreVersion` | Which surface adapter + persona core drove it | A persona/adapter edit changes behavior; comparing across versions is apples-to-oranges unless recorded. |
 | `targetRevision` | Deployment/revision under test | Verdicts from **different deploys must never be pooled** — a fix on one revision would look like a regression on another. |
 | `surface` | api / ui / mcp | The axis being compared; also guards against comparing two API runs as if cross-surface. |
-| `runId` + `at` | Fresh per run | Identity/ordering of an individual run (diagnostic only — see repro manifest). |
+| `runId` + `timestamp` | Fresh per run | Identity/ordering of an individual verdict (diagnostic only — see repro manifest). |
 
 **Rule for `meta-aggregate.mjs`:** it MUST group by `(batchId, scenarioId)` (optionally
 scoped to a single `targetRevision`) and aggregate **only within a group** — never pool all
@@ -558,10 +604,11 @@ extraction:
    trend math, and `{kind,evidence}` signals are more auditable). **Reconcile the signal
    shape and the `score` field** so all three emit byte-comparable frustration blocks.
 
-The `level` ordinal (`none | low | moderate | high | abandoned`, plus `not_assessed` for
+The current `level` ordinal (`none | mild | moderate | severe | abandoned`, plus `not_assessed` for
 insufficient evidence — `score: null`, excluded from aggregate stats), the schema id
 (`agentweaver.persona-judge-verdict/v1`), the P0/P1 semantics, and the driver-only rule are
-**consistent** across all three specs — no conflict there.
+defined by `scripts/harness-judge/verdict-schema.mjs`. Historical proposals elsewhere in
+these plans do not override that implementation contract.
 
 ---
 
@@ -906,6 +953,8 @@ shared packages**, never copied.
 
 ---
 
+<a id="driver-performance--interaction-model"></a>
+
 ## Driver performance / interaction model
 
 **Parallelism-first, autonomous, low-touch — identical to the other two harnesses.** The
@@ -982,6 +1031,8 @@ opt-in and flagged; #315 is caught on the fast **scoping rung** because it is a
 draft-and-pushback defect that never needs execution.
 
 ---
+
+<a id="rollout--migration-plan"></a>
 
 ## Rollout / migration plan
 

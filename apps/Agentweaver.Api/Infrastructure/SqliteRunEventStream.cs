@@ -122,7 +122,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {
-        if (runStore is not RunActiveClaimGuardedRunStore guarded)
+        if (RunStoreChain.Find<RunActiveClaimGuardedRunStore>(runStore) is not { } guarded)
             throw new InvalidOperationException("Conditional SQLite events require the guarded run store.");
 
         var recorded = new List<RunEvent>();

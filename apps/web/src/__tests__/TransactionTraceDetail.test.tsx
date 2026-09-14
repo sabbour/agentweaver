@@ -5,11 +5,19 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
+const sseMocks = vi.hoisted(() => ({
+  useRunStream: vi.fn(),
+}));
+
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunTraces: vi.fn(),
     getRunEvents: vi.fn(),
   },
+}));
+
+vi.mock('../api/sse', () => ({
+  useRunStream: sseMocks.useRunStream,
 }));
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -18,6 +26,13 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sseMocks.useRunStream.mockReturnValue({
+    events: [],
+    droppedEventCount: 0,
+    status: 'streaming',
+    error: null,
+    reconnect: vi.fn(),
+  });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({
     runId: 'run-47',
     spans: [
@@ -300,6 +315,65 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
   });
 
+  it('renders live run_command heartbeat progress from the run stream', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'tool',
+          name: 'run_command',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 12_000,
+          success: true,
+          toolName: 'run_command',
+          toolCallId: 'call-7',
+          attributes: {
+            runId: 'run-47',
+            toolName: 'run_command',
+            toolCallId: 'call-7',
+            status: 'success',
+          },
+        },
+      ],
+    });
+    sseMocks.useRunStream.mockReturnValue({
+      events: [
+        {
+          sequence: 8,
+          type: 'tool.execution_pending',
+          payload: {
+            runId: 'run-47',
+            toolCallId: 'call-7',
+            toolName: 'run_command',
+            startedAtUtc: '2026-09-11T16:00:01.000Z',
+            deadlineUtc: '2026-09-11T16:10:01.000Z',
+            elapsedSeconds: 12,
+          },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'streaming',
+      error: null,
+      reconnect: vi.fn(),
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    expect(toolSpan?.textContent).toContain('Running · 12 s');
+    fireEvent.click(toolSpan!);
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('Live progress');
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('Running for 12 s');
+  });
+
   it('labels an absent persisted tool output with correctly spaced text', async () => {
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       {
@@ -369,6 +443,52 @@ describe('TransactionTracePanel trace detail', () => {
     fireEvent.click(toolSpan!);
     await waitFor(() => expect(screen.getByLabelText('Trace summary').textContent).toContain('Terminal failed run'));
     expect(screen.getByLabelText('Span inspector').textContent).toContain('Run failed — terminal outcome');
+  });
+
+  it('keeps run-command input and output collapsed until requested', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [{
+        id: 'command',
+        name: 'run_command',
+        spanType: 'tool',
+        timestamp: '2026-09-11T16:00:01.000Z',
+        durationMs: 500,
+        success: true,
+        toolName: 'run_command',
+        toolCallId: 'call-command',
+      }],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-command', toolName: 'run_command', arguments: { command: 'dotnet test' } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.result',
+        payload: { callId: 'call-command', content: 'exit_code: 0' },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId('trace-span'));
+
+    const details = screen.getByTestId('run-command-details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.getByText('Command details')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Command details'));
+    expect(details.open).toBe(true);
+    expect(screen.getByText(/"command": "dotnet test"/)).toBeTruthy();
+    expect(screen.getByText('exit_code: 0')).toBeTruthy();
   });
 
   it('redacts sensitive input and output again before rendering legacy event data', async () => {

@@ -1,0 +1,147 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "AgentHost pod, container, and process boundaries",
+  "alt": "UML deployment view of a SandboxClaim selecting a warm-pool template, a Kata-isolated AgentHost pod with separate AgentHost and executor containers, authenticated IPC, model-controlled child processes, private volumes, shared workspace PVC, and network policy.",
+  "direction": "TB",
+  "routing": "separate-ports",
+  "groups": [
+    {
+      "id": "control",
+      "label": "Control plane and Kubernetes resources",
+      "tier": 1
+    },
+    {
+      "id": "host",
+      "label": "AgentHost container",
+      "tier": 1
+    },
+    {
+      "id": "executor",
+      "label": "Executor container",
+      "tier": 1
+    },
+    {
+      "id": "resources",
+      "label": "Pod resources and network",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "icon": "box",
+      "id": "worker",
+      "label": "Worker orchestration",
+      "subLabel": "Owns claim and pod lifecycle",
+      "fluentIcon": "coordinator",
+      "badge": "Control plane",
+      "group": "control"
+    },
+    {
+      "icon": "box",
+      "id": "claim",
+      "label": "SandboxClaim, warm pool, and template",
+      "subLabel": "Controller binds a two-container Kata pod",
+      "fluentIcon": "sandbox",
+      "badge": "CRD",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.custom_resource",
+      "group": "control"
+    },
+    {
+      "icon": "box",
+      "id": "agenthost",
+      "label": "AgentHost process",
+      "subLabel": "A2A and trusted mediation",
+      "fluentIcon": "agent",
+      "badge": "Container",
+      "group": "host"
+    },
+    {
+      "icon": "box",
+      "id": "relay",
+      "label": "Trusted relay and exec-ipc",
+      "subLabel": "Supervised stream over token-authenticated UDS",
+      "fluentIcon": "dispatch",
+      "badge": "Process",
+      "group": "host"
+    },
+    {
+      "icon": "box",
+      "id": "podexec",
+      "label": "PodExecServer",
+      "subLabel": "Dispatcher and registrations",
+      "fluentIcon": "security",
+      "badge": "Container",
+      "group": "executor"
+    },
+    {
+      "icon": "box",
+      "id": "workload",
+      "label": "Shell, build, test, preview",
+      "subLabel": "Executor-owned group with private HOME and tmp",
+      "fluentIcon": "code",
+      "badge": "Process",
+      "group": "executor"
+    },
+    {
+      "icon": "box",
+      "id": "workspace",
+      "label": "agentweaver-workspace",
+      "subLabel": "RWX shared persistence",
+      "fluentIcon": "workspace",
+      "badge": "PVC",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.persistent_volume_claim",
+      "group": "resources"
+    },
+    {
+      "icon": "box",
+      "id": "network",
+      "label": "NetworkPolicy and destinations",
+      "subLabel": "API, MCP, DNS, and public HTTPS allowances",
+      "fluentIcon": "network",
+      "badge": "Policy",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.network_policy",
+      "group": "resources"
+    }
+  ],
+  "edges": [
+    {
+      "from": "worker",
+      "to": "claim",
+      "label": "create / adopt"
+    },
+    {
+      "from": "claim",
+      "to": "agenthost",
+      "label": "instantiate Kata pod"
+    },
+    {
+      "from": "agenthost",
+      "to": "relay",
+      "label": "spawn / stream"
+    },
+    {
+      "from": "relay",
+      "to": "podexec",
+      "label": "exec / spawn / stop"
+    },
+    {
+      "from": "podexec",
+      "to": "workload",
+      "label": "launch and own"
+    },
+    {
+      "from": "workspace",
+      "to": "workload",
+      "label": "registered scoped mount"
+    },
+    {
+      "from": "network",
+      "to": "workload",
+      "label": "pod network policy"
+    }
+  ]
+}

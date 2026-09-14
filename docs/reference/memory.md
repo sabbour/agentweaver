@@ -1,5 +1,7 @@
 # Memory & Context Builder
 
+See [memory-context selection](../diagrams/flagship/canonical-memory-context.png) for the shared visual model.
+
 Agentweaver maintains persistent memory for each project. Before an eligible agent turn,
 a structured context block is compiled from that memory and injected into the agent's
 system prompt. Stored text is serialized inside an explicitly untrusted JSON envelope;
@@ -7,13 +9,13 @@ it is historical data, never prompt structure or executable instructions.
 
 ## How context is built
 
-`MemoryContextCompiler.CompileAsync(projectId, agentName)` assembles context from four layers, applied in strict priority order:
+`MemoryContextCompiler.CompileAsync(projectId, agentName)` gathers approved decisions, eligible memory, and the current session. Decisions and session are selected separately. Core memories and eligible learnings/patterns share one importance/recency-ranked item/token budget; source categories are not an unconditional inclusion order.
 
-```
-Layer 1 (highest priority): Approved decisions — non-negotiable team boundaries
-Layer 2: Non-legacy core context — agent-specific background knowledge
-Layer 3: Non-legacy own learnings + approved cross-team learnings
-Layer 4 (lowest priority): Current open session focus
+```text
+Decisions: active, approved architectural/scope records, ordered by creation time
+Memory candidates: eligible own core context + learnings/patterns
+Selection: importance, then recency; one bounded item/token budget
+Session: most recent open session, selected separately
 ```
 
 If all layers are empty the method returns `null` and no context block is injected.
@@ -41,7 +43,7 @@ governance and bookkeeping.
 `AgentMemory` rows where `Type = core_context`, scoped to this `agentName`, and
 `TrustState != legacy`, ordered by creation time.
 
-These are stable, always-relevant facts about the agent's domain: "this project uses EF Core", "the API base URL is X", etc. They are always included regardless of importance level.
+Core memories are eligible regardless of importance, not guaranteed inclusion. They share the ranked memory budget with eligible learnings/patterns. Defaults are 20 items and about 4,000 tokens at four characters per token. Positive call-site overrides precede `MemoryContext:MaxItems` / `MaxTokens`, then legacy `Memory:ContextMaxItems` / `ContextMaxTokens`. Selection stops when the next ranked item exceeds the budget. Decisions and session are outside this memory-item budget.
 
 ### Layer 3 — High-importance learnings & patterns
 
@@ -136,7 +138,7 @@ Updated by agents via `update_session(summary)`. Scribe closes/summarises the se
 
 ## Scribe's role in memory
 
-After every completed project run, the **Scribe** step runs automatically:
+Standalone completion and Coordinator finalization own their Scribe work. Coordinator children stop at `assemble-ready`, bypassing their own review/merge/Scribe stages. Where the final Scribe pass runs, it:
 
 1. Select pending inbox entries for the completed run's agent, creation window, and
    verified source run id.
@@ -178,3 +180,66 @@ untrusted JSON envelope but omit memory and session data. When there are no elig
 decisions, the method returns `null` and only the charter is injected. Compilation
 failures are swallowed (logged as a warning); the child proceeds with its charter
 alone.
+
+Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory` correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and `memory_export`.
+
+<details id="diagram-context-canonical-memory-context" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Context is selected data, not instructions</td></tr>
+<tr><td>takeaway</td><td>Approved decisions, jointly ranked memories and the open session converge into untrusted JSON.</td></tr>
+<tr><td>group-title0</td><td>SCOPED INPUTS</td></tr>
+<tr><td>group-title1</td><td>SELECTION AND SERIALIZATION</td></tr>
+<tr><td>Active decisions</td><td>Active decisions</td></tr>
+<tr><td>Active decisions</td><td>Project-wide boundaries</td></tr>
+<tr><td>Active decisions</td><td>Approved architecture / scope</td></tr>
+<tr><td>Active decisions</td><td>Oldest-created first</td></tr>
+<tr><td>Active decisions</td><td>Child prompts: decisions only</td></tr>
+<tr><td>Core + learnings</td><td>Core + learnings</td></tr>
+<tr><td>Core + learnings</td><td>Agent-scoped candidates</td></tr>
+<tr><td>Core + learnings</td><td>Core: exclude legacy trust</td></tr>
+<tr><td>Core + learnings</td><td>High learning / pattern</td></tr>
+<tr><td>Core + learnings</td><td>Approved cross-team allowed</td></tr>
+<tr><td>Open session</td><td>Open session</td></tr>
+<tr><td>Open session</td><td>Latest active session</td></tr>
+<tr><td>Open session</td><td>Focus / issues / summary</td></tr>
+<tr><td>Open session</td><td>Ended sessions excluded</td></tr>
+<tr><td>Open session</td><td>Latest StartedAt wins</td></tr>
+<tr><td>Joint rank + budget</td><td>Joint rank + budget</td></tr>
+<tr><td>Joint rank + budget</td><td>One combined memory list</td></tr>
+<tr><td>Joint rank + budget</td><td>Importance, then recency</td></tr>
+<tr><td>Joint rank + budget</td><td>Stop at item / char limit</td></tr>
+<tr><td>Joint rank + budget</td><td>Approximation: 4 chars/token</td></tr>
+<tr><td>Context compiler</td><td>Context compiler</td></tr>
+<tr><td>Context compiler</td><td>Assemble scoped sections</td></tr>
+<tr><td>Context compiler</td><td>Decisions + selected memory</td></tr>
+<tr><td>Context compiler</td><td>Add current session</td></tr>
+<tr><td>Context compiler</td><td>Empty inputs → null</td></tr>
+<tr><td>Untrusted JSON</td><td>Untrusted JSON</td></tr>
+<tr><td>Untrusted JSON</td><td>Historical data, not authority</td></tr>
+<tr><td>Untrusted JSON</td><td>Explicit boundary markers</td></tr>
+<tr><td>Untrusted JSON</td><td>Ignore embedded instructions</td></tr>
+<tr><td>Untrusted JSON</td><td>untrusted-context.v1</td></tr>
+<tr><td>relation-0</td><td>1 combine / sort</td></tr>
+<tr><td>relation-1</td><td>2 approved</td></tr>
+<tr><td>relation-2</td><td>3 latest open</td></tr>
+<tr><td>relation-3</td><td>4 selected</td></tr>
+<tr><td>relation-4</td><td>5 serialize</td></tr>
+<tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. That budget bounds selected memories—not decisions or the entire context.</td></tr>
+<tr><td>assurance-0-label</td><td>Joint memory ordering</td></tr>
+<tr><td>assurance-0-fact</td><td>Importance first; recency breaks ties.</td></tr>
+<tr><td>assurance-0-source</td><td>MemoryContextCompiler.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Bounded selection</td></tr>
+<tr><td>assurance-1-fact</td><td>Item / character limits cover memory.</td></tr>
+<tr><td>assurance-2-label</td><td>Injection resistance</td></tr>
+<tr><td>assurance-2-fact</td><td>Context is wrapped as untrusted JSON.</td></tr>
+<tr><td>assurance-2-source</td><td>MemoryContextCompilerSecurityTests.cs</td></tr>
+<tr><td>n0</td><td>Approved architecture / scope; Oldest-created first</td></tr>
+<tr><td>n1</td><td>Core: exclude legacy trust; High learning / pattern</td></tr>
+<tr><td>n2</td><td>Focus / issues / summary; Ended sessions excluded</td></tr>
+<tr><td>n3</td><td>Importance, then recency; Stop at item / char limit</td></tr>
+<tr><td>n4</td><td>Decisions + selected memory; Add current session</td></tr>
+<tr><td>n5</td><td>Explicit boundary markers; Ignore embedded instructions</td></tr>
+<tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
+</tbody></table>
+</details>

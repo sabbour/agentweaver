@@ -53,7 +53,7 @@ PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
 
 For non-interactive use, pass flags, environment variables, and/or a params
-file (see [`scripts/azure/params.example.json`](../../scripts/azure/params.example.json)):
+file (see [`scripts/azure/params.example.json`](https://github.com/sabbour/agentweaver/blob/dev/scripts/azure/params.example.json)):
 
 ```bash
 npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
@@ -109,22 +109,25 @@ or the old GitHub App credential is revoked.
 ### Image-build progress and optional Azure CLI limits
 
 The installer prints elapsed time for frontend preparation, each image
-lifecycle, and each ACR build/import/provenance operation. ACR manifest reads
-are bounded to 60 seconds because they are read-only and safely retried by the
-existing visibility poll. To bound a local Azure CLI process for a mutating
-operation, explicitly set one or both environment variables:
+lifecycle, and each ACR build/import/provenance operation. ACR manifest and
+repository digest reads default to a 10-minute per-attempt budget because ACR's
+read path can take several minutes while concurrent imports are still
+settling. To bound a local Azure CLI process for a mutating operation,
+explicitly set one or both environment variables:
 
 ```powershell
 $env:ACR_BUILD_TIMEOUT_MS = "1800000"  # 30 minutes
 $env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
-$env:ACR_QUERY_TIMEOUT_MS = "90000"    # 90s per ACR digest-verification attempt
+$env:ACR_QUERY_TIMEOUT_MS = "600000"   # 10 minutes per ACR digest-verification attempt
 ```
 
-`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. The digest
-lookup is a read-only query, so a timed-out attempt is treated as "not visible
-yet" and is retried by the existing bounded backoff. Keep it short: raising it
-does not buy reliability, it just makes each hung `az acr repository show` stall
-that much longer before the retry can happen.
+`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. ACR digest
+lookups are read-only, so timed-out or transient failed attempts are retried
+before the deployment decides whether a tag is present, absent, or unknown.
+Operators can still lower this for local experiments, but retries widen a
+shorter configured budget back toward the 10-minute default so one slow
+`az acr repository show` under import load does not make a resume look like a
+missing tag.
 
 The build and import limits behave differently from each other. A timed-out
 `az acr build` is **not** retried: a local CLI timeout leaves the remote build's
@@ -140,6 +143,15 @@ actually landed before the connection dropped. Deterministic errors (a missing
 source image, an authentication failure) still fail immediately rather than
 burning retries. Staging-tag cleanup never fails a deployment: a leaked
 preflight tag is harmless, an aborted deployment is not.
+
+When `--image-source ghcr` or `--image-source custom` promotes a staged image
+into a final release tag, a failed final-tag digest read is never treated as
+"tag absent". Without `--force`, the promotion first attempts a non-forced
+import; if ACR reports that the tag already exists, the deploy re-reads the tag
+and retries with `--force` only when the existing digest already matches the
+staged source digest. Differing tags still fail closed unless the operator
+explicitly requested `--force`, and that operator intent is honored even if the
+pre-promotion digest read remained unknown after retries.
 
 ### Resuming a failed deployment
 
@@ -175,10 +187,21 @@ safe to delete at any time.
 npm run azure:deploy-from-local
 ```
 
-Mints a new immutable image tag from `HEAD` (refuses a dirty working tree),
+Mints a new immutable image tag from `HEAD` (refuses a dirty working tree by default),
 builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
+
+For an intentional personal development test, `--allow-dirty` is the explicit escape
+hatch. It is not release-candidate evidence; use an exact committed candidate for release validation.
+
+| Goal | Command |
+| --- | --- |
+| First provisioning | `npm run azure:provision-infra` |
+| Deploy this checkout | `npm run azure:deploy-from-local` |
+| Deploy an exact commit/ref | `npm run azure:deploy-from-commit -- <sha-or-ref>` |
+| Deploy a published version | `npm run azure:deploy-from-release -- vX.Y.Z` |
+| Verify without deployment | `npm run azure:verify` |
 
 To deploy an arbitrary committed branch, PR ref, or historical commit without
 switching the caller's checkout:

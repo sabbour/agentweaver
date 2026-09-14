@@ -99,14 +99,16 @@ objections), not full-run completion. A run that stops there is working as inten
 not stuck or broken. If a caller wants a scenario that drives to full completion,
 they need a different adapter/scenario, not this one.
 
-This pattern generalizes across the catalog: every persona core in
-`scripts/persona-briefs/personas/*.md` currently has a "Where to stop (safe
-checkpoint)" section that stops before or at a confirmation/review gate, and every
-`*.api.md` surface adapter explicitly says "Stop at the outcome-spec confirmation
-gate without confirming execution." Any adapter whose Intent mapping says "stop at
-X" should be treated as intentionally non-terminal, not a stuck/broken run, when
-triaging a "the run didn't finish" report. See `scripts/persona-briefs/catalog.json`
-for the `runsToCompletion` flag recorded per persona/surface pair.
+This pattern generalizes across the catalog: several persona cores and adapters stop
+before or at a confirmation/review gate, while completion-capable personas explicitly
+declare `runsToCompletion: true` in `scripts/persona-briefs/catalog.json`. Any
+adapter whose Intent mapping says "stop at X" should be treated as intentionally
+non-terminal, not a stuck/broken run, when triaging a "the run didn't finish" report.
+For scenario selection, run `node scripts/persona-briefs/find-similar.mjs
+--description "<intent>" --requires-completion` whenever the run must execute through
+completion or validate a live preview; gate-stopping candidates appear under
+`rejectedMatches` with an explicit warning instead of being silently ranked as
+suitable.
 
 ---
 
@@ -1111,11 +1113,11 @@ Cached SSO completes the recorder sign-in with no interactive prompt. The record
 ## Run steering is unreachable due to a rotating execution_key nonce
 
 - date: 2026-09-14
-- category: bug
+- category: environment
 - surface: api
-- status: open
+- status: resolved
 
-POST /api/runs/{id}/steer supports verbs stop, send, redirect, amend, but is gated behind 409 ai_execution_context_required. The execution_key handed back in the 409 differs on every single response, and the key returned by a successful POST /api/ai/execution-context matches neither the key prepared nor any key subsequently demanded. Passing it as body execution_key, body executionKey, header x-ai-execution-key, and header x-execution-key all fail. There is currently no working way to send a mid-flight correction to a running run over the API - budget for that when designing scenarios. Tracked as issue #1316.
+POST /api/runs/{id}/steer supports verbs stop, send, redirect, amend, and is gated behind 409 ai_execution_context_required. Satisfy it by calling POST /api/ai/execution-context and resending the original request with the returned execution_key in the **If-Model-Provider-Key** header - see PostAiAsync in apps/Agentweaver.Mcp/AgentweaverApiClient.cs for the reference implementation. Body execution_key, body executionKey, header x-ai-execution-key and header x-execution-key do NOT work; the header name is the only thing that does. The key legitimately differs on every response because it is an HMAC-signed payload embedding its own expiry, but it does not need to match a previously issued one - AcceptAsync verifies the signature plus operation/project/subject/provider-identity, never byte equality. An earlier version of this entry claimed steering was unreachable because the key "rotates"; that was wrong, and it was wrong because the header name was never tried. Tracked as issue #1316 (now scoped to discoverability: the 409 hint did not name the header, and OpenAPI omits it).
 
 ---
 

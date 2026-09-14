@@ -1,6 +1,6 @@
 # Operations experience
 
-Operations is where Agentweaver users answer one practical question: **is the system ready to keep agents moving safely?** The web UI shows this state through Settings, Diagnostics, Heartbeat, Flow, and project sandbox policy. MCP exposes the same facts through focused tools.
+Operations is where Agentweaver users answer one practical question: **is the system ready to keep agents moving safely?** Diagnostics, Heartbeat, Flow, Cluster, and Observability provide inspection. Account, platform, and project settings have distinct configuration scopes. MCP exposes selected operations through focused tools.
 
 Scope: this page covers operations surfaces that exist today; it does not describe unsupported cost metrics, hidden telemetry, or deployment settings that are not exposed in the product.
 
@@ -18,76 +18,70 @@ Agentweaver operations is a control room, not a general admin console. A user us
 
 The backend remains the source of truth. The web UI renders snapshots, badges, cards, and empty states. MCP tools return the same operational facts as structured results an assistant can summarize or act on.
 
-![Mental model: Human operator, Web UI, MCP client, MCP tools, Settings, Diagnostics, Heartbeat, Flow, Project Settings, diagnostics_get, heartbeat_status, sandbox_policy_get, …](../diagrams/experience-operations-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-operations-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The important operating rule is: Agentweaver shows real state. Diagnostics can warn or fail. Heartbeat can be `running`, `waiting_first_tick`, or `disabled`. Flow can be empty. Sandbox policy can prevent shell execution even when the project itself is available.
 
 ## Operations surfaces at a glance
 
 | Surface | Where the user goes | What it answers | MCP parity |
 |---|---|---|---|
-| **Settings** | Global **Settings** page | Which sandbox policy applies to a repository path? | `sandbox_policy_get`, partially `sandbox_policy_set` |
+| **Account settings** | Account menu → **Account settings** | Authentication, personal AI access, GitHub connections, and MCP client setup | No single equivalent tool |
+| **Platform settings** | **Platform settings** (`/platform-settings`) | Deployment model-provider configuration, subject to platform permissions | No dedicated operations tool |
 | **Project Settings** | Project **Settings** → **Sandbox policy** | Which sandbox policy applies to this project's working directory? | `sandbox_policy_get`, partially `sandbox_policy_set` |
 | **Diagnostics** | Project **Diagnostics** page | Is the system or project healthy enough to operate? | `diagnostics_get` for global diagnostics |
 | **Heartbeat** | Project **Heartbeat** page | Is background automation enabled, ticking, and acting? | `heartbeat_status` |
 | **Flow** | Project **Flow** page | What is each agent working on right now? | Indirect through board/run/coordinator tools |
-| **Cluster** | Project **Cluster** page (SYSTEM section) | Are pods healthy and scheduling, are any pods orphaned? | `GET /api/diagnostics/cluster` |
-| **Observability > Traces** | Project **Observability** → **Traces** | How did a coordinator transaction move through agent turns, tool calls, and LLM spans? | `GET /api/metrics/runs/{runId}/traces` |
+| **Cluster** | Project **Cluster** page (SYSTEM section) | Are claims binding, are resources healthy, and are pods orphaned? | No dedicated MCP tool; REST: `GET /api/diagnostics/cluster` |
+| **Observability** | Project **Observability**, **Traces**, and **Agents** | What usage, performance, and recorded trace data is available? | No dedicated MCP tool; traces REST: `GET /api/metrics/runs/{runId}/traces` |
 
-Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture. Use **Cluster** when runs are slow to schedule or pods are accumulating.
+Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed.
+Use **Flow** during active multi-agent work, project **Settings** for command policy, and **Cluster**
+when runs are slow to schedule or pods are accumulating.
 
 ## Settings experience
 
-The **Settings** menu in the navigation rail has two user-facing scopes:
+Settings have three distinct scopes:
 
-- global **Settings**, which edits sandbox policy by repository path;
-- project **Settings**, which configures one project.
+- **Account settings** for the signed-in user's authentication, personal AI access, repository access,
+  and MCP clients;
+- **Platform settings** for model providers and deployment-level provider configuration;
+- project **Settings** for one project's repository, execution/provider choices, review and sandbox
+  policy, and lifecycle actions.
 
-Project **Settings** includes project name, repository link, default model, sandbox policy, review policy, and danger-zone actions. For project management and MCP `project_configure`, see [Projects](./projects.md). The global **Settings** page itself exposes only **Sandbox policy**.
+For project management and MCP `project_configure`, see [Projects](./projects.md). Account settings is
+not a repository-path sandbox editor, and it cannot grant or revoke Microsoft Entra platform roles.
 
-### Global Settings
+### Account and platform settings
 
-The global page title is **Settings**. Its only section is **Sandbox policy**. The user enters **Repository path** showing example **C:/path/to/repo**, then selects **Load policy**.
+**Account settings** shows **Authentication**, **AI Access**, **GitHub connections**, and **MCP clients**.
+Personal session-chat AI access is separate from project Copilot connections. Entra role assignments
+are displayed, not changed on this page.
 
-After loading, the page shows:
-
-- **Shell execution** — switch label **Enabled** or **Disabled**.
-- **Sandbox enabled** — switch label **On — commands run in the sandbox** or **Off — no isolation layer**.
-- **Outbound network** — switch label **Enabled** or **Blocked**. It is disabled when sandboxing is off.
-- **Allowed repository roots** — read-only list, or **None configured**.
-- **Blocked command patterns** — read-only list, or **None configured**.
-- **Save** — persists the full loaded policy and shows **Policy saved.** on success.
-
-This page is useful when the user knows the repository path but is not already inside a project.
+**Platform settings** manages model-provider entries. It is separate from project provider selection and
+repository sandbox policy; access depends on the user's platform permissions.
 
 ### Project Settings sandbox policy
 
 Project **Settings** has an in-page rail. The operations-relevant section is **Sandbox policy**, described as **Control how agent commands execute and what they may reach.** It loads from the project's working directory, so the user does not type a path.
 
-The section shows the same policy fields as global Settings and saves with **Save**. On success, it shows **Sandbox policy saved.** On failure, the API error appears inline.
+The section shows shell, sandbox, and outbound-network switches plus read-only allowed roots and
+blocked patterns. It saves with **Save** and reports success or an inline API error. Preview approval
+timeout and lifetime are configured here too; both default to 1440 minutes (24 hours).
 
-Use project **Settings** when changing the policy for an active project. Use global **Settings** when checking a repository path outside the project context.
+Use project **Settings** for an active project's policy. MCP `sandbox_policy_get` can inspect a
+repository path, while `sandbox_policy_set` changes only shell enablement.
 
 ### What Settings does not expose
 
-The global **Settings** page does not expose API keys, provider secrets, CORS, database paths, worktree paths, Kubernetes routing, or Key Vault values. Those are runtime and deployment configuration; see [Configuration](../guide/configuration.md) and [Infrastructure & deployment](../deep-dive/infra-deployment.md).
+Account settings is not a general deployment console. Database/workspace paths, CORS, Kubernetes
+routing, and Key Vault delivery remain runtime/infrastructure concerns. Platform provider controls
+are a separate surface; see [Configuration](../guide/configuration.md) and
+[Infrastructure & deployment](../deep-dive/infra-deployment.md).
 
 ## Diagnostics experience
 
 Diagnostics answers: **is Agentweaver healthy enough to operate right now?** It is read-only and runs real checks over live state.
 
 The page title is **Diagnostics** with subtitle **System and project health checks.** It provides:
-
-![Diagnostics page with Global and This project tabs and check cards](/screenshots/diagnostics-checks.png)
-
-> 📸 **Screenshot — `diagnostics-checks.png`**
-> *Shows:* the **Diagnostics** page titled "Diagnostics" / "System and project health checks." with the **Global** / **This project** tabs (`aria-label="Diagnostics scope"`), the **Auto-refresh** switch, the **Re-run** button, the **Updated** timestamp, and the check list (`aria-label="Diagnostics checks"`) header "Checks (n) · {ms} ms" with `pass` / `warn` / `fail` badges.
-> *Path:* open a project → click **Diagnostics** in the left rail → `/projects/:projectId/diagnostics`.
 
 - **Global** and **This project** tabs;
 - **Auto-refresh** switch;
@@ -125,18 +119,10 @@ Checkpoint GC appears as operational state inside diagnostics. The Diagnostics p
 
 Heartbeat answers: **is background automation ticking, and did it act?** The coordinator heartbeat service runs on an interval and drives backlog pickup from Ready into active coordinator work.
 
-![Heartbeat page with Automations and Recent activity](/screenshots/heartbeat-status.png)
-
-> 📸 **Screenshot — `heartbeat-status.png`**
-> *Shows:* the **Heartbeat** page titled "Heartbeat" / "Background automation status and recent ticks." with the **Auto-refresh** switch and **Refresh** button, the **Automations** section, and the **Recent activity** table (`aria-label="Recent heartbeat ticks"`).
-> *Path:* open a project → click **Heartbeat** in the left rail → `/projects/:projectId/heartbeat`.
-
-![Heartbeat experience: User, Board Ready column, Coordinator heartbeat, API, Coordinator run, Flow](../diagrams/experience-operations-fig2.png)
-
-<!-- Rendered from ../diagrams/src/experience-operations-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Pickup is not just a timer-to-run arrow. The task must remain eligible, its project must be available,
+and the atomic claim must win before a coordinator run is reserved. A lost claim starts no duplicate
+run; an unavailable project is not treated as a successful pickup. Automation status and recent ticks
+explain whether this path ran; Flow separately projects the resulting work.
 
 The page title is **Heartbeat** with subtitle **Background automation status and recent ticks.** It provides:
 
@@ -188,12 +174,6 @@ Flow answers: **what is each agent working on right now?** It is the live agent 
 
 The page title is **Flow**. The default subtitle is **What each agent is working on right now.** With an agent filter, it becomes **Live work and terminal-run archive for {agent}.** Flow auto-refreshes every five seconds and also provides **Refresh**.
 
-![Flow page with per-agent activity cards](/screenshots/flow-agents.png)
-
-> 📸 **Screenshot — `flow-agents.png`**
-> *Shows:* the **Flow** page titled "Flow" / "What each agent is working on right now." with the **Refresh** button and per-agent cards sorted by operational pressure (active, then queued, then blocked); with an agent selected, the **Previous work archive** section (`aria-label="Previous work archive"`) and the "Live work and terminal-run archive for {agent}." subtitle.
-> *Path:* open a project → click **Flow** in the left rail → `/projects/:projectId/flow`.
-
 Flow reads the project board's `agent_queues` projection and sorts agents by operational pressure: active work first, then queued work, then blocked work.
 
 ### Agent cards
@@ -213,7 +193,10 @@ Flow is not a full run timeline. It is the team-load view: who is busy, who is w
 
 ### Agent filter and archive
 
-When opened with an agent filter, Flow shows an **Agent filter** badge, the agent name, and **Clear filter**. It also shows **Previous work archive** for terminal runs: completed, merged, assemble-ready, declined, failed, and merge-failed work. Each archive item links to the execution page and shows status, timestamp, and model id when available.
+When opened with an agent filter, Flow shows an **Agent filter** badge, the agent name, and **Clear filter**.
+It also shows **Previous work archive** for terminal runs: completed, merged, assemble-ready, declined,
+failed, and merge-failed work. Archive links open the relevant run/orchestration context; there is no
+standalone Execution page. Entries show status, timestamp, and model id when available.
 
 ### Empty states
 
@@ -227,7 +210,8 @@ An empty Flow page is not automatically a system failure. Check the board for Re
 
 ## Sandbox policy experience
 
-Sandbox policy answers: **what may agent commands do for this repository?** It is repository-scoped. The same policy can be reached from global **Settings**, project **Settings**, and MCP tools.
+Sandbox policy answers: **what may agent commands do for this repository?** It is repository-scoped,
+available from project **Settings** and the narrower MCP tools, not Account settings.
 
 At a user level, the policy controls:
 
@@ -248,12 +232,6 @@ The deeper model is layered: governance, filesystem containment, execution isola
 | **Outbound network** | Enables or blocks network access for sandboxed commands; disabled when sandboxing is off. |
 | **Allowed repository roots** | Shows recognized repository roots; the UI displays this list but does not edit it. |
 | **Blocked command patterns** | Shows destructive command patterns; the UI displays this list but does not edit it. |
-
-![Sandbox policy fields in Project Settings](/screenshots/sandbox-policy.png)
-
-> 📸 **Screenshot — `sandbox-policy.png`**
-> *Shows:* the **Sandbox policy** section (reached from project **Settings**) with the **Shell execution**, **Sandbox enabled**, and **Outbound network** switches, plus the read-only **Allowed repository roots** and **Blocked command patterns** lists.
-> *Path:* open a project → **Settings** → **Sandbox policy** → `/projects/:projectId/settings` (Sandbox policy section).
 
 The UI saves the full loaded policy so list fields are preserved even when the user only toggles a switch.
 
@@ -276,7 +254,8 @@ When sandboxing is on, **Outbound network** controls sandboxed command network a
 
 - Web **Diagnostics** and MCP `diagnostics_get` report live diagnostics facts. The web page adds project scope, cards, durations, and auto-refresh.
 - Web **Heartbeat** and MCP `heartbeat_status` report heartbeat state. The web page adds automation cards, recent tick history, error display, and auto-refresh.
-- Web **Settings**/**Project Settings** and MCP `sandbox_policy_get`/`sandbox_policy_set` touch repository sandbox policy. The web UI exposes the full displayed policy; the MCP setter changes shell enablement.
+- Web project **Settings** and MCP `sandbox_policy_get`/`sandbox_policy_set` touch repository sandbox policy.
+  The web UI exposes the full displayed policy; the MCP setter changes shell enablement.
 - Web **Flow** has no dedicated MCP tool. MCP clients inspect board, run, and orchestration state through backlog, run, and coordinator tools.
 
 Humans get visual scanning and judgment points. Assistants get compact tools for reporting and narrow safe mutations.
@@ -365,20 +344,19 @@ Operations pages are snapshots and projections over backend state. They do not r
 
 The **Cluster** page is the SYSTEM-section operations view for Kubernetes cluster health. It is available under the **Cluster** nav item (Server24Regular icon) at `/projects/:projectId/cluster`.
 
-![Cluster page with KPI cards and pod tables](/screenshots/cluster-page.png)
-
-> 📸 **Screenshot — `cluster-page.png`**
-> *Shows:* the **Cluster** page with KPI cards (Active pods, Orphaned pods, CPU used/total, Pending runs), quota bars (CPU, memory), the component health table, and the Active / Orphaned / Pending pods tables.
-> *Path:* open a project → click **Cluster** in the SYSTEM left rail section → `/projects/:projectId/cluster`.
-
 The page provides:
 
-- **KPI cards** — Active pods, Orphaned pods, CPU used/total, Pending-capacity runs
-- **Quota bars** — CPU and memory usage, color-coded by saturation. Since #217 removed the `ResourceQuota` CPU/memory caps there is no hard limit to fill against, so these bars no longer represent an enforced ceiling; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds.
+- **KPI cards** — Orphaned pods, Pending capacity, Checks healthy, and Warm pool ready when pool data exists
+- **Resource topology** — Runtime by default, with optional networking, workloads, storage, autoscaling,
+  and availability layers. There are no CPU/memory quota bars or separate active-pod table.
 - **Component health table** — 5 checks: Postgres, Azure Key Vault, agent-pod quota headroom, warm-pool, Kubernetes API server
-- **Active agent pods table** — pods currently serving a live run
+- **Sandbox claims** and **Warm pools** — bound/pending claims and ready/desired pool capacity
 - **Orphaned agent pods table** — pods with no matching active run (will be reaped on the next sweep)
-- **Pending-capacity runs table** — subtasks that could not get a sandbox immediately because no warm-pool capacity was free. Zero is healthy. This is also a **legacy / back-compat** surface, so new runs usually leave it empty because Kubernetes now owns scheduling.
+- **Pending-capacity runs table** — historical `PendingCapacity` records, not the current Kubernetes
+  scheduling queue. A zero count does not prove every live claim has bound.
+
+Kubernetes owns scheduling. Namespace quota bounds pod/claim/PVC counts and storage, not CPU/memory;
+current claim state and `sandbox.provisioning_pending` events explain a live scheduling wait.
 
 The page auto-refreshes every 30 seconds by default. When the API is not deployed on AKS (or the cluster diagnostics endpoint returns `404`), the page falls back gracefully and shows a message indicating cluster diagnostics are unavailable.
 
@@ -388,3 +366,104 @@ The page auto-refreshes every 30 seconds by default. When the API is not deploye
 ## See also
 
 - [Token usage monitoring](./token-usage-monitoring.md) — project and app-level AI Credit dashboards, part of the broader operations picture.
+
+<details id="diagram-context-experience-operations-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Choose the right operations surface</td></tr>
+<tr><td>takeaway</td><td>Inspection and configuration have different scopes; MCP parity is intentionally partial.</td></tr>
+<tr><td>group-title-0</td><td>INSPECT CURRENT STATE</td></tr>
+<tr><td>group-title-1</td><td>CONFIGURE WITH THE RIGHT AUTHORITY</td></tr>
+<tr><td>Diagnostics</td><td>Diagnostics</td></tr>
+<tr><td>Diagnostics</td><td>Health and checks</td></tr>
+<tr><td>Diagnostics</td><td>diagnostics_get</td></tr>
+<tr><td>Diagnostics</td><td>Inspect explicit failures and unknown timed-out checks.</td></tr>
+<tr><td>Heartbeat + Flow</td><td>Heartbeat + Flow</td></tr>
+<tr><td>Heartbeat + Flow</td><td>Pickup and orchestration</td></tr>
+<tr><td>Heartbeat + Flow</td><td>heartbeat_status</td></tr>
+<tr><td>Heartbeat + Flow</td><td>Automation reports pickup; Flow shows ongoing work.</td></tr>
+<tr><td>Cluster + traces</td><td>Cluster + traces</td></tr>
+<tr><td>Cluster + traces</td><td>Capacity and observability</td></tr>
+<tr><td>Cluster + traces</td><td>REST-backed UI views</td></tr>
+<tr><td>Cluster + traces</td><td>No dedicated Cluster or Observability MCP tools.</td></tr>
+<tr><td>Account settings</td><td>Account settings</td></tr>
+<tr><td>Account settings</td><td>Authentication / AI access</td></tr>
+<tr><td>Account settings</td><td>GitHub / MCP clients</td></tr>
+<tr><td>Account settings</td><td>Not a repository-path sandbox-policy editor.</td></tr>
+<tr><td>Platform settings</td><td>Platform settings</td></tr>
+<tr><td>Platform settings</td><td>Model provider controls</td></tr>
+<tr><td>Platform settings</td><td>platform administrator</td></tr>
+<tr><td>Platform settings</td><td>Global provider configuration requires admin authority.</td></tr>
+<tr><td>Project settings</td><td>Project settings</td></tr>
+<tr><td>Project settings</td><td>Repository / sandbox</td></tr>
+<tr><td>Project settings</td><td>project-scoped policy</td></tr>
+<tr><td>Project settings</td><td>Preview approval and lifetime; MCP setter is narrower.</td></tr>
+<tr><td>note</td><td>All surfaces use authorized API operations. sandbox_policy_set changes repository shell_enabled only.</td></tr>
+<tr><td>n0</td><td>Inspect explicit failures and
+unknown timed-out checks.</td></tr>
+<tr><td>n1</td><td>Automation reports pickup;
+Flow shows ongoing work.</td></tr>
+<tr><td>n2</td><td>No dedicated Cluster or
+Observability MCP tools.</td></tr>
+<tr><td>n3</td><td>Not a repository-path
+sandbox-policy editor.</td></tr>
+<tr><td>n4</td><td>Global provider configuration
+requires admin authority.</td></tr>
+<tr><td>n5</td><td>Preview approval and lifetime;
+MCP setter is narrower.</td></tr>
+<tr><td>groups</td><td>INSPECT CURRENT STATE; CONFIGURE WITH THE RIGHT AUTHORITY</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-experience-workflows-backlog-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One won claim, one reserved run</td></tr>
+<tr><td>takeaway</td><td>Ready pickup commits claim and reservation before activation; other outcomes do not launch.</td></tr>
+<tr><td>group-title-0</td><td>SELECTION AND ATOMIC RESERVATION</td></tr>
+<tr><td>group-title-1</td><td>POST-CLAIM OUTCOMES</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Ranked Ready tasks</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Heartbeat candidates</td></tr>
+<tr><td>Ranked Ready tasks</td><td>eligible project + workspace</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Top-N limits candidates per tick, not total concurrency.</td></tr>
+<tr><td>Atomic transaction</td><td>Atomic transaction</td></tr>
+<tr><td>Atomic transaction</td><td>Claim + run + policy</td></tr>
+<tr><td>Atomic transaction</td><td>task-scoped reservation</td></tr>
+<tr><td>Atomic transaction</td><td>Commit all together; no orphan losing run.</td></tr>
+<tr><td>Activate winner</td><td>Activate winner</td></tr>
+<tr><td>Activate winner</td><td>Use reserved run ID</td></tr>
+<tr><td>Activate winner</td><td>post-commit activation</td></tr>
+<tr><td>Activate winner</td><td>Schedule unattended confirm attributed to CapturedBy.</td></tr>
+<tr><td>Lost / unavailable</td><td>Lost / unavailable</td></tr>
+<tr><td>Lost / unavailable</td><td>No launch by this pickup</td></tr>
+<tr><td>Lost / unavailable</td><td>rollback / preserve rank</td></tr>
+<tr><td>Lost / unavailable</td><td>A winner may own a lost claim; unavailable leaves Ready.</td></tr>
+<tr><td>Claimed failed run</td><td>Claimed failed run</td></tr>
+<tr><td>Claimed failed run</td><td>Visible failure reason</td></tr>
+<tr><td>Claimed failed run</td><td>preflight / activation failure</td></tr>
+<tr><td>Claimed failed run</td><td>Do not silently requeue. Terminalization may log failure.</td></tr>
+<tr><td>Coordinator work</td><td>Coordinator work</td></tr>
+<tr><td>Coordinator work</td><td>Unattended execution</td></tr>
+<tr><td>Coordinator work</td><td>claim-time policy snapshot</td></tr>
+<tr><td>Coordinator work</td><td>No second manual start for the same captured goal.</td></tr>
+<tr><td>e0</td><td>attempt</td></tr>
+<tr><td>e1</td><td>won</td></tr>
+<tr><td>e2</td><td>not won</td></tr>
+<tr><td>e3</td><td>activate</td></tr>
+<tr><td>e4</td><td>failure</td></tr>
+<tr><td>note</td><td>A won preflight-failure reservation also stays Claimed/Failed. Claim-once is not tool-execution-once.</td></tr>
+<tr><td>n0</td><td>Top-N limits candidates per
+tick, not total concurrency.</td></tr>
+<tr><td>n1</td><td>Commit all together;
+no orphan losing run.</td></tr>
+<tr><td>n2</td><td>Schedule unattended confirm
+attributed to CapturedBy.</td></tr>
+<tr><td>n3</td><td>A winner may own a lost claim;
+unavailable leaves Ready.</td></tr>
+<tr><td>n4</td><td>Do not silently requeue.
+Terminalization may log failure.</td></tr>
+<tr><td>n5</td><td>No second manual start for
+the same captured goal.</td></tr>
+<tr><td>groups</td><td>SELECTION AND ATOMIC RESERVATION; POST-CLAIM OUTCOMES</td></tr>
+</tbody></table>
+</details>

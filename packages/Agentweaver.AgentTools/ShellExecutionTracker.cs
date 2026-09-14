@@ -73,15 +73,24 @@ public sealed class ShellExecutionTracker : IDisposable
     public async Task<IDisposable> EnterAsync(
         string commandHash,
         TimeSpan timeout,
+        CancellationToken ct = default) =>
+        await EnterAsync(commandHash, commandHash, timeout, ct).ConfigureAwait(false);
+
+    public async Task<IDisposable> EnterAsync(
+        string toolCallId,
+        string commandHash,
+        TimeSpan timeout,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolCallId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandHash);
         lock (_sync)
             ObjectDisposedException.ThrowIf(_disposed, this);
         await _singleFlight.WaitAsync(ct).ConfigureAwait(false);
 
         var startedAt = DateTimeOffset.UtcNow;
         var deadline = timeout > TimeSpan.Zero ? startedAt.Add(timeout) : DateTimeOffset.MaxValue;
-        var snapshot = new ShellExecutionSnapshot(commandHash, commandHash, startedAt, deadline);
+        var snapshot = new ShellExecutionSnapshot(toolCallId, commandHash, startedAt, deadline);
         TaskCompletionSource changed;
         lock (_sync)
         {

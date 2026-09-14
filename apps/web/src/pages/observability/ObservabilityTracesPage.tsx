@@ -2,7 +2,7 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { safeTerminalFailureMessage, type Project, type RunTerminalDiagnostic, type WorkflowRunDto } from '../../api/types';
+import { isSafeTerminalCause, safeTerminalFailureMessage, type Project, type RunTerminalDiagnostic, type WorkflowRunDto } from '../../api/types';
 import {
   Badge,
   Button,
@@ -113,14 +113,7 @@ function FailureDiagnosticPanel({
           correlation_ids: Object.fromEntries(
             Object.entries(value.correlation_ids).filter(([, id]) => /^[a-f0-9]{32}$/.test(id)),
           ),
-          cause_chain: value.cause_chain.filter((cause) => [
-            'HttpRequestException',
-            'IOException',
-            'OperationCanceledException',
-            'SocketException',
-            'TaskCanceledException',
-            'TimeoutException',
-          ].includes(cause)),
+          cause_chain: value.cause_chain.filter(isSafeTerminalCause),
         });
       })
       .catch((error: unknown) => {

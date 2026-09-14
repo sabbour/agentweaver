@@ -368,6 +368,40 @@ public sealed class McpToolSchemaTests
         diagnostic.Message.Should().Be($"Run failed with code '{code}'. Retry availability is unknown.");
     }
 
+    [Fact]
+    public async Task RunFailureDiagnostic_PreservesCoordinatorCodeAndSafeCauseBreadcrumbs()
+    {
+        var tools = new DiagnosticsTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    code = "coordinator_execution_failed",
+                    message = "untrusted",
+                    component = "coordinator",
+                    timestamp = "2026-09-14T00:00:00Z",
+                    retryable = false,
+                    correlation_ids = new Dictionary<string, string>(),
+                    cause_chain = new[]
+                    {
+                        "phase:coordinator-draft:failed",
+                        "tool:start_preview:failed:3",
+                        "TimeoutException",
+                        "https://agentweaver.blob.core.windows.net/runs/log?sig=secret",
+                    },
+                }),
+            })));
+
+        var diagnostic = await tools.RunFailureDiagnosticAsync("run-1");
+
+        diagnostic.Code.Should().Be("coordinator_execution_failed");
+        diagnostic.Message.Should().Be("Run failed with code 'coordinator_execution_failed'. Retry is not available.");
+        diagnostic.CauseChain.Should().Equal(
+            "phase:coordinator-draft:failed",
+            "tool:start_preview:failed:3",
+            "TimeoutException");
+    }
+
     // ---- #344: team_cast mutually-exclusive params must not both be required ----
 
     [Fact]

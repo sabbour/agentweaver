@@ -1,0 +1,148 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Context compilation and progressive tool disclosure",
+  "alt": "Two-lane data-flow view showing approved decisions, attributed memory, current project and run state, role and workflow constraints, trust and budget filtering, compact context assembly, a shared tool capability registry, progressive disclosure from summaries to schemas and guidance, coordinator versus role-agent slices, and durable observations feeding later runs.",
+  "direction": "TB",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "knowledge",
+      "label": "Approved decisions and memory",
+      "subLabel": "Attributed, governed history",
+      "icon": "box",
+      "fluentIcon": "memory",
+      "badge": "Durable"
+    },
+    {
+      "id": "current",
+      "label": "Current run, role, and workflow",
+      "subLabel": "WorkPlan, task frontier, charter, review, and sandbox",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": "Authority"
+    },
+    {
+      "id": "compiler",
+      "label": "Context compiler",
+      "subLabel": "Resolve provenance, audience, trust, and relevance",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Compile"
+    },
+    {
+      "id": "budget",
+      "label": "Trust and budget filter",
+      "subLabel": "Rank approved, recent, relevant, role-eligible material",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Bound"
+    },
+    {
+      "id": "tool-registry",
+      "label": "Shared tool registry",
+      "subLabel": "Names, authorization, schemas, and guidance",
+      "icon": "box",
+      "fluentIcon": "mcp",
+      "badge": "Shared"
+    },
+    {
+      "id": "summaries",
+      "label": "Disclosure index",
+      "subLabel": "Compact tool and context summaries first",
+      "icon": "box",
+      "fluentIcon": "archive",
+      "badge": "Discover"
+    },
+    {
+      "id": "detail",
+      "label": "On-demand detail",
+      "subLabel": "Full schema, guidance, or supporting context",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": "Expand"
+    },
+    {
+      "id": "context",
+      "label": "Execution context",
+      "subLabel": "Task slice, approved memory, and tool summaries",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": "Prompt input"
+    },
+    {
+      "id": "runtime",
+      "label": "Coordinator or role agent",
+      "subLabel": "Broad planning context vs scoped child execution",
+      "icon": "box",
+      "fluentIcon": "agent",
+      "badge": "Audience"
+    },
+    {
+      "id": "observations",
+      "label": "Attributed observations",
+      "subLabel": "Evidence and learnings return for governance",
+      "icon": "box",
+      "fluentIcon": "history",
+      "badge": "Feedback"
+    }
+  ],
+  "edges": [
+    {
+      "from": "knowledge",
+      "to": "compiler",
+      "label": "approved history"
+    },
+    {
+      "from": "current",
+      "to": "compiler",
+      "label": "state + authority"
+    },
+    {
+      "from": "compiler",
+      "to": "budget",
+      "label": "eligible candidates"
+    },
+    {
+      "from": "budget",
+      "to": "context",
+      "label": "ranked task slice"
+    },
+    {
+      "from": "tool-registry",
+      "to": "summaries",
+      "label": "compact catalog"
+    },
+    {
+      "from": "summaries",
+      "to": "context",
+      "label": "available tools"
+    },
+    {
+      "from": "context",
+      "to": "runtime",
+      "label": "compose prompt"
+    },
+    {
+      "from": "runtime",
+      "to": "detail",
+      "label": "request expansion"
+    },
+    {
+      "from": "tool-registry",
+      "to": "detail",
+      "label": "schema + guidance"
+    },
+    {
+      "from": "detail",
+      "to": "runtime",
+      "label": "just-in-time detail"
+    },
+    {
+      "from": "runtime",
+      "to": "observations",
+      "label": "evidence + learning"
+    }
+  ]
+}

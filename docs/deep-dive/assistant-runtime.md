@@ -21,29 +21,26 @@ A project run needs an isolated git worktree, a sandboxed execution environment,
 
 ## The life of a session
 
-![The life of a session: Sessions UI, AssistantEndpoints, AssistantRunService, AgentHost pod, OperatorAssistantAgent, MCP server, Copilot SDK session, Run store / event log](../diagrams/assistant-runtime-fig1.png)
-
-<!-- Rendered from ../diagrams/src/assistant-runtime-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The API owns the durable conversation; the held AgentHost creates a fresh SDK session
+for each turn and uses a separately issued MCP broker token, not the browser's Entra bearer.
 
 1. **Start.** `POST /api/assistant/runs` creates a run record and, if an initial message was supplied, immediately runs the opening turn. The response returns the `runId` used for every subsequent message.
 2. **Converse.** `POST /api/assistant/runs/{id}/messages` appends the caller's message, runs a turn, and returns the assistant's reply. Each turn is serialized per-run via a semaphore so two messages to the same session can't race.
 3. **Persist.** Every turn appends `AgentMessage` events (role + content) to the same durable event log every other run type uses. This is the only source of truth for a conversation's history — the in-memory cache is purely an optimization.
 4. **Go idle, or move pods.** Two independent timers, because a conversation and its pod have very different costs. The **pod-idle** sweep releases a conversation's held AgentHost pod after 5 minutes of quiet (`AssistantRunOptions.PodIdleTimeout`) — the conversation stays fully alive and resumable, the next message just pays one cold start again. The much later **conversation-idle** sweep parks the run after 30 minutes without activity (`AssistantRunOptions.IdleTimeout`), releasing any still-held pod and freeing its concurrency slot. Neither sweep touches a run that is blocked on an armed tool-approval. Separately, because there is no session affinity between the UI and API replicas, a later message for the same run can land on a pod that never held it in memory at all.
-5. **Resume.** Either case above is a *cache miss*, not a failure. `RehydrateRunAsync` looks the run up in the durable store, checks ownership, replays its persisted `AgentMessage` events into an in-memory history (bounded to the most recent 24 messages — `MaxHistoryMessages`), and — if the run had been marked `Completed` by the idle sweep — flips it back to `InProgress`. The caller never sees a difference; the log line `Rehydrated operator run {RunId} from durable storage (N history messages restored)` is the only trace.
+5. **Resume.** A cache miss can be rehydrated from durable state after authorization. History is bounded to the latest 24 messages (`MaxHistoryMessages`). An idle sweep parks the run as nonterminal `Idle`; a compare-and-swap wake returns it to `InProgress`. `Completed`, or a durable `run.completed`, is closed and rejects further messages with `409 operator_run_closed`. Rehydration is not permission to revive a completed conversation or a blanket exactly-once-turn guarantee.
 
 ## Caller identity across API, AgentHost, and MCP
 
-Each assistant endpoint extracts the bearer presented on that specific HTTP request. `AssistantRunService` passes it only in the in-memory turn request; it is not written to the run row, history, or event log. On the turn that first claims a pod, `RemoteOperatorAssistantAgent` sends it to the AgentHost through the one-time internal `/configure` call, separately from the linked GitHub access token. `/configure` is genuinely one-shot (a second call is rejected), so on every subsequent turn against the *same held pod* the current bearer instead rides the per-turn `AgentSetupParams.CallerBearerToken`, which `A2ATurnBridgeAgent.ApplyPerTurnSetup` hands to `AgentHostRuntimeState.RefreshCallerBearerToken` before the turn runs. Either way the pod always uses the bearer from the request that triggered the turn.
+The browser request authenticates to the API with its Entra identity. For each turn, `AssistantRunService` obtains a separate short-lived Agentweaver MCP broker token and a renewal callback. `RemoteOperatorAssistantAgent` requires both; it does not forward the raw browser bearer to MCP. The initial token travels in the one-shot internal `/configure` payload, and subsequent turns refresh the held pod's broker context through per-turn setup. Credentials are not conversation history or durable run-event content.
 
 That separation matters in Entra mode:
 
-- the **caller bearer** is the Microsoft Entra access token used to authorize Agentweaver platform and project operations;
-- the **GitHub access token** belongs to the active linked account and is used by the Copilot provider and GitHub operations.
+- the **browser bearer** establishes the Entra caller at the API;
+- the **MCP broker token** carries that caller's permitted MCP context, with `mcp:invoke` and the exact resource audience;
+- the **model-provider credential/configuration** and any repository capability are separate execution inputs, not interchangeable bearer tokens.
 
-The MCP resource server validates the Entra token's signature, issuer, audience, lifetime, and tenant before accepting it, then forwards the same bearer to the API. The API validates it again and remains the authorization authority. A refreshed browser token is used on the next message because no caller credential is cached with the conversation.
+MCP validates the broker token's signature, issuer, resource audience, lifetime, subject, and scope, then forwards that broker token to the API for independent authorization. Entra tenant validation happens at the API identity boundary, not as an MCP credential fallback. Source: `AssistantRunService.cs:789-813`, `RemoteOperatorAssistantAgent.cs:77-83`, and `McpBrokerAuthenticationHandler.cs:64-88`.
 
 ::: tip Only genuinely-active conversations count against the limit
 A caller may have at most `MaxConcurrentRunsPerUser` (5) sessions *actively running* at once — enforced only when a brand-new run is created, and counted from **durable run status** (the caller's `InProgress` operator runs in the run store) rather than from any one API replica's in-memory cache.
@@ -59,7 +56,7 @@ The AgentHost pod is claimed on a conversation's first turn and then **held**. R
 
 `KubernetesSandboxExecutor.LaunchAgentHostPodAsync` decides whether a pod is reusable by asking whether *this replica* still holds the run's turn token (`PodNameRegistry`). The turn token is what authenticates the A2A call, so it is exactly the right predicate:
 
-- **token held** → the existing claim is reused as-is: no delete, no recreate, no `/configure`. Only the caller bearer is refreshed, on the per-turn setup channel described above.
+- **token held** → the existing claim is reused as-is: no delete, no recreate, no `/configure`. The per-turn setup channel refreshes the MCP broker context described above.
 - **no token** (other replica, or a restart) → the claim is unreachable and un-reconfigurable from here, so it is deleted and recreated, which is the original cold-start path. Cross-replica turns therefore degrade to the old behaviour rather than breaking.
 
 Held pods are given back by:
@@ -96,3 +93,66 @@ Any file system, shell, or code-execution work the assistant needs to do must go
 - [API reference — Assistant endpoints](/reference/api#assistant-endpoints)
 - [Agent Runtime & Tools — Deep Dive](./agent-runtime.md) — the heavier path used by full project runs
 - [MCP Server — Deep Dive](./mcp-server.md)
+
+<details id="diagram-context-assistant-runtime-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A conversation survives its pod</td></tr>
+<tr><td>takeaway</td><td>API-owned history; a held AgentHost runs a fresh, MCP-only SDK session each turn.</td></tr>
+<tr><td>group-title0</td><td>CONVERSATION CONTROL</td></tr>
+<tr><td>group-title1</td><td>DURABILITY / EXECUTION</td></tr>
+<tr><td>Sessions UI</td><td>Sessions UI</td></tr>
+<tr><td>Sessions UI</td><td>Entra-authenticated caller</td></tr>
+<tr><td>Sessions UI</td><td>Start or append a message</td></tr>
+<tr><td>Sessions UI</td><td>Approval replies stay at API</td></tr>
+<tr><td>Sessions UI</td><td>/api/assistant/runs</td></tr>
+<tr><td>Assistant API</td><td>Assistant API</td></tr>
+<tr><td>Assistant API</td><td>Durable conversation owner</td></tr>
+<tr><td>Assistant API</td><td>Serialize turns per run</td></tr>
+<tr><td>Assistant API</td><td>Issue + renew MCP broker</td></tr>
+<tr><td>Assistant API</td><td>broker lifetime: 5 min</td></tr>
+<tr><td>Held AgentHost</td><td>Held AgentHost</td></tr>
+<tr><td>Held AgentHost</td><td>Pod reused across turns</td></tr>
+<tr><td>Held AgentHost</td><td>One-shot /configure</td></tr>
+<tr><td>Held AgentHost</td><td>Per-turn broker refresh</td></tr>
+<tr><td>Held AgentHost</td><td>A2A turn bearer</td></tr>
+<tr><td>Run + event store</td><td>Run + event store</td></tr>
+<tr><td>Run + event store</td><td>Authoritative conversation</td></tr>
+<tr><td>Run + event store</td><td>Append AgentMessage events</td></tr>
+<tr><td>Run + event store</td><td>Reload latest 24 messages</td></tr>
+<tr><td>Run + event store</td><td>Idle → InProgress (CAS)</td></tr>
+<tr><td>MCP server</td><td>MCP server</td></tr>
+<tr><td>MCP server</td><td>Broker-only tool boundary</td></tr>
+<tr><td>MCP server</td><td>Validate issuer + audience</td></tr>
+<tr><td>MCP server</td><td>Consequential tools gated</td></tr>
+<tr><td>MCP server</td><td>RS256 • mcp:invoke</td></tr>
+<tr><td>Fresh SDK session</td><td>Fresh SDK session</td></tr>
+<tr><td>Fresh SDK session</td><td>OperatorAssistantAgent</td></tr>
+<tr><td>Fresh SDK session</td><td>Seed reconstructed history</td></tr>
+<tr><td>Fresh SDK session</td><td>No native shell / files</td></tr>
+<tr><td>Fresh SDK session</td><td>SDK session store: off</td></tr>
+<tr><td>relation-0</td><td>1 message</td></tr>
+<tr><td>relation-1</td><td>2 configure / turn</td></tr>
+<tr><td>relation-2</td><td>3 run turn</td></tr>
+<tr><td>relation-3</td><td>4 MCP tools</td></tr>
+<tr><td>relation-4</td><td>5 append / reload</td></tr>
+<tr><td>relation-5</td><td>6 API authorization</td></tr>
+<tr><td>assurance</td><td>Pod quiet 5 min: release • Conversation quiet 30 min: Idle, resumable • Completed: sealed</td></tr>
+<tr><td>assurance-0-label</td><td>API durable history</td></tr>
+<tr><td>assurance-0-fact</td><td>History survives pod release.</td></tr>
+<tr><td>assurance-0-source</td><td>AssistantRunService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Broker lifetime</td></tr>
+<tr><td>assurance-1-fact</td><td>Renew before MCP tool calls.</td></tr>
+<tr><td>assurance-1-source</td><td>OperatorAssistantAgent.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Conversation lifecycle</td></tr>
+<tr><td>assurance-2-fact</td><td>Idle can wake; Completed cannot.</td></tr>
+<tr><td>n0</td><td>Start or append a message; Approval replies stay at API</td></tr>
+<tr><td>n1</td><td>Serialize turns per run; Issue + renew MCP broker</td></tr>
+<tr><td>n2</td><td>One-shot /configure; Per-turn broker refresh</td></tr>
+<tr><td>n3</td><td>Append AgentMessage events; Reload latest 24 messages</td></tr>
+<tr><td>n4</td><td>Validate issuer + audience; Consequential tools gated</td></tr>
+<tr><td>n5</td><td>Seed reconstructed history; No native shell / files</td></tr>
+<tr><td>footer</td><td>Pod quiet 5 min: release  •  Conversation quiet 30 min: Idle, resumable  •  Completed: sealed</td></tr>
+<tr><td>groups</td><td>CONVERSATION CONTROL; DURABILITY / EXECUTION</td></tr>
+</tbody></table>
+</details>

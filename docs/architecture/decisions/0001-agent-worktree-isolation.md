@@ -17,6 +17,10 @@ that issue's worktree.
 ## Consequences
 
 Concurrent issue work has filesystem and index isolation while retaining one local Git
-object database. Worktree creation, dependency-linking, reuse, and cleanup are required
+object database. Worktree creation, private dependency installation, reuse, and cleanup are required
 parts of the agent lifecycle. Human contributors may still use a normal feature branch in
 the main checkout.
+
+Each package root keeps physical, worktree-private `node_modules`. Only the fingerprinted
+npm download cache is shared; writable dependency trees and build outputs are not.
+See [Contributing: Testing](../../../CONTRIBUTING.md#testing).

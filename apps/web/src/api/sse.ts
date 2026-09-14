@@ -85,6 +85,7 @@ export type EventType =
   | 'tool.call'
   | 'tool.result'
   | 'tool.error'
+  | 'tool.execution_pending'
   | 'tool.output'
   | 'tool.exec_result'
   | 'shell.approval_required'

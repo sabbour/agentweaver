@@ -8,33 +8,24 @@ For the scaling story, see [Distributed execution & scaling](./deep-dive/distrib
 
 ## Architecture — shared store, cursor stream
 
-![Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher](diagrams/canonical-durable-event-stream.png)
-
-<!-- Rendered from diagrams/src/canonical-durable-event-stream.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The horizontal-scale invariant is simple: **the database log is the source of truth, and the cursor is the replay boundary**. `EfRunEventStream.AppendAsync` writes through before acknowledging (`WriteThroughAsync`), and `SubscribeAsync` repeatedly loads rows whose sequence is greater than the caller's last seen cursor, yielding them in sequence order until a terminal event appears. It drains the full replay batch before stopping, so a diagnostic row persisted immediately after a terminal row is still delivered before the SSE subscription closes. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:180`.
 
-## Delivery sequence — durable-first, then replay and live tail
+## Delivery sequence — durable-first, then cursor polling
 
-![Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery](diagrams/canonical-durable-event-stream-sequence.png)
-
-<!-- Rendered from diagrams/src/canonical-durable-event-stream-sequence.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram).
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The EF/Postgres path does not switch to an in-process live channel after replay:
+each replica continues reading the shared log. SQLite's compatibility implementation
+registers a local channel before replay and then tails it, dropping already replayed
+sequences. These are distinct delivery implementations, not a shared cross-replica bus.
 
 ## What changed from the old in-memory-only stream
 
 | Concern | Current behavior | Source |
 |---|---|---|
-| Event production | `RunStreamEntry.RecordNext` and `Record` add to local history, wake local waiters, and synchronously mirror the same event into `IRunEventStream`. | `RunStreamStore.cs:87`, `RunStreamStore.cs:98`, `RunStreamStore.cs:106`, `RunStreamStore.cs:115`, `RunStreamStore.cs:164` |
+| Event production | `RunStreamEntry` obtains the authoritative sequence from the durable append before exposing the event to local history/waiters. Local notification is not the cross-replica relay. | `RunStreamStore.cs:183-212` |
 | Cross-replica reads | `EfRunEventStream.SubscribeAsync` polls the shared `RunEvents` table every `250 ms` when no new rows were emitted, so a subscriber on a different replica catches up without sticky sessions. | `EfRunEventStream.cs:33`, `EfRunEventStream.cs:77`, `EfRunEventStream.cs:96`, `EfRunEventStream.cs:180` |
-| Late terminal diagnostics | `AppendAsync` writes through before checking completed-run state. Late `coordinator.assembly_blocked` / `coordinator.assembly_failed` diagnostics emitted around terminalization are durable, even when the live channel stays closed. | `EfRunEventStream.cs:63`, `EfRunEventStream.cs:68`, `SqliteRunEventStream.cs:81`, `SqliteRunEventStream.cs:87` |
+| Late terminal diagnostics | Diagnostics can remain durable after terminalization. EF's late message-delta suppression is process-local; it is not a database-enforced cross-replica terminal fence. A row outside the drained terminal-containing batch may require a later replay. | `EfRunEventStream.cs:59-86,144-189` |
 | Replay terminal semantics | Replay yields all rows in the loaded batch, then stops if the batch contained a terminal event. `coordinator.assembly_failed` is terminal; retryable `coordinator.assembly_blocked` is not, so subscribers can stay attached across recovery. | `EfRunEventStream.cs:35`, `EfRunEventStream.cs:84`, `EfRunEventStream.cs:111`, `SqliteRunEventStream.cs:34`, `SqliteRunEventStream.cs:153` |
-| Sequence safety | Caller-assigned sequences are idempotent if already present; auto-assigned sequences are computed in a serializable transaction with retry on `DbUpdateException`. | `EfRunEventStream.cs:118`, `EfRunEventStream.cs:128`, `EfRunEventStream.cs:131`, `EfRunEventStream.cs:141`, `EfRunEventStream.cs:163` |
+| Sequence safety | PostgreSQL allocates per-run `MAX(Sequence) + 1` under an advisory transaction lock before commit. An explicit duplicate sequence is idempotent only when its contents match; a conflicting payload is rejected. | `EfRunEventStream.cs:223-284,316-321` |
 | Terminal safety net | Terminal persistence re-appends the full in-memory history through `IRunEventStream`; duplicate `(RunId, Sequence)` rows are skipped, so missed mirrors are reconciled without duplication. | `RunWorkflowFactory.cs:287`, `RunWorkflowFactory.cs:296`, `RunWorkflowFactory.cs:298`, `RunWorkflowFactory.cs:301` |
 | Execution pod badge | AgentHost pod bindings append `sandbox.execution_pod.bound` to the same shared log, so graph pod badges resolve after refresh and across replicas. | `RunEventExecutionPodNameStore.cs:15`, `RunEventExecutionPodNameStore.cs:38`, `RunEventExecutionPodNameStore.cs:59`, `KubernetesSandboxExecutor.cs:342` |
 | SSE fallback | If the current replica has no local stream entry, `/api/runs/{id}/stream` subscribes to `IRunEventStream` from the `Last-Event-ID` cursor and writes those events as SSE frames. | `RunEndpoints.cs:416`, `RunEndpoints.cs:423`, `RunEndpoints.cs:429`, `RunEndpoints.cs:431`, `RunEndpoints.cs:443` |
@@ -67,3 +58,101 @@ Browser refreshes around coordinator gates no longer surface transient `404` or 
 - [Distributed execution & scaling](./deep-dive/distributed-execution-scaling.md#run-event-fan-out-under-multiple-replicas) — why the shared event store is required for multi-replica deployments.
 - [Events & observability](./deep-dive/events-observability.md) — event taxonomy and observability model.
 - [Token usage monitoring](./experience/token-usage-monitoring.md) — one UI surface that consumes the same live stream and usage projections.
+
+<details id="diagram-context-canonical-durable-event-stream">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Postgres is the event relay</td></tr>
+<tr><td>subtitle</td><td>Any API replica can serve a cursor over durable RunEvents—no sticky session required.</td></tr>
+<tr><td>group-title0</td><td>Write path · replica A</td></tr>
+<tr><td>group-title1</td><td>Read path · replica B</td></tr>
+<tr><td>Run producer</td><td>Run producer</td></tr>
+<tr><td>Run producer</td><td>Append a structured event</td></tr>
+<tr><td>Run producer</td><td>runId + type + payload</td></tr>
+<tr><td>EF event stream</td><td>EF event stream</td></tr>
+<tr><td>EF event stream</td><td>Serialize writes per run</td></tr>
+<tr><td>EF event stream</td><td>pg_advisory_xact_lock</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>Shared PostgreSQL table</td></tr>
+<tr><td>RunEvents</td><td>(RunId, Sequence)</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web / MCP watcher</td></tr>
+<tr><td>Web / MCP watcher</td><td>Consume ordered events</td></tr>
+<tr><td>Web / MCP watcher</td><td>last delivered cursor</td></tr>
+<tr><td>SSE endpoint</td><td>SSE endpoint</td></tr>
+<tr><td>SSE endpoint</td><td>Emit id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>ordered response frames</td></tr>
+<tr><td>EF subscriber</td><td>EF subscriber</td></tr>
+<tr><td>EF subscriber</td><td>Read Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>idle poll: 250 ms</td></tr>
+<tr><td>e1</td><td>append</td></tr>
+<tr><td>e2</td><td>commit</td></tr>
+<tr><td>e3</td><td>ordered batch</td></tr>
+<tr><td>e4</td><td>yield</td></tr>
+<tr><td>e5</td><td>SSE frames</td></tr>
+<tr><td>assurance-title</td><td>POSTGRES LANE ONLY</td></tr>
+<tr><td>assurance-line1</td><td>SQLite register-channel / replay / tail is a separate implementation—not this architecture.</td></tr>
+<tr><td>assurance-line2</td><td>Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>Run producer</td><td>Input</td></tr>
+<tr><td>Run producer</td><td>RunStreamEntry</td></tr>
+<tr><td>Run producer</td><td>Identity</td></tr>
+<tr><td>Run producer</td><td>runId + event type</td></tr>
+<tr><td>Run producer</td><td>Body</td></tr>
+<tr><td>Run producer</td><td>Structured payload</td></tr>
+<tr><td>Run producer</td><td>Ack</td></tr>
+<tr><td>Run producer</td><td>After durable commit</td></tr>
+<tr><td>EF event stream</td><td>Lock</td></tr>
+<tr><td>EF event stream</td><td>Per-run advisory lock</td></tr>
+<tr><td>EF event stream</td><td>Next</td></tr>
+<tr><td>EF event stream</td><td>MAX(Sequence) + 1</td></tr>
+<tr><td>EF event stream</td><td>Write</td></tr>
+<tr><td>EF event stream</td><td>Save transaction</td></tr>
+<tr><td>EF event stream</td><td>Commit</td></tr>
+<tr><td>EF event stream</td><td>Before acknowledgement</td></tr>
+<tr><td>RunEvents</td><td>Table</td></tr>
+<tr><td>RunEvents</td><td>Key</td></tr>
+<tr><td>RunEvents</td><td>RunId + Sequence</td></tr>
+<tr><td>RunEvents</td><td>Order</td></tr>
+<tr><td>RunEvents</td><td>Ascending sequence</td></tr>
+<tr><td>RunEvents</td><td>Reuse</td></tr>
+<tr><td>RunEvents</td><td>Same type / payload</td></tr>
+<tr><td>Web / MCP watcher</td><td>Client</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web or MCP</td></tr>
+<tr><td>Web / MCP watcher</td><td>Resume</td></tr>
+<tr><td>Web / MCP watcher</td><td>Last delivered cursor</td></tr>
+<tr><td>Web / MCP watcher</td><td>Replica</td></tr>
+<tr><td>Web / MCP watcher</td><td>No sticky requirement</td></tr>
+<tr><td>Web / MCP watcher</td><td>History</td></tr>
+<tr><td>Web / MCP watcher</td><td>Durable ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Frame</td></tr>
+<tr><td>SSE endpoint</td><td>id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>Cursor</td></tr>
+<tr><td>SSE endpoint</td><td>Last-Event-ID</td></tr>
+<tr><td>SSE endpoint</td><td>Delivery</td></tr>
+<tr><td>SSE endpoint</td><td>Yield ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Close</td></tr>
+<tr><td>SSE endpoint</td><td>After batch is drained</td></tr>
+<tr><td>EF subscriber</td><td>Query</td></tr>
+<tr><td>EF subscriber</td><td>Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>Idle</td></tr>
+<tr><td>EF subscriber</td><td>Poll after 250 ms</td></tr>
+<tr><td>EF subscriber</td><td>State</td></tr>
+<tr><td>EF subscriber</td><td>Shared durable table</td></tr>
+<tr><td>EF subscriber</td><td>Blocked</td></tr>
+<tr><td>EF subscriber</td><td>Retryable: keep open</td></tr>
+<tr><td>producer</td><td>Coordinator or run execution; Acknowledgement follows commit</td></tr>
+<tr><td>append</td><td>Allocate MAX(Sequence) + 1; Save and commit transaction</td></tr>
+<tr><td>store</td><td>Cross-replica ordered history; Explicit duplicates must match payload</td></tr>
+<tr><td>client</td><td>Reconnect from the cursor; No local channel dependency</td></tr>
+<tr><td>sse</td><td>Cursor advances after delivery; Drain batch before terminal close</td></tr>
+<tr><td>reader</td><td>Query the shared durable table; Retryable assembly_blocked stays open</td></tr>
+<tr><td>notes</td><td>POSTGRES LANE ONLY; SQLite register-channel / replay / tail is a separate implementation—not this architecture.; Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
+</tbody></table>
+</details>

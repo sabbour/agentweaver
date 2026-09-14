@@ -85,13 +85,6 @@ Queued work then requires fresh submission.
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.
 
-![The Host in One Picture: Web UI / MCP / CLI, ASP.NET Core HTTP host, Cross-cutting middleware, Minimal API endpoint module, Application/domain service, Store or provider, SQLite / workspace files / GitHub / Kubernetes](../diagrams/canonical-api-host.png)
-
-<!-- Rendered from ../diagrams/src/canonical-api-host.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The important separation is:
 
 - **Program startup** decides what exists: configuration, DI registrations, boot checks, middleware, and endpoint groups.
@@ -152,7 +145,7 @@ The host coordinates long-lived state: run streams, locks, registries, backgroun
 ### Lifetime logic
 
 - **Singletons** are used for components that are stateless, internally synchronized, or intentionally process-wide: registries, locks, stream stores, provider selectors, and most raw SQLite stores. When a singleton touches SQLite, the safe pattern is connection-per-operation rather than keeping one shared connection forever.
-- **Scoped services** are used where the underlying dependency is unit-of-work oriented. EF Core `DbContext` is scoped because it is not thread-safe and should represent one operation's database session.
+- **Unit-of-work contexts** are isolated because EF `DbContext` is not thread-safe. Production singleton stores use `IDbContextFactory<MemoryDbContext>` to create a fresh context per operation rather than retaining a shared context.
 - **Hosted services** are used for autonomous loops that are part of the host lifecycle, such as heartbeat pickup and cleanup.
 - **Factories** are used when configuration chooses an implementation, such as local versus persistent-volume workspaces or sandbox execution routing.
 
@@ -170,34 +163,30 @@ Where this lives: `apps/Agentweaver.Api/Program.cs`.
 
 ### Problem solved
 
-Every endpoint should not have to reimplement exception handling, CORS, rate limiting, bearer-token validation, and organization authorization. Middleware centralizes those concerns and gives requests a predictable path to the handler.
+Endpoints share exception handling, CORS, rate limiting, authentication, and endpoint-policy authorization. Project/resource role checks remain in the endpoint or service that knows the resource.
 
-![Problem solved: Incoming request, Exception handler, CORS, Rate limiter middleware, Token auth gate, Org authorization gate, 401 Unauthorized, Endpoint handler, 403 Forbidden, Response](../diagrams/api-core-fig4.png)
+### Endpoint classification and authentication
 
-<!-- Rendered from ../diagrams/src/api-core-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The web-role request order is forwarded headers, exception handling, routing, CORS, rate limiting, endpoint-authorization integrity, authentication, unmatched-endpoint handling, and authorization. Endpoint integrity validates the selected route's authorization classification before dispatch. Missing or contradictory metadata fails closed; URL-prefix exemptions are not the authorization model.
 
-### Token gate
+Authentication selects a credential scheme allowed by the endpoint. Entra validation includes the configured tenant; broker-capable routes independently validate Agentweaver broker tokens. Neither GitHub organization membership nor a GitHub username grants platform access.
 
-The first custom gate treats most `/api/*` routes as bearer-token protected. Health/ping style endpoints and the web-session exchange path are exceptions. Non-API paths can pass this gate, which is important for OAuth discovery and web auth routes.
+### Resource authorization
 
-### Organization gate
-
-The second custom gate runs after token validation. It checks the caller's Entra platform and project access. It also has exempt prefixes for health, auth bootstrap, MCP/OAuth discovery, and related public protocol routes.
+After endpoint-policy authorization, handlers load the relevant resource and enforce the required project role: Viewer, Contributor, or Owner. Input validation and resource lookup order varies by endpoint; this is not a second global organization middleware. Internal-service and run-capability endpoints have explicit, separate classifications.
 
 ### Rate limiting
 
-The rate limiter middleware is globally installed, but rate limiting is applied only to endpoints that opt into the named policy. OAuth protocol endpoints opt in because they are public and abuse-sensitive. Ordinary API endpoints are protected by bearer/org authorization and are not automatically limited just because the middleware exists.
+The rate limiter middleware is globally installed, but named policies apply to endpoints that opt in. OAuth protocol endpoints opt in because they are public and abuse-sensitive. Merely installing the middleware does not rate-limit every API endpoint.
 
 ### Middleware rules
 
-- Endpoint metadata such as `AllowAnonymous` does not bypass custom middleware by itself. Public behavior must be represented in the middleware's path exemptions.
-- The root banner route is non-API, so it passes token auth, but it is not one of the organization-gate exempt prefixes. Unauthenticated callers should not assume it is public.
-- Middleware order matters: organization authorization depends on identity established by token auth.
+- Classify public, protocol-managed, platform, broker, internal-service, and run-capability endpoints explicitly.
+- Do not infer authorization from `/api` or any other path prefix.
+- Resource authorization depends on the authenticated identity and the requested resource.
+- The worker role exposes `/healthz` and `/readyz`, not the web role's application API. The role split does not by itself prove that every background service is worker-exclusive.
 
-Where this lives: `apps/Agentweaver.Api/Program.cs`; `apps/Agentweaver.Api/Security/`; `apps/Agentweaver.Api/Auth/`; `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`.
+Where this lives: `apps/Agentweaver.Api/Program.cs:1255-1326`; `apps/Agentweaver.Api/Auth/EndpointAuthorization.cs`; `apps/Agentweaver.Api/Auth/EntraAccessTokenValidator.cs`; `apps/Agentweaver.Api/Security/ProjectAuthorization.cs`.
 
 ## Endpoint Surface & Request Handling Structure
 
@@ -224,20 +213,13 @@ The main route families are:
 
 ### Handler pattern
 
-A typical protected handler follows this flow:
-
-![Handler pattern: Client, Middleware, Endpoint, Store/Service, DB/Workspace](../diagrams/api-core-fig7.png)
-
-<!-- Rendered from ../diagrams/src/api-core-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+A typical protected handler follows the boundaries in [The host in one picture](#the-host-in-one-picture). A second generic client-to-store chain adds no distinct information.
 
 The exact service/store calls differ by feature, but the responsibilities stay stable:
 
-1. **Bind** route values, query values, and JSON bodies into typed request objects.
-2. **Authenticate globally** through middleware before handler execution.
-3. **Authorize locally** by checking ownership or resource relationship. For example, a run must belong to the caller/project being accessed. Do not special-case GitHub usernames such as `admin`; there is no built-in username-derived superuser role.
+1. **Authenticate and authorize the endpoint** through middleware before handler execution.
+2. **Bind and validate** route values, query values, and JSON bodies; load the resource needed for the operation.
+3. **Authorize the resource** using the required project role and resource relationship. Do not special-case GitHub usernames such as `admin`; there is no built-in username-derived superuser role.
 4. **Validate dangerous inputs centrally**, especially filesystem-relative paths used by workspace and file routes.
 5. **Delegate behavior** to a service or store.
 6. **Project the result** into a DTO that is safe and stable for clients.
@@ -248,7 +230,7 @@ The exact service/store calls differ by feature, but the responsibilities stay s
 - Use `/api/runs/{id}/...` for run-scoped resources.
 - Use `GET` for projections, `POST` for commands/state transitions, `PATCH` for partial updates, `PUT` when replacing/updating a named configuration, and `DELETE` only when deletion semantics are intended.
 - Model command endpoints as subresources or actions (`/retry`, `/review`, `/commit`) when the operation is not a simple CRUD update.
-- Keep public protocol routes outside normal protected API assumptions only when middleware exemptions explicitly support that.
+- Give public protocol routes explicit endpoint authorization metadata rather than path-based exemptions.
 
 Where this lives: `apps/Agentweaver.Api/Endpoints/`; `apps/Agentweaver.Api/Workflows/`; `apps/Agentweaver.Api/ReviewPolicies/`; `apps/Agentweaver.Api/Diagnostics/`; `apps/Agentweaver.Api/Metrics/`.
 
@@ -278,28 +260,21 @@ conversation keeps the same run id.
 
 Agent runs are long-lived and interactive. The UI needs low-latency updates while a run is active, but users also refresh browsers, reconnect, and inspect completed runs. A purely in-memory stream would be fast but fragile; a purely database-polled stream would be durable but less responsive.
 
-Agentweaver uses a two-layer event model:
-
-![Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery](../diagrams/canonical-durable-event-stream-sequence.png)
-
-<!-- Rendered from ../diagrams/src/canonical-durable-event-stream-sequence.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram).
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Agentweaver durably appends events before exposing them to subscribers. Delivery then depends on the selected store and whether this replica has a local run-stream entry:
 
 ### Control flow
 
 1. A run event is appended with a run id, sequence, type, and payload.
 2. The event is written durably before it is acknowledged to the producer.
-3. After the durable write, the event is published to an in-process channel for active subscribers.
-4. A subscriber performs **replay-then-tail**: replay persisted events after its cursor, then switch to the live channel without a gap.
-5. Terminal events close the stream. Some human-review gates also intentionally end the active stream so the UI can switch to review behavior.
+3. With a local `RunStreamStore` entry, the endpoint reads an atomic snapshot and waits for local changes.
+4. Without that entry, it subscribes to the durable provider. `EfRunEventStream` polls shared rows after the cursor (250 ms when empty); `SqliteRunEventStream` uses durable replay and a bounded process-local channel.
+5. Terminal replay ends the transport after draining its batch. Some human-review gates also emit transport `done`; that is not durable run completion.
 
 ### Why this design
 
 - Durable-first append means a client cannot observe an event that would be lost on crash.
-- Bounded live channels protect the server from slow consumers.
-- Dropping a live channel copy is acceptable because the durable event remains replayable.
+- Local buffers/channels bound memory; they are not a cross-replica message bus.
+- Shared-table polling lets a different replica observe committed events without owning the producer's local stream.
 - Sequence-based replay makes browser reconnects and `Last-Event-ID` style cursors practical.
 
 ### Invariants
@@ -309,7 +284,7 @@ Agentweaver uses a two-layer event model:
 - Reconnects should not miss events; duplicates should be tolerable or skipped by sequence.
 - Terminal events should cause clean completion rather than endless idle streams.
 
-Where this lives: `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs`; `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs`; `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs`.
+Where this lives: `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs`; `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs`; `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs`; `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:457-555`.
 
 ## Contracts and DTOs
 
@@ -347,9 +322,10 @@ ASP.NET Core's normal configuration stack is used: appsettings, environment-spec
 |---|---|
 | Logging | Controls host and framework log verbosity. |
 | CORS | Declares browser origins allowed to call the API. Empty means no configured browser origins. |
-| Auth:GitHub | Defines allowed organization/team expectations and requested GitHub scopes. |
+| Auth:Entra | Defines platform identity and tenant validation; GitHub capabilities do not grant platform/project roles. |
+| Auth:RepoApp / Auth:CopilotApp | Defines separate repository and Copilot capability integrations. |
 | Auth:OAuth | Defines OAuth issuer/audience/signing/redirect behavior for MCP/API token flows. Production guards require safe pinned values. |
-| Database | Selects the main operational SQLite path and the EF memory database provider/connection. SQLite is the default; SQL Server/Azure SQL/PostgreSQL are supported for the EF memory context. |
+| Database | Postgres selects EF operational stores, durable events, shared checkpoints, and leases. Local SQLite uses raw operational stores plus a separate EF memory database and file checkpoints. Other EF provider options are not equivalent to the Postgres operational topology. |
 | Workspace | Selects how project workspaces are resolved. Local mode honors caller-provided paths; persistent-volume/kubernetes mode maps project ids under a configured mount root. |
 | Runs | Restricts allowed local repository roots for filesystem safety. |
 | Coordinator | Controls heartbeat enablement and cadence. |
@@ -363,7 +339,7 @@ There are two important persistence surfaces:
 - the **operational database** for projects, runs, backlog, workflow state, and other host operations;
 - the **memory database** for EF-managed memory/decision data and durable run events.
 
-The split lets newer EF-managed features evolve without forcing the older raw SQLite store layer to migrate at the same pace. The cost is operational awareness: backup, diagnostics, and migrations need to remember that not all state lives in one file.
+In production Postgres, both surfaces use `MemoryDbContext` and one database, with a fresh context per operation. The two-file operational/EF split applies to local SQLite. Workspace files remain a separate backup and recovery concern in either mode.
 
 ### Workspace provider split
 
@@ -382,13 +358,6 @@ Operators need to know whether the host is healthy and what work is happening wi
 ### Diagnostics model
 
 Diagnostics are live checks assembled server-side:
-
-![Diagnostics model: Diagnostics request, Diagnostics service, SQLite reachability, Data directory write probe, Built-in workflow availability, Built-in review policy availability, Coordinator heartbeat status, Project store read, GitHub CLI/auth surface, Diagnostic DTO with pass/fail/details/duration](../diagrams/api-core-fig6.png)
-
-<!-- Rendered from ../diagrams/src/api-core-fig6.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 There are three levels:
 
@@ -431,8 +400,8 @@ Where this lives: `apps/Agentweaver.Api/Diagnostics/`; `apps/Agentweaver.Api/Met
 These rules are the practical knowledge needed to rebuild or extend the host safely:
 
 - **The endpoint mapping list is the routing seam.** A new feature should add a mapping extension and be called from startup explicitly.
-- **Custom auth middleware is path-based.** Public routes require explicit middleware exemption, not just endpoint metadata.
-- **Resource ownership is layered.** Global auth proves who the caller is; handlers/services still need project/run ownership checks through `caller.Owns(...)` or an equivalent owner comparison. A GitHub login never implies superuser access by name.
+- **Authorization is endpoint-classified.** Integrity checks reject unclassified or conflicting metadata; public access is not a prefix exemption.
+- **Resource access is layered.** Authentication establishes identity; handlers/services enforce project roles and resource relationships. A GitHub login never implies platform or project access.
 - **Filesystem paths are dangerous inputs.** File and diff routes should use centralized relative-path validation and reject rooted, parent-traversal, device, UNC, drive-relative, control-character, or alternate-data-stream tricks.
 - **SSE has both live and durable layers.** Live buffers optimize active UI sessions; durable run events support replay and restart recovery.
 - **Database split matters.** Operational state and EF memory/run-event state may live in different databases.
@@ -449,7 +418,7 @@ Where this lives: `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs`; `apps/Age
 A safe extension normally follows this sequence:
 
 1. **Define the contract.** Add request/response DTOs or reuse existing ones only if the wire meaning is identical.
-2. **Choose the state boundary.** Decide whether the capability reads/writes operational SQLite, EF memory data, workspace files, GitHub, Kubernetes, or only in-memory state.
+2. **Choose the state boundary.** Decide whether the capability uses provider-selected operational/EF stores, workspace files, GitHub, Kubernetes, or only in-memory state.
 3. **Create or extend a service.** Put lifecycle, transaction, retry, and multi-store coordination logic outside the endpoint handler.
 4. **Register dependencies.** Pick singleton/scoped/hosted/client lifetimes based on actual behavior, not convenience.
 5. **Map endpoints in a feature module.** Keep route definitions together and call the module from startup.
@@ -458,3 +427,222 @@ A safe extension normally follows this sequence:
 8. **Validate with the smallest relevant test/build path.** Endpoint changes should prove request binding, auth behavior, ownership behavior, and persistence effects where applicable.
 
 The core design goal is not to make every feature small; it is to keep each responsibility in the layer that can own it cleanly.
+
+<details id="diagram-context-api-core-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>API middleware · endpoint metadata is authority</td></tr>
+<tr><td>takeaway</td><td>The request pipeline classifies endpoints before authentication; handlers enforce resource roles.</td></tr>
+<tr><td>group-0-title</td><td>TRANSPORT / CLASSIFICATION</td></tr>
+<tr><td>group-1-title</td><td>IDENTITY / RESOURCE</td></tr>
+<tr><td>Forwarded headers</td><td>Forwarded headers</td></tr>
+<tr><td>Forwarded headers</td><td>Then exception handler</td></tr>
+<tr><td>Forwarded headers</td><td>Normalize proxy context; map unhandled errors</td></tr>
+<tr><td>Forwarded headers</td><td>Program.cs:1266–1273</td></tr>
+<tr><td>Routing → CORS</td><td>Routing → CORS</td></tr>
+<tr><td>Routing → CORS</td><td>Then rate limiter</td></tr>
+<tr><td>Routing → CORS</td><td>Route selection precedes endpoint metadata checks</td></tr>
+<tr><td>Routing → CORS</td><td>Program.cs:1274–1276</td></tr>
+<tr><td>Endpoint integrity</td><td>Endpoint integrity</td></tr>
+<tr><td>Endpoint integrity</td><td>Classified authorization metadata</td></tr>
+<tr><td>Endpoint integrity</td><td>Unclassified application endpoint fails closed</td></tr>
+<tr><td>Endpoint integrity</td><td>EndpointAuthorization:139–174</td></tr>
+<tr><td>Authentication</td><td>Authentication</td></tr>
+<tr><td>Authentication</td><td>Validate selected credential</td></tr>
+<tr><td>Authentication</td><td>Entra tenant check lives inside token validation</td></tr>
+<tr><td>Authentication</td><td>Program.cs:1278</td></tr>
+<tr><td>Unmatched endpoint</td><td>Unmatched endpoint</td></tr>
+<tr><td>Unmatched endpoint</td><td>Explicit unmatched-route handling</td></tr>
+<tr><td>Unmatched endpoint</td><td>Runs after authentication, before authorization</td></tr>
+<tr><td>Unmatched endpoint</td><td>Program.cs:1279</td></tr>
+<tr><td>Authorization</td><td>Authorization</td></tr>
+<tr><td>Authorization</td><td>Endpoint policy evaluation</td></tr>
+<tr><td>Authorization</td><td>Anonymous operational endpoints are classified</td></tr>
+<tr><td>Authorization</td><td>Program.cs:1280</td></tr>
+<tr><td>Endpoint handler</td><td>Endpoint handler</td></tr>
+<tr><td>Endpoint handler</td><td>Bind, validate, load resource</td></tr>
+<tr><td>Endpoint handler</td><td>Ordering varies; apply project / resource role</td></tr>
+<tr><td>Endpoint handler</td><td>RunEndpoints:429–445</td></tr>
+<tr><td>Service → DTO / result</td><td>Service → DTO / result</td></tr>
+<tr><td>Service → DTO / result</td><td>Delegate governed work</td></tr>
+<tr><td>Service → DTO / result</td><td>Return the handler result to caller</td></tr>
+<tr><td>Service → DTO / result</td><td>Program.cs:1282–1295</td></tr>
+<tr><td>Forwarded headers</td><td>next</td></tr>
+<tr><td>Routing → CORS</td><td>endpoint</td></tr>
+<tr><td>Endpoint integrity</td><td>valid</td></tr>
+<tr><td>Unmatched endpoint</td><td>matched</td></tr>
+<tr><td>Authorization</td><td>allowed</td></tr>
+<tr><td>Endpoint handler</td><td>map</td></tr>
+<tr><td>scope</td><td>Request lane only: startup migration/recovery is separate. Worker role exposes probes, not this app surface.</td></tr>
+<tr><td>groups</td><td>TRANSPORT / CLASSIFICATION; IDENTITY / RESOURCE</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-api-core-fig6" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>System diagnostics · a narrow live check map</td></tr>
+<tr><td>takeaway</td><td>The protected system snapshot combines checks and counts; it is not the detailed-health surface.</td></tr>
+<tr><td>group-0-title</td><td>SYSTEM CHECKS</td></tr>
+<tr><td>group-1-title</td><td>STATUS / COUNTS</td></tr>
+<tr><td>Diagnostics request</td><td>Diagnostics request</td></tr>
+<tr><td>Diagnostics request</td><td>Protected endpoint</td></tr>
+<tr><td>Diagnostics request</td><td>DiagnosticsService.GetSystemDiagnosticsAsync</td></tr>
+<tr><td>Diagnostics request</td><td>DiagnosticsEndpoints:52</td></tr>
+<tr><td>Diagnostics service</td><td>Diagnostics service</td></tr>
+<tr><td>Diagnostics service</td><td>Ordered live checks</td></tr>
+<tr><td>Diagnostics service</td><td>Capture generated time and total duration</td></tr>
+<tr><td>Diagnostics service</td><td>DiagnosticsService:89–136</td></tr>
+<tr><td>SQLite + data directory</td><td>SQLite + data directory</td></tr>
+<tr><td>SQLite + data directory</td><td>Reachability / write probe</td></tr>
+<tr><td>SQLite + data directory</td><td>SQLite check is not universal PG health proof</td></tr>
+<tr><td>SQLite + data directory</td><td>DiagnosticsService:1192–1230</td></tr>
+<tr><td>Built-in definitions</td><td>Built-in definitions</td></tr>
+<tr><td>Built-in definitions</td><td>Workflow + review-policy checks</td></tr>
+<tr><td>Built-in definitions</td><td>Report registry availability, not a live run</td></tr>
+<tr><td>Built-in definitions</td><td>DiagnosticsService:97–103</td></tr>
+<tr><td>Heartbeat + project store</td><td>Heartbeat + project store</td></tr>
+<tr><td>Heartbeat + project store</td><td>Status and project-store read</td></tr>
+<tr><td>Heartbeat + project store</td><td>Report coordinator heartbeat service state</td></tr>
+<tr><td>GitHub CLI / auth</td><td>GitHub CLI / auth</td></tr>
+<tr><td>GitHub CLI / auth</td><td>Local CLI diagnostic surface</td></tr>
+<tr><td>GitHub CLI / auth</td><td>Do not equate CLI auth with platform sign-in</td></tr>
+<tr><td>GitHub CLI / auth</td><td>DiagnosticsService:1292+</td></tr>
+<tr><td>Counts + pod quota</td><td>Counts + pod quota</td></tr>
+<tr><td>Counts + pod quota</td><td>Provider-aware run/project counts</td></tr>
+<tr><td>Counts + pod quota</td><td>Quota optional; missing/read failure → unknown</td></tr>
+<tr><td>Counts + pod quota</td><td>DiagnosticsService:105–138</td></tr>
+<tr><td>SystemDiagnosticsDto</td><td>SystemDiagnosticsDto</td></tr>
+<tr><td>SystemDiagnosticsDto</td><td>Checks / details / durations</td></tr>
+<tr><td>SystemDiagnosticsDto</td><td>API version, uptime, totals and generatedUtc</td></tr>
+<tr><td>SystemDiagnosticsDto</td><td>DiagnosticsService:116–134</td></tr>
+<tr><td>Diagnostics request</td><td>collect</td></tr>
+<tr><td>Diagnostics service</td><td>check</td></tr>
+<tr><td>Diagnostics service</td><td>counts</td></tr>
+<tr><td>Counts + pod quota</td><td>summary</td></tr>
+<tr><td>scope</td><td>Detailed health separately checks PostgreSQL, Key Vault, warm pool and Kubernetes; probes are cheaper.</td></tr>
+<tr><td>groups</td><td>SYSTEM CHECKS; STATUS / COUNTS</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-api-host" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>API host: compose once, authorize each request</td></tr>
+<tr><td>takeaway</td><td>Startup prepares the host. Requests never flow through migrations or recovery.</td></tr>
+<tr><td>Startup composition</td><td>BOOTSTRAP</td></tr>
+<tr><td>request-group-title</td><td>PER REQUEST</td></tr>
+<tr><td>classification-guard</td><td>Unclassified endpoint? Fail closed.</td></tr>
+<tr><td>Startup composition</td><td>Startup composition</td></tr>
+<tr><td>Startup composition</td><td>Configuration and service registration</td></tr>
+<tr><td>Startup composition</td><td>Provider selection, migrations, recovery, workspace checks</td></tr>
+<tr><td>Startup composition</td><td>Program.cs:1200-1254</td></tr>
+<tr><td>Role-specific HTTP host</td><td>Role-specific HTTP host</td></tr>
+<tr><td>Role-specific HTTP host</td><td>Web API or worker probes</td></tr>
+<tr><td>Role-specific HTTP host</td><td>The worker does not expose application endpoint groups</td></tr>
+<tr><td>Role-specific HTTP host</td><td>Program.cs:1255-1326</td></tr>
+<tr><td>Client request</td><td>Client request</td></tr>
+<tr><td>Client request</td><td>Browser / MCP adapter / automation</td></tr>
+<tr><td>Client request</td><td>MCP forwards a validated broker token, not GitHub auth</td></tr>
+<tr><td>Client request</td><td>AgentweaverApiClient.cs:359</td></tr>
+<tr><td>Cross-cutting policy</td><td>Cross-cutting policy</td></tr>
+<tr><td>Cross-cutting policy</td><td>Integrity, authentication, authorization</td></tr>
+<tr><td>Cross-cutting policy</td><td>Routing / CORS / rate limiting precede identity checks</td></tr>
+<tr><td>Cross-cutting policy</td><td>Program.cs:1274-1295</td></tr>
+<tr><td>Application services</td><td>Application services</td></tr>
+<tr><td>Application services</td><td>Own operation semantics</td></tr>
+<tr><td>Application services</td><td>Coordinate lifecycle, transactions, and external effects</td></tr>
+<tr><td>Application services</td><td>Endpoint modules -&gt; services</td></tr>
+<tr><td>Endpoint adapter</td><td>Endpoint adapter</td></tr>
+<tr><td>Endpoint adapter</td><td>Bind, load, check resource role</td></tr>
+<tr><td>Endpoint adapter</td><td>Viewer / Contributor / Owner; return a safe DTO</td></tr>
+<tr><td>Endpoint adapter</td><td>ProjectAuthorization.cs:56-86</td></tr>
+<tr><td>Provider-selected stores</td><td>Provider-selected stores</td></tr>
+<tr><td>Provider-selected stores</td><td>Production Postgres / local SQLite</td></tr>
+<tr><td>Provider-selected stores</td><td>Fresh context or connection per operation</td></tr>
+<tr><td>Provider-selected stores</td><td>Program.cs:1026-1075</td></tr>
+<tr><td>Workspace and integrations</td><td>Workspace and integrations</td></tr>
+<tr><td>Workspace and integrations</td><td>Git, AgentHost, model-provider adapters</td></tr>
+<tr><td>Workspace and integrations</td><td>Files and execution remain separate from database rows</td></tr>
+<tr><td>Workspace and integrations</td><td>Explicit capability boundaries</td></tr>
+<tr><td>Startup composition</td><td>prepares</td></tr>
+<tr><td>request-policy</td><td>request</td></tr>
+<tr><td>policy-handler</td><td>dispatch</td></tr>
+<tr><td>Endpoint adapter</td><td>delegate</td></tr>
+<tr><td>service-store</td><td>read / write</td></tr>
+<tr><td>service-adapters</td><td>invoke</td></tr>
+<tr><td>store-result</td><td>rows</td></tr>
+<tr><td>service-result</td><td>result</td></tr>
+<tr><td>Endpoint adapter</td><td>DTO / HTTP response</td></tr>
+<tr><td>scope</td><td>Worker HTTP: healthz / readyz only. Background registrations are not necessarily worker-exclusive.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-provider-admission" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Accept a provider before invoking it</td></tr>
+<tr><td>takeaway</td><td>Signed admission context freezes execution choice; live capability checks remain separate.</td></tr>
+<tr><td>group-title0</td><td>PREPARE AND ACCEPT</td></tr>
+<tr><td>group-title1</td><td>RUN BOUNDARY AND LIVE FENCES</td></tr>
+<tr><td>Prepare context</td><td>Prepare context</td></tr>
+<tr><td>Prepare context</td><td>Resolve effective provider</td></tr>
+<tr><td>Prepare context</td><td>Bind operation + project</td></tr>
+<tr><td>Prepare context</td><td>Bind subject + provider key</td></tr>
+<tr><td>Prepare context</td><td>Signed • expires in 5 min</td></tr>
+<tr><td>Accept request</td><td>Accept request</td></tr>
+<tr><td>Accept request</td><td>Re-resolve and compare</td></tr>
+<tr><td>Accept request</td><td>Verify signature + expiry</td></tr>
+<tr><td>Accept request</td><td>Reject mismatched context</td></tr>
+<tr><td>Accept request</td><td>Replacement context on error</td></tr>
+<tr><td>Accepted plan</td><td>Accepted plan</td></tr>
+<tr><td>Accepted plan</td><td>One execution provider</td></tr>
+<tr><td>Accepted plan</td><td>Freeze BYOK configuration</td></tr>
+<tr><td>Accepted plan</td><td>Provider choice is immutable</td></tr>
+<tr><td>Accepted plan</td><td>Copilot OR BYOK</td></tr>
+<tr><td>Run snapshot</td><td>Run snapshot</td></tr>
+<tr><td>Run snapshot</td><td>Private durable ownership</td></tr>
+<tr><td>Run snapshot</td><td>Database owner → secret ref</td></tr>
+<tr><td>Run snapshot</td><td>Secret store holds snapshot</td></tr>
+<tr><td>Run snapshot</td><td>Child / retry inheritance</td></tr>
+<tr><td>Invocation guard</td><td>Invocation guard</td></tr>
+<tr><td>Invocation guard</td><td>Check accepted run boundary</td></tr>
+<tr><td>Invocation guard</td><td>Match operation and provider</td></tr>
+<tr><td>Invocation guard</td><td>Reject inconsistent execution</td></tr>
+<tr><td>Invocation guard</td><td>No silent provider fallback</td></tr>
+<tr><td>Capability fences</td><td>Capability fences</td></tr>
+<tr><td>Capability fences</td><td>Separate live permission checks</td></tr>
+<tr><td>Capability fences</td><td>Before / after mint or read</td></tr>
+<tr><td>Capability fences</td><td>Reject revoked or changed grant</td></tr>
+<tr><td>Capability fences</td><td>Snapshot is not a bypass</td></tr>
+<tr><td>relation-0</td><td>1 signed context</td></tr>
+<tr><td>relation-1</td><td>2 match</td></tr>
+<tr><td>relation-2</td><td>3 capture</td></tr>
+<tr><td>relation-3</td><td>4 load boundary</td></tr>
+<tr><td>relation-4</td><td>5 Copilot capability</td></tr>
+<tr><td>assurance</td><td>Mismatch rejects with replacement context. A frozen provider snapshot does not bypass live GitHub capability fences.</td></tr>
+<tr><td>assurance-0-label</td><td>Prepared key</td></tr>
+<tr><td>assurance-0-fact</td><td>Five minutes; operation / subject bound.</td></tr>
+<tr><td>assurance-0-source</td><td>AiExecutionPlanService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Private snapshot</td></tr>
+<tr><td>assurance-1-fact</td><td>DB ownership points to secret storage.</td></tr>
+<tr><td>assurance-1-source</td><td>RunModelProviderSnapshotStore.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Live capability</td></tr>
+<tr><td>assurance-2-fact</td><td>Recheck before and after mint / read.</td></tr>
+<tr><td>assurance-2-source</td><td>GitHubCapabilityBroker.cs</td></tr>
+<tr><td>n0</td><td>Bind operation + project; Bind subject + provider key</td></tr>
+<tr><td>n1</td><td>Verify signature + expiry; Reject mismatched context</td></tr>
+<tr><td>n2</td><td>Freeze BYOK configuration; Provider choice is immutable</td></tr>
+<tr><td>n3</td><td>Database owner → secret ref; Secret store holds snapshot</td></tr>
+<tr><td>n4</td><td>Match operation and provider; Reject inconsistent execution</td></tr>
+<tr><td>n5</td><td>Before / after mint or read; Reject revoked or changed grant</td></tr>
+<tr><td>groups</td><td>PREPARE AND ACCEPT; RUN BOUNDARY AND LIVE FENCES</td></tr>
+</tbody></table>
+</details>

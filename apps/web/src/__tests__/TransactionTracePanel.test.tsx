@@ -138,6 +138,44 @@ describe('buildToolCallIndex', () => {
     expect(detail?.content).toBeUndefined();
   });
 
+  it('tracks an output-free run_command heartbeat until a terminal event clears it', () => {
+    const active = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        deadlineUtc: '2026-09-14T09:10:00.000Z',
+        elapsedSeconds: 12,
+      }),
+    ]);
+
+    expect(active.get('c3')?.activeExecution).toEqual({
+      runId: 'run-1',
+      toolCallId: 'c3',
+      toolName: 'run_command',
+      startedAtUtc: '2026-09-14T09:00:00.000Z',
+      deadlineUtc: '2026-09-14T09:10:00.000Z',
+      elapsedSeconds: 12,
+    });
+
+    const settled = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        elapsedSeconds: 12,
+      }),
+      event('tool.result', { callId: 'c3', content: 'ok' }),
+    ]);
+
+    expect(settled.get('c3')?.outcome).toBe('succeeded');
+    expect(settled.get('c3')?.activeExecution).toBeUndefined();
+  });
+
   it('ignores events without a callId and ignores unrelated event types', () => {
     const events: PersistedRunEvent[] = [
       event('tool.call', { toolName: 'no_call_id' }),

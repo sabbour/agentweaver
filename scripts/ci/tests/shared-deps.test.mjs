@@ -614,11 +614,14 @@ test('validation path classification keeps layer and stack policy deterministic'
   assert.deepEqual(areasForPaths(['scripts/ui-harness/test/auth.test.mjs']), ['harness']);
   assert.deepEqual(areasForPaths(['apps/web/src/App.tsx']), ['web']);
   assert.deepEqual(areasForPaths(['docs/guide/testing.md']), ['docs']);
+  assert.deepEqual(areasForPaths(['docs/diagrams/example.png']), ['docs', 'diagrams']);
+  assert.deepEqual(areasForPaths(['scripts/docs/render-diagrams.mjs']), ['diagrams']);
+  assert.deepEqual(areasForPaths(['README.md']), ['diagrams']);
   assert.deepEqual(areasForPaths(['packages/Agentweaver.Domain/Foo.cs']), ['dotnet']);
   assert.deepEqual(areasForPaths(['tests/Agentweaver.Tests/fixture.json']), ['dotnet']);
   assert.deepEqual(
     areasForPaths(['.github/workflows/ci.yml']),
-    ['node', 'harness', 'web', 'docs', 'dotnet'],
+    ['node', 'harness', 'web', 'docs', 'diagrams', 'dotnet'],
   );
   // Other workflows don't run these suites, so they must select no areas.
   assert.deepEqual(areasForPaths(['.github/workflows/docs-drift.yml']), []);

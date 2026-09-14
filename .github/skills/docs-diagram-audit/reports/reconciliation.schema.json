@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Central research-only canonical reconciliation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["phase", "coordinator_model", "authority", "concept_overrides", "reserved_names", "protected_pilot", "publication_blockers", "path_policy"],
+  "properties": {
+    "phase": {"const": "research-only"},
+    "coordinator_model": {"const": "gpt-6-astra"},
+    "authority": {"type": "string", "minLength": 1},
+    "concept_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false, "required": ["owner_area", "rationale"],
+        "properties": {
+          "disposition": {"enum": ["retain", "reuse", "merge", "remove", "redesign"]},
+          "target": {"type": "string", "minLength": 1},
+          "canonical_diagram": {"type": "string", "minLength": 1},
+          "owner_area": {"type": "string", "minLength": 1},
+          "rationale": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "reserved_names": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9-]+$"}},
+    "protected_pilot": {
+      "type": "object", "additionalProperties": false, "required": ["name", "owner", "disposition", "status", "rule"],
+      "properties": {
+        "name": {"const": "canonical-coordinator-architecture"},
+        "owner": {"const": "coordinator-pilot"},
+        "disposition": {"const": "redesign"},
+        "status": {"const": "done"},
+        "rule": {"type": "string", "minLength": 1}
+      }
+    },
+    "publication_blockers": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "path_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["existing_surviving_pngs", "consolidated_pngs", "inline_visuals", "screenshots", "consumer_edits", "global_reports"],
+      "properties": {
+        "existing_surviving_pngs": {"type": "string"},
+        "consolidated_pngs": {"type": "string"},
+        "inline_visuals": {"type": "string"},
+        "screenshots": {"type": "string"},
+        "consumer_edits": {"type": "string"},
+        "global_reports": {"type": "string"}
+      }
+    }
+  }
+}

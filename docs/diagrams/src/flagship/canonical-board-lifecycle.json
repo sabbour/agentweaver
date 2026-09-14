@@ -1,0 +1,63 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Task commitment, coordinator execution, and board projection",
+  "alt": "State and projection view showing the only persisted task states Backlog, Ready, and Claimed; atomic coordinator-run reservation; and read-only projection of the linked run into Active, Human Review, Problems, or Done.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "backlog",
+      "label": "Backlog",
+      "subLabel": "Captured but not committed",
+      "icon": "box",
+      "fluentIcon": "archive",
+      "badge": "Task state",
+      "variant": "state"
+    },
+    {
+      "id": "ready",
+      "label": "Ready",
+      "subLabel": "Committed; dependencies may still block pickup",
+      "icon": "box",
+      "fluentIcon": "event",
+      "badge": "Task state",
+      "variant": "state"
+    },
+    {
+      "id": "claimed",
+      "label": "Claimed",
+      "subLabel": "Run ID persisted atomically",
+      "icon": "box",
+      "fluentIcon": "coordinator",
+      "badge": "Task state",
+      "variant": "state"
+    },
+    {
+      "id": "run-projection",
+      "label": "Linked run projection",
+      "subLabel": "Active · Human Review · Problems · Done",
+      "icon": "box",
+      "fluentIcon": "telemetry",
+      "badge": "Projection"
+    }
+  ],
+  "edges": [
+    {
+      "from": "backlog",
+      "to": "ready",
+      "label": "commit"
+    },
+    {
+      "from": "ready",
+      "to": "claimed",
+      "label": "atomic pickup"
+    },
+    {
+      "from": "claimed",
+      "to": "run-projection",
+      "label": "RunId + WorkPlan"
+    }
+  ]
+}

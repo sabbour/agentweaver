@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.32.2
+
+### Patch Changes
+
+- 7ae7024: Make persona similarity ranking completion-aware: `find-similar.mjs` now surfaces completion metadata, accepts `--requires-completion`, rejects gate-stopping personas for completion-required scenarios, and warns when the top keyword match stops before execution.
+- 7ae7024: Treat targeted coordinator redirects as non-destructive handoffs, so interrupting a stuck child to apply new direction no longer fails that child or cascades failure to unrelated subtasks.
+- 7ae7024: Bound sandboxed `run_command` execution so a non-terminating command can no longer park a run silently forever. Commands now have a configurable default budget of 30 minutes, emit a degraded-run signal when they exceed it, and return guidance telling agents to use `start_preview_process` for long-lived preview/dev servers.
+- 7ae7024: Surface safe terminal-failure cause breadcrumbs from structured failures, coordinator phases, and recent tool-error events so operators can tell which step or tool failed and whether retry is available.
+- 6084786: Fix the Topology panel's balanced-grid layout so dense coordinator graphs reserve pod-bearing cards, keep forward arrows flowing consistently, route connectors around cards, and drop edges whose endpoints are not present.
+
+## 0.32.1
+
+### Patch Changes
+
+- 5592410: Stop `start_preview` from aborting a preview registration that is still succeeding.
+  
+  `PreviewPublishTool.CreateHttpClient` never set `HttpClient.Timeout`, so it kept the .NET default of
+  100 seconds. The tool arms a 3-minute registration budget and reports that value to the agent on
+  timeout, but the shorter client timeout always fired first — making the configured budget unreachable
+  dead code and producing a "did not complete within 180 seconds" error after roughly 100 seconds.
+  
+  Publishing a preview routinely takes 90-120 seconds (port-forward, DNS convergence, health probe),
+  which straddles that default, so registration failed on a healthy, auto-approved app with no pending
+  approval to resolve. The client timeout is now disabled, leaving the linked cancellation token source
+  as the single authority on the budget. `Agentweaver.Mcp`'s client already did this; this path had
+  drifted from it.
+
+## 0.32.0
+
+### Minor Changes
+
+- 75d59ac: Add an editable draw.io authoring path, Fluent diagram templates, and visual review skills while retaining the existing JSON graph and sequence renderer.
+
+### Patch Changes
+
+- 5b2884d: Stop a single hung `az acr repository show` call from aborting a release deployment. The ACR digest lookup passed `allowFailure`, which only covers a non-zero exit code, so a query timeout rejected instead and escaped the surrounding retry/backoff loop. The lookup now treats a timeout as "not visible yet" and stays retryable, matching the sibling tag-digest lookup.
+- bb2b4be: Declare the `If-Model-Provider-Key` precondition header on every AI-guarded API operation. Seventeen endpoints require a prepared AI execution context, but only `POST /api/projects/{id}/orchestrations` documented the header, so an OpenAPI-guided client could discover a guarded route, receive `409 ai_execution_context_required`, and have no way to learn how to satisfy it. A shared `RequiresAiExecutionContext()` route extension now declares the header on all of them, marking it optional with a stated condition where the endpoint only invokes a model for some request shapes (for example `/steer`, which needs it for every verb except `stop`). The three 409 hint messages also name the header and say to resend the request. Behavior is unchanged; this is discoverability only.
+- 2a8c649: Make release deployments recoverable instead of all-or-nothing. Three changes:
+  
+  - **Timeouts now actually work on Windows.** `az` is a `.cmd` shim launched via `cmd.exe`, so killing the timed-out child left the `python.exe` grandchild alive holding the output pipes — the capture promise never settled and the deploy hung indefinitely despite its timeout. Timed-out commands are now terminated by process tree.
+  - **Transient registry failures are retried.** Idempotent ACR operations (`import`, retag, untag) retry with exponential backoff and jitter on connection resets, throttling, and timeouts, instead of failing an otherwise healthy deployment. Deterministic errors still fail immediately. Staging-tag cleanup can no longer fail a deployment at all.
+  - **Deployments can resume.** Completed build and deploy stages are checkpointed outside the repository, so `--resume` continues from the stage that broke rather than repeating the full four-image promotion; `--restart` discards that state. Verification always re-runs, even on a resume, and a successful deployment clears its own checkpoint.
+- 8df38b6: Stop a run from cancelling its own live preview. Publishing a preview takes 90-120 s (port-forward, DNS convergence, health probe) and the final `sandbox.preview_ready` batch commits only while the run row is still active. An agent that finished its work inside that window cancelled the publication through the run's own completion token, and the preview process was torn down as `preview_not_published`.
+  
+  Publication now claims a short, database-backed lease on the run. While the lease is held, every terminal transition defers until the publication commits or the lease expires, so `preview_ready` always precedes the terminal event. The lease is bounded twice — it carries its own expiry, and a deferral cap releases it — so a replica that crashes mid-publication cannot park a run. The lease is released around the preview approval wait, so a run is never held open for an operator.
+- 0764aca: Add `npm run azure:prune-registry`, a cross-platform registry cleanup command.
+  
+  Deployments accumulate release images, per-commit images, provenance copies, and
+  preflight staging tags that nothing references. The new `prune-registry`
+  subcommand removes them, replacing an ad-hoc PowerShell script with a Node
+  implementation that runs the same way on every platform as the rest of the
+  deployment toolchain.
+  
+  It is a dry run by default and prints its full plan before `--execute` will
+  touch anything. Retention is decided by digest rather than tag name, so the
+  per-architecture children of a retained multi-arch index are protected even
+  though they carry no tags of their own — the naive "delete everything untagged"
+  approach silently destroys those. Images running in the cluster are protected
+  whether they are referenced by tag or by pinned digest, and the command refuses
+  to delete anything at all if the running set cannot be read, since that set is
+  what makes digest protection possible.
+- 5a4d780: Accept a model-supplied `description` argument on the sandboxed `run_command` tool.
+  
+  The native Copilot shell tool accepts a `description`, so the model frequently supplied one to the
+  sandboxed `run_command` too. That argument did not match this tool's schema, so the call fell through
+  to the disabled native shell and cost a full turn to a `tool.error` + `run.degraded` before the agent
+  retried without it. The argument is now accepted and ignored.
+- 3d46b43: Show live `run_command` progress in transaction traces with a correlated, output-free heartbeat.
+  
+  Long-running sandboxed commands now emit `tool.execution_pending` progress frames over the existing
+  run stream, and the trace detail panel updates from that stream without browser polling. The
+  heartbeat is tied to the matching tool-call id and omits command text, output, exit code, working
+  directory, and environment data.
+- 11ede9b: Keep `run_command` input and output collapsed in the transaction trace detail panel. A long build or test command used to expand its full stdout and stderr inline, which pushed the rest of the trace off screen and made a run hard to read. Command text and output now stay collapsed until you open them.
+- 5a4d780: Stop unattended runs spinning on a shell command blocked by the destructive-command approval gate.
+  
+  A run created with `auto-approve-tools`/`autopilot` has no operator watching for approval cards, but
+  `run_command` still told it to "retry this command" after approval — so the agent re-issued the same
+  blocked command indefinitely while the run reported `InProgress`. Destructive shell remains
+  deliberately ineligible for run-level auto-approval, so the gate is unchanged; only the guidance is.
+  An unattended run is now told not to retry and to achieve the result without the destructive
+  operation, and `shell.approval_required` carries an `unattended` flag for the timeline.
+
 ## 0.31.1
 
 ### Patch Changes

@@ -775,3 +775,38 @@ Use unit-test command capture for dry-run validation; use `az ... --help` for CL
 - **Notes**: Verified supported generic `--set` syntax through CLI help and deployment unit tests.
 
 ---
+
+## [ERR-20260913-DOC-COMMENT] flagship documentation comment consolidation
+
+**Logged**: 2026-09-13T00:00:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+The initial legacy-diagram comment matcher crossed HTML comment boundaries and removed unrelated documentation prose.
+
+### Error
+```text
+A pattern shaped like <!--[\s\S]*?...[\s\S]*?--> started at an earlier comment and
+continued through intervening prose until it found a later legacy-diagram marker.
+```
+
+### Context
+- The flagship reference consolidator selected HTML comments by matching their content.
+- The unrestricted `[\s\S]*?` body could consume an intervening `-->`, so a match was not bounded to one comment.
+- Affected deletion-only documentation changes were restored from reverse Git patches before consolidation was rerun.
+
+### Suggested Fix
+Bound searches to one HTML comment with a tempered body such as
+`<!--(?:(?!-->)[\s\S])*(marker)(?:(?!-->)[\s\S])*-->`, and verify the transformation is idempotent.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/docs/consolidate-flagship-references.mjs, README.md, docs/deep-dive/coordinator-internals.md, docs/deep-dive/agent-definition.md
+
+### Resolution
+- **Resolved**: 2026-09-13T00:00:00Z
+- **Notes**: Restored the affected prose, replaced the matcher with a comment-bounded pattern, and reran consolidation successfully.
+
+---

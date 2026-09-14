@@ -1,0 +1,166 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Provider authorization and execution admission",
+  "alt": "Guarded flow showing operation and caller authorization, provider and credential resolution, operation policy, protected execution-context acceptance, durable run-boundary capture, point-of-invocation revalidation, and explicit rejection before model calls.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "request",
+      "label": "Authenticated operation request",
+      "subLabel": "Operation, caller, and project or run scope",
+      "icon": "box",
+      "fluentIcon": "person",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "authorize",
+      "label": "Caller and scope valid?",
+      "subLabel": "Operation-specific access rules",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Authorize",
+      "variant": "decision"
+    },
+    {
+      "id": "resolve",
+      "label": "Resolve provider and credential",
+      "subLabel": "Project, platform, and personal precedence",
+      "icon": "box",
+      "fluentIcon": "identity",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "policy",
+      "label": "Provider allowed for operation?",
+      "subLabel": "BYOK support is operation metadata",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Policy",
+      "variant": "decision"
+    },
+    {
+      "id": "prepared",
+      "label": "Prepared execution context",
+      "subLabel": "Provider identity plus protected short-lived key",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "accept",
+      "label": "Context still matches?",
+      "subLabel": "Caller, operation, project, expiry, and provider identity",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Accept",
+      "variant": "decision"
+    },
+    {
+      "id": "snapshot",
+      "label": "Durable run boundary",
+      "subLabel": "Private provider identity and execution configuration",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "invoke",
+      "label": "Point-of-invocation validation",
+      "subLabel": "Revalidate accepted provider before each attempt",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Fence",
+      "variant": "decision"
+    },
+    {
+      "id": "execute",
+      "label": "Execute model call",
+      "subLabel": "Use only accepted authority",
+      "icon": "box",
+      "fluentIcon": "model",
+      "badge": "Admitted",
+      "variant": "terminator"
+    },
+    {
+      "id": "reject",
+      "label": "Reject before invocation",
+      "subLabel": "Reprepare explicitly; never silently switch provider",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Stop",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "request",
+      "to": "authorize",
+      "label": "prepare"
+    },
+    {
+      "from": "authorize",
+      "to": "resolve",
+      "label": "authorized"
+    },
+    {
+      "from": "authorize",
+      "to": "reject",
+      "label": "denied"
+    },
+    {
+      "from": "resolve",
+      "to": "policy",
+      "label": "current boundary"
+    },
+    {
+      "from": "policy",
+      "to": "prepared",
+      "label": "eligible"
+    },
+    {
+      "from": "prepared",
+      "to": "accept",
+      "label": "submit key"
+    },
+    {
+      "from": "accept",
+      "to": "snapshot",
+      "label": "matching"
+    },
+    {
+      "from": "accept",
+      "to": "reject",
+      "label": "changed / expired"
+    },
+    {
+      "from": "snapshot",
+      "to": "invoke",
+      "label": "run-bound identity"
+    },
+    {
+      "from": "invoke",
+      "to": "execute",
+      "label": "valid"
+    },
+    {
+      "from": "invoke",
+      "to": "reject",
+      "label": "mismatch"
+    }
+  ]
+}

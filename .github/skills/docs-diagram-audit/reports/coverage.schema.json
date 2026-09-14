@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Research-only expanded diagram audit and ownership",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "phase", "model", "scope", "counts", "discovery_reconciliation", "documents", "concepts", "assets", "references", "inline_visuals", "image_coverage", "literal_asset_mentions", "findings", "validation", "ownership"],
+  "properties": {
+    "version": {"const": 1},
+    "phase": {"const": "research-only"},
+    "model": {"const": "gpt-6-astra"},
+    "scope": {"type": "string", "minLength": 1},
+    "counts": {"type": "object", "additionalProperties": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}]}},
+    "discovery_reconciliation": {"type": "object", "required": ["native_integrity", "native_reference_count", "augmented_reference_count", "augmented_integrity"]},
+    "documents": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "owner_area"], "properties": {"path": {"type": "string"}, "owner_area": {"type": "string"}}}},
+    "concepts": {"type": "array", "items": {"$ref": "#/$defs/concept"}},
+    "assets": {"type": "array", "items": {"$ref": "#/$defs/asset"}},
+    "references": {"type": "array", "items": {"$ref": "#/$defs/reference"}},
+    "inline_visuals": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "line", "end_line", "kind", "content", "concept_ids"], "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "kind": {"type": "string"}, "content": {"type": "string"}, "concept_ids": {"$ref": "#/$defs/strings"}}}},
+    "image_coverage": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "line", "target", "concept_ids"], "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "target": {"type": "string"}, "concept_ids": {"$ref": "#/$defs/strings"}}}},
+    "literal_asset_mentions": {"type": "array", "items": {"$ref": "#/$defs/mention"}},
+    "findings": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["area", "severity", "subject", "detail", "evidence"], "properties": {"area": {"type": "string"}, "severity": {"enum": ["info", "warning", "blocker"]}, "subject": {"type": "string"}, "detail": {"type": "string"}, "evidence": {"$ref": "#/$defs/strings"}}}},
+    "validation": {"type": "object", "required": ["catalog_json_schema", "area_json_schemas", "area_assignment_coverage", "disposition_completeness", "canonical_target_resolution", "stable_path_plan", "ownership_overlaps", "evidence_locations_checked", "evidence_errors", "coverage_errors", "hash_checks", "broken_local_links", "broken_vitepress_anchors", "native_vitepress_anchor_check", "external_links", "protected_files_changed_since_snapshot", "nonpilot_protected_files_changed", "concurrent_pilot_notice", "excluded_authored_page", "final_skill_errors"]},
+    "ownership": {"type": "array", "items": {"$ref": "#/$defs/plan"}}
+  },
+  "$defs": {
+    "strings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "nullable_string": {"type": ["string", "null"]},
+    "disposition": {"enum": ["retain", "reuse", "merge", "remove", "redesign"]},
+    "reference": {
+      "type": "object", "additionalProperties": false, "required": ["path", "line", "target", "kind", "alt", "resolved", "status"],
+      "properties": {
+        "path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "target": {"type": "string"}, "kind": {"enum": ["image", "link"]}, "alt": {"type": "string"},
+        "resolved": {"$ref": "#/$defs/nullable_string"}, "status": {"enum": ["local", "missing", "external-unchecked", "outside-repository"]}, "anchor_status": {"enum": ["valid", "missing-vitepress-anchor"]}
+      }
+    },
+    "concept": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "document", "research_area", "owner_area", "title", "representation", "disposition", "target", "canonical_diagram", "canonical_owner", "rationale", "evidence", "references"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1}, "document": {"type": "string"}, "research_area": {"type": "string"}, "owner_area": {"type": "string"}, "title": {"type": "string"},
+        "representation": {"enum": ["diagram", "prose", "table", "ascii", "mermaid", "screenshot", "proposed-diagram", "reference"]},
+        "disposition": {"$ref": "#/$defs/disposition"}, "target": {"$ref": "#/$defs/nullable_string"}, "canonical_diagram": {"$ref": "#/$defs/nullable_string"}, "canonical_owner": {"$ref": "#/$defs/nullable_string"},
+        "rationale": {"type": "string", "minLength": 1}, "evidence": {"$ref": "#/$defs/strings"},
+        "references": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["line", "target"], "properties": {"line": {"type": "integer", "minimum": 1}, "target": {"type": "string"}}}},
+        "placeholder_assets": {"$ref": "#/$defs/strings"}
+      },
+      "allOf": [{"if": {"properties": {"disposition": {"enum": ["reuse", "merge"]}}}, "then": {"properties": {"target": {"type": "string", "minLength": 1}}}}]
+    },
+    "mention": {
+      "type": "object", "additionalProperties": false, "required": ["path", "line", "basename", "asset_candidates", "kind"],
+      "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "basename": {"type": "string"}, "asset_candidates": {"$ref": "#/$defs/strings"}, "kind": {"const": "literal-mention-not-necessarily-consumer"}}
+    },
+    "asset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "role", "owner_area", "catalog_diagram", "disposition", "target", "rationale", "sha256", "dimensions", "placeholder", "references", "path_action", "mentions"],
+      "properties": {
+        "path": {"type": "string"}, "role": {"enum": ["hash", "canonical-source", "derived-source", "review-artifact", "authoring-support", "derived-external-image", "screenshot", "legacy-source", "public-image", "image"]},
+        "owner_area": {"type": "string"}, "catalog_diagram": {"$ref": "#/$defs/nullable_string"}, "disposition": {"$ref": "#/$defs/disposition"}, "target": {"$ref": "#/$defs/nullable_string"},
+        "rationale": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dimensions": {"oneOf": [{"type": "null"}, {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1}}]},
+        "placeholder": {"enum": [null, "one-pixel", "verified-placeholder-family"]},
+        "references": {"type": "array", "items": {"$ref": "#/$defs/reference"}},
+        "path_action": {"enum": ["preserve", "planned-consolidation-or-removal"]},
+        "mentions": {"type": "array", "items": {"$ref": "#/$defs/mention"}}
+      }
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["area", "status", "diagram_names", "proposed_diagram_names", "document_paths", "concept_ids", "exclusive_asset_paths", "report_entry_owner", "consumer_changes"],
+      "properties": {
+        "area": {"type": "string"}, "status": {"enum": ["reserved-do-not-touch", "queued-after-audit-blockers", "queued-downstream-work", "done"]}, "diagram_names": {"$ref": "#/$defs/strings"}, "proposed_diagram_names": {"$ref": "#/$defs/strings"},
+        "document_paths": {"$ref": "#/$defs/strings"}, "concept_ids": {"$ref": "#/$defs/strings"}, "exclusive_asset_paths": {"$ref": "#/$defs/strings"}, "report_entry_owner": {"type": "string"},
+        "consumer_changes": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["diagram", "target", "consumers", "instructions"], "properties": {"diagram": {"type": "string"}, "target": {"$ref": "#/$defs/nullable_string"}, "consumers": {"type": "array"}, "instructions": {"type": "string"}}}}
+      }
+    }
+  }
+}
