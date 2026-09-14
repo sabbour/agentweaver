@@ -1047,7 +1047,7 @@ export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';
 
 // POST /api/runs/{coordinatorRunId}/steer body.
 // kind "send"     {instruction}                         — informational; no re-plan, no subtask mutation.
-// kind "redirect" {instruction, target_child_run_id?}   — re-plans/re-arms; a target child is force-completed to unblock it.
+// kind "redirect" {instruction, target_child_run_id?}   — re-plans/re-arms; a forced target interruption is not child failure.
 // kind "amend"    {instruction}                          — additive; extends the outcome spec/plan; never discards in-flight work.
 // kind "stop"     {}                                     — stop the orchestration.
 export interface SteerCoordinatorRequest {

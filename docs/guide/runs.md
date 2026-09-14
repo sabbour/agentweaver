@@ -182,7 +182,10 @@ While a coordinator orchestration is active, you can intervene from the topology
 | **Stop run** | Immediately stop the orchestration; takes effect on running agents right away |
 
 ::: tip Stop is immediate; redirect is at the next turn
-Stopping a run takes effect immediately on all running agents. Redirecting or amending takes effect at the next agent turn boundary — the current turn completes first.
+Stopping a run takes effect immediately on all running agents. Redirecting or amending
+takes effect at the next agent turn boundary. If a targeted redirect must interrupt a
+stuck child turn, that cancellation is treated as a redirect handoff rather than a child
+failure, so unrelated siblings and dependents are not failed by the steer itself.
 :::
 
 After sending guidance, the Messages pane records a durable acknowledgement with its
