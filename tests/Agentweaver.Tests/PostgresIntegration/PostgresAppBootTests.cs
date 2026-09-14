@@ -23,9 +23,15 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// migrations, and exercises the EXACT crash path: <c>Program.cs</c> calls
 /// <c>WorkflowRestartService.RecoverAsync</c> (→ <c>IRunStore.GetByStatusAsync</c>) at startup,
 /// so a successful boot alone proves the regression is fixed. It additionally asserts that in
-/// Postgres mode <see cref="IRunStore"/> resolves to <see cref="EfRunStore"/> and the concrete
-/// <see cref="SqliteRunStore"/> is NOT registered, then runs a full run lifecycle through the
-/// interface.</para>
+/// Postgres mode the <see cref="IRunStore"/> chain contains <see cref="EfRunStore"/> and the
+/// concrete <see cref="SqliteRunStore"/> is NOT registered, then runs a full run lifecycle
+/// through the interface.</para>
+///
+/// <para><see cref="IRunStore"/> is a decorator chain, not a single object: since #1315
+/// <see cref="PreviewPublicationLeaseRunStore"/> wraps the provider store. These assertions
+/// therefore use <see cref="RunStoreChain.Find{T}"/> rather than an exact type check. Do not
+/// change them back to <c>BeOfType</c> — the backing store is what this test protects, not the
+/// identity of the outermost wrapper.</para>
 ///
 /// <para>Skipped automatically when Docker is unavailable (Testcontainers throws on startup).</para>
 /// </summary>
@@ -42,8 +48,13 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         var sp = scope.ServiceProvider;
 
         // The interface must resolve to the EF/Postgres implementation, never the SQLite one.
-        sp.GetRequiredService<IRunStore>().Should().BeOfType<EfRunStore>(
+        // IRunStore is wrapped by PreviewPublicationLeaseRunStore, so assert on the chain: the
+        // decorator's identity is not the point, the backing store is.
+        var runStore = sp.GetRequiredService<IRunStore>();
+        RunStoreChain.Find<EfRunStore>(runStore).Should().NotBeNull(
             "Postgres mode must bind IRunStore to EfRunStore");
+        RunStoreChain.Find<SqliteRunStore>(runStore).Should().BeNull(
+            "no SQLite store may appear anywhere in the Postgres run-store chain");
 
         // Nothing may resolve a concrete SqliteRunStore in Postgres mode — the raw SQLite
         // registration is gone, so a stray concrete injection would fail fast at boot instead
@@ -64,7 +75,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     public async Task WorkflowRestartService_RecoverAsync_RunsAgainstPostgres_AndFailsStrandedRun()
     {
         var runStore = _fixture.Services.GetRequiredService<IRunStore>();
-        runStore.Should().BeOfType<EfRunStore>();
+        RunStoreChain.Find<EfRunStore>(runStore).Should().NotBeNull();
 
         // Seed a stranded InProgress run (the state the recovery sweep must act on).
         var runId = RunId.New();
