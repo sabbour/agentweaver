@@ -99,14 +99,16 @@ objections), not full-run completion. A run that stops there is working as inten
 not stuck or broken. If a caller wants a scenario that drives to full completion,
 they need a different adapter/scenario, not this one.
 
-This pattern generalizes across the catalog: every persona core in
-`scripts/persona-briefs/personas/*.md` currently has a "Where to stop (safe
-checkpoint)" section that stops before or at a confirmation/review gate, and every
-`*.api.md` surface adapter explicitly says "Stop at the outcome-spec confirmation
-gate without confirming execution." Any adapter whose Intent mapping says "stop at
-X" should be treated as intentionally non-terminal, not a stuck/broken run, when
-triaging a "the run didn't finish" report. See `scripts/persona-briefs/catalog.json`
-for the `runsToCompletion` flag recorded per persona/surface pair.
+This pattern generalizes across the catalog: several persona cores and adapters stop
+before or at a confirmation/review gate, while completion-capable personas explicitly
+declare `runsToCompletion: true` in `scripts/persona-briefs/catalog.json`. Any
+adapter whose Intent mapping says "stop at X" should be treated as intentionally
+non-terminal, not a stuck/broken run, when triaging a "the run didn't finish" report.
+For scenario selection, run `node scripts/persona-briefs/find-similar.mjs
+--description "<intent>" --requires-completion` whenever the run must execute through
+completion or validate a live preview; gate-stopping candidates appear under
+`rejectedMatches` with an explicit warning instead of being silently ranked as
+suitable.
 
 ---
 
