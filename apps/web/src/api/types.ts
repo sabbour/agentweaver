@@ -153,17 +153,59 @@ export interface RunTerminalDiagnostic {
   cause_chain: string[];
 }
 
+const TERMINAL_FAILURE_CODES = new Set([
+  'agent_turn_internal_error',
+  'a2a_transport_failure',
+  'agent_host_turn_incomplete',
+  'assembly_blocked',
+  'assembly_failed',
+  'coordinator_execution_failed',
+  'coordinator_direct_execution_failed',
+  'github_copilot_auth_required',
+  'github_copilot_capability_snapshot_unavailable',
+  'github_copilot_model_unavailable',
+  'github_copilot_models_unavailable',
+  'github_copilot_provider_unavailable',
+  'github_copilot_rate_limited',
+  'github_copilot_runtime_not_configured',
+  'github_copilot_turn_stalled',
+  'github_copilot_turn_timeout',
+  'model_provider_changed',
+  'model_provider_connection_required',
+  'model_provider_snapshot_unavailable',
+  'model_provider_unavailable',
+  'model_provider_validation_unavailable',
+  'shell_execution_timeout',
+]);
+
+const TERMINAL_CAUSE_TYPES = new Set([
+  'AgentProviderException',
+  'ArgumentException',
+  'DirectoryNotFoundException',
+  'FileNotFoundException',
+  'HttpRequestException',
+  'IOException',
+  'InvalidOperationException',
+  'JsonException',
+  'ModelProviderConnectionRequiredException',
+  'NotSupportedException',
+  'OperationCanceledException',
+  'SocketException',
+  'TaskCanceledException',
+  'TimeoutException',
+  'UnauthorizedAccessException',
+  'WorkflowAgentInfrastructureException',
+]);
+
+const SAFE_TERMINAL_CAUSE = /^(?:code|phase|reason|step|tool):[A-Za-z0-9_.:-]{1,112}$/;
+
+export function isSafeTerminalCause(cause: string): boolean {
+  return cause.length <= 128
+    && (TERMINAL_CAUSE_TYPES.has(cause) || SAFE_TERMINAL_CAUSE.test(cause));
+}
+
 export function safeTerminalFailureMessage(_message: string, code: string, retryable: boolean | null): string {
-  const allowedCodes = new Set([
-    'agent_turn_internal_error',
-    'a2a_transport_failure',
-    'agent_host_turn_incomplete',
-    'github_copilot_auth_required',
-    'github_copilot_capability_snapshot_unavailable',
-    'model_provider_snapshot_unavailable',
-    'shell_execution_timeout',
-  ]);
-  const safeCode = allowedCodes.has(code) ? code : 'agent_turn_internal_error';
+  const safeCode = TERMINAL_FAILURE_CODES.has(code) ? code : 'agent_turn_internal_error';
   const retrySummary = retryable === true
     ? ' Retry is available.'
     : retryable === false

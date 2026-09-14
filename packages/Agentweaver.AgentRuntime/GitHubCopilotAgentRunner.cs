@@ -8,6 +8,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -439,6 +440,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     category = providerFailure.FailureKind.ToString(),
                     errorCode = providerFailure.ErrorCode,
                     retryable = providerFailure.IsRetryable,
+                    causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
                 });
                 throw providerFailure;
             }
@@ -520,6 +522,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     category = providerFailure.FailureKind.ToString(),
                     errorCode = providerFailure.ErrorCode,
                     retryable = providerFailure.IsRetryable,
+                    causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
                 });
                 throw providerFailure;
             }

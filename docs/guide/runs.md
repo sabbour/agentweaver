@@ -334,10 +334,15 @@ the configured provider changed, became unavailable, or requires reconnection. R
 GitHub only when a new run reports `github_copilot_auth_required`.
 
 The projection contains only a bounded error code, safe message, component,
-timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
-AgentHost-generated internal failures and pre-launch provider failures include a
-server-generated correlation ID, the active trace ID when available, and a bounded
-exception-type chain. If an earlier
+timestamp, retryability, allowlisted correlation IDs, and sanitized cause breadcrumbs.
+Those breadcrumbs may include exception type names plus server-authored `step:*`,
+`phase:*`, `reason:*`, and `tool:*` labels; they never include prompts, tool payloads,
+headers, credentials, raw paths, or stack traces. AgentHost-generated internal failures
+and pre-launch provider failures include a server-generated correlation ID, the active
+trace ID when available, and a bounded exception-type chain. When a terminal failure
+has no direct exception chain, the diagnostic reader inspects recent persisted step and
+tool-error events so repeated tool failures are surfaced instead of misattributing the
+failure to the component that timed out last. If an earlier
 best-effort agent operation failed but the Coordinator later terminalized for another
 reason, the projection uses the latest terminal failure instead of the earlier recovered
 failure.
