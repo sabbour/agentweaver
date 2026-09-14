@@ -353,6 +353,24 @@ internal static readonly IReadOnlySet<RunStatus> TerminalRunStatuses = new HashS
 
 internal static bool IsTerminal(RunStatus status) => TerminalRunStatuses.Contains(status);
 
+internal static string? CoordinatorStatusReasonForProjection(Run run, string? coordinatorStatus)
+{
+    if (string.IsNullOrWhiteSpace(run.Result)) return null;
+
+    if (run.Status is RunStatus.Failed or RunStatus.MergeFailed or RunStatus.Declined)
+        return run.Result;
+
+    if (string.IsNullOrWhiteSpace(coordinatorStatus)) return null;
+
+    var normalizedStatus = coordinatorStatus.Trim().ToLowerInvariant();
+    var normalizedReason = run.Result.Trim().ToLowerInvariant();
+    if (normalizedReason == normalizedStatus
+        || normalizedReason.StartsWith($"{normalizedStatus}:", StringComparison.Ordinal))
+        return run.Result;
+
+    return null;
+}
+
 /// <summary>
 /// Cancels a non-terminal run's live work: signals the MAF workflow to abandon (which also stops any
 /// child subtask runs the coordinator is driving through the same workflow), best-effort removes the

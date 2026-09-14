@@ -223,11 +223,12 @@ public sealed record RunResponse
     public string? CoordinatorStatus { get; init; }
 
     /// <summary>
-    /// Human-readable detail for a COORDINATOR run's terminal/failure state, sourced from
-    /// <see cref="Result"/> (e.g. "assembly_blocked: &lt;reason&gt;", "interrupted: ..."). Scoped to
-    /// coordinator runs so the web UI can render "Failed: &lt;reason&gt;" without overloading the
-    /// generic run result. Null for standalone runs, child runs, and non-terminal coordinator
-    /// runs with no result yet. (Feature 008)
+    /// Human-readable detail for a COORDINATOR run's current terminal/parked state, sourced from
+    /// <see cref="Result"/> only when it matches the current coordinator lifecycle status (for example
+    /// "assembly_blocked: &lt;reason&gt;" while <see cref="CoordinatorStatus"/> is assembly_blocked).
+    /// Stale terminal details are intentionally suppressed while a coordinator has returned to an
+    /// active state such as dispatching. Null for standalone runs, child runs, and active coordinator
+    /// runs with no current status reason. (Feature 008)
     /// </summary>
     [JsonPropertyName("coordinator_status_reason")]
     public string? CoordinatorStatusReason { get; init; }
@@ -323,9 +324,10 @@ public sealed record WorkflowRunSummary
     public string? CoordinatorStatus { get; init; }
 
     /// <summary>
-    /// Human-readable detail for a COORDINATOR run's terminal/failure state, sourced from
-    /// <see cref="Result"/>. Scoped to coordinator runs so the runs list can render
-    /// "Failed: &lt;reason&gt;". Null for standalone and child runs. (Feature 008)
+    /// Human-readable detail for a COORDINATOR run's current terminal/parked state, sourced from
+    /// <see cref="Result"/> only when it matches the current coordinator lifecycle status. Stale
+    /// terminal details are suppressed after the coordinator returns to an active state. Null for
+    /// standalone, child, and active coordinator runs with no current status reason. (Feature 008)
     /// </summary>
     [JsonPropertyName("coordinator_status_reason")]
     public string? CoordinatorStatusReason { get; init; }
