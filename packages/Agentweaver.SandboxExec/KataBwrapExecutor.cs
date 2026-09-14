@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Agentweaver.SandboxFs;
 using Microsoft.Extensions.Logging;
 
@@ -42,6 +43,14 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
     /// <summary>System trees a run may write to when it owns a per-run writable system root.</summary>
     private static readonly string[] WritableSystemRoots = ["/usr", "/etc", "/var"];
+    private static readonly string[] WritableSystemRootExecutables =
+    [
+        "apt",
+        "apt-get",
+        "aptitude",
+        "dpkg",
+        "add-apt-repository",
+    ];
 
     /// <summary>
     /// Default location of the build daemon socket. The builder is a sidecar in this pod, so the
@@ -62,10 +71,20 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Process> _writableSystemRoots =
         new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, WritableSystemRootFailure> _writableSystemRootFailures =
+        new(StringComparer.Ordinal);
     private readonly bool _writableSystemRootEnabled;
     private readonly string _writableSystemRootSize;
     private readonly string _imageBuildSocket;
     private readonly int _maxWritableSystemRoots;
+
+    internal static readonly TimeSpan WritableSystemRootFailureBackoff = TimeSpan.FromMinutes(10);
+
+    private static readonly Regex WritableSystemRootShellCommandPattern = new(
+        @"(?:^|[;&|(\n]\s*)(?:[A-Za-z_][A-Za-z0-9_]*=(?:""[^""]*""|'[^']*'|\S+)\s+)*(?:(?:sudo|command|exec|time)\s+)*(?:/[\w./-]+/)?(?:apt-get|aptitude|add-apt-repository|dpkg|apt)(?![-\w])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private sealed record WritableSystemRootFailure(DateTimeOffset RetryAfter);
 
     public bool IsRealIsolation => true;
     public string BackendName => "kata-sidecar-bwrap-fs";
@@ -685,6 +704,8 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     {
         if (!_writableSystemRootEnabled || !OperatingSystem.IsLinux())
             return null;
+        if (!CommandMayRequireWritableSystemRoot(command))
+            return null;
 
         string runKey;
         try
@@ -704,6 +725,20 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             existing.Dispose();
         }
 
+        if (_writableSystemRootFailures.TryGetValue(runKey, out var failure))
+        {
+            if (failure.RetryAfter > DateTimeOffset.UtcNow)
+            {
+                _logger?.LogInformation(
+                    "Skipping per-run writable system root for {Run}: the previous startup attempt failed; retry after {RetryAfter:o}.",
+                    runKey,
+                    failure.RetryAfter);
+                return null;
+            }
+
+            _writableSystemRootFailures.TryRemove(new KeyValuePair<string, WritableSystemRootFailure>(runKey, failure));
+        }
+
         if (_writableSystemRoots.Count >= _maxWritableSystemRoots)
             ReapStaleWritableSystemRoots();
 
@@ -717,7 +752,12 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
         var holder = StartWritableSystemRootHolder(runKey);
         if (holder is null)
+        {
+            _writableSystemRootFailures[runKey] = new WritableSystemRootFailure(
+                DateTimeOffset.UtcNow + WritableSystemRootFailureBackoff);
             return null;
+        }
+        _writableSystemRootFailures.TryRemove(runKey, out _);
         if (_writableSystemRoots.TryAdd(runKey, holder))
             return holder.Id;
 
@@ -726,6 +766,26 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         return _writableSystemRoots.TryGetValue(runKey, out var winner) && !winner.HasExited
             ? winner.Id
             : null;
+    }
+
+    internal static bool CommandMayRequireWritableSystemRoot(SandboxCommand command)
+    {
+        if (command.DirectExecution is { } directExecution)
+            return IsWritableSystemRootExecutable(directExecution.Executable);
+
+        return !string.IsNullOrWhiteSpace(command.CommandLine)
+               && WritableSystemRootShellCommandPattern.IsMatch(command.CommandLine);
+    }
+
+    private static bool IsWritableSystemRootExecutable(string executable)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+            return false;
+
+        var trimmed = executable.Trim().Trim('"', '\'');
+        var slash = trimmed.LastIndexOfAny(['/', '\\']);
+        var name = slash >= 0 ? trimmed[(slash + 1)..] : trimmed;
+        return WritableSystemRootExecutables.Contains(name, StringComparer.Ordinal);
     }
 
     private Process? StartWritableSystemRootHolder(string runKey)

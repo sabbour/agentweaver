@@ -322,6 +322,41 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   return 'unknown';
 }
 
+function isActiveOrchPhase(phase: OrchPhase): boolean {
+  return phase === 'drafting_outcome'
+    || phase === 'dispatching'
+    || phase === 'awaiting_assembly'
+    || phase === 'assembling'
+    || phase === 'build_test'
+    || phase === 'rai'
+    || phase === 'in_review'
+    || phase === 'merge'
+    || phase === 'scribe';
+}
+
+function isTerminalOrParkedOrchPhase(phase: OrchPhase): boolean {
+  return phase === 'complete'
+    || phase === 'delegated'
+    || phase === 'failed'
+    || phase === 'blocked'
+    || phase === 'needs_resolution'
+    || phase === 'declined';
+}
+
+function isIneligibleSubtasksReason(reason: string | undefined | null): boolean {
+  return /(?:^|\b)ineligible_subtasks(?:\b|\s*\[)/i.test(reason ?? '');
+}
+
+function normalizeCoordinatorReasonForPhase(reason: string | undefined | null, phase: OrchPhase): string | undefined {
+  if (!reason || reason.trim() === '') return undefined;
+  if (isIneligibleSubtasksReason(reason)) {
+    return normalizeAssemblyBlockedReason(reason) ?? "Waiting on subtasks that aren't ready to assemble.";
+  }
+  if (phase === 'blocked') return normalizeAssemblyBlockedReason(reason);
+  if (phase === 'failed' || phase === 'needs_resolution' || phase === 'declined') return reason;
+  return undefined;
+}
+
 function outcomePlanRedraftIsActive(
   events: RunStreamEvent[],
   runStatus: RunStatus | undefined,
@@ -473,6 +508,7 @@ export function normalizeAssemblyBlockedReason(reason: string | undefined | null
       ? `Waiting on 1 subtask that isn't ready to assemble (${list}).`
       : `Waiting on ${ids.length} subtasks that aren't ready to assemble (${list}).`;
   }
+  if (isIneligibleSubtasksReason(stripped)) return "Waiting on subtasks that aren't ready to assemble.";
   return stripped.replace(/_/g, ' ');
 }
 
@@ -628,7 +664,7 @@ function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null)
   return probeState.key === probeKey ? probeState.status : 'warming';
 }
 
-// Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
+// Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status, except an active coordinator_status overrides stale terminal/parked events.
 function deriveOrchState(
   events: RunStreamEvent[],
   statusField: string | undefined,
@@ -679,6 +715,17 @@ function deriveOrchState(
       };
     }
   }
+  const fieldPhase = normalizePhase(statusField);
+  if (winner && fieldPhase !== 'unknown' && isActiveOrchPhase(fieldPhase) && isTerminalOrParkedOrchPhase(winner.phase)) {
+    return {
+      phase: fieldPhase,
+      reason: normalizeCoordinatorReasonForPhase(reasonField, fieldPhase),
+      ineligibleSubtasks: reasonField && isIneligibleSubtasksReason(reasonField)
+        ? parseIneligibleIdsFromReason(reasonField).map((id) => ({ id }))
+        : undefined,
+      sourceLabel: 'run status field',
+    };
+  }
   if (winner) {
     const rawFiles = winner.payload['conflictingFiles'] ?? winner.payload['conflicting_files'];
     const conflictFiles = Array.isArray(rawFiles)
@@ -726,14 +773,11 @@ function deriveOrchState(
       updatedAt: readEventTimestamp(latestOutcomeDrafting.payload),
     };
   }
-  const fieldPhase = normalizePhase(statusField);
   if (fieldPhase !== 'unknown') {
-    // #97: when the live blocked stream event was evicted (reload/reconnect) the only surviving signal
-    // is the persisted status/reason field — normalize the `ineligible_subtasks [ids]` code here too so
-    // the reason line never degrades back to the opaque raw code.
-    const normalizedFieldReason = fieldPhase === 'blocked'
-      ? normalizeAssemblyBlockedReason(reasonField)
-      : reasonField ?? undefined;
+    // #97/#1344: when the live blocked stream event was evicted (reload/reconnect) the only surviving
+    // signal is the persisted status/reason field. Normalize ineligible-subtask reasons as waiting
+    // context, but do not carry stale terminal reasons onto an active coordinator phase.
+    const normalizedFieldReason = normalizeCoordinatorReasonForPhase(reasonField, fieldPhase);
     return {
       phase: fieldPhase,
       reason: normalizedFieldReason,
@@ -938,6 +982,19 @@ function deriveCoordinatorRunViewState(
   }
 
   const orchBucket = bucketForOrchPhase(orch.phase);
+  if (status === 'in_progress'
+    && (orchBucket === 'failed' || orchBucket === 'completed')) {
+    return {
+      bucket: 'running',
+      label: runStatusLabel(status),
+      reason: orch.reason,
+      sourceLabel: 'run status field',
+      terminal: false,
+      canRetry: false,
+      canStop: true,
+      canToggleAutomation: true,
+    };
+  }
   if (orchBucket !== 'unknown') {
     return {
       bucket: orchBucket,

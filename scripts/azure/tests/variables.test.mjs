@@ -194,7 +194,9 @@ test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {
       KEYVAULT_NAME: TEST_KEYVAULT_NAME,
       ACR_BUILD_TIMEOUT_MS: "1800000",
       ACR_IMPORT_TIMEOUT_MS: "600000",
+      ACR_UNTAG_TIMEOUT_MS: "60000",
       ACR_QUERY_TIMEOUT_MS: "600000",
+      ACR_IMPORT_CONCURRENCY: "2",
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
@@ -202,7 +204,9 @@ test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {
   });
   assert.equal(vars.ACR_BUILD_TIMEOUT_MS, "1800000");
   assert.equal(vars.ACR_IMPORT_TIMEOUT_MS, "600000");
+  assert.equal(vars.ACR_UNTAG_TIMEOUT_MS, "60000");
   assert.equal(vars.ACR_QUERY_TIMEOUT_MS, "600000");
+  assert.equal(vars.ACR_IMPORT_CONCURRENCY, "2");
 });
 
 test("resolveVariables: env overrides beat defaults for every field", async () => {

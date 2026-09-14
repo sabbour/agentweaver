@@ -12,7 +12,6 @@
 //
 //   - `az acr import --force`  -- re-importing the same source to the same tag
 //                                 converges on the same digest.
-//   - `az acr repository untag` -- removing an already-removed tag is a no-op.
 //   - read-only queries (`show`, `show-manifests`) -- no remote mutation at all.
 //
 // Each call site documents its own idempotency justification. Do not wrap a
