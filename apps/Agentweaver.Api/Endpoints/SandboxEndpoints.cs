@@ -140,9 +140,18 @@ public static class SandboxEndpoints
             var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
             using var publicationLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, runCt);
             var published = false;
+            var leased = false;
             try
             {
-                if (!await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
+                // Claim the publication lease before any slow work. While it is held, a run that
+                // finishes its agent work cannot terminalize out from under the publication (#1315).
+                // A refused lease means the run is already terminal, which is the same conflict the
+                // active-run pre-read reported before, now decided in one atomic step.
+                leased = await runStore.TryBeginPreviewPublicationAsync(
+                    parsedRunId,
+                    DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                    publicationLifetime.Token).ConfigureAwait(false);
+                if (!leased || !await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
                 {
                     const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
                     EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
@@ -187,6 +196,21 @@ public static class SandboxEndpoints
             }
             finally
             {
+                if (leased)
+                {
+                    using var release = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    try
+                    {
+                        await runStore.EndPreviewPublicationAsync(parsedRunId, release.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The lease expires on its own, so a failed release only delays deferred
+                        // terminal transitions. It must never mask the publication's own result.
+                        logger.LogWarning(ex, "Failed to release preview publication lease for run {RunId}", runId);
+                    }
+                }
+
                 if (!published && !string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
                 {
                     using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -756,6 +780,7 @@ public static class SandboxEndpoints
         ILogger logger,
         CancellationToken ct)
     {
+        var leased = false;
         try
         {
             var result = await attempt.Completion.ConfigureAwait(false);
@@ -782,6 +807,25 @@ public static class SandboxEndpoints
 
             if (result.Outcome == PreviewApprovalOutcome.Approved)
             {
+                // Hold the run active for the length of the publication, exactly as the direct
+                // publish endpoint does (#1315). A refused lease means the run went terminal
+                // between the check above and here.
+                leased = await runStore.TryBeginPreviewPublicationAsync(
+                    run.Id,
+                    DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                    ct).ConfigureAwait(false);
+                if (!leased)
+                {
+                    await TryStopRetainedProcessAsync(
+                        runId, retry.PreviewRunnerSessionId, "run_terminal",
+                        previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+                    EmitPreviewFailure(
+                        streamStore, logger, runId, retry.TargetPort, "registration_failed",
+                        "The run became terminal before preview approval completed.",
+                        retry.PreviewRunnerSessionId);
+                    return;
+                }
+
                 if (!string.IsNullOrWhiteSpace(retry.PreviewRunnerSessionId))
                 {
                     var bearer = await ResolveRetainedProcessBearerAsync(
@@ -883,6 +927,21 @@ public static class SandboxEndpoints
                 retry.TargetPort,
                 "registration_failed",
                 "Preview approval retry failed unexpectedly.");
+        }
+        finally
+        {
+            if (leased)
+            {
+                using var release = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                try
+                {
+                    await runStore.EndPreviewPublicationAsync(run.Id, release.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to release preview publication lease for run {RunId}", runId);
+                }
+            }
         }
     }
 

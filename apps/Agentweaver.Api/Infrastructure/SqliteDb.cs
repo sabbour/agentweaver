@@ -102,6 +102,9 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_claim_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_pod_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_namespace TEXT;", ct);
+        // #1315: set while a preview publication is in flight so terminalization defers until the
+        // publication commits its ready events or the lease expires.
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN preview_publication_lease_until TEXT;", ct);
 
         // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
