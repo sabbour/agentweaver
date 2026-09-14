@@ -679,20 +679,20 @@ describe('ProjectSettingsPage', () => {
     expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
   });
 
-  it('validates the preview DNS convergence deadline before calling the API', async () => {
+  it('validates the preview infrastructure convergence deadline before calling the API', async () => {
     renderPage('proj-1');
     await screen.findByText('Rename project');
     fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
 
     const input = await screen.findByRole('spinbutton', {
-      name: 'Preview DNS convergence deadline in seconds',
+      name: 'Preview infrastructure convergence deadline in seconds',
     });
     expect((input as HTMLInputElement).value).toBe('600');
     fireEvent.change(input, { target: { value: '59' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save preview settings' }));
 
     expect(await screen.findByText(
-      'DNS convergence deadline must be a whole number between 60 and 3600 seconds.',
+      'Infrastructure convergence deadline must be a whole number between 60 and 3600 seconds.',
     )).toBeDefined();
     expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
   });

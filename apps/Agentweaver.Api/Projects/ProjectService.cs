@@ -281,7 +281,7 @@ public sealed class ProjectService
                 "Preview lifetime must be between 1 and 1440 minutes.");
         if (dnsConvergenceTimeoutSeconds is < 60 or > 3600)
             throw new ArgumentOutOfRangeException(nameof(dnsConvergenceTimeoutSeconds),
-                "Preview DNS convergence timeout must be between 60 and 3600 seconds.");
+                "Preview infrastructure convergence timeout must be between 60 and 3600 seconds.");
 
         var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
         if (project is null) return false;
