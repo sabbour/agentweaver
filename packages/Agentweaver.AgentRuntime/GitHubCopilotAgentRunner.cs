@@ -347,6 +347,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            UnattendedRun = IsUnattendedRun(runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
         };
         var toolContext = new SandboxToolContext(
@@ -1009,6 +1010,18 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// Falls back to truncation if the input is not a valid absolute URI.
     /// </summary>
+    /// <summary>
+    /// A run created with <c>auto-approve-tools</c> or <c>autopilot</c> has no operator watching
+    /// for approval prompts. Used to tailor the shell HITL refusal so an unattended run rewrites a
+    /// blocked destructive command instead of spinning on it (#1314).
+    /// </summary>
+    private bool IsUnattendedRun(string runId)
+    {
+        if (_runOptions is null) return false;
+        var options = _runOptions.Get(runId);
+        return options.AutoApproveTools || options.Autopilot;
+    }
+
     internal static string SanitizeUrl(string rawUrl)
     {
         if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))
