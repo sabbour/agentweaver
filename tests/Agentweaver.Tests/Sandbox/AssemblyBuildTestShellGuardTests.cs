@@ -873,6 +873,105 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             NullLogger<CopilotAIAgent>.Instance);
     }
 
+    [Fact]
+    public async Task Unattended_run_is_told_to_rewrite_a_blocked_destructive_command()
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var events = new List<(string Type, object Payload)>();
+        var context = BuildContext(
+            executor,
+            tracker,
+            rejectDestructiveCommands: false,
+            unattendedRun: true,
+            emitEvent: (type, payload) => events.Add((type, payload)));
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "rm -rf scaffold" }));
+
+        // The gate still holds — destructive shell is never auto-approved.
+        executor.ExecuteCalls.Should().Be(0);
+
+        var text = result?.ToString();
+        text.Should().Contain("Do NOT retry this command as-is");
+        text.Should().NotContain("After approval, retry this command");
+
+        events.Should().ContainSingle().Which.Type.Should().Be(EventTypes.ShellApprovalRequired);
+        events[0].Payload.Should().BeEquivalentTo(new { unattended = true }, o => o.ExcludingMissingMembers());
+    }
+
+    [Fact]
+    public async Task Attended_run_is_still_told_to_retry_after_approval()
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var events = new List<(string Type, object Payload)>();
+        var context = BuildContext(
+            executor,
+            tracker,
+            rejectDestructiveCommands: false,
+            unattendedRun: false,
+            emitEvent: (type, payload) => events.Add((type, payload)));
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "rm -rf scaffold" }));
+
+        executor.ExecuteCalls.Should().Be(0);
+        result?.ToString().Should().Contain("After approval, retry this command");
+        events.Should().ContainSingle().Which.Type.Should().Be(EventTypes.ShellApprovalRequired);
+        events[0].Payload.Should().BeEquivalentTo(new { unattended = false }, o => o.ExcludingMissingMembers());
+    }
+
+    [Fact]
+    public async Task Unattended_run_does_not_bypass_an_explicit_operator_approval_policy()
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var events = new List<(string Type, object Payload)>();
+        var context = BuildContext(
+            executor,
+            tracker,
+            rejectDestructiveCommands: false,
+            requireApprovalForAllShell: true,
+            unattendedRun: true,
+            emitEvent: (type, payload) => events.Add((type, payload)));
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git status" }));
+
+        // RequireApprovalForAllShell is an explicit operator policy: a run-level flag must not
+        // relax it, and the agent must keep waiting for a real approval.
+        executor.ExecuteCalls.Should().Be(0);
+        result?.ToString().Should().Contain("After approval, retry this command");
+        events[0].Payload.Should().BeEquivalentTo(new { unattended = false }, o => o.ExcludingMissingMembers());
+    }
+
+    [Fact]
+    public async Task Unattended_run_still_hard_rejects_destructive_commands_in_the_build_test_gate()
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(executor, tracker, rejectDestructiveCommands: true, unattendedRun: true);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "rm -rf node_modules" }));
+
+        result?.ToString().Should().Contain("rejected");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
     private SandboxToolContext BuildContext(
         ISandboxExecutor executor,
         ShellExecutionTracker tracker,
@@ -882,6 +981,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         string[]? destructivePatterns = null,
         bool rejectDestructiveCommands = true,
         bool requireApprovalForAllShell = false,
+        bool unattendedRun = false,
+        Action<string, object>? emitEvent = null,
         Func<string, bool>? isCommandApproved = null) =>
         new(
             AgentId: "agent",
@@ -897,11 +998,13 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 RejectBackgroundCommands = true,
                 RejectDestructiveCommands = rejectDestructiveCommands,
                 RequireApprovalForAllShell = requireApprovalForAllShell,
+                UnattendedRun = unattendedRun,
                 MaximumTimeoutMs = 600_000,
                 RepositoryAccessToken = repositoryAccessToken,
             },
             Logger: NullLogger.Instance,
             ShellExecutionTracker: tracker,
+            EmitEvent: emitEvent,
             IsCommandApproved: isCommandApproved,
             ScratchDirectory: scratchDirectory);
 
