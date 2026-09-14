@@ -1077,7 +1077,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         ModelId       = r.ModelId,
         Result        = r.Result,
         CoordinatorStatus = coordinatorStatuses.GetValueOrDefault(r.Id.ToString()),
-        CoordinatorStatusReason = isCoordinator ? r.Result : null,
+        CoordinatorStatusReason = isCoordinator ? EndpointHelpers.CoordinatorStatusReasonForProjection(r, coordinatorStatuses.GetValueOrDefault(r.Id.ToString())) : null,
         ArchivedAt = r.ArchivedAt,
         };
     }).ToList();
