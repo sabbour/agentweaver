@@ -52,6 +52,13 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: OAUTH_PUBLIC_ORIGIN
+            - name: DataProtection__ApplicationName
+              value: agentweaver
+            - name: DataProtection__KeyVault__VaultUri
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: KEYVAULT_URI
           volumeMounts: []
           resources:
             requests:

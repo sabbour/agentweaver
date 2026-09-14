@@ -188,6 +188,10 @@ public sealed record TraceSpanAttributesDto
     [JsonPropertyName("toolName")] public string? ToolName { get; init; }
     [JsonPropertyName("toolCallId")] public string? ToolCallId { get; init; }
     [JsonPropertyName("toolSuccess")] public bool? ToolSuccess { get; init; }
+    [JsonPropertyName("toolInput")] public string? ToolInput { get; init; }
+    [JsonPropertyName("toolInputState")] public string? ToolInputState { get; init; }
+    [JsonPropertyName("toolOutput")] public string? ToolOutput { get; init; }
+    [JsonPropertyName("toolOutputState")] public string? ToolOutputState { get; init; }
     [JsonPropertyName("policyDecision")] public string? PolicyDecision { get; init; }
     [JsonPropertyName("authorizationDecision")] public string? AuthorizationDecision { get; init; }
     [JsonPropertyName("policyShellEnabled")] public bool? PolicyShellEnabled { get; init; }

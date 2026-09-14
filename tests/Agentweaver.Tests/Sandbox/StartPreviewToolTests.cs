@@ -289,7 +289,7 @@ public sealed class StartPreviewToolTests
 
         var calls = new List<(string CallId, string ToolName, object? Args)>();
         var results = new List<(string CallId, string Content)>();
-        var spanStarts = new List<(string CallId, string ToolName, DateTimeOffset? Timestamp)>();
+        var spanStarts = new List<(string CallId, string ToolName, object? Args, DateTimeOffset? Timestamp)>();
         var spanCompletes = new List<(string CallId, bool Success, string? Error, DateTimeOffset? Timestamp)>();
 
         var wrapped = new CopilotAIAgent.InstrumentedCustomAIFunction(
@@ -297,7 +297,7 @@ public sealed class StartPreviewToolTests
             emitToolCallOnce: (callId, toolName, args) => calls.Add((callId, toolName, args)),
             emitToolResultOnce: (callId, content) => results.Add((callId, content)),
             emitToolErrorOnce: (_, _) => throw new InvalidOperationException("should not error on success"),
-            startToolSpan: (callId, toolName, timestamp) => spanStarts.Add((callId, toolName, timestamp)),
+            startToolSpan: (callId, toolName, args, timestamp) => spanStarts.Add((callId, toolName, args, timestamp)),
             completeToolSpan: (callId, success, error, timestamp, _) => spanCompletes.Add((callId, success, error, timestamp)));
 
         var result = (await wrapped.InvokeAsync(new AIFunctionArguments(
@@ -312,6 +312,7 @@ public sealed class StartPreviewToolTests
         callId.Should().NotBeNullOrEmpty();
         results[0].CallId.Should().Be(callId, because: "the span tag and RunEvents must share one id for frontend correlation");
         spanStarts[0].CallId.Should().Be(callId);
+        spanStarts[0].Args.Should().NotBeNull();
         spanCompletes[0].CallId.Should().Be(callId);
         spanStarts[0].Timestamp.Should().NotBeNull();
         spanCompletes[0].Timestamp.Should().NotBeNull();
@@ -339,7 +340,7 @@ public sealed class StartPreviewToolTests
             emitToolCallOnce: (callId, _, _) => calls.Add(callId),
             emitToolResultOnce: (_, _) => throw new InvalidOperationException("should not succeed"),
             emitToolErrorOnce: (_, message) => errorMessage = message,
-            startToolSpan: (_, _, _) => { },
+            startToolSpan: (_, _, _, _) => { },
             completeToolSpan: (_, success, error, _, _) => spanCompletes.Add((success, error)));
 
         var act = async () => await wrapped.InvokeAsync(new AIFunctionArguments());

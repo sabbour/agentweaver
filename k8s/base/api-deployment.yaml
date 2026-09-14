@@ -188,6 +188,8 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: OAUTH_PUBLIC_ORIGIN
+            - name: DataProtection__ApplicationName
+              value: agentweaver
             - name: Auth__OAuth__ForwardedHeaders__TrustedNetworks
               valueFrom:
                 configMapKeyRef:
@@ -287,6 +289,11 @@ spec:
             # WorkloadIdentityCredential resolves automatically from the webhook-injected
             # AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE env vars.
             - name: Auth__KeyVault__Uri
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: KEYVAULT_URI
+            - name: DataProtection__KeyVault__VaultUri
               valueFrom:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
