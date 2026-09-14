@@ -367,9 +367,9 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(title.textContent).toBe('Orchestration');
     expect(progress.textContent).toContain('tasks');
 
-    // The Details disclosure was removed: run id is in the breadcrumb, failure reason is in the rail.
+    // The Details disclosure was removed: primary run identity is visible without burying state.
     expect(screen.queryByTestId('run-chrome-toggle')).toBeNull();
-    expect(screen.queryByTestId('run-metadata')).toBeNull();
+    expect(screen.getByTestId('run-metadata').textContent).toContain('Run coord-run-1');
     expect(screen.queryByTestId('run-status-details')).toBeNull();
 
     const titleStyle = getComputedStyle(title);

@@ -153,6 +153,13 @@ changed files appear through `GET /api/runs/{id}/assembly/files` once assembly h
 
 You see the **topology view** — a live graph of the entire orchestration.
 
+The run header keeps the operator-facing identity first: status, run ID, start
+time, progress, elapsed time, and actions. The original prompt appears below
+that metadata at a readable width. Long prompts are collapsed by default with
+**Show more** / **Show less** controls; expanding keeps the full prompt
+selectable and preserves paragraph breaks, line breaks, and inline command
+snippets.
+
 The graph shows:
 
 - **Coordinator node** at the center

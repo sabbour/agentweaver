@@ -199,6 +199,75 @@ function LocationProbe() {
 }
 
 describe('CoordinatorRunPage — unified coordinator graph view', () => {
+  it('clamps a long run prompt by default and expands without losing content', async () => {
+    const longPrompt = [
+      'Audit the preview stack from API routes through the deployed UI and identify the smallest safe fix.',
+      'Validate with the existing web tests, avoid cluster mutations, and keep the run evidence copyable for handoff.',
+      "If you need a live check, use 'node src/server.js & pid=$!; sleep 2; curl -s localhost:5173/health; kill $pid' and report the exact command output.",
+      'Then summarize the user impact, the validation evidence, and the risks that remain for the release captain.',
+      'Coordinate with sibling agents only through the issue thread and do not touch their worktrees.',
+      'This intentionally long prompt should not bury the actual run status, run id, or start time.',
+    ].join('\n\n');
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: longPrompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      started_at: '2026-07-07T00:01:00.000Z',
+      ended_at: null,
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('false');
+    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('4');
+    expect(screen.getByTestId('run-metadata').textContent).toContain('Run coord-run-1');
+    expect(screen.getByTestId('run-metadata').textContent).toContain('Started');
+    expect((screen.getByTestId('run-header').textContent ?? '').indexOf('Run coord-run-1')).toBeLessThan(
+      (screen.getByTestId('run-header').textContent ?? '').indexOf(longPrompt.slice(0, 40)),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more run prompt' }));
+
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('true');
+    expect(promptBody.hasAttribute('data-collapsed-lines')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Show less run prompt' })).toBeDefined();
+  });
+
+  it('does not show a prompt disclosure for a short run prompt', async () => {
+    const shortPrompt = 'Fix the preview button copy.';
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: shortPrompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect((await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 })).textContent).toBe(shortPrompt);
+    expect(screen.queryByRole('button', { name: 'Show more run prompt' })).toBeNull();
+  });
+
+  it('preserves run prompt newlines and renders inline shell snippets as code', async () => {
+    const shellSnippet = "'node src/server.js & pid=$!; sleep 2; curl -s localhost:5173/health; kill $pid'";
+    const prompt = `Check the local preview.\n\nRun ${shellSnippet}\nThen report readiness.`;
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: prompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
+    expect(promptBody.textContent).toBe(prompt);
+    expect(getComputedStyle(promptBody).whiteSpace).toBe('pre-wrap');
+    expect(within(promptBody).getByText(shellSnippet, { selector: 'code' })).toBeDefined();
+  });
+
   it('navigates to the run trace deep link from the "View trace" header button', async () => {
     render(
       <AzureFluentProvider density="compact">
