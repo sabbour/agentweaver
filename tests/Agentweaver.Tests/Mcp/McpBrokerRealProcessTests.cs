@@ -11,6 +11,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Mcp;
 using Agentweaver.Tests.Assistant;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -37,6 +38,8 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
     private readonly string _origin;
     private readonly int _mcpPort = GetFreeTcpPort();
     private Process? _mcpProcess;
+    private string? _mcpDataProtectionKeysDirectory;
+    private string? _mcpDataProtectionApplicationName;
     private string? _lastApiAuthorization;
     private string? _jwksOverride;
 
@@ -96,6 +99,17 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
 
     private async Task StartMcpProcessAsync()
     {
+        _mcpProcess = await StartMcpProcessAsync(
+            _mcpPort,
+            _mcpDataProtectionKeysDirectory,
+            _mcpDataProtectionApplicationName);
+    }
+
+    private async Task<Process> StartMcpProcessAsync(
+        int port,
+        string? dataProtectionKeysDirectory,
+        string? dataProtectionApplicationName)
+    {
         var mcpDll = FindMcpAssemblyPath();
         var startInfo = new ProcessStartInfo("dotnet", $"\"{mcpDll}\"")
         {
@@ -106,26 +120,30 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         };
         startInfo.Environment["DOTNET_ENVIRONMENT"] = "Development";
         startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
-        startInfo.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{_mcpPort}";
+        startInfo.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
         startInfo.Environment["AGENTWEAVER_API_URL"] = _origin;
         startInfo.Environment["Auth__OAuth__PublicOrigin"] = _origin;
+        if (!string.IsNullOrWhiteSpace(dataProtectionKeysDirectory))
+            startInfo.Environment["DataProtection__KeysDirectory"] = dataProtectionKeysDirectory;
+        if (!string.IsNullOrWhiteSpace(dataProtectionApplicationName))
+            startInfo.Environment["DataProtection__ApplicationName"] = dataProtectionApplicationName;
 
-        _mcpProcess = Process.Start(startInfo);
-        _mcpProcess.Should().NotBeNull();
-        _ = _mcpProcess!.StandardOutput.ReadToEndAsync();
-        _ = _mcpProcess.StandardError.ReadToEndAsync();
+        var process = Process.Start(startInfo);
+        process.Should().NotBeNull();
+        _ = process!.StandardOutput.ReadToEndAsync();
+        _ = process.StandardError.ReadToEndAsync();
 
         using var client = new HttpClient();
-        var health = new Uri($"http://127.0.0.1:{_mcpPort}/healthz");
+        var health = new Uri($"http://127.0.0.1:{port}/healthz");
         for (var attempt = 0; attempt < 60; attempt++)
         {
-            if (_mcpProcess.HasExited)
-                throw new InvalidOperationException($"MCP process exited with code {_mcpProcess.ExitCode}.");
+            if (process.HasExited)
+                throw new InvalidOperationException($"MCP process exited with code {process.ExitCode}.");
             try
             {
                 using var response = await client.GetAsync(health);
                 if (response.IsSuccessStatusCode)
-                    return;
+                    return process;
             }
             catch (HttpRequestException)
             {
@@ -141,6 +159,16 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         await _authority.StopAsync();
         await _authority.DisposeAsync();
         _trustedRsa.Dispose();
+    }
+
+    private async Task RestartMcpProcessAsync(
+        string? dataProtectionKeysDirectory,
+        string? dataProtectionApplicationName = null)
+    {
+        await StopMcpProcessAsync();
+        _mcpDataProtectionKeysDirectory = dataProtectionKeysDirectory;
+        _mcpDataProtectionApplicationName = dataProtectionApplicationName;
+        await StartMcpProcessAsync();
     }
 
     private async Task StopMcpProcessAsync()
@@ -307,6 +335,105 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         jwt.Subject.Should().Be(AssistantWebApplicationFactory.TestUser);
     }
 
+    [Fact]
+    public async Task UnknownMcpSessionId_ReturnsNotFound()
+    {
+        using var client = CreateClient();
+        using var response = await PostToolsListAsync(client, CreateToken(), "not-a-valid-session-id");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task McpSessionIdProtectedByRetiredKey_ReturnsNotFound()
+    {
+        var oldKeys = CreateTempDirectory("agentweaver-mcp-old-keys");
+        var newKeys = CreateTempDirectory("agentweaver-mcp-new-keys");
+        try
+        {
+            await RestartMcpProcessAsync(oldKeys);
+            using var client = CreateClient();
+            var token = CreateToken();
+            using var initialize = await PostInitializeAsync(client, token);
+            initialize.StatusCode.Should().Be(HttpStatusCode.OK);
+            var sessionId = ReadSessionId(initialize);
+
+            await RestartMcpProcessAsync(newKeys);
+            using var stale = await PostToolsListAsync(client, token, sessionId);
+
+            stale.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(oldKeys);
+            DeleteDirectoryQuietly(newKeys);
+        }
+    }
+
+    [Fact]
+    public async Task McpSessionSurvivesRestart_WhenKeyRingIsPersisted()
+    {
+        var sharedKeys = CreateTempDirectory("agentweaver-mcp-shared-keys");
+        try
+        {
+            await RestartMcpProcessAsync(sharedKeys);
+            using var client = CreateClient();
+            var token = CreateToken();
+            using var initialize = await PostInitializeAsync(client, token);
+            initialize.StatusCode.Should().Be(HttpStatusCode.OK);
+            var sessionId = ReadSessionId(initialize);
+
+            await RestartMcpProcessAsync(sharedKeys);
+            using var listed = await PostToolsListAsync(client, token, sessionId);
+
+            listed.StatusCode.Should().Be(HttpStatusCode.OK, await listed.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(sharedKeys);
+        }
+    }
+
+    [Fact]
+    public async Task McpInstancesSharingKeyRing_ReadEachOthersSessions_WithStableApplicationName()
+    {
+        var sharedKeys = CreateTempDirectory("agentweaver-mcp-two-instance-keys");
+        Process? second = null;
+        try
+        {
+            await RestartMcpProcessAsync(sharedKeys);
+            var secondPort = GetFreeTcpPort();
+            second = await StartMcpProcessAsync(secondPort, sharedKeys, dataProtectionApplicationName: null);
+
+            using var firstClient = CreateClient();
+            using var secondClient = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{secondPort}"),
+                Timeout = TimeSpan.FromSeconds(10),
+            };
+            var token = CreateToken();
+            using var initialize = await PostInitializeAsync(firstClient, token);
+            initialize.StatusCode.Should().Be(HttpStatusCode.OK);
+            var sessionId = ReadSessionId(initialize);
+
+            using var listed = await PostToolsListAsync(secondClient, token, sessionId);
+
+            listed.StatusCode.Should().Be(HttpStatusCode.OK, await listed.Content.ReadAsStringAsync());
+            Agentweaver.AspNetCore.DataProtection.AgentweaverDataProtection.StableApplicationName
+                .Should().Be("agentweaver");
+        }
+        finally
+        {
+            if (second is { HasExited: false })
+            {
+                second.Kill(entireProcessTree: true);
+                await second.WaitForExitAsync();
+            }
+            second?.Dispose();
+            DeleteDirectoryQuietly(sharedKeys);
+        }
+    }
+
     private HttpClient CreateClient() => new()
     {
         BaseAddress = new Uri($"http://127.0.0.1:{_mcpPort}"),
@@ -327,6 +454,47 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         if (token is not null)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return await client.SendAsync(request);
+    }
+
+    private static async Task<HttpResponseMessage> PostToolsListAsync(
+        HttpClient client,
+        string token,
+        string sessionId)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.TryAddWithoutValidation(McpStaleSessionRecoveryMiddleware.SessionIdHeaderName, sessionId);
+        return await client.SendAsync(request);
+    }
+
+    private static string ReadSessionId(HttpResponseMessage response)
+    {
+        response.Headers.TryGetValues(
+                McpStaleSessionRecoveryMiddleware.SessionIdHeaderName,
+                out var values)
+            .Should().BeTrue("MCP initialize must return the protected session id header");
+        return values!.Single();
+    }
+
+    private static string CreateTempDirectory(string prefix)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void DeleteDirectoryQuietly(string path)
+    {
+        try { Directory.Delete(path, recursive: true); }
+        catch { }
     }
 
     private string ExpectedChallenge(string? error = null)
