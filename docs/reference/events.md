@@ -139,6 +139,26 @@ This event records a successful tool execution. `content` carries the result the
 
 This event records every tool outcome that is not a success. It covers sandbox policy denials — an absolute path, `..` traversal, or a symlink escape — as well as non-policy failures such as a missing file or an I/O error. `errorMessage` explains what went wrong. It never carries the contents of a file outside the sandbox, because a denied tool never runs.
 
+### `tool.execution_pending`
+
+This event is an output-free heartbeat while a sandboxed `run_command` invocation is still active.
+It is correlated with the matching `tool.call` by `toolCallId`, and it stops when the command
+returns, fails, times out, is cancelled, or the sandbox tears down. The payload is limited to timing
+and correlation fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `runId` | string | The run that owns the command. |
+| `toolCallId` | string | Matches the `tool.call`/`tool.result`/`tool.error` correlation id. |
+| `toolName` | string | Always `run_command`. |
+| `startedAtUtc` | string | UTC time the active command slot opened. |
+| `deadlineUtc` | string \| null | Watchdog deadline when one is armed. |
+| `elapsedSeconds` | number | Wall-clock seconds observed when the heartbeat was emitted. |
+
+The heartbeat never carries command text, stdout, stderr, exit code, working directory, or
+environment data. Browser clients consume it from the existing run stream; they must not add
+separate polling.
+
 ### `run.completed`
 
 This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the

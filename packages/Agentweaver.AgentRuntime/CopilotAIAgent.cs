@@ -235,8 +235,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         "AGENTWEAVER_AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
         TimeSpan.FromMinutes(60));
 
-    /// <summary>Cadence for active-shell progress events. Settable for focused tests.</summary>
-    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>
+    /// Cadence for active-shell progress events. Five seconds keeps the trace UI visibly alive
+    /// without turning the run stream into an output channel. Settable for focused tests.
+    /// </summary>
+    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Test seam; production defaults to force-stopping the Copilot CLI process tree.</summary>
     internal Func<Task>? ShellTimeoutTerminator { get; set; }
@@ -1130,15 +1133,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private void EmitShellExecutionPending(ShellExecutionSnapshot snapshot)
     {
-        Emit(EventTypes.ToolExecutionPending, new
-        {
-            toolCallId = snapshot.ToolCallId,
-            commandHash = snapshot.CommandHash,
-            startedAtUtc = snapshot.StartedAt,
-            deadlineUtc = snapshot.Deadline,
-            elapsedSeconds = (DateTimeOffset.UtcNow - snapshot.StartedAt).TotalSeconds,
-        });
+        Emit(EventTypes.ToolExecutionPending, CreateShellExecutionPendingPayload(_runId, snapshot, DateTimeOffset.UtcNow));
     }
+
+    internal static object CreateShellExecutionPendingPayload(
+        string runId,
+        ShellExecutionSnapshot snapshot,
+        DateTimeOffset observedAt) => new
+        {
+            runId,
+            toolCallId = snapshot.ToolCallId,
+            toolName = "run_command",
+            startedAtUtc = snapshot.StartedAt,
+            deadlineUtc = snapshot.Deadline == DateTimeOffset.MaxValue ? null : (DateTimeOffset?)snapshot.Deadline,
+            elapsedSeconds = Math.Max(0, (observedAt - snapshot.StartedAt).TotalSeconds),
+        };
 
     internal async Task HandleShellExecutionTimeoutAsync(ShellExecutionSnapshot snapshot)
     {
@@ -2329,6 +2338,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 : null;
 
             var startTime = DateTimeOffset.UtcNow;
+            using var invocationScope = SandboxToolInvocation.PushToolCallId(callId);
             startToolSpan(callId, inner.Name, startTime);
             emitToolCallOnce(callId, inner.Name, argsDict);
 

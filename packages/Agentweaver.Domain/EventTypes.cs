@@ -75,8 +75,8 @@ public static class EventTypes
     /// <summary>
     /// Heartbeat emitted while an approved shell command remains active. It keeps the child event
     /// stream moving so the coordinator's stall window measures real inactivity rather than a
-    /// healthy silent command. Payload: { toolCallId, commandHash, startedAtUtc, deadlineUtc,
-    /// elapsedSeconds }.
+    /// healthy silent command. Payload is output-free and command-free:
+    /// { runId, toolCallId, toolName, startedAtUtc, deadlineUtc, elapsedSeconds }.
     /// </summary>
     public const string ToolExecutionPending = "tool.execution_pending";
     /// <summary>

@@ -8,6 +8,14 @@ export interface ToolCallDetail {
   content?: unknown;
   errorMessage?: unknown;
   outcome: 'pending' | 'succeeded' | 'failed';
+  activeExecution?: {
+    runId?: string;
+    toolCallId: string;
+    toolName?: string;
+    startedAtUtc?: string;
+    deadlineUtc?: string;
+    elapsedSeconds?: number;
+  };
 }
 
 export interface SafeToolValue {
@@ -103,17 +111,33 @@ export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, Too
   const index = new Map<string, ToolCallDetail>();
   for (const event of events) {
     const payload = event.payload;
-    const callId = typeof payload?.['callId'] === 'string' ? payload['callId'] : undefined;
+    const callId = typeof payload?.['callId'] === 'string'
+      ? payload['callId']
+      : typeof payload?.['toolCallId'] === 'string'
+        ? payload['toolCallId']
+        : undefined;
     if (!callId) continue;
     const entry: ToolCallDetail = index.get(callId) ?? { outcome: 'pending' };
     if (event.type === 'tool.call') {
       if (Object.hasOwn(payload, 'arguments')) entry.arguments = payload['arguments'];
     } else if (event.type === 'tool.result') {
       entry.outcome = 'succeeded';
+      entry.activeExecution = undefined;
       if (Object.hasOwn(payload, 'content')) entry.content = payload['content'];
     } else if (event.type === 'tool.error') {
       entry.outcome = 'failed';
+      entry.activeExecution = undefined;
       if (Object.hasOwn(payload, 'errorMessage')) entry.errorMessage = payload['errorMessage'];
+    } else if (event.type === 'tool.execution_pending') {
+      if (entry.outcome !== 'pending') continue;
+      entry.activeExecution = {
+        runId: typeof payload['runId'] === 'string' ? payload['runId'] : undefined,
+        toolCallId: callId,
+        toolName: typeof payload['toolName'] === 'string' ? payload['toolName'] : undefined,
+        startedAtUtc: typeof payload['startedAtUtc'] === 'string' ? payload['startedAtUtc'] : undefined,
+        deadlineUtc: typeof payload['deadlineUtc'] === 'string' ? payload['deadlineUtc'] : undefined,
+        elapsedSeconds: typeof payload['elapsedSeconds'] === 'number' ? payload['elapsedSeconds'] : undefined,
+      };
     } else {
       continue;
     }
