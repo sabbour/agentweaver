@@ -848,7 +848,8 @@ public sealed class AppInsightsMetricsService
             timeFrom,
             timeTo,
             ct,
-            exception => queryError = DescribeTraceQueryFailure(exception)).ConfigureAwait(false);
+            exception => queryError = DescribeTraceQueryFailure(exception),
+            useWorkspaceCooldown: false).ConfigureAwait(false);
         if (result is null) return new TracePage([], queryError, null, false);
 
         var hasMore = result.Table.Rows.Count > pageSize;
@@ -1031,12 +1032,13 @@ public sealed class AppInsightsMetricsService
         CancellationToken ct,
         Action<Exception>? onError = null,
         QueryFailureSink? failures = null,
+        bool useWorkspaceCooldown = true,
         [CallerMemberName] string context = "")
     {
         var client = GetClient();
         if (client is null) return null;
 
-        if (TryGetWorkspaceCooldown(out var remaining))
+        if (useWorkspaceCooldown && TryGetWorkspaceCooldown(out var remaining))
         {
             var exception = new TelemetryQueryUnavailableException(
                 $"Application Insights workspace queries are paused for approximately {Math.Ceiling(remaining.TotalSeconds)} seconds after a dependency failure.");
@@ -1076,7 +1078,7 @@ public sealed class AppInsightsMetricsService
             var failure = ex is OperationCanceledException
                 ? new TimeoutException($"Application Insights workspace query exceeded the {WorkspaceQueryTimeout.TotalSeconds:0}-second timeout.", ex)
                 : ex;
-            MarkWorkspaceUnavailable();
+            if (useWorkspaceCooldown) MarkWorkspaceUnavailable();
             onError?.Invoke(failure);
             if (failures is not null)
             {
@@ -1086,12 +1088,23 @@ public sealed class AppInsightsMetricsService
             }
             else
             {
-                _logger.LogError(
-                    failure,
-                    "Application Insights query failed in {QueryContext} ({FailureType}); workspace queries are paused for {CooldownSeconds} seconds.",
-                    context,
-                    failure.GetType().Name,
-                    WorkspaceQueryCooldown.TotalSeconds);
+                if (useWorkspaceCooldown)
+                {
+                    _logger.LogError(
+                        failure,
+                        "Application Insights query failed in {QueryContext} ({FailureType}); workspace queries are paused for {CooldownSeconds} seconds.",
+                        context,
+                        failure.GetType().Name,
+                        WorkspaceQueryCooldown.TotalSeconds);
+                }
+                else
+                {
+                    _logger.LogError(
+                        failure,
+                        "Application Insights query failed in {QueryContext} ({FailureType}); workspace cooldown was not changed.",
+                        context,
+                        failure.GetType().Name);
+                }
             }
             return null;
         }
@@ -1121,7 +1134,7 @@ public sealed class AppInsightsMetricsService
 
     private static string DescribeTraceQueryFailure(Exception exception) =>
         exception is TimeoutException
-            ? $"Application Insights trace telemetry did not respond within {WorkspaceQueryTimeout.TotalSeconds:0} seconds. Trace retrieval is paused briefly to protect responsiveness; retry shortly."
+            ? $"Application Insights trace telemetry did not respond within {WorkspaceQueryTimeout.TotalSeconds:0} seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly."
             : exception is TelemetryQueryUnavailableException
                 ? "Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly."
                 : "Application Insights trace telemetry is temporarily unavailable. Retry shortly.";
