@@ -153,12 +153,25 @@ changed files appear through `GET /api/runs/{id}/assembly/files` once assembly h
 
 You see the **topology view** — a live graph of the entire orchestration.
 
+The run header keeps the operator-facing identity first: status, run ID, start
+time, progress, elapsed time, and actions. The original prompt appears below
+that metadata at a readable width. Long prompts are collapsed by default with
+**Show more** / **Show less** controls; expanding keeps the full prompt
+selectable and preserves paragraph breaks, line breaks, and inline command
+snippets.
+
 The graph shows:
 
 - **Coordinator node** at the center
 - **Agent nodes** for each dispatched subtask, labeled with the agent's name and role
 - **Edge status** — running, completed, failed, awaiting
 - **Coordinator status badge** in the header (Dispatching → Awaiting assembly → Assembling → In review → Complete)
+
+The run-level `status` is authoritative. A run reported as **In progress** remains in progress even
+if older coordinator context mentions `assembly_blocked` or `ineligible_subtasks`; that context means
+the coordinator is waiting for subtasks that are not ready to assemble yet. A child whose run status
+is **InProgress** stays running in the topology and run tree, not failed. Failure diagnostics and
+retry guidance appear only after the run reaches a failed terminal status.
 
 ### Comparing topology layouts
 
@@ -260,13 +273,13 @@ an unconditional agent-to-review shortcut.
 
 | Status | Meaning |
 |---|---|
-| **Running** | The run is actively executing |
+| **Running** | The run is actively executing. If the coordinator is waiting on a still-running child, any `ineligible_subtasks` detail is shown as waiting context rather than a failure. |
 | **Awaiting assembly** | All subtasks have finished; coordinator is collecting results |
 | **Assembling** | Coordinator is assembling the combined output |
 | **In review** | Awaiting your approval |
 | **Completed / Merged** | Merged successfully |
 | **No Changes** | The agent finished but made no file changes |
-| **Failed** | Unrecoverable error |
+| **Failed** | Unrecoverable error. The failure banner and run retry guidance are shown only for terminal failed runs. |
 | **Declined** | You rejected the changes |
 | **Merge Failed** | The merge step failed (e.g., a conflict on the target branch) |
 

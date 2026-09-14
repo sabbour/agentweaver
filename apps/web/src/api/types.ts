@@ -1850,6 +1850,10 @@ export interface TraceSpanAttributesDto {
   toolName?: string | null;
   toolCallId?: string | null;
   toolSuccess?: boolean | null;
+  toolInput?: string | null;
+  toolInputState?: 'captured' | 'not_captured' | 'truncated' | 'redacted' | string | null;
+  toolOutput?: string | null;
+  toolOutputState?: 'captured' | 'not_captured' | 'truncated' | 'redacted' | string | null;
   policyDecision?: string | null;
   authorizationDecision?: string | null;
   policyShellEnabled?: boolean | null;

@@ -9,7 +9,7 @@ The deployment is built around five ideas:
 1. **One public HTTPS entry point** routes browser, API, OAuth, and MCP traffic by path.
 2. **Four long-running application workloads** run separately: API, worker, frontend/static host, and MCP server. API and worker share the API image.
 3. **State is explicit**: PostgreSQL Flexible Server holds all application state; the workspace volume is a shared multi-writer file share for worktrees and sandbox files.
-4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, while AgentHost user tokens are resolved on the API side and brokered to the sandbox in `/configure` (the sandbox identity has no Key Vault access, issue #471).
+4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, API and MCP use Key Vault for the shared Data Protection key ring, while AgentHost user tokens are resolved on the API side and brokered to the sandbox in `/configure` (the sandbox identity has no Key Vault access, issue #471).
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
 The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied. `KEYVAULT_NAME` is required environment configuration and has no default.
@@ -20,8 +20,8 @@ At a high level, Agentweaver is a private application stack behind a public Gate
 
 The [shared AKS component map](../diagrams/flagship/canonical-aks-components.png) is the
 single overview; this page does not keep a competing local copy. Its shared-owner
-refresh must reconcile the baseline worker count (two), actual secret consumers
-(API/worker, not MCP), and the absence of direct AgentHost vault access. Until
+refresh must reconcile the baseline worker count (two), CSI secret consumers
+(API/worker), MCP's direct Key Vault use for Data Protection, and the absence of direct AgentHost vault access. Until
 then, use the current workload and identity details below rather than stale
 labels in that reference.
 
@@ -106,7 +106,7 @@ Both are served by a small ASP.NET Core static-file host. The frontend is safe t
 
 ### MCP workload
 
-The MCP server is a separate resource-server process. It exposes the MCP endpoint and validates tokens issued by the API's OAuth authorization server. It uses the internal API service for API calls and JWKS lookup, while its issuer and audience settings are pinned to the public host so token claims match what clients see externally.
+The MCP server is a separate resource-server process. It exposes the MCP endpoint and validates tokens issued by the API's OAuth authorization server. It uses the internal API service for API calls and JWKS lookup, while its issuer and audience settings are pinned to the public host so token claims match what clients see externally. It stores its ASP.NET Core Data Protection key ring in Azure Key Vault, with the stable application name `agentweaver`, so protected MCP session ids survive restarts and work across replicas.
 
 This split keeps MCP protocol concerns out of the frontend and avoids making the API process also serve as the MCP resource server. The cost is that routing, identity, network policy, and OAuth metadata must all agree on which paths belong to the authorization server and which paths belong to the MCP resource server.
 
@@ -163,11 +163,13 @@ loading. The managed identity has Secrets User and Secrets Officer roles; this i
 not exclusively a file-consumer design.
 
 The API and worker read the required API authentication key from the CSI-mounted
-`mcp-api-key` file. MCP mounts no secrets. API and worker have distinct federation
-subjects for `agentweaver-api-identity`; an MCP ServiceAccount annotation alone
-does not establish a configured federation or vault consumer. AgentHost uses the
-separate `agentweaver-agenthost-identity` with no Key Vault roles (issue #471).
-The static `agentweaver-secrets` SecretProviderClass serves API/worker secret mounts.
+`mcp-api-key` file. MCP mounts no secrets, but it uses `SecretClient` through
+workload identity to read and write the shared Data Protection key ring in Key
+Vault. API, MCP and worker have distinct federation subjects for
+`agentweaver-api-identity`; a ServiceAccount annotation alone does not establish
+a configured federation or vault consumer. AgentHost uses the separate
+`agentweaver-agenthost-identity` with no Key Vault roles (issue #471). The static
+`agentweaver-secrets` SecretProviderClass serves API/worker secret mounts.
 
 `sandbox-warmpool-agenthost.yaml` keeps two AgentHost pods pre-warmed in standby. At run launch, the API claims one and sends run-scoped provider, repository, preview, workspace, and turn-authentication data through `/configure`. The AgentHost identity has no Key Vault roles, so the pod does not read the vault directly. There are no per-run SecretProviderClasses, cloned templates, or per-run warm pools to clean up.
 
@@ -175,7 +177,7 @@ Rotation constraint: the CSI driver can refresh mounted API files on a polling i
 
 API-key constraint: `mcp-api-key` remains a **required first-deploy prerequisite**. Run `npm run azure:provision-infra` before the first `npm run azure:deploy-from-local`; without the CSI-delivered key, API authentication and worker loopback calls cannot operate and diagnostics report `key_vault: critical: secret 'mcp-api-key' not found`.
 
-Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `k8s/base/serviceaccount-api.yaml`, `k8s/base/serviceaccount-agenthost.yaml`, `k8s/base/secret-provider-class.yaml`, `k8s/base/api-deployment.yaml`, `apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs`.
+Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `k8s/base/serviceaccount-api.yaml`, `k8s/base/serviceaccount-mcp.yaml`, `k8s/base/serviceaccount-agenthost.yaml`, `k8s/base/secret-provider-class.yaml`, `k8s/base/api-deployment.yaml`, `k8s/base/mcp-deployment.yaml`, `apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs`.
 
 ## Storage and persistence
 
@@ -201,6 +203,8 @@ StorageClass constraint: mount options are immutable. Do not patch a cluster-man
 Primary application state lives in **Azure Database for PostgreSQL Flexible
 Server**, with automated backups and point-in-time restore. Workspace files and
 Key Vault secrets are separate persistence domains and need their own protection.
+Data Protection keys are Key Vault secrets. Azure encrypts them at rest and
+Azure RBAC controls access.
 Do not apply old SQLite `memory.db` backup or RWO/Recreate advice to the current
 RollingUpdate API/worker deployments. The deploy list still contains a legacy
 10Gi RWO data claim; that does not make it the live workspace mount.
@@ -331,6 +335,7 @@ To stand up an equivalent deployment:
 - **AgentHost pod crashes with missing Copilot runtime:** rebuild the AgentHost image with the Dockerfile's `dotnet publish --runtime linux-x64 --self-contained false` so the `GitHub.Copilot.SDK` native binary is copied to `/app/runtimes/linux-x64/native/copilot`.
 - **Workspace mount fails:** inspect RWX Azure Files mount options and permissions; current API/worker RollingUpdate does not use the old RWO/Recreate workspace model.
 - **Sandbox cannot reach package/model endpoints:** Cilium FQDN policy or DNS allowance is missing, stale, or not supported by the cluster dataplane.
+- **MCP returns 404 for a session id:** the client sent an unknown, expired, or undecryptable MCP session id. Start a new MCP session. Check Key Vault access and the `agentweaver-dataprotection-key-*` secrets if this happens right after a deploy.
 - **OAuth clients reject tokens:** issuer/audience/public host values must match exactly between API token minting, MCP validation, and public metadata.
 
 ## Minimal source map

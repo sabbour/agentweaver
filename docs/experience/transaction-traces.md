@@ -36,9 +36,10 @@ trace data for the run yet, the panel shows an empty state.
 The **Attributes** tab lists the typed, allow-listed dimensions returned by the run-traces API for
 the selected span: session/run/project identity; agent and workflow-run identity; operation,
 model, provider, and routing; tool and policy/authorization decisions; sandbox/runtime; token
-usage; and status/error type. Every field is explicit: **Not recorded** means the span predates the
-dimension or Agentweaver did not truthfully have that fact. The API never returns arbitrary
-OpenTelemetry custom dimensions, prompt text, credentials, raw tokens, or raw tool input/output.
+usage; tool-payload capture state; and status/error type. Every field is explicit: **Not
+recorded** means the span predates the dimension or Agentweaver did not truthfully have that fact.
+The API never returns arbitrary OpenTelemetry custom dimensions, prompt text, credentials, raw
+tokens, or unbounded raw tool input/output.
 
 The **Events** tab lists persisted run events using their actual sequence number and type. Every
 newly persisted event has a server-side UTC append timestamp. The API projects that as
@@ -49,13 +50,14 @@ also withheld while their event sequence/type/time remain visible. Expand a payl
 recorded fields are needed.
 
 For an **Execute Tool** span, the detail panel also shows the tool's **Input** and **Output**. These
-come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the span
-by `callId`), not from Application Insights. Objects and JSON-string output are formatted as
-readable JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane
-says **No input** or **No output**; if a value is redacted, it is explicitly marked **Redacted**.
-For `run_command`, these command details start collapsed and require an explicit expansion. The UI
-applies a second, bounded redaction pass before displaying legacy event data, so credentials
-and oversized or deeply nested payloads cannot leak through the inspector.
+prefer the persisted `tool.call` / `tool.result` / `tool.error` run events when they are available
+(matched to the span by `callId`), and otherwise fall back to bounded, redacted payload previews
+carried on the Application Insights span. Objects and JSON-string output are formatted as readable
+JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane says why:
+the payload was not captured, was truncated because it was too large, or was redacted by policy.
+For `run_command`, these command details start collapsed and require an explicit expansion. The
+runtime and UI both redact credentials before displaying payloads, and large payloads are truncated
+with an explicit marker instead of being silently dropped.
 
 While a sandboxed `run_command` is still executing, the same run stream carries
 `tool.execution_pending` heartbeats. The trace row and inspector use those correlated,
@@ -73,10 +75,10 @@ limits an individual error detail to 2,048 characters before the UI receives it.
 Command progress is not inferred from the absence of a terminal result. The current sandbox tool
 uses the executor's buffered `ExecuteAsync` contract, while `StreamAsync` carries output-bearing
 chunks. Replacing one with the other merely to make a timer appear active could alter buffering or
-expose output prematurely. A future live-progress implementation must emit a correlated,
-output-free server-side heartbeat only while the exact command invocation is active, stop it on
-every terminal path, and deliver it over the existing run stream rather than adding browser polling.
-It must not use activity/span telemetry for command text or output.
+expose output prematurely. Live progress therefore uses a correlated, output-free server-side
+heartbeat only while the exact command invocation is active, stops on every terminal path, and
+delivers over the existing run stream rather than browser polling. The command text and final
+output are captured only as bounded, redacted previews or as redacted persisted events.
 
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call

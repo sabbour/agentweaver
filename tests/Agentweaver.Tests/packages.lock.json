@@ -1614,6 +1614,12 @@
           "ModelContextProtocol": "[0.3.0-preview.2, )"
         }
       },
+      "agentweaver.aspnetcore": {
+        "type": "Project",
+        "dependencies": {
+          "Azure.Security.KeyVault.Secrets": "[4.11.0, )"
+        }
+      },
       "agentweaver.agenttools": {
         "type": "Project",
         "dependencies": {
@@ -1628,6 +1634,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.AgentRuntime": "[1.0.0, )",
+          "Agentweaver.AspNetCore": "[1.0.0, )",
           "Agentweaver.Api.Data": "[1.0.0, )",
           "Agentweaver.Api.Migrations.Postgres": "[1.0.0, )",
           "Agentweaver.Domain": "[1.0.0, )",
@@ -1686,6 +1693,7 @@
       "agentweaver.mcp": {
         "type": "Project",
         "dependencies": {
+          "Agentweaver.AspNetCore": "[1.0.0, )",
           "ModelContextProtocol.AspNetCore": "[0.3.0-preview.2, )",
           "OpenIddict.Validation.AspNetCore": "[7.6.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.6.0, )"

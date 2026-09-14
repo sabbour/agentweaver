@@ -15,7 +15,7 @@ import {
   ReactFlow,
 } from '@xyflow/react';
 import { useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 import type {
   KubernetesTopologyDto,
@@ -66,6 +66,9 @@ interface FunctionNode {
   health: NodeHealth;
   iconSrc: string;
   facts: TopologyFact[];
+  resources: KubernetesTopologyNodeDto[];
+  detailLayers: KubernetesTopologyLayer[];
+  detailWarnings?: string[];
   policyBadges?: Array<{ label: string; tone: 'allowed' | 'blocked' }>;
   policies?: PolicyDetail[];
 }
@@ -239,6 +242,57 @@ const useStyles = makeStyles({
     margin: 0,
     overflowWrap: 'anywhere',
   },
+  detailWarning: {
+    padding: tokens.spacingHorizontalS,
+    border: `1px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+    borderRadius: tokens.borderRadiusSmall,
+    color: tokens.colorPaletteMarigoldForeground2,
+    backgroundColor: tokens.colorPaletteMarigoldBackground1,
+    fontSize: tokens.fontSizeBase200,
+  },
+  attentionCallout: {
+    padding: tokens.spacingHorizontalS,
+    border: `1px solid ${tokens.colorPaletteRedBorder2}`,
+    borderRadius: tokens.borderRadiusSmall,
+    color: tokens.colorPaletteRedForeground1,
+    backgroundColor: tokens.colorPaletteRedBackground1,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  detailSection: {
+    display: 'grid',
+    gap: tokens.spacingVerticalXS,
+  },
+  detailSectionTitle: {
+    margin: 0,
+    fontSize: tokens.fontSizeBase300,
+  },
+  detailTable: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: tokens.fontSizeBase200,
+  },
+  detailCell: {
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    textAlign: 'left',
+    verticalAlign: 'top',
+  },
+  mono: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    overflowWrap: 'anywhere',
+  },
+  identifier: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexWrap: 'wrap',
+  },
+  emptyDetail: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
   policyList: {
     listStyleType: 'none',
     display: 'grid',
@@ -295,6 +349,8 @@ function component(
     health: aggregateHealth(resources),
     iconSrc: topologyIcons[id],
     facts,
+    resources,
+    detailLayers: Array.from(new Set([layer, ...resources.map((resource) => resource.layer)])),
   };
 }
 
@@ -316,6 +372,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
   const templates = byType(runtime, 'SandboxTemplate');
   const pools = byType(runtime, 'SandboxWarmPool');
   const claims = byType(runtime, 'SandboxClaim');
+  const sandboxes = byType(runtime, 'Sandbox');
 
   if (runtime.length > 0) {
     components.push(component(
@@ -337,7 +394,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'SandboxTemplate',
       templates,
       plural(templates.length, 'template'),
-      [{ label: 'Function', value: 'Defines the isolated AgentHost sandbox pod shape' }],
+      [],
     ));
     components.push(component(
       'sandbox-pool',
@@ -346,7 +403,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'SandboxWarmPool · scaling',
       pools,
       plural(pools.length, 'warm pool'),
-      [{ label: 'Function', value: 'Keeps sandbox capacity ready for new executions' }],
+      [],
     ));
     components.push(component(
       'sandbox-claim',
@@ -355,16 +412,16 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'SandboxClaim',
       claims,
       plural(claims.length, 'claim'),
-      [{ label: 'Function', value: 'Binds a session execution to an available sandbox' }],
+      [],
     ));
     components.push(component(
       'sandbox',
       'runtime',
       'Sandboxes',
       'Sandbox pod workload',
-      claims,
-      `${claims.length} bound or pending ${claims.length === 1 ? 'sandbox' : 'sandboxes'}`,
-      [{ label: 'Function', value: 'Runs isolated AgentHost execution' }],
+      sandboxes.length > 0 ? sandboxes : claims,
+      `${claims.filter((claim) => claim.details.boundSandbox).length} bound · ${claims.filter((claim) => !claim.details.boundSandbox).length} pending · ${sandboxes.length} sandboxes`,
+      [{ label: 'Isolation', value: sandboxes.some((sandbox) => sandbox.details.runtimeClassName === 'kata-vm-isolation') ? 'Kata VM isolation' : 'Runtime class reported per sandbox' }],
     ));
   }
 
@@ -439,7 +496,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'Deployment workload',
       deployments,
       plural(deployments.length, 'deployment workload'),
-      [{ label: 'Function', value: 'Coordinates platform services and agent execution' }],
+      [{ label: 'Rollouts', value: 'Replica and image detail available in the inspector' }],
     ));
   }
   if (deployments.length > 0 && pods.length > 0) {
@@ -450,7 +507,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'Pod workload',
       pods,
       plural(pods.length, 'running pod'),
-      [{ label: 'Function', value: 'Runs the selected Agentweaver deployment workloads' }],
+      [{ label: 'Restart signal', value: `${pods.reduce((sum, pod) => sum + numericDetail(pod, 'restartCount'), 0)} container restarts` }],
     ));
   }
 
@@ -467,7 +524,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'State storage',
       applicationClaims,
       plural(applicationClaims.length, 'application storage function'),
-      [{ label: 'Function', value: 'Retains Agentweaver application state where provisioned' }],
+      [{ label: 'Storage purpose', value: 'Application state where provisioned' }],
     ));
   }
   if (workspaceClaims.length > 0) {
@@ -478,7 +535,7 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'Shared workspace',
       workspaceClaims,
       plural(workspaceClaims.length, 'artifact workspace'),
-      [{ label: 'Function', value: 'Retains run worktrees, sandbox outputs, and session artifacts' }],
+      [{ label: 'Storage purpose', value: 'Run worktrees, sandbox outputs, and session artifacts' }],
     ));
   }
 
@@ -491,11 +548,64 @@ function buildComponents(topology: KubernetesTopologyDto): FunctionNode[] {
       'Scaling policy',
       autoscaling,
       plural(autoscaling.length, 'scaling policy'),
-      [{ label: 'Function', value: 'Adjusts capacity for Agentweaver workloads' }],
+      [{ label: 'Scaling scope', value: 'Agentweaver workloads' }],
     ));
   }
 
-  return components;
+  const layerByName = new Map(topology.layers.map((layer) => [layer.name, layer]));
+  return components.map((item) => ({
+    ...item,
+    detailWarnings: item.detailLayers
+      .map((layerName) => layerByName.get(layerName))
+      .filter((layer) => layer && layer.status !== 'available' && layer.status !== 'not_requested')
+      .map((layer) => `${capitalize(layer!.name)} detail fetch ${layer!.status === 'partial' ? 'partially failed' : 'failed'}: ${layer!.message}`),
+  }));
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
+}
+
+function numericDetail(resource: KubernetesTopologyNodeDto, key: string): number {
+  const parsed = Number.parseInt(resource.details[key] ?? '0', 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isReadyShort(resource: KubernetesTopologyNodeDto): boolean {
+  const ready = resource.details.ready;
+  if (!ready) return false;
+  const [current, desired] = ready.split('/').map((value) => Number.parseInt(value, 10));
+  return Number.isFinite(current) && Number.isFinite(desired) && current < desired;
+}
+
+function attentionScore(resource: KubernetesTopologyNodeDto): number {
+  return (resource.health === 'critical' ? 100 : resource.health === 'attention' ? 50 : 0)
+    + (isReadyShort(resource) ? 25 : 0)
+    + Math.min(numericDetail(resource, 'restartCount'), 20);
+}
+
+function sortAttentionFirst(resources: KubernetesTopologyNodeDto[]): KubernetesTopologyNodeDto[] {
+  return [...resources].sort((left, right) =>
+    attentionScore(right) - attentionScore(left) ||
+    left.name.localeCompare(right.name));
+}
+
+function formatAgeFromDetails(resource: KubernetesTopologyNodeDto): string {
+  const parsed = Number.parseInt(resource.details.ageSeconds ?? '', 10);
+  if (!Number.isFinite(parsed)) return '—';
+  if (parsed < 60) return `${parsed}s`;
+  if (parsed < 3600) return `${Math.floor(parsed / 60)}m`;
+  if (parsed < 86400) return `${Math.floor(parsed / 3600)}h`;
+  return `${Math.floor(parsed / 86400)}d`;
+}
+
+function field(resource: KubernetesTopologyNodeDto, key: string, fallback = '—'): string {
+  return resource.details[key] || fallback;
+}
+
+function formatTimestamp(value: string): string {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
 }
 
 function topologyEdge(source: string, target: string, tone: EdgeTone = 'default'): Edge {
@@ -570,11 +680,315 @@ function ResourceNode({ data }: NodeProps) {
 
 const nodeTypes = { resource: ResourceNode };
 
+function copyText(value: string): void {
+  void globalThis.navigator?.clipboard?.writeText(value).catch(() => undefined);
+}
+
+function Identifier({
+  value,
+  label,
+  href,
+}: {
+  value?: string | null;
+  label: string;
+  href?: string;
+}) {
+  const styles = useStyles();
+  if (!value || value === '—') return <>—</>;
+  const id = <code className={styles.mono}>{value}</code>;
+  return (
+    <span className={styles.identifier}>
+      {href ? <a href={href}>{id}</a> : id}
+      <Button
+        appearance="subtle"
+        size="small"
+        onClick={() => copyText(value)}
+        aria-label={`Copy ${label} ${value}`}
+      >
+        Copy
+      </Button>
+    </span>
+  );
+}
+
+function DetailTable({
+  label,
+  columns,
+  rows,
+}: {
+  label: string;
+  columns: string[];
+  rows: ReactNode[][];
+}) {
+  const styles = useStyles();
+  return (
+    <table className={styles.detailTable} aria-label={label}>
+      <thead>
+        <tr>
+          {columns.map((column) => (
+            <th key={column} className={styles.detailCell}>{column}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, index) => (
+          <tr key={index}>
+            {row.map((cell, cellIndex) => (
+              <td key={cellIndex} className={styles.detailCell}>{cell}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function EmptyDetail({ title, children }: { title: string; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.emptyDetail}>
+      <strong>{title}</strong>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function restartCell(resource: KubernetesTopologyNodeDto): ReactNode {
+  const restarts = numericDetail(resource, 'restartCount');
+  return restarts > 0
+    ? <Badge appearance="tint" color="danger">{restarts} restarts</Badge>
+    : String(restarts);
+}
+
+function runHref(projectId: string | undefined, runId: string | undefined): string | undefined {
+  return projectId && runId ? `/projects/${encodeURIComponent(projectId)}/orchestrations/${encodeURIComponent(runId)}` : undefined;
+}
+
+function WorkloadPodDetails({ component }: { component: FunctionNode }) {
+  const styles = useStyles();
+  const pods = sortAttentionFirst(component.resources.filter((resource) => resource.type === 'Pod'));
+  const unhealthy = pods.filter((pod) => attentionScore(pod) > 0);
+  const groups = pods.reduce<Record<string, KubernetesTopologyNodeDto[]>>((acc, pod) => {
+    const deployment = field(pod, 'deployment', 'Unowned pods');
+    (acc[deployment] ??= []).push(pod);
+    return acc;
+  }, {});
+
+  if (pods.length === 0) {
+    return <EmptyDetail title="No workload pods">No workload pods were returned for this topology snapshot.</EmptyDetail>;
+  }
+
+  return (
+    <div className={styles.detailSection}>
+      {unhealthy.length > 0 ? (
+        <div role="alert" className={styles.attentionCallout}>
+          {unhealthy.map((pod) => pod.name).join(', ')} need attention. Check readiness and restart counts first.
+        </div>
+      ) : null}
+      {Object.entries(groups).map(([deployment, deploymentPods]) => (
+        <section key={deployment} className={styles.detailSection}>
+          <h4 className={styles.detailSectionTitle}>{deployment}</h4>
+          <DetailTable
+            label={`${deployment} pods`}
+            columns={['Pod', 'Ready', 'Restarts', 'Age', 'Node', 'Runtime', 'Image']}
+            rows={deploymentPods.map((pod) => [
+              <Identifier value={pod.name} label="pod" />,
+              field(pod, 'ready'),
+              restartCell(pod),
+              formatAgeFromDetails(pod),
+              <Identifier value={field(pod, 'nodeName')} label="node" />,
+              field(pod, 'runtimeClassName', 'runc'),
+              field(pod, 'imageTags'),
+            ])}
+          />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function DeploymentDetails({ component }: { component: FunctionNode }) {
+  const deployments = sortAttentionFirst(component.resources.filter((resource) => resource.type === 'Deployment'));
+  if (deployments.length === 0) return <EmptyDetail title="No deployments">No deployment workloads were returned for this topology snapshot.</EmptyDetail>;
+  return (
+    <DetailTable
+      label="Deployment rollout details"
+      columns={['Deployment', 'Desired', 'Ready', 'Available', 'Image', 'Last rollout']}
+      rows={deployments.map((deployment) => [
+        <Identifier value={deployment.name} label="deployment" />,
+        field(deployment, 'replicas', '0'),
+        field(deployment, 'readyReplicas', '0'),
+        field(deployment, 'availableReplicas', '0'),
+        field(deployment, 'imageTags'),
+        deployment.details.lastRolloutUtc ? formatTimestamp(deployment.details.lastRolloutUtc) : 'Not reported',
+      ])}
+    />
+  );
+}
+
+function ClaimDetails({
+  component,
+  projectId,
+  emptyTitle = 'No sandbox claims are active',
+  emptyBody = 'Zero claims is a legitimate idle state: no run is currently waiting for or bound to a sandbox.',
+}: {
+  component: FunctionNode;
+  projectId?: string;
+  emptyTitle?: string;
+  emptyBody?: string;
+}) {
+  const claims = sortAttentionFirst(component.resources.filter((resource) => resource.type === 'SandboxClaim'));
+  if (claims.length === 0) return <EmptyDetail title={emptyTitle}>{emptyBody}</EmptyDetail>;
+  return (
+    <DetailTable
+      label="Sandbox claim details"
+      columns={['Run', 'Subtask', 'Claim', 'Bound pod', 'Phase', 'Age']}
+      rows={claims.map((claim) => {
+        const runId = field(claim, 'runId', '');
+        return [
+          <Identifier value={runId || undefined} label="run" href={runHref(projectId, runId)} />,
+          field(claim, 'subtask'),
+          <Identifier value={claim.name} label="claim" />,
+          <Identifier value={field(claim, 'boundSandbox', '') || undefined} label="pod" />,
+          field(claim, 'phase', claim.health),
+          formatAgeFromDetails(claim),
+        ];
+      })}
+    />
+  );
+}
+
+function PoolDetails({ component }: { component: FunctionNode }) {
+  const pools = sortAttentionFirst(component.resources.filter((resource) => resource.type === 'SandboxWarmPool'));
+  if (pools.length === 0) return <EmptyDetail title="No sandbox warm pools">No SandboxWarmPool objects were returned for this topology snapshot.</EmptyDetail>;
+  return (
+    <DetailTable
+      label="Sandbox warm pool details"
+      columns={['Pool', 'Warm size', 'Available', 'Claimed', 'Template', 'Min / max', 'Recent scale event']}
+      rows={pools.map((pool) => {
+        const desired = field(pool, 'replicas', '0');
+        const ready = field(pool, 'readyReplicas', '0');
+        const available = Number.parseInt(field(pool, 'availableReplicas', ready), 10);
+        const readyCount = Number.parseInt(ready, 10);
+        const claimed = Number.isFinite(available) && Number.isFinite(readyCount)
+          ? Math.max(0, readyCount - available)
+          : 0;
+        return [
+          <Identifier value={pool.name} label="warm pool" />,
+          `${ready}/${desired}`,
+          field(pool, 'availableReplicas', ready),
+          String(claimed),
+          field(pool, 'template'),
+          pool.details.minReplicas || pool.details.maxReplicas
+            ? `${pool.details.minReplicas ?? '—'} / ${pool.details.maxReplicas ?? '—'}`
+            : 'Not reported by SandboxWarmPool',
+          pool.details.lastScaleEvent ? formatTimestamp(pool.details.lastScaleEvent) : 'No scale event reported',
+        ];
+      })}
+    />
+  );
+}
+
+function SandboxDetails({
+  component,
+  claims,
+}: {
+  component: FunctionNode;
+  claims: KubernetesTopologyNodeDto[];
+}) {
+  const sandboxes = sortAttentionFirst(component.resources.filter((resource) => resource.type === 'Sandbox'));
+  const boundNames = new Set(claims.map((claim) => claim.details.boundSandbox).filter(Boolean));
+  const bound = sandboxes.filter((sandbox) => boundNames.has(sandbox.name) || boundNames.has(sandbox.details.podName));
+  const pending = sandboxes.filter((sandbox) => sandbox.health !== 'healthy');
+  if (sandboxes.length === 0) {
+    return <EmptyDetail title="No sandboxes">No Sandbox objects were returned. If claims exist, their bound pod names are still shown in Sandbox claims.</EmptyDetail>;
+  }
+  return (
+    <div>
+      <p>{bound.length} bound · {pending.length} pending · {Math.max(0, sandboxes.length - bound.length - pending.length)} available</p>
+      <DetailTable
+        label="Sandbox runtime details"
+        columns={['Sandbox', 'Pod', 'Node', 'Runtime class', 'Isolation backend', 'Containers', 'Status']}
+        rows={sandboxes.map((sandbox) => [
+          <Identifier value={sandbox.name} label="sandbox" />,
+          <Identifier value={field(sandbox, 'podName', sandbox.name)} label="pod" />,
+          <Identifier value={field(sandbox, 'nodeName')} label="node" />,
+          field(sandbox, 'runtimeClassName', 'runc'),
+          field(sandbox, 'isolationBackend', 'runc'),
+          field(sandbox, 'containers'),
+          boundNames.has(sandbox.name) || boundNames.has(sandbox.details.podName) ? 'bound' : field(sandbox, 'status', sandbox.health),
+        ])}
+      />
+    </div>
+  );
+}
+
+function TemplateDetails({ component }: { component: FunctionNode }) {
+  const templates = component.resources.filter((resource) => resource.type === 'SandboxTemplate');
+  if (templates.length === 0) return <EmptyDetail title="No sandbox template">No SandboxTemplate object was returned for this topology snapshot.</EmptyDetail>;
+  return (
+    <DetailTable
+      label="Sandbox template details"
+      columns={['Template', 'Image', 'Runtime class', 'Requests', 'Limits', 'Mounts', 'Policy']}
+      rows={templates.map((template) => [
+        <Identifier value={template.name} label="template" />,
+        field(template, 'imageTags'),
+        field(template, 'runtimeClassName', 'runc'),
+        field(template, 'resourceRequests'),
+        field(template, 'resourceLimits'),
+        field(template, 'mounts'),
+        field(template, 'policy'),
+      ])}
+    />
+  );
+}
+
+function DetailContent({
+  component,
+  projectId,
+  topology,
+}: {
+  component: FunctionNode;
+  projectId?: string;
+  topology: KubernetesTopologyDto;
+}) {
+  const runtimeClaims = topology.nodes.filter((node) => node.type === 'SandboxClaim');
+  switch (component.id) {
+    case 'workload-pods':
+      return <WorkloadPodDetails component={component} />;
+    case 'control-plane':
+      return <DeploymentDetails component={component} />;
+    case 'agent-execution':
+      return (
+        <ClaimDetails
+          component={component}
+          projectId={projectId}
+          emptyTitle="No sessions are bound to sandbox claims"
+          emptyBody="No run is currently occupying an AgentHost sandbox in this snapshot."
+        />
+      );
+    case 'sandbox-pool':
+      return <PoolDetails component={component} />;
+    case 'sandbox-claim':
+      return <ClaimDetails component={component} projectId={projectId} />;
+    case 'sandbox':
+      return <SandboxDetails component={component} claims={runtimeClaims} />;
+    case 'sandbox-template':
+      return <TemplateDetails component={component} />;
+    default:
+      return null;
+  }
+}
+
 function TopologyInspector({
   component,
+  topology,
+  projectId,
   onClose,
 }: {
   component: FunctionNode;
+  topology: KubernetesTopologyDto;
+  projectId?: string;
   onClose: () => void;
 }) {
   const styles = useStyles();
@@ -588,7 +1002,14 @@ function TopologyInspector({
         action={<Button appearance="subtle" size="small" onClick={onClose}>Close</Button>}
       />
       <p className={styles.inspectorKind}>{component.detail}</p>
+      {component.detailWarnings?.map((warning) => (
+        <div key={warning} role="alert" className={styles.detailWarning}>{warning}</div>
+      ))}
       <dl className={styles.facts}>
+        <div style={{ display: 'contents' }}>
+          <dt className={styles.factLabel}>Last updated</dt>
+          <dd className={styles.factValue}>{formatTimestamp(topology.generated_utc)}</dd>
+        </div>
         {component.facts.map((fact) => (
           <div key={fact.label} style={{ display: 'contents' }}>
             <dt className={styles.factLabel}>{fact.label}</dt>
@@ -609,11 +1030,18 @@ function TopologyInspector({
           ))}
         </ul>
       ) : null}
+      <DetailContent component={component} topology={topology} projectId={projectId} />
     </Card>
   );
 }
 
-export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopologyDto }) {
+export function ClusterTopologyGraph({
+  topology,
+  projectId,
+}: {
+  topology: KubernetesTopologyDto;
+  projectId?: string;
+}) {
   const styles = useStyles();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const components = useMemo(() => buildComponents(topology), [topology]);
@@ -700,7 +1128,14 @@ export function ClusterTopologyGraph({ topology }: { topology: KubernetesTopolog
           proOptions={{ hideAttribution: true }}
         />
       </div>
-      {selected ? <TopologyInspector component={selected} onClose={() => setSelectedId(null)} /> : null}
+      {selected ? (
+        <TopologyInspector
+          component={selected}
+          topology={topology}
+          projectId={projectId}
+          onClose={() => setSelectedId(null)}
+        />
+      ) : null}
     </div>
   );
 }

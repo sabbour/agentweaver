@@ -109,37 +109,56 @@ or the old GitHub App credential is revoked.
 ### Image-build progress and optional Azure CLI limits
 
 The installer prints elapsed time for frontend preparation, each image
-lifecycle, and each ACR build/import/provenance operation. ACR manifest reads
-are bounded to 60 seconds because they are read-only and safely retried by the
-existing visibility poll. To bound a local Azure CLI process for a mutating
-operation, explicitly set one or both environment variables:
+lifecycle, each ACR build/import/provenance operation, and staging-tag cleanup.
+ACR manifest and repository digest reads default to a 10-minute per-attempt
+budget because ACR's read path can take several minutes while concurrent
+imports are still settling. To bound a local Azure CLI process for a mutating
+operation, explicitly set one or more environment variables:
 
 ```powershell
-$env:ACR_BUILD_TIMEOUT_MS = "1800000"  # 30 minutes
-$env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
-$env:ACR_QUERY_TIMEOUT_MS = "90000"    # 90s per ACR digest-verification attempt
+$env:ACR_BUILD_TIMEOUT_MS = "1800000"    # 30 minutes
+$env:ACR_IMPORT_TIMEOUT_MS = "600000"    # 10 minutes
+$env:ACR_UNTAG_TIMEOUT_MS = "60000"      # 1 minute per staging-tag cleanup
+$env:ACR_QUERY_TIMEOUT_MS = "600000"     # 10 minutes per ACR digest-verification attempt
+$env:ACR_IMPORT_CONCURRENCY = "1"        # external image preflight imports at a time
 ```
 
-`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. The digest
-lookup is a read-only query, so a timed-out attempt is treated as "not visible
-yet" and is retried by the existing bounded backoff. Keep it short: raising it
-does not buy reliability, it just makes each hung `az acr repository show` stall
-that much longer before the retry can happen.
+`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. ACR digest
+lookups are read-only, so timed-out or transient failed attempts are retried
+before the deployment decides whether a tag is present, absent, or unknown.
+Operators can still lower this for local experiments, but retries widen a
+shorter configured budget back toward the 10-minute default so one slow
+`az acr repository show` under import load does not make a resume look like a
+missing tag.
 
 The build and import limits behave differently from each other. A timed-out
 `az acr build` is **not** retried: a local CLI timeout leaves the remote build's
 state unknown. Inspect the target ACR tag/digest before deciding whether a
 manual retry is safe.
 
-ACR *import*, retag, and untag operations are retried automatically (three
-attempts, exponential backoff with jitter) on transient transport or service
-failures — connection resets, throttling, and timeouts. This is safe because
-those operations are idempotent: retries pass `--force`, so importing the same
+ACR *import* and retag operations are retried automatically (three attempts,
+exponential backoff with jitter) on transient transport or service failures,
+including connection resets, throttling, and timeouts. This is safe because
+those operations are idempotent. Retries pass `--force`, so importing the same
 source into the same tag converges on the same digest even if an earlier attempt
-actually landed before the connection dropped. Deterministic errors (a missing
-source image, an authentication failure) still fail immediately rather than
-burning retries. Staging-tag cleanup never fails a deployment: a leaked
-preflight tag is harmless, an aborted deployment is not.
+actually landed before the connection dropped. Deterministic errors, such as a
+missing source image or an authentication failure, still fail immediately
+rather than burning retries. Staging-tag cleanup uses its own short
+`ACR_UNTAG_TIMEOUT_MS` budget and never fails a deployment. A leaked preflight
+tag is harmless. An aborted deployment is not.
+
+External image preflight imports default to one image at a time. This avoids
+ACR throttling seen during four-way GHCR import. Set `ACR_IMPORT_CONCURRENCY`
+to a higher integer only when the target registry has enough capacity.
+
+When `--image-source ghcr` or `--image-source custom` promotes a staged image
+into a final release tag, a failed final-tag digest read is never treated as
+"tag absent". Without `--force`, the promotion first attempts a non-forced
+import; if ACR reports that the tag already exists, the deploy re-reads the tag
+and retries with `--force` only when the existing digest already matches the
+staged source digest. Differing tags still fail closed unless the operator
+explicitly requested `--force`, and that operator intent is honored even if the
+pre-promotion digest read remained unknown after retries.
 
 ### Resuming a failed deployment
 
