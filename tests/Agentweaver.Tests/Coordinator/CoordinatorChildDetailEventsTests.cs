@@ -166,7 +166,7 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
 
         var secretError = actualEvents.Single(e => e.Payload.GetProperty("callId").GetString() == "tool-secret-error")
             .Payload.GetProperty("errorMessage").GetString();
-        secretError.Should().Be(SensitiveDataRedactor.RedactedPlaceholder);
+        secretError.Should().Be($"provider returned {SensitiveDataRedactor.RedactedPlaceholder}");
     }
 
     [Fact]
