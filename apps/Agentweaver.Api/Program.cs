@@ -133,9 +133,14 @@ builder.Services.AddSingleton<SqliteDb>();
         // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
         // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
         builder.Services.AddSingleton<RunActiveClaimGuard>();
-        builder.Services.AddSingleton<IRunStore>(sp => new RunActiveClaimGuardedRunStore(
-            sp.GetRequiredService<SqliteRunStore>(),
-            sp.GetRequiredService<RunActiveClaimGuard>()));
+        // PreviewPublicationLeaseRunStore sits OUTSIDE the claim guard: it waits for an in-flight
+        // preview publication before terminalizing, and the publication's conditional append takes
+        // the very same claim, so waiting while holding it would deadlock (#1315).
+        builder.Services.AddSingleton<IRunStore>(sp => new PreviewPublicationLeaseRunStore(
+            new RunActiveClaimGuardedRunStore(
+                sp.GetRequiredService<SqliteRunStore>(),
+                sp.GetRequiredService<RunActiveClaimGuard>()),
+            sp.GetService<ILogger<PreviewPublicationLeaseRunStore>>()));
         builder.Services.AddSingleton<SqliteRunRevisionStore>();
         builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<SqliteRunRevisionStore>());
         builder.Services.AddSingleton<SqliteWorkflowRunStore>();
@@ -1033,7 +1038,12 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 
         // EF-backed singleton stores (provider-independent, use IDbContextFactory)
         builder.Services.AddSingleton<EfRunStore>();
-        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<EfRunStore>());
+        // Defer terminalization while a preview publication holds the run's lease (#1315). The EF
+        // path needs no claim guard — EfRunEventStream's conditional append takes a real row lock —
+        // so the lease decorator wraps the store directly.
+        builder.Services.AddSingleton<IRunStore>(sp => new PreviewPublicationLeaseRunStore(
+            sp.GetRequiredService<EfRunStore>(),
+            sp.GetService<ILogger<PreviewPublicationLeaseRunStore>>()));
         builder.Services.AddSingleton<EfRunRevisionStore>();
         builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<EfRunRevisionStore>());
         builder.Services.AddSingleton<EfWorkflowRunStore>();

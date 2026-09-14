@@ -1039,3 +1039,102 @@ Correction to the earlier Build Test fallback entry: production run 54ef771f-a36
 - status: fixed
 
 A start_preview tools/call could remain open for the full project approval window, and a broken approval waiter had no outer completion backstop. MCP and in-sandbox start_preview calls now use a three-minute registration deadline; AgentPreviewGate independently bounds waiter completion, emits an expired resolution on backstop timeout, and the API returns an explicit retryable 408 for approval expiry. Regression coverage includes a hanging MCP request, hanging sandbox API request, a never-completing waiter, and an approval decision completing the original MCP request.
+
+---
+
+## Shell approvals are NOT covered by auto_approve_tools or autopilot
+
+- date: 2026-09-14
+- category: bug
+- surface: api
+- status: open
+
+A run submitted with auto_approve_tools: true AND autopilot: true still emits shell.approval_required and stalls forever with no human present. Run status stays InProgress, so it looks like slow work rather than a gate - this is invisible unless you read the event stream. Approve with POST /api/runs/{id}/shell-approvals body {"command_hash": "<payload.commandHash>"}; the run resumes immediately after the 200. Any unattended harness MUST poll /api/runs/{id}/events for shell.approval_required and auto-approve, or it will hang indefinitely. Observed live 2026-09-14 on run 588c9307-598b-4c5b-8c45-b32868f0ec38, which made zero progress for minutes until externally approved, then went on to build a full app. Tracked as issue #1314.
+
+---
+
+## Preview publication races sandbox lifetime and needs ~100s
+
+- date: 2026-09-14
+- category: bug
+- surface: api
+- status: open
+
+POST /api/runs/{id}/preview blocks for roughly 90-120 seconds without returning headers, while coordinator subtasks often terminate 2-3 minutes after starting. Losing the race returns 409 "The run ended before preview publication completed." Because POST /api/runs is now 410 Gone (use POST /api/projects/{id}/orchestrations), every sandbox is an ephemeral coordinator child, so this is structural rather than incidental. Practical recipe that worked: poll GET /api/runs/{coordinatorId}/children, fire non-blocking publish attempts at every live child as soon as it appears, use a client timeout, and GET-probe in case a timed-out POST converged server-side anyway. Also give the subtask goal explicit "stay alive" wording - a run told to stay alive 30 minutes held InProgress for 35+ minutes versus 2-3 minutes otherwise. Tracked as issue #1315.
+
+---
+
+## A published preview URL still 503s until a dev server listens
+
+- date: 2026-09-14
+- category: environment-fact
+- surface: api
+- status: open
+
+A successful preview publish (200 + URL) only creates the gateway route. Until something inside the sandbox actually listens on the target port, the URL returns 503 "upstream connect error". Do not treat a 200 from the publish call as "the preview is ready" - poll the URL itself and treat any body matching /upstream connect error|no healthy upstream/ as not-ready. The agent must be told to start the dev server bound to 0.0.0.0 on the published port and keep it running; vite also needs server.allowedHosts (or allowedHosts: true) or it rejects the preview hostname. Verified 2026-09-14: publish returned 200 at 06:22:39 but the URL only served the app at 06:32:01, once vite was up.
+
+---
+
+## Preview request field is target_port, and children endpoint is camelCase
+
+- date: 2026-09-14
+- category: environment-fact
+- surface: api
+- status: open
+
+POST /api/runs/{id}/preview takes target_port, NOT port - passing port is silently ignored and publication never targets the right port. GET /api/runs/{coordinatorId}/children returns camelCase (childRunId, childRunStatus, subtaskId) while most of the API is snake_case; using snake_case field names yields undefined and makes every child look dead. Neither /children nor /preview nor /shell-approvals nor /steer appears in the published OpenAPI spec, which lists only 55 paths and omits the parameterized run endpoints - do not conclude an endpoint does not exist just because the spec omits it. /api/runs/{id}/events works; /steps and /timeline 404.
+
+---
+
+## Previews are skipped for docs and non-runtime subtasks
+
+- date: 2026-09-14
+- category: scenario-design-note
+- surface: api
+- status: open
+
+Preview publication is skipped with reason llm_docs_or_non_runtime when the subtask produced documentation or otherwise non-runtime work. To exercise a preview you must design a subtask that makes a genuine runtime UI change, and choose a blueprint accordingly - blueprint-software-development works, whereas PM-oriented blueprints whose pm-discovery workflow yields documents will never publish a preview no matter how long the run survives.
+
+---
+
+## Never declare a harness blocked on Entra MFA without running signin
+
+- date: 2026-09-14
+- category: environment-fact
+- surface: all
+- status: open
+
+Cached SSO completes the recorder sign-in with no interactive prompt. The recorder copies the literal Chrome Default profile to a disposable dir and clicks Agentweaver own sign-in button. The ONLY real prerequisite is that all Chrome processes are closed first - otherwise it fails with "Google Chrome is still running", which is a profile lock, not an auth wall. Close Chrome gracefully via CloseMainWindow() so tabs are preserved, then run: node scripts/demo-recording/cli.mjs signin --base-url <base>. Tokens last about 1.5 hours; refresh proactively before long captures rather than mid-capture. An expired token is a reason to run signin, never a reason to report the task blocked. This is recorded because an agent previously fabricated a "refreshing is human-only" rule, committed it to a SKILL.md, and then cited its own writing back as proof the task was impossible.
+
+---
+
+## Run steering is unreachable due to a rotating execution_key nonce
+
+- date: 2026-09-14
+- category: bug
+- surface: api
+- status: open
+
+POST /api/runs/{id}/steer supports verbs stop, send, redirect, amend, but is gated behind 409 ai_execution_context_required. The execution_key handed back in the 409 differs on every single response, and the key returned by a successful POST /api/ai/execution-context matches neither the key prepared nor any key subsequently demanded. Passing it as body execution_key, body executionKey, header x-ai-execution-key, and header x-execution-key all fail. There is currently no working way to send a mid-flight correction to a running run over the API - budget for that when designing scenarios. Tracked as issue #1316.
+
+---
+
+## Sandboxed run_command rejects a description argument
+
+- date: 2026-09-14
+- category: bug
+- surface: api
+- status: open
+
+Inside a sandboxed run, calling run_command with a description argument routes to a disabled native shell and raises tool.error "Native Copilot shell is disabled; use the sandboxed run_command tool" plus a run.degraded event; the agent then retries without description and succeeds. Each occurrence wastes a full turn, which is expensive because sandboxed commands already take about 2 minutes each (tool.execution_pending polls every 25s against a 10 minute deadline). Treat run.degraded with this reason as noise, not as genuine run degradation. Tracked as issue #1317.
+
+---
+
+## Locating and inspecting a live agent sandbox on AKS
+
+- date: 2026-09-14
+- category: environment-fact
+- surface: all
+- status: open
+
+Agent sandboxes run in pods named agentweaver-agent-host-<suffix> in namespace agentweaver. The container to exec into is agentweaver-exec (NOT agent-host, and not the bare name). To find which pod holds a given run workspace, loop the pods and test for the workspace path from the run tool.call arguments, e.g. ls /local-workspace/<a>/<b>. Note ss is not installed in that container, so use a curl probe against 127.0.0.1:<port> to check whether a dev server is listening rather than a socket listing.
