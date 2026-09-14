@@ -156,9 +156,11 @@ const ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS = 2_000;
 const ACR_TAG_DIGEST_POLL_MAX_DELAY_MS = 15_000;
 const ACR_TAG_DIGEST_POLL_BUDGET_MS = 5 * 60_000;
 // `show-manifests` is read-only, so bounding this local CLI query cannot
-// duplicate a build/import. A query timeout simply counts as "not visible
-// yet" and the existing bounded backoff continues.
-const ACR_QUERY_TIMEOUT_MS = 60_000;
+// duplicate a build/import. ACR's repository-read path has taken more than
+// three minutes while concurrent preflight imports were in flight, so the
+// default must cover a loaded registry, not just an idle one.
+const ACR_QUERY_TIMEOUT_MS = 10 * 60_000;
+const ACR_QUERY_TIMEOUT_RETRY_MULTIPLIER = 4;
 const ACR_TAG_DIGEST_POLL_DELAYS_MS = Object.freeze(buildAcrTagDigestPollDelays());
 
 function buildAcrTagDigestPollDelays() {
@@ -259,6 +261,13 @@ function acrRepositoryDigestUnknown(image, tag, error) {
   };
 }
 
+function acrRepositoryDigestQueryTimeoutMs(cfg, attempt) {
+  const configured = Number(cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS);
+  const base = Number.isFinite(configured) && configured > 0 ? configured : ACR_QUERY_TIMEOUT_MS;
+  if (base >= ACR_QUERY_TIMEOUT_MS) return base;
+  return Math.min(ACR_QUERY_TIMEOUT_MS, base * ACR_QUERY_TIMEOUT_RETRY_MULTIPLIER ** (attempt - 1));
+}
+
 function existingDigestValue(result) {
   return result?.state === "present" ? result.digest : null;
 }
@@ -296,7 +305,7 @@ function isAcrImportConflict(error) {
 export async function acrRepositoryDigestForImage(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
   try {
     return await withRetry(
-      async () => {
+      async (attempt) => {
         const { stdout, stderr, code } = await exec.capture(
           "az",
           [
@@ -312,7 +321,7 @@ export async function acrRepositoryDigestForImage(image, tag, cfg, { exec = exec
             "--output",
             "tsv",
           ],
-          { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
+          { allowFailure: true, timeoutMs: acrRepositoryDigestQueryTimeoutMs(cfg, attempt) },
         );
         if (code !== 0) {
           if (isAcrRepositoryImageAbsent({ stdout, stderr })) return { state: "absent" };

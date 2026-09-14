@@ -630,6 +630,54 @@ test("importImagesFromGhcr: matching existing digest after retry skips final tag
   assert.equal(finalPromotionImports(exec).length, 0, "matching final tags must be clean no-ops");
 });
 
+test("importImagesFromGhcr: slow matching existing digest read gets a 10 minute default budget and skips promotion", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const finalReadTimeouts = [];
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args, opts) => {
+      if (isAcrImport(args)) {
+        assert.ok(
+          !(sourceArg(args).startsWith(CFG.ACR_LOGIN_SERVER) && imageArg(args).endsWith(":v1.2.3")),
+          "matching final tags must not be promoted",
+        );
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        const [image, tag] = ref.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+        finalReadTimeouts.push(opts.timeoutMs);
+        if (opts.timeoutMs < 600_000) {
+          throw new Error(`Command timed out after ${opts.timeoutMs}ms; az acr repository show was still running under concurrent import load`);
+        }
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.ok(finalReadTimeouts.length >= 4, "expected final tag digest reads");
+  assert.ok(
+    finalReadTimeouts.every((timeoutMs) => timeoutMs >= 600_000),
+    "final tag digest reads need a default budget large enough for ACR under import load",
+  );
+  assert.equal(finalPromotionImports(exec).length, 0, "matching final tags must be clean no-ops after the slow read completes");
+});
+
 test("importImagesFromGhcr: operator --force reaches promotion import after digest read remains unknown", async () => {
   const cfg = {
     ...CFG,
