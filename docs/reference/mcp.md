@@ -1,12 +1,16 @@
 # MCP server reference
 
+See [One-call run orchestration, gates, watch and retry](../diagrams/canonical-coordinator-journey.png) for the shared visual model.
+
+See [AI execution context](./api.md#ai-execution-context) for the shared visual model.
+
 ::: warning Experimental
 The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
 :::
 
 The Agentweaver MCP server exposes Agentweaver operations as structured tool calls over hosted HTTP and local stdio transports.
 
-> For a complete, always-up-to-date list of every tool name and its one-line description, see the auto-generated [MCP tool index](./mcp-tools.md). This page documents each tool's full parameters and return shape.
+> For a complete, always-up-to-date list of every tool name and its one-line description, see the auto-generated [MCP tool index](./mcp-tools.md). This page documents selected parameters and workflows. The generated [tool index](./mcp-tools.md) is the complete name/description catalog; exposed tool schemas define current complete parameter contracts.
 
 ## Setup
 
@@ -481,7 +485,15 @@ Get the content or diff of a specific file from a run's worktree.
 
 ## Coordinator
 
-Thin proxies over the Coordinator endpoints. The Coordinator agent drafts a confirmable outcome spec for a goal, then suspends at a confirmation gate. No subagent work is dispatched until the spec is confirmed. A coordinator run is an ordinary run, so its live drafting is observable with `run_watch` (see below).
+Coordinator launch has three relevant cases:
+
+| Launch | Behavior |
+|---|---|
+| `defineOutcome`, Autopilot off | Draft/persist a spec, then wait for confirmation or revision. |
+| `defineOutcome`, launch Autopilot on | Draft, then confirm unattended through the normal seam on behalf of the accountable user. |
+| `direct` | Persist a confirmed prompt-backed spec and plan directly, without a model-drafted outcome or confirmation RequestPort. |
+
+Confirmation advances into selection, decomposition, dispatch, steering and collective assembly; it is not orchestration completion. Direct mode and Autopilot do not remove workflow review/merge requirements or grant arbitrary tool permissions.
 
 ### `coordinator_start`
 
@@ -499,10 +511,7 @@ Start a coordinator orchestration for a project from a plain-language goal. Prox
 
 **Returns**: `{ runId }` for the new coordinator run.
 
-For both start tools, safe-tool auto-approval currently covers `web_fetch` only. It does
-not bypass preview, destructive, privileged, secret-bearing, or other network approvals.
-The selected policy is persisted and reused by retries and child runs. Heartbeat pickup
-settings remain defaults only for runs created by heartbeat.
+Safe-tool auto-approval covers `web_fetch` and `start_preview`. Preview skips the human wait only: port, process-liveness, run/sandbox access and publication validation remain. Grants emit `tool.auto_approved`; arbitrary shell, destructive, privileged, secret-bearing and unrelated network permissions are not granted. Immutable launch policy survives retry and is inherited by children.
 
 ---
 
@@ -598,7 +607,7 @@ Get a one-shot topology snapshot for a coordinator run by combining the work pla
 
 ### Watching a coordinator run
 
-There is no separate streaming tool for the coordinator. A coordinator run is an ordinary run, so point the existing [`run_watch`](#run_watch) tool at the coordinator `run_id` to observe live drafting and orchestration. The `coordinator.started`, `coordinator.outcome_spec`, and `coordinator.outcome_spec.confirmed` events ride the same `sequence`-ordered run stream, and Phase 2 adds `coordinator.work_plan`, `coordinator.topology` (a `version: 1` snapshot at `seq: 0` followed by deltas), `subtask.*`, and `coordinator.steering` on that same stream. The live orchestration graph is reconstructable from `run_watch` alone — no extra streaming tool is needed. Use `coordinator_outcome_spec_get`, `coordinator_work_plan_get`, `coordinator_children_get`, or `orchestration_topology` for an authoritative point-in-time snapshot.
+There is no separate streaming tool for the coordinator. A coordinator run is an ordinary run, so point the existing [`run_watch`](#run-watch) tool at the coordinator `run_id` to observe live drafting and orchestration. The `coordinator.started`, `coordinator.outcome_spec`, and `coordinator.outcome_spec.confirmed` events ride the same `sequence`-ordered run stream, and Phase 2 adds `coordinator.work_plan`, `coordinator.topology` (a `version: 1` snapshot at `seq: 0` followed by deltas), `subtask.*`, and `coordinator.steering` on that same stream. The live orchestration graph is reconstructable from `run_watch` alone — no extra streaming tool is needed. Use `coordinator_outcome_spec_get`, `coordinator_work_plan_get`, `coordinator_children_get`, or `orchestration_topology` for an authoritative point-in-time snapshot.
 
 ---
 
@@ -1106,7 +1115,7 @@ List all runs for a project.
 
 ## Backlog
 
-The backlog is the project's Kanban board for task management. Tasks progress through Backlog → Ready → Active, with terminal states of Done, Failed, and Archived.
+The backlog is the project's Kanban board for task management. Task state is Backlog, Ready or Claimed. A claimed card projects its run into Problems, Human Review, Active or Done. Archiving hides eligible items; it is not another task-state enum value.
 
 ### `backlog_capture_task`
 
@@ -1464,3 +1473,110 @@ Get the content of a file in a project workspace at a given ref.
 | `ref` | string | no | Branch name or worktree branch (defaults to base branch) |
 
 **Returns**: Object with `path`, `content` (base64-encoded), `encoding`, and `size`.
+
+
+## Cross-surface launch and provider contracts
+
+Coordinator launch has three relevant cases:
+
+| Launch | Behavior |
+|---|---|
+| `defineOutcome`, Autopilot off | Draft/persist a spec, then wait for confirmation or revision. |
+| `defineOutcome`, launch Autopilot on | Draft, then confirm unattended through the normal seam on behalf of the accountable user. |
+| `direct` | Persist a confirmed prompt-backed spec and plan directly, without a model-drafted outcome or confirmation RequestPort. |
+
+Confirmation advances into selection, decomposition, dispatch, steering and collective assembly; it is not orchestration completion. Direct mode and Autopilot do not remove workflow review/merge requirements or grant arbitrary tool permissions.
+
+`run_task` defaults to Direct; `coordinator_start` defaults to defineOutcome; `run_submit` is a legacy Direct Coordinator alias, not the removed standalone REST route. Autopilot auto-answers questions and, when set at launch in defineOutcome, confirms the draft unattended; it does not grant tool permissions. Heartbeat pickup defaults are separate from false-by-default explicit launches.
+
+MCP prepares AI context internally, rejects unresolved providers, and forwards its `execution_key` as `If-Model-Provider-Key`. The forwarding key is not a public tool parameter. Workflow responses include ordered `triggers` plus first-trigger alias `trigger`; writes still use complete workflow YAML generation/save rather than a dedicated structured trigger-edit tool.
+
+<!-- diagram-context:canonical-coordinator-journey:start -->
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-coordinator-journey:end -->

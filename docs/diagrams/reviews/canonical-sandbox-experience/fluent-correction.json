@@ -1,0 +1,294 @@
+{
+  "diagram": "canonical-sandbox-experience",
+  "source_sha256": "f62bcc008d56f3b66dc0408a7b60e4373f107fa8d9f5866f35cfd483352c45b5",
+  "png_sha256": "722e8c556c68fcfa58e85980007d4da7bed88327a183d765644fa3a519322eb6",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-sandbox-experience\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "From run request to reviewable work"
+    },
+    {
+      "cell": "takeaway",
+      "text": "A run gets isolated execution, visible progress and bounded tools—not an unrestricted host shell."
+    },
+    {
+      "cell": "group-title0",
+      "text": "ADMIT AND PREPARE"
+    },
+    {
+      "cell": "group-title1",
+      "text": "EXECUTE AND RETURN EVIDENCE"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Authorized run"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "User requests repository work"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "Provider acceptance first"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "API owns run lifecycle"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "Project role required"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "REQUEST"
+    },
+    {
+      "cell": "n1-title",
+      "text": "SandboxClaim"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Bind a warm AgentHost pod"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "Resolve claim-bound pod"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Configure identity once"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "Claim state is shared"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "PREPARE"
+    },
+    {
+      "cell": "n2-title",
+      "text": "AgentHost"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Model and governed tools"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "A2A authenticated turns"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "Run-scoped workspace"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "Copilot OR BYOK"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "EXECUTE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Run experience"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Events and human decisions"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "Progress / tool evidence"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "Approve consequential work"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "Approval ≠ policy bypass"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "OBSERVE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Isolated workspace"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "File and shell results"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "Contain paths and processes"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "Bound / redact tool output"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "Network policy also applies"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "WORK"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Preview or review"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Inspect resulting work"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Preview needs publication proof"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "Review artifacts before merge"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "Release / reap compute"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "OUTCOME"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 start"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 configure"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 tools"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 events / approvals"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 work artifacts"
+    },
+    {
+      "cell": "assurance",
+      "text": "Credentials arrive via /configure, not ambient stores. Approval, policy and isolation remain independent checks."
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "Workspace ownership"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "Children use isolated worktrees."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "RunOrchestrator.cs"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Pod observation"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "Pod telemetry is not branch ownership."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "sandbox-pod-execution.md"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Publication evidence"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "Preview readiness proves public HTTPS."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "SandboxPreviewPublicationTests.cs"
+    }
+  ],
+  "context_pages": [
+    "docs/experience/sandbox-pod-execution.md",
+    "docs/guide/runs.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "start",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "configure",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n4",
+      "label": "tools",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n3",
+      "label": "events / approvals",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "work artifacts",
+      "result": "clean"
+    }
+  ]
+}

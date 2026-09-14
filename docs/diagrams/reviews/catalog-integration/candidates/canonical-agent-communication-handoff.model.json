@@ -1,0 +1,548 @@
+{
+  "title": "Handoffs, not peer chat",
+  "nodes": [
+    {
+      "id": "goal",
+      "label": "Human goal",
+      "subLabel": "Define the desired outcome",
+      "meta": "intent input",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "REQUEST",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "spec",
+      "label": "OutcomeSpec",
+      "subLabel": "Confirm before dispatch",
+      "meta": "confirmation gate",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "CONTRACT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "plan",
+      "label": "WorkPlan DAG",
+      "subLabel": "Subtasks + dependencies",
+      "meta": "eligible frontier",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "PLAN",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "a",
+      "label": "Child run A",
+      "subLabel": "One assigned subtask",
+      "meta": "isolated worktree",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "EXECUTION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "b",
+      "label": "Child run B",
+      "subLabel": "Another eligible subtask",
+      "meta": "isolated worktree",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "EXECUTION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "assembly",
+      "label": "Collective assembly",
+      "subLabel": "Integrate settled work",
+      "meta": "one reviewed integration",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "ASSEMBLY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "goal",
+      "to": "spec",
+      "label": "draft",
+      "loopback": false
+    },
+    {
+      "from": "spec",
+      "to": "plan",
+      "label": "confirm",
+      "loopback": false
+    },
+    {
+      "from": "plan",
+      "to": "a",
+      "label": "dispatch A",
+      "loopback": false
+    },
+    {
+      "from": "plan",
+      "to": "b",
+      "label": "dispatch B",
+      "loopback": false
+    },
+    {
+      "from": "a",
+      "to": "assembly",
+      "label": "result A",
+      "loopback": false
+    },
+    {
+      "from": "b",
+      "to": "assembly",
+      "label": "result B",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "group0",
+      "label": "Intent → execution contract"
+    },
+    {
+      "id": "group1",
+      "label": "Children and assembly"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "goal",
+        "type": "card",
+        "position": {
+          "x": 222.67281105990784,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "goal",
+          "label": "Human goal",
+          "subLabel": "Define the desired outcome",
+          "meta": "intent input",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "REQUEST",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "spec",
+        "type": "card",
+        "position": {
+          "x": 694.6728110599079,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "spec",
+          "label": "OutcomeSpec",
+          "subLabel": "Confirm before dispatch",
+          "meta": "confirmation gate",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "CONTRACT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "plan",
+        "type": "card",
+        "position": {
+          "x": 1166.6728110599079,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "plan",
+          "label": "WorkPlan DAG",
+          "subLabel": "Subtasks + dependencies",
+          "meta": "eligible frontier",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "PLAN",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "a",
+        "type": "card",
+        "position": {
+          "x": 222.67281105990784,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "a",
+          "label": "Child run A",
+          "subLabel": "One assigned subtask",
+          "meta": "isolated worktree",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "EXECUTION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "b",
+        "type": "card",
+        "position": {
+          "x": 694.6728110599079,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "b",
+          "label": "Child run B",
+          "subLabel": "Another eligible subtask",
+          "meta": "isolated worktree",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "EXECUTION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "assembly",
+        "type": "card",
+        "position": {
+          "x": 1166.6728110599079,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "assembly",
+          "label": "Collective assembly",
+          "subLabel": "Integrate settled work",
+          "meta": "one reviewed integration",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "ASSEMBLY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "group-group0",
+        "type": "band",
+        "position": {
+          "x": 190.67281105990784,
+          "y": 309.48387096774195
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "Intent → execution contract",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 210.67281105990784,
+          "y": 325.48387096774195
+        },
+        "data": {
+          "label": "Intent → execution contract",
+          "width": 1308
+        }
+      },
+      {
+        "id": "group-group1",
+        "type": "band",
+        "position": {
+          "x": 190.67281105990784,
+          "y": 613.447004608295
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "Children and assembly",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 210.67281105990784,
+          "y": 629.447004608295
+        },
+        "data": {
+          "label": "Children and assembly",
+          "width": 1308
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "goal",
+        "target": "spec",
+        "label": "draft",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 562.6728110599079,
+              "y": 425.48387096774195
+            },
+            {
+              "x": 694.6728110599079,
+              "y": 425.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 628.6728110599079,
+            "y": 425.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "spec",
+        "target": "plan",
+        "label": "confirm",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1034.6728110599079,
+              "y": 425.48387096774195
+            },
+            {
+              "x": 1166.6728110599079,
+              "y": 425.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1100.6728110599079,
+            "y": 425.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "plan",
+        "target": "a",
+        "label": "dispatch A",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1506.6728110599079,
+              "y": 412.81720430107526
+            },
+            {
+              "x": 1574.6728110599079,
+              "y": 412.81720430107526
+            },
+            {
+              "x": 1574.6728110599079,
+              "y": 643.7703379416283
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 643.7703379416283
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 716.7803379416283
+            },
+            {
+              "x": 562.6728110599079,
+              "y": 716.7803379416283
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1126.6728110599079,
+            "y": 643.7703379416283
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "plan",
+        "target": "b",
+        "label": "dispatch B",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1506.6728110599079,
+              "y": 438.15053763440864
+            },
+            {
+              "x": 1538.6728110599079,
+              "y": 438.15053763440864
+            },
+            {
+              "x": 1538.6728110599079,
+              "y": 617.483870967742
+            },
+            {
+              "x": 1066.6728110599079,
+              "y": 617.483870967742
+            },
+            {
+              "x": 1066.6728110599079,
+              "y": 716.7803379416283
+            },
+            {
+              "x": 1034.6728110599079,
+              "y": 716.7803379416283
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1302.6728110599079,
+            "y": 617.483870967742
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "a",
+        "target": "assembly",
+        "label": "result A",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 562.6728110599079,
+              "y": 742.1136712749616
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 742.1136712749616
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 813.7903379416283
+            },
+            {
+              "x": 1115.6828110599079,
+              "y": 813.7903379416283
+            },
+            {
+              "x": 1115.6828110599079,
+              "y": 716.7803379416283
+            },
+            {
+              "x": 1166.6728110599079,
+              "y": 716.7803379416283
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 855.1778110599079,
+            "y": 813.7903379416283
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "b",
+        "target": "assembly",
+        "label": "result B",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1034.6728110599079,
+              "y": 742.1136712749616
+            },
+            {
+              "x": 1166.6728110599079,
+              "y": 742.1136712749616
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 1127.072811059908,
+              "y": 742.1136712749616
+            },
+            "to": {
+              "x": 1127.072811059908,
+              "y": 822.1136712749616
+            }
+          },
+          "labelPos": {
+            "x": 1127.072811059908,
+            "y": 837.3136712749616
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1729.345622119816,
+    "canvasHeight": 1073.4562211981568
+  }
+}

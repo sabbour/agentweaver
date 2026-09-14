@@ -1,0 +1,358 @@
+{
+  "name": "guide-example-scenarios-fig3",
+  "title": "MCP lifecycle: choose one launch path",
+  "takeaway": "Queue pickup and explicit starts are alternatives; inspection and approvals remain explicit.",
+  "pitch": [
+    "Authorize and prepare project work",
+    "Start, observe and review one run"
+  ],
+  "nodes": [
+    {
+      "id": "auth",
+      "title": "Authorize",
+      "subtitle": "MCP OAuth / Entra identity",
+      "meta": "Repo capability is separate",
+      "badge": "SIGN IN",
+      "icon": "person",
+      "x": 34,
+      "y": 87,
+      "w": 230,
+      "h": 69,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.Mcp/Tools/GitHubAuthTools.cs:10-35; docs/guide/mcp-cli.md"
+    },
+    {
+      "id": "project",
+      "title": "Choose project",
+      "subtitle": "project_list / project_create",
+      "meta": "Check provider + repo readiness",
+      "badge": "PROJECT",
+      "icon": "product",
+      "x": 298,
+      "y": 87,
+      "w": 230,
+      "h": 69,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Mcp/Tools/ProjectTools.cs:13-101; GitHubAuthTools.cs:50-106"
+    },
+    {
+      "id": "team",
+      "title": "Confirm team",
+      "subtitle": "team_cast: proposal first",
+      "meta": "confirm_proposal_id or confirm",
+      "badge": "TEAM",
+      "icon": "product",
+      "x": 562,
+      "y": 87,
+      "w": 230,
+      "h": 69,
+      "tone": "green",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    },
+    {
+      "id": "manual",
+      "title": "Define outcome",
+      "subtitle": "coordinator_start",
+      "meta": "defineOutcome; autopilot=false",
+      "badge": "MANUAL",
+      "icon": "product",
+      "x": 34,
+      "y": 222,
+      "w": 230,
+      "h": 120,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    },
+    {
+      "id": "direct",
+      "title": "Start and poll",
+      "subtitle": "run_task",
+      "meta": "Default direct; creates NEW run",
+      "badge": "DIRECT",
+      "icon": "process",
+      "x": 298,
+      "y": 222,
+      "w": 230,
+      "h": 120,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    },
+    {
+      "id": "backlog",
+      "title": "Queue for heartbeat",
+      "subtitle": "backlog_capture_task",
+      "meta": "then backlog_move_to_ready",
+      "badge": "PICKUP",
+      "icon": "product",
+      "x": 562,
+      "y": 222,
+      "w": 230,
+      "h": 120,
+      "tone": "marigold",
+      "evidence": "apps/Agentweaver.Mcp/Tools/BacklogTools.cs:27-39,79-92; apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:183-245"
+    },
+    {
+      "id": "observe",
+      "title": "Observe / steer",
+      "subtitle": "coordinator_work_plan_get",
+      "meta": "coordinator_children_get",
+      "badge": "READ / CONTROL",
+      "icon": "product",
+      "x": 34,
+      "y": 414,
+      "w": 230,
+      "h": 99,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    },
+    {
+      "id": "files",
+      "title": "Inspect files",
+      "subtitle": "run_show_artifacts",
+      "meta": "then run_get_file",
+      "badge": "LIST FIRST",
+      "icon": "process",
+      "x": 298,
+      "y": 414,
+      "w": 230,
+      "h": 99,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    },
+    {
+      "id": "review",
+      "title": "Review when gated",
+      "subtitle": "run_review(approved: bool)",
+      "meta": "true approves; false declines",
+      "badge": "HUMAN",
+      "icon": "person",
+      "x": 562,
+      "y": 414,
+      "w": 230,
+      "h": 99,
+      "tone": "green",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79"
+    }
+  ],
+  "edges": [
+    {
+      "id": "m1",
+      "source": "auth",
+      "target": "project",
+      "label": "authorize",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "m2",
+      "source": "project",
+      "target": "team",
+      "label": "prepare",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "m3",
+      "source": "manual",
+      "target": "observe",
+      "label": "confirm",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [],
+      "returnFlow": false,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.5;entryY=0;"
+    },
+    {
+      "id": "m4",
+      "source": "direct",
+      "target": "observe",
+      "label": "new run",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [
+        [
+          413,
+          371
+        ],
+        [
+          210,
+          371
+        ]
+      ],
+      "returnFlow": false,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.77;entryY=0;"
+    },
+    {
+      "id": "m5",
+      "source": "backlog",
+      "target": "observe",
+      "label": "reserved run",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:183-245",
+      "points": [
+        [
+          677,
+          380
+        ],
+        [
+          260,
+          380
+        ]
+      ],
+      "returnFlow": false,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.98;entryY=0;"
+    },
+    {
+      "id": "m6",
+      "source": "observe",
+      "target": "files",
+      "label": "list",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "m7",
+      "source": "files",
+      "target": "review",
+      "label": "inspect",
+      "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    }
+  ],
+  "groups": [
+    {
+      "id": "m-prep",
+      "title": "PREPARE AUTHORITY AND A CONFIRMED TEAM",
+      "x": 20,
+      "y": 59,
+      "w": 787,
+      "h": 114
+    },
+    {
+      "id": "m-launch",
+      "title": "CHOOSE ONE  •  DO NOT QUEUE AND EXPLICITLY START THE SAME TASK",
+      "x": 20,
+      "y": 193,
+      "w": 787,
+      "h": 167
+    },
+    {
+      "id": "m-observe",
+      "title": "OBSERVE, INSPECT AND DECIDE  •  NOT AUTOMATIC SUCCESS",
+      "x": 20,
+      "y": 385,
+      "w": 787,
+      "h": 148
+    }
+  ],
+  "notes": [
+    {
+      "id": "m-confirm",
+      "title": "MANUAL GATE",
+      "text": "coordinator_outcome_spec_get → coordinator_outcome_spec_confirm (or coordinator_outcome_spec_revise).",
+      "x": 42,
+      "y": 302,
+      "w": 210,
+      "h": 38
+    },
+    {
+      "id": "m-pickup",
+      "title": "HEARTBEAT",
+      "text": "Atomically claims Ready item. Pickup autopilot controls confirmation, not tool or merge approval.",
+      "x": 570,
+      "y": 301,
+      "w": 212,
+      "h": 34
+    },
+    {
+      "id": "m-direct",
+      "title": "BOUNDED WAIT",
+      "text": "Returns artifacts, a gate, a next action, a timeout, or a failure. Never assume completion.",
+      "x": 306,
+      "y": 301,
+      "w": 212,
+      "h": 34
+    },
+    {
+      "id": "m-outcomes",
+      "title": "REVIEW PARITY",
+      "text": "Request changes: web/REST review, not run_review. coordinator_steer is separate. memory_export is optional.",
+      "x": 28,
+      "y": 541,
+      "w": 770,
+      "h": 20
+    },
+    {
+      "id": "m-gates",
+      "title": "COLLECTIVE GATES",
+      "text": "Children: Agent → Assemble-ready. Selected workflow gates apply to combined output, not per child.",
+      "x": 28,
+      "y": 564,
+      "w": 770,
+      "h": 18
+    }
+  ],
+  "symbols": {
+    "pod": [
+      "shape=mxgraph.kubernetes.icon;prIcon=pod;",
+      "native:kubernetes"
+    ],
+    "service": [
+      "shape=mxgraph.kubernetes.icon;prIcon=svc;",
+      "native:kubernetes"
+    ],
+    "gateway": [
+      "shape=mxgraph.kubernetes.icon;prIcon=crd;",
+      "native:kubernetes"
+    ],
+    "account": [
+      "shape=mxgraph.kubernetes.icon;prIcon=sa;",
+      "native:kubernetes"
+    ],
+    "process": [
+      "shape=process;",
+      "native:flowchart"
+    ],
+    "decision": [
+      "shape=rhombus;",
+      "native:flowchart"
+    ],
+    "person": [
+      "shape=umlActor;",
+      "native:uml"
+    ],
+    "cloud": [
+      "shape=cloud;",
+      "native:cloud"
+    ],
+    "vault": [
+      "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "identity": [
+      "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "store": [
+      "shape=cylinder3;size=10;",
+      "native:database"
+    ],
+    "product": [
+      "shape=hexagon;",
+      "custom:agentweaver"
+    ]
+  },
+  "orientation": "A5-landscape",
+  "page_units": "100 draw.io units per inch; 827 x 583 approximates 210 x 148 mm",
+  "research_agents": [
+    "guide-runtime-evidence",
+    "guide-network-evidence",
+    "guide-workflow-evidence"
+  ],
+  "model": "gpt-6-astra"
+}

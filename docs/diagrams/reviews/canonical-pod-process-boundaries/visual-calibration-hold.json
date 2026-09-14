@@ -1,0 +1,39 @@
+{
+  "status": "paused-awaiting-approved-shared-visual-calibration",
+  "recorded_at": "2026-09-13T13:01:20.544-07:00",
+  "authority": "user visual rejection",
+  "supersedes": "Any earlier implication that authoring may resume solely by satisfying XML growth.",
+  "promoted_assets": [],
+  "promotion_count": 0,
+  "research_and_audit_artifacts": "Preserved without overwriting existing evidence.",
+  "prior_public_asset_changes": {
+    "description": "Earlier merge cleanup removed four owned legacy asset sets, totaling 16 files. These were removals, not replacement promotions.",
+    "exact_paths_manifest": "owned-files.json",
+    "manifest_field": "removed_assets"
+  },
+  "prohibited_until_approval": [
+    "Final diagram authoring",
+    "Mass-producing further diagram exports",
+    "Promoting replacement assets",
+    "Overwriting additional public PNG, draw.io or hash files"
+  ],
+  "required_before_resume": "Explicit approval of the revised shared visual calibration/template.",
+  "learning": {
+    "id": "LRN-20260913-VIS",
+    "category": "correction",
+    "source": "user_feedback",
+    "priority": "high",
+    "area": "docs",
+    "summary": "Matching palette and card fields did not preserve the React renderer's compact polished visual rhythm.",
+    "rejected_traits": [
+      "Oversized titles and type",
+      "Excessive prose on canvas",
+      "Weak information density",
+      "Flat, oversized group boxes",
+      "Insufficient hierarchy and whitespace discipline",
+      "Generic draw.io appearance",
+      "Loss of compact polished React card rhythm"
+    ],
+    "action": "Await the approved shared reference; do not invent another local style or pursue XML volume as a substitute for visual quality."
+  }
+}

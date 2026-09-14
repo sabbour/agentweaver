@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 2881,
+  "result_meaningful_xml": 26129,
+  "baseline_visible_structures": 10,
+  "result_visible_structures": 89,
+  "growth_ratio": 9.06942,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-api-host\\canonical-api-host-pitch.drawio",
+  "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-api-host\\canonical-api-host-pass-01.drawio"
+}

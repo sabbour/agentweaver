@@ -1,0 +1,184 @@
+<mxfile host="Agentweaver" agent="GPT-6 Astra execution-plan authoring" version="31.4.5" type="device" compressed="false">
+  <diagram id="sandbox-pod-execution-fig5" name="Provisioning progress is not turn readiness">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="793.7" pageHeight="559.37" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Provisioning progress is not turn readiness" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=21;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="14" width="746" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="Bound claims, standby health and configured leaf readiness are separate milestones." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="48" width="746" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="dispatch">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-icon" value="" style="shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="dispatch">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-title" value="Coordinator dispatch" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="dispatch">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-subtitle" value="Child launch begins" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="dispatch">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-metadata" value="Admission owned by Kubernetes" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="dispatch">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="dispatch">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch-badge" value="AW" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="dispatch">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="claim" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="claim">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-icon" value="" style="shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="claim">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-title" value="Child executor" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-subtitle" value="Create/adopt claim" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-metadata" value="Poll until controller binding" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-badge" value="AW" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="claim">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="pending" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="pending">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-icon" value="" style="shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="pending">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-title" value="Provisioning progress" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="pending">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-subtitle" value="provisioning_pending about 20s" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="pending">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-metadata" value="Child stream shows legitimate wait" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="pending">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="pending">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="pending-badge" value="AW" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="pending">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="observer" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="observer">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-icon" value="" style="shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="observer">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-title" value="Coordinator observer" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="observer">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-subtitle" value="Recognize provisioning wait" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="observer">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-metadata" value="Not a completed agent turn" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="observer">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="observer">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="observer-badge" value="AW" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="observer">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="bound" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="bound">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-icon" value="" style="shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="bound">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-title" value="Claim bound" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="bound">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-subtitle" value="Ready condition + pod name" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="bound">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-metadata" value="Resolve actual pod IP" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="bound">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="bound">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="bound-badge" value="K8S" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="bound">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="ready" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="ready">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-icon" value="" style="shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="ready">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-title" value="Configure leaf" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ready">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-subtitle" value="Standby listener then SetupAsync" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ready">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-metadata" value="Only then start A2A turn" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ready">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="ready">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="ready-badge" value="K8S" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="ready">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-1" value="launch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="dispatch" target="claim">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-2" value="waiting" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="claim" target="pending">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-3" value="progress" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="pending" target="observer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-4" value="bound" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="claim" target="bound">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-5" value="setup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="bound" target="ready">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="note-0" value="Provisioning events distinguish capacity wait from a silent execution stall." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="378" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-1" value="Claim Ready is controller binding, not configured AgentHost readiness." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="393" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-2" value="The configure diagram owns the credential and endpoint-registration sequence." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="408" width="744" height="14" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

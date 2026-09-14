@@ -1,0 +1,748 @@
+{
+  "title": "Credentials: authority stays in the control plane",
+  "nodes": [
+    {
+      "id": "sa",
+      "label": "API + Worker SAs",
+      "subLabel": "Separate Kubernetes RBAC",
+      "meta": "AKS OIDC federation",
+      "icon": "globe",
+      "shape": "mxgraph.kubernetes.icon",
+      "badge": {
+        "text": "FEDERATE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=sa;fillColor=#00666d;strokeColor=none;strokeWidth=1;",
+      "group": "s-control"
+    },
+    {
+      "id": "mi",
+      "label": "API managed identity",
+      "subLabel": "Secrets User + Secrets Officer",
+      "meta": "agentweaver-api-identity",
+      "icon": "identity",
+      "shape": "image",
+      "badge": {
+        "text": "PRIVILEGED",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+      "group": "s-control"
+    },
+    {
+      "id": "vault",
+      "label": "Azure Key Vault",
+      "subLabel": "Credential and app-secret authority",
+      "meta": "Runtime and CSI consumers",
+      "icon": "vault",
+      "shape": "image",
+      "badge": {
+        "text": "VAULT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+      "group": "s-control"
+    },
+    {
+      "id": "broker",
+      "label": "Capability broker",
+      "subLabel": "Fence run + purpose before/after read",
+      "meta": "No ambient user-token lookup",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "RUN BOUND",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+      "group": "s-control"
+    },
+    {
+      "id": "hmi",
+      "label": "AgentHost identity",
+      "subLabel": "Separate ServiceAccount federation",
+      "meta": "No Key Vault role assignments",
+      "icon": "identity",
+      "shape": "image",
+      "badge": {
+        "text": "NO VAULT",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;fillColor=#635c57;strokeColor=#635c57;strokeWidth=1;",
+      "group": "s-host"
+    },
+    {
+      "id": "configured",
+      "label": "AgentHost runtime",
+      "subLabel": "One-time /configure delivery",
+      "meta": "Copilot or BYOK; repo separate",
+      "icon": "bot",
+      "shape": "mxgraph.kubernetes.icon",
+      "badge": {
+        "text": "IN MEMORY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=pod;fillColor=#0e700e;strokeColor=none;strokeWidth=1;",
+      "group": "s-host"
+    },
+    {
+      "id": "csi",
+      "label": "CSI app secrets",
+      "subLabel": "SecretProviderClass configuration",
+      "meta": "Files + synced secretKeyRef",
+      "icon": "server",
+      "shape": "mxgraph.kubernetes.icon",
+      "badge": {
+        "text": "API / WORKER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=svc;fillColor=#00666d;strokeColor=none;strokeWidth=1;",
+      "group": "s-delivery"
+    },
+    {
+      "id": "oauth",
+      "label": "OAuth certificates",
+      "subLabel": "API runtime SecretClient",
+      "meta": "Usable active / previous versions",
+      "icon": "vault",
+      "shape": "image",
+      "badge": {
+        "text": "API ONLY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;fillColor=#00666d;strokeColor=#00666d;strokeWidth=1;",
+      "group": "s-delivery"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP resource server",
+      "subLabel": "Agentweaver broker JWT only",
+      "meta": "Exact /mcp + mcp:invoke",
+      "icon": "server",
+      "shape": "mxgraph.kubernetes.icon",
+      "badge": {
+        "text": "NO MOUNTS",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=svc;fillColor=#0e700e;strokeColor=none;strokeWidth=1;",
+      "group": "s-delivery"
+    }
+  ],
+  "edges": [
+    {
+      "from": "sa",
+      "to": "mi",
+      "label": "federate",
+      "loopback": false
+    },
+    {
+      "from": "mi",
+      "to": "vault",
+      "label": "authorize",
+      "loopback": false
+    },
+    {
+      "from": "vault",
+      "to": "broker",
+      "label": "redeem",
+      "loopback": false
+    },
+    {
+      "from": "broker",
+      "to": "configured",
+      "label": "configure",
+      "loopback": false
+    },
+    {
+      "from": "hmi",
+      "to": "configured",
+      "label": "pod identity",
+      "loopback": false
+    },
+    {
+      "from": "vault",
+      "to": "csi",
+      "label": "app secrets",
+      "loopback": false
+    },
+    {
+      "from": "vault",
+      "to": "oauth",
+      "label": "cert versions",
+      "loopback": false
+    },
+    {
+      "from": "configured",
+      "to": "mcp",
+      "label": "Assistant JWT",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "s-control",
+      "label": "TRUSTED CONTROL PLANE"
+    },
+    {
+      "id": "s-host",
+      "label": "ISOLATED AGENTHOST"
+    },
+    {
+      "id": "s-delivery",
+      "label": "DISTINCT DELIVERY CHANNELS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "sa",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 239.39130434782604
+        },
+        "data": {
+          "id": "sa",
+          "label": "API + Worker SAs",
+          "subLabel": "Separate Kubernetes RBAC",
+          "meta": "AKS OIDC federation",
+          "icon": "globe",
+          "shape": "mxgraph.kubernetes.icon",
+          "badge": {
+            "text": "FEDERATE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=sa;fillColor=#00666d;strokeColor=none;strokeWidth=1;",
+          "group": "s-control"
+        }
+      },
+      {
+        "id": "mi",
+        "type": "card",
+        "position": {
+          "x": 708.6608695652174,
+          "y": 225.39130434782604
+        },
+        "data": {
+          "id": "mi",
+          "label": "API managed identity",
+          "subLabel": "Secrets User + Secrets Officer",
+          "meta": "agentweaver-api-identity",
+          "icon": "identity",
+          "shape": "image",
+          "badge": {
+            "text": "PRIVILEGED",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+          "group": "s-control"
+        }
+      },
+      {
+        "id": "vault",
+        "type": "card",
+        "position": {
+          "x": 708.6608695652174,
+          "y": 469.3913043478261
+        },
+        "data": {
+          "id": "vault",
+          "label": "Azure Key Vault",
+          "subLabel": "Credential and app-secret authority",
+          "meta": "Runtime and CSI consumers",
+          "icon": "vault",
+          "shape": "image",
+          "badge": {
+            "text": "VAULT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+          "group": "s-control"
+        }
+      },
+      {
+        "id": "broker",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 469.3913043478261
+        },
+        "data": {
+          "id": "broker",
+          "label": "Capability broker",
+          "subLabel": "Fence run + purpose before/after read",
+          "meta": "No ambient user-token lookup",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "RUN BOUND",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+          "group": "s-control"
+        }
+      },
+      {
+        "id": "hmi",
+        "type": "card",
+        "position": {
+          "x": 1207.0608695652172,
+          "y": 225.39130434782604
+        },
+        "data": {
+          "id": "hmi",
+          "label": "AgentHost identity",
+          "subLabel": "Separate ServiceAccount federation",
+          "meta": "No Key Vault role assignments",
+          "icon": "identity",
+          "shape": "image",
+          "badge": {
+            "text": "NO VAULT",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;fillColor=#635c57;strokeColor=#635c57;strokeWidth=1;",
+          "group": "s-host"
+        }
+      },
+      {
+        "id": "configured",
+        "type": "card",
+        "position": {
+          "x": 1207.0608695652172,
+          "y": 483.3913043478261
+        },
+        "data": {
+          "id": "configured",
+          "label": "AgentHost runtime",
+          "subLabel": "One-time /configure delivery",
+          "meta": "Copilot or BYOK; repo separate",
+          "icon": "bot",
+          "shape": "mxgraph.kubernetes.icon",
+          "badge": {
+            "text": "IN MEMORY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=pod;fillColor=#0e700e;strokeColor=none;strokeWidth=1;",
+          "group": "s-host"
+        }
+      },
+      {
+        "id": "csi",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 729.5652173913045
+        },
+        "data": {
+          "id": "csi",
+          "label": "CSI app secrets",
+          "subLabel": "SecretProviderClass configuration",
+          "meta": "Files + synced secretKeyRef",
+          "icon": "server",
+          "shape": "mxgraph.kubernetes.icon",
+          "badge": {
+            "text": "API / WORKER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=svc;fillColor=#00666d;strokeColor=none;strokeWidth=1;",
+          "group": "s-delivery"
+        }
+      },
+      {
+        "id": "oauth",
+        "type": "card",
+        "position": {
+          "x": 708.6608695652174,
+          "y": 743.5652173913045
+        },
+        "data": {
+          "id": "oauth",
+          "label": "OAuth certificates",
+          "subLabel": "API runtime SecretClient",
+          "meta": "Usable active / previous versions",
+          "icon": "vault",
+          "shape": "image",
+          "badge": {
+            "text": "API ONLY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;fillColor=#00666d;strokeColor=#00666d;strokeWidth=1;",
+          "group": "s-delivery"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 1207.0608695652172,
+          "y": 743.5652173913045
+        },
+        "data": {
+          "id": "mcp",
+          "label": "MCP resource server",
+          "subLabel": "Agentweaver broker JWT only",
+          "meta": "Exact /mcp + mcp:invoke",
+          "icon": "server",
+          "shape": "mxgraph.kubernetes.icon",
+          "badge": {
+            "text": "NO MOUNTS",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.icon;prIcon=svc;fillColor=#0e700e;strokeColor=none;strokeWidth=1;",
+          "group": "s-delivery"
+        }
+      },
+      {
+        "id": "group-s-control",
+        "type": "band",
+        "position": {
+          "x": 178.26086956521738,
+          "y": 161.39130434782604
+        },
+        "style": {
+          "width": 902.4,
+          "height": 464.0000000000001
+        },
+        "data": {
+          "label": "TRUSTED CONTROL PLANE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-s-control-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.26086956521738,
+          "y": 177.39130434782604
+        },
+        "data": {
+          "label": "TRUSTED CONTROL PLANE",
+          "width": 862.4
+        }
+      },
+      {
+        "id": "group-s-host",
+        "type": "band",
+        "position": {
+          "x": 1175.0608695652172,
+          "y": 161.39130434782604
+        },
+        "style": {
+          "width": 404,
+          "height": 450.0000000000001
+        },
+        "data": {
+          "label": "ISOLATED AGENTHOST",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-s-host-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 1195.0608695652172,
+          "y": 177.39130434782604
+        },
+        "data": {
+          "label": "ISOLATED AGENTHOST",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-s-delivery",
+        "type": "band",
+        "position": {
+          "x": 178.26086956521738,
+          "y": 665.5652173913045
+        },
+        "style": {
+          "width": 1400.7999999999997,
+          "height": 220
+        },
+        "data": {
+          "label": "DISTINCT DELIVERY CHANNELS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-s-delivery-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.26086956521738,
+          "y": 681.5652173913045
+        },
+        "data": {
+          "label": "DISTINCT DELIVERY CHANNELS",
+          "width": 1360.7999999999997
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "sa",
+        "target": "mi",
+        "label": "federate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.2608695652174,
+              "y": 291.391304347826
+            },
+            {
+              "x": 708.6608695652174,
+              "y": 291.391304347826
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 629.4608695652173,
+            "y": 291.391304347826
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "mi",
+        "target": "vault",
+        "label": "authorize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 878.6608695652174,
+              "y": 357.391304347826
+            },
+            {
+              "x": 878.6608695652174,
+              "y": 469.3913043478261
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 878.6608695652174,
+            "y": 413.39130434782606
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "vault",
+        "target": "broker",
+        "label": "redeem",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 708.6608695652174,
+              "y": 535.3913043478261
+            },
+            {
+              "x": 582.2608695652174,
+              "y": 535.3913043478261
+            },
+            {
+              "x": 582.2608695652174,
+              "y": 518.0579710144928
+            },
+            {
+              "x": 550.2608695652174,
+              "y": 518.0579710144928
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 645.4608695652173,
+            "y": 535.3913043478261
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "broker",
+        "target": "configured",
+        "label": "configure",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.2608695652174,
+              "y": 552.7246376811595
+            },
+            {
+              "x": 582.2608695652174,
+              "y": 552.7246376811595
+            },
+            {
+              "x": 582.2608695652174,
+              "y": 650.5552173913045
+            },
+            {
+              "x": 1175.0608695652172,
+              "y": 650.5552173913045
+            },
+            {
+              "x": 1175.0608695652172,
+              "y": 535.3913043478261
+            },
+            {
+              "x": 1207.0608695652172,
+              "y": 535.3913043478261
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 790.2608695652174,
+            "y": 650.5552173913045
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "hmi",
+        "target": "configured",
+        "label": "pod identity",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1377.0608695652172,
+              "y": 357.391304347826
+            },
+            {
+              "x": 1377.0608695652172,
+              "y": 483.3913043478261
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1377.0608695652172,
+            "y": 420.39130434782606
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "vault",
+        "target": "csi",
+        "label": "app secrets",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 844.6608695652174,
+              "y": 601.3913043478261
+            },
+            {
+              "x": 844.6608695652174,
+              "y": 717.3913043478261
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 717.3913043478261
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 795.5652173913045
+            },
+            {
+              "x": 210.26086956521738,
+              "y": 795.5652173913045
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 644.6608695652174,
+            "y": 717.3913043478261
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "vault",
+        "target": "oauth",
+        "label": "cert versions",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 912.6608695652174,
+              "y": 601.3913043478261
+            },
+            {
+              "x": 912.6608695652174,
+              "y": 711.5652173913045
+            },
+            {
+              "x": 878.6608695652174,
+              "y": 711.5652173913045
+            },
+            {
+              "x": 878.6608695652174,
+              "y": 743.5652173913045
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 912.6608695652174,
+              "y": 678.513043478261
+            },
+            "to": {
+              "x": 920.6608695652174,
+              "y": 678.513043478261
+            }
+          },
+          "labelPos": {
+            "x": 987.8608695652174,
+            "y": 678.513043478261
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "configured",
+        "target": "mcp",
+        "label": "Assistant JWT",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1377.0608695652172,
+              "y": 587.3913043478261
+            },
+            {
+              "x": 1377.0608695652172,
+              "y": 743.5652173913045
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1377.0608695652172,
+            "y": 665.4782608695652
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1755.8434782608697,
+    "canvasHeight": 1029.304347826087
+  }
+}

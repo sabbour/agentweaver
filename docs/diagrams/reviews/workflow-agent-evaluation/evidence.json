@@ -1,0 +1,167 @@
+{
+  "owner": "astra-workflow-assets",
+  "disposition": "retain",
+  "scope": "Only assigned source/raster/hash/generated cleanup/review artifacts; no inventory writes.",
+  "model": {
+    "title": "Agent Evaluation workflow",
+    "nodes": [
+      {
+        "id": "eval-setup",
+        "type": "prompt",
+        "label": "Evaluation Setup",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:14",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "eval-run",
+        "type": "prompt",
+        "label": "Evaluation Runs",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:20",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "eval-collect",
+        "type": "prompt",
+        "label": "Collect Results",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:26",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "safety-gate",
+        "type": "check",
+        "label": "Safety Gate",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "rai",
+        "branches": [
+          "revise",
+          "safety-failed",
+          "no-changes",
+          "review"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:32",
+        "detail": "Verdict routing",
+        "metadata": "rai"
+      },
+      {
+        "id": "report",
+        "type": "prompt",
+        "label": "Evaluation Report",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:44",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "terminal-safety-failed",
+        "type": "terminal",
+        "label": "Safety Failed",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:50",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "done",
+        "type": "terminal",
+        "label": "Done",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:56",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      }
+    ],
+    "edges": [
+      {
+        "source": "eval-setup",
+        "target": "eval-run",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:63\u201364"
+      },
+      {
+        "source": "eval-run",
+        "target": "eval-collect",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:66\u201367"
+      },
+      {
+        "source": "eval-collect",
+        "target": "safety-gate",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:69\u201370"
+      },
+      {
+        "source": "safety-gate",
+        "target": "eval-setup",
+        "label": "revise",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:73\u201375"
+      },
+      {
+        "source": "safety-gate",
+        "target": "terminal-safety-failed",
+        "label": "safety-failed",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:77\u201379"
+      },
+      {
+        "source": "safety-gate",
+        "target": "done",
+        "label": "no-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:81\u201383"
+      },
+      {
+        "source": "safety-gate",
+        "target": "report",
+        "label": "review",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:85\u201387"
+      },
+      {
+        "source": "report",
+        "target": "done",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:89\u201390"
+      }
+    ],
+    "main": [
+      "eval-setup",
+      "eval-run",
+      "eval-collect",
+      "safety-gate",
+      "report"
+    ],
+    "note": "Authored graph \u2022 all YAML branches retained",
+    "footer": "Evaluation Runs and Collect Results are prompt steps, not fan-out / fan-in."
+  },
+  "supplied_research": {
+    "component_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "flow_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "assurance": "Parent reports independent YAML tuple equality: 8/15/11/7/14/6/17 edges. CatalogWorkflowBindingTests gate theory includes evaluation; bindability theory does not.",
+    "reconciled_facts": "Catalog graphs retained, not legacy visuals. No authored merge/PR/Scribe in seven catalogs. Default has explicit merge -> PR -> Scribe. Selection is trigger agnostic; overrides precede singleton, 2 parse attempts, exception fallback immediate."
+  },
+  "visual_sources": [
+    "docs/diagrams/drawio/fluent-template.drawio",
+    "docs/diagrams/drawio/fluent-library.xml",
+    "apps/web/src/components/WorkflowGraphPanel.tsx:1\u201390"
+  ],
+  "assets": "Native diagrams.net flowchart process, decision, document and terminal shapes. No external logos. Native shape implementations distributed with pinned draw.io Desktop 31.4.5 (Apache-2.0 diagrams.net); repository Fluent chrome.",
+  "classifications": {
+    "eval-setup": "native:flowchart",
+    "eval-run": "native:flowchart",
+    "eval-collect": "native:flowchart",
+    "safety-gate": "native:flowchart",
+    "report": "native:flowchart",
+    "terminal-safety-failed": "native:flowchart",
+    "done": "native:flowchart"
+  }
+}

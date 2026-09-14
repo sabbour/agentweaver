@@ -1,0 +1,57 @@
+{
+  "added": [
+    "docs/diagrams/src/workflow-agent-evaluation.drawio"
+  ],
+  "modified": [
+    "docs/diagrams/workflow-agent-evaluation.png",
+    "docs/diagrams/workflow-agent-evaluation.hash.txt"
+  ],
+  "removed": [
+    "docs/diagrams/src/workflow-agent-evaluation.json",
+    "docs/diagrams/drawio/generated/workflow-agent-evaluation.drawio"
+  ],
+  "reviews": [
+    "docs/diagrams/reviews/workflow-agent-evaluation/author_workflows.py",
+    "docs/diagrams/reviews/workflow-agent-evaluation/evidence.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/finish_workflows.py",
+    "docs/diagrams/reviews/workflow-agent-evaluation/growth.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/iteration-manifest.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/legacy-graph.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/ownership.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pass-01-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pass-01-upgrade-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pass-02-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pass-03-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pass-04-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/pitch-print-contact.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/publication-check.txt",
+    "docs/diagrams/reviews/workflow-agent-evaluation/research-assurance.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/research-components.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/research-flows.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/validation.json",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-upgrade-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-upgrade.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-upgrade.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-upgrade.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-02-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-02.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-02.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-02.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-03-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-03.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-03.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-03.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-04-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-04.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-04.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-04.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pitch-print.png",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pitch.drawio",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pitch.md",
+    "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pitch.png"
+  ]
+}

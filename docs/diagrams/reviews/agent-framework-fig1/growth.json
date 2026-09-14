@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 2373,
+  "result_meaningful_xml": 24855,
+  "baseline_visible_structures": 9,
+  "result_visible_structures": 88,
+  "growth_ratio": 10.474083,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\agent-framework-fig1\\agent-framework-fig1-pitch.drawio",
+  "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\agent-framework-fig1\\agent-framework-fig1-pass-01.drawio"
+}

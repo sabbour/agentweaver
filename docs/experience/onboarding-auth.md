@@ -11,7 +11,7 @@ See also: [Overview](./00-overview.md), [Projects](./projects.md), [MCP client e
 The web UI and MCP server identify each caller.
 
 - The web UI uses Microsoft Entra ID.
-- The MCP server accepts its configured bearer-token methods.
+- The MCP server accepts Agentweaver broker tokens for its exact MCP resource.
 - The GitHub Copilot App provides model-provider access.
 - The GitHub Repo App provides repository access.
 
@@ -27,10 +27,13 @@ The browser returns through `/auth/entra/callback`. Agentweaver keeps authorizat
 
 ![First-run web UI experience: User, web UI, Agentweaver API, Microsoft Entra ID](../diagrams/experience-onboarding-auth-fig1.png)
 
-<!-- Rendered from ../diagrams/src/experience-onboarding-auth-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/experience-onboarding-auth-fig1.drawio.
+     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
+
+For normal web sign-in, the callback returns a one-time exchange code to the frontend.
+The frontend redeems it through `/api/auth/session/exchange`, which issues the browser
+session. Entra's authorization code and the server-held PKCE verifier are a separate
+exchange with Microsoft; do not confuse either with an MCP broker token.
 
 ## Setup readiness
 
@@ -108,34 +111,45 @@ For loopback redirect URIs, registered URI matching ignores the port when the sc
 The MCP OAuth flow has four visible phases:
 
 1. **Discovery.** The client learns that `/mcp` is protected, discovers the protected-resource metadata, then discovers Agentweaver's Authorization Server metadata and JWKS URI.
-2. **Consent.** The client opens a browser to Agentweaver's OAuth authorize endpoint. Agentweaver redirects the human to GitHub. The user signs in and approves the GitHub App / OAuth request.
-3. **Token issuance.** Agentweaver enforces organization membership when configured, redirects an Agentweaver authorization code back to the MCP client's redirect URI, and exchanges that code plus the PKCE verifier for an Agentweaver JWT and rotating refresh token.
+2. **Sign-in and consent.** The client opens `/oauth/authorize` in a browser. Without an Entra-backed browser session, the page offers sign-in through `/auth/entra/authorize`; the Entra callback resumes the saved request through `/oauth/resume`. Agentweaver then asks the human to approve the client's requested access. An existing consent can be reused unless the client requests consent again.
+3. **Token issuance.** OpenIddict returns an authorization code to the client's validated redirect URI. The client redeems it at `/oauth/token` with its PKCE verifier, the same redirect URI, and the exact MCP resource. An approved `offline_access` request enables refresh tokens. Denial returns an OAuth error, not access.
 4. **Tool use.** The client calls `/mcp` with `Authorization: Bearer <Agentweaver JWT>`. The MCP server validates the JWT offline using JWKS, then forwards the same bearer token to the API during tool calls.
 
-![MCP OAuth and bearer-token flow: User, MCP client, Agentweaver MCP server, Agentweaver API / Authorization Server, GitHub, Agentweaver API resources](../diagrams/experience-onboarding-auth-fig2.png)
+![MCP broker access: client discovery, Entra browser sign-in and consent, PKCE token exchange, validated MCP calls forwarded to the API](../diagrams/experience-onboarding-auth-fig2.png)
 
-<!-- Rendered from ../diagrams/src/experience-onboarding-auth-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/experience-onboarding-auth-fig2.drawio.
+     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
 
-The Agentweaver JWT is short-lived, signed with RS256, and bound to the MCP resource audience. It carries the issuer, audience, subject, GitHub login, scope `mcp:invoke`, optional organization claim, lifetime claims, and a JWT ID used for revocation. The MCP server validates signature, issuer, audience, lifetime, and algorithm using cached JWKS. The API validates again when the token is forwarded and checks revocation state for the token ID.
+The broker JWT is signed with keyed RS256 and bound to the single exact
+`<public-origin>/mcp` audience. Its subject comes from the Entra browser identity,
+not a GitHub login. MCP uses OpenIddict discovery/JWKS validation, then checks the issuer,
+audience, signing key ID, algorithm, subject, and `mcp:invoke` scope. The API independently
+validates the forwarded credential and enforces platform and project authorization.
 
-Refresh tokens are opaque to the client and stored by Agentweaver as hashes. Refresh is rotating: each successful refresh consumes the presented token and issues a successor in the same chain. Reusing a consumed or revoked refresh token revokes the chain.
+Refresh tokens are opaque reference tokens managed by OpenIddict. Refresh-token family
+tracking and replay handling prevent a consumed or revoked grant from remaining a reusable
+credential. Clients should use their OAuth library's refresh flow, not copy tokens manually.
 
-## MCP bearer acceptance order
+## MCP broker-only acceptance
 
-The hosted MCP server accepts bearer tokens in this order:
+There is one public MCP credential class: an Agentweaver broker token for the exact
+resource and scope. There is **no** automation-key, raw-GitHub, or direct-Entra fallback.
 
-1. **Automation keys.** Configured automation keys are checked first through the MCP API-key registry. They support machine-to-machine callers such as CI, scripts, and controlled service integrations. The registry maps each key to an accountable configured user.
-2. **Agentweaver JWTs.** If the bearer looks like an Agentweaver OAuth access token, the MCP server validates it offline through the Authorization Server JWKS. The token must have the expected issuer, audience, expiry, and RS256 signature.
-3. **Raw GitHub tokens while enabled.** As a transition path, the MCP server can validate a raw GitHub bearer token by calling GitHub's user API and caching the result briefly. This path is controlled by configuration and can be turned off once clients use Agentweaver OAuth.
+- No token: `401` with protected-resource metadata and scope in the challenge, without an error.
+- Invalid token: `401` with `invalid_token`.
+- Valid broker token without `mcp:invoke`: `403` with `insufficient_scope`.
+- Health and protected-resource discovery remain public.
 
-If no token is supplied, the MCP server returns a bearer challenge that advertises the protected-resource metadata URL. If a token is supplied but fails all accepted paths, it returns `401` with `invalid_token`. The health check and OAuth protected-resource metadata remain unauthenticated so clients and operators can discover how to authenticate.
+HTTP tool calls forward only the validated broker token. STDIO has no inbound HTTP
+context, so it forwards `AGENTWEAVER_TOKEN`, which must itself be a broker token.
+It never falls back to an API key.
 
-Once a bearer token is accepted, the MCP server stores both the resolved identity and the original bearer for the request. Tool implementations then call the backend API with that same bearer token. This keeps the backend authorization model honest: the API sees the user's Agentweaver JWT or GitHub token, not just the MCP process identity. In local STDIO mode, when there is no inbound HTTP request context, the MCP client falls back to its configured API key for backend calls.
-
-Downstream resource authorization remains ownership-based. A valid bearer token and allowed org membership let the caller reach protected APIs, but project, team, run, backlog, workflow, workspace, and memory operations still require the caller to own the target resource. Agentweaver does not assign superuser privileges from GitHub usernames, including `admin`.
+Authentication is not authorization. Project endpoints apply the required **Viewer**,
+**Contributor**, or **Owner** role in addition to platform access. GitHub capability consent
+does not create those assignments, and a GitHub username is not an administrator grant.
+See `apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:67`,
+`apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359`, and
+`apps/Agentweaver.Api/Security/ProjectAuthorization.cs:59`.
 
 ## GitHub capability tools in MCP
 
@@ -187,9 +201,12 @@ Use a literal loopback HTTP redirect URI such as `http://127.0.0.1:<port>/callba
 `http://[::1]:<port>/callback`. The client must redeem the authorization code with the exact
 redirect URI from the authorization request.
 
-### Organization access is denied
+### Platform or project access is denied
 
-Agentweaver can require membership in a configured GitHub organization, and some deployments also restrict by team. GitHub SAML enforcement can make a valid member look unverifiable if the token has not been authorized for that organization. The safe outcome is denial or retry rather than allowing an unproven caller. Re-authorize GitHub with the required organization access, ensure SAML SSO is approved for the token, and confirm the account is in the required org or team.
+Check the signed-in Entra account and its platform role or project assignment.
+Ask an authorized administrator or project owner to review access. Reconnecting GitHub
+cannot repair a missing Agentweaver role. A separate Repo App repository-access failure
+must be resolved through the GitHub capability connection and authorized repository selection.
 
 ### Token expires during an MCP session
 
@@ -207,9 +224,120 @@ If the browser handoff expires before the user completes GitHub authorization, s
 - GitHub client secrets and GitHub access-token exchanges happen server-side.
 - Browser redirects carry one-time codes, not long-lived GitHub tokens.
 - OAuth bootstrap and discovery routes are public because clients need them before they have a token.
-- Protected web API and MCP tool calls use bearer tokens.
+- Web API calls use the authenticated browser session or supported Entra credentials;
+  external MCP calls use broker tokens.
 - MCP validates Agentweaver JWTs offline via JWKS, then forwards the caller's bearer token to the API.
-- Organization membership is enforced at issuance for MCP OAuth and on protected API access where configured.
-- Automation keys are accepted for controlled machine-to-machine use, not as an interactive user sign-in replacement.
+- Platform roles and project assignments remain authoritative after broker authentication.
+- Raw Entra tokens, GitHub tokens, and API keys are rejected at the public MCP boundary.
 
 Humans sign in with Entra. They authorize each GitHub capability only when the current task requires it.
+
+<!-- diagram-context:experience-onboarding-auth-fig1:start -->
+<details id="diagram-context-experience-onboarding-auth-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Browser sign-in and readiness</td></tr>
+<tr><td>takeaway</td><td>Entra establishes identity; AI readiness and optional GitHub capabilities remain separate.</td></tr>
+<tr><td>group-title-0</td><td>BROWSER SIGN-IN</td></tr>
+<tr><td>group-title-1</td><td>SESSION AND SETUP</td></tr>
+<tr><td>Browser</td><td>Browser</td></tr>
+<tr><td>Browser</td><td>Start Entra sign-in</td></tr>
+<tr><td>Browser</td><td>/auth/entra/authorize</td></tr>
+<tr><td>Browser</td><td>The API binds this request to expiring browser state.</td></tr>
+<tr><td>Auth API</td><td>Auth API</td></tr>
+<tr><td>Auth API</td><td>Save state and PKCE</td></tr>
+<tr><td>Auth API</td><td>verifier + nonce</td></tr>
+<tr><td>Auth API</td><td>The verifier stays server-side. Redirect carries a challenge.</td></tr>
+<tr><td>Microsoft Entra</td><td>Microsoft Entra</td></tr>
+<tr><td>Microsoft Entra</td><td>Authenticate identity</td></tr>
+<tr><td>Microsoft Entra</td><td>code + state callback</td></tr>
+<tr><td>Microsoft Entra</td><td>Not GitHub login; not repository authorization.</td></tr>
+<tr><td>Ready app shell</td><td>Ready app shell</td></tr>
+<tr><td>Ready app shell</td><td>Continue when ready</td></tr>
+<tr><td>Ready app shell</td><td>platform access + AI</td></tr>
+<tr><td>Ready app shell</td><td>GitHub Repo App access is optional for GitHub work.</td></tr>
+<tr><td>Browser session</td><td>Browser session</td></tr>
+<tr><td>Browser session</td><td>One-time code exchange</td></tr>
+<tr><td>Browser session</td><td>session credential</td></tr>
+<tr><td>Browser session</td><td>Frontend exchanges a code; no raw token in callback URL.</td></tr>
+<tr><td>Callback checks</td><td>Callback checks</td></tr>
+<tr><td>Callback checks</td><td>Consume state once</td></tr>
+<tr><td>Callback checks</td><td>redeem code + verifier</td></tr>
+<tr><td>Callback checks</td><td>Validate Entra response and bound browser callback.</td></tr>
+<tr><td>e0</td><td>authorize</td></tr>
+<tr><td>e1</td><td>redirect</td></tr>
+<tr><td>e2</td><td>callback</td></tr>
+<tr><td>e3</td><td>exchange</td></tr>
+<tr><td>e4</td><td>setup check</td></tr>
+<tr><td>note</td><td>Session identity does not grant repository access, provider readiness, or project membership.</td></tr>
+<tr><td>n0</td><td>The API binds this request
+to expiring browser state.</td></tr>
+<tr><td>n1</td><td>The verifier stays server-side.
+Redirect carries a challenge.</td></tr>
+<tr><td>n2</td><td>Not GitHub login;
+not repository authorization.</td></tr>
+<tr><td>n3</td><td>GitHub Repo App access is
+optional for GitHub work.</td></tr>
+<tr><td>n4</td><td>Frontend exchanges a code;
+no raw token in callback URL.</td></tr>
+<tr><td>n5</td><td>Validate Entra response and
+bound browser callback.</td></tr>
+<tr><td>groups</td><td>BROWSER SIGN-IN; SESSION AND SETUP</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-onboarding-auth-fig1:end -->
+
+<!-- diagram-context:experience-onboarding-auth-fig2:start -->
+<details id="diagram-context-experience-onboarding-auth-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>MCP uses broker credentials</td></tr>
+<tr><td>takeaway</td><td>An Entra-backed consent flow issues the exact-resource credential accepted by MCP.</td></tr>
+<tr><td>group-title-0</td><td>DISCOVERY AND HUMAN CONSENT</td></tr>
+<tr><td>group-title-1</td><td>TOKEN AND RESOURCE ENFORCEMENT</td></tr>
+<tr><td>MCP client</td><td>MCP client</td></tr>
+<tr><td>MCP client</td><td>Discover resource/issuer</td></tr>
+<tr><td>MCP client</td><td>401 challenge + metadata</td></tr>
+<tr><td>MCP client</td><td>Use the advertised resource and authorization server.</td></tr>
+<tr><td>Browser consent</td><td>Browser consent</td></tr>
+<tr><td>Browser consent</td><td>Entra-backed session</td></tr>
+<tr><td>Browser consent</td><td>/oauth/authorize + PKCE</td></tr>
+<tr><td>Browser consent</td><td>Show client and requested access; Allow or Deny.</td></tr>
+<tr><td>OpenIddict</td><td>OpenIddict</td></tr>
+<tr><td>OpenIddict</td><td>Bind grant and code</td></tr>
+<tr><td>OpenIddict</td><td>client / redirect / resource</td></tr>
+<tr><td>OpenIddict</td><td>Existing consent may skip a prompt; denial is not success.</td></tr>
+<tr><td>Authorized API</td><td>Authorized API</td></tr>
+<tr><td>Authorized API</td><td>Enforce resource access</td></tr>
+<tr><td>Authorized API</td><td>project role / membership</td></tr>
+<tr><td>Authorized API</td><td>MCP forwards the validated bearer; API checks again.</td></tr>
+<tr><td>MCP boundary</td><td>MCP boundary</td></tr>
+<tr><td>MCP boundary</td><td>Validate broker token</td></tr>
+<tr><td>MCP boundary</td><td>issuer + RS256 + lifetime</td></tr>
+<tr><td>MCP boundary</td><td>Exact single audience, subject and mcp:invoke.</td></tr>
+<tr><td>Token exchange</td><td>Token exchange</td></tr>
+<tr><td>Token exchange</td><td>Code + verifier</td></tr>
+<tr><td>Token exchange</td><td>/oauth/token</td></tr>
+<tr><td>Token exchange</td><td>Returns Agentweaver token; not raw Entra or GitHub.</td></tr>
+<tr><td>e0</td><td>open</td></tr>
+<tr><td>e1</td><td>allow</td></tr>
+<tr><td>e2</td><td>code grant</td></tr>
+<tr><td>e3</td><td>tool bearer</td></tr>
+<tr><td>e4</td><td>forward</td></tr>
+<tr><td>note</td><td>Invalid/missing token: 401. Missing scope: 403. No API-key or raw Entra/GitHub fallback.</td></tr>
+<tr><td>n0</td><td>Use the advertised resource
+and authorization server.</td></tr>
+<tr><td>n1</td><td>Show client and requested
+access; Allow or Deny.</td></tr>
+<tr><td>n2</td><td>Existing consent may skip a
+prompt; denial is not success.</td></tr>
+<tr><td>n3</td><td>MCP forwards the validated
+bearer; API checks again.</td></tr>
+<tr><td>n4</td><td>Exact single audience,
+subject and mcp:invoke.</td></tr>
+<tr><td>n5</td><td>Returns Agentweaver token;
+not raw Entra or GitHub.</td></tr>
+<tr><td>groups</td><td>DISCOVERY AND HUMAN CONSENT; TOKEN AND RESOURCE ENFORCEMENT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-onboarding-auth-fig2:end -->

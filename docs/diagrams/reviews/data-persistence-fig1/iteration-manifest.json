@@ -1,0 +1,85 @@
+{
+  "diagram": "data-persistence-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "data-persistence-fig1-pitch.drawio",
+    "png": "data-persistence-fig1-pitch.png",
+    "change_record": "data-persistence-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "data-persistence-fig1-pass-01.drawio",
+      "png": "data-persistence-fig1-pass-01.png",
+      "change_record": "data-persistence-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 2,
+      "baseline_meaningful_xml": 2396,
+      "result_meaningful_xml": 21994,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 9.179466
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "data-persistence-fig1-pass-02.drawio",
+      "png": "data-persistence-fig1-pass-02.png",
+      "change_record": "data-persistence-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "data-persistence-fig1-pass-03.drawio",
+      "png": "data-persistence-fig1-pass-03.png",
+      "change_record": "data-persistence-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "data-persistence-fig1-pass-04.drawio",
+      "png": "data-persistence-fig1-pass-04.png",
+      "change_record": "data-persistence-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "pg-to-pgevents",
+          "source": "pg",
+          "target": "pgevents",
+          "relationship": "selected event store",
+          "evidence": "apps/Agentweaver.Api/Program.cs:1026-1054",
+          "result": "clean"
+        },
+        {
+          "id": "sqlite-to-localevents",
+          "source": "sqlite",
+          "target": "localevents",
+          "relationship": "selected event store",
+          "evidence": "apps/Agentweaver.Api/Program.cs:1026-1054",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

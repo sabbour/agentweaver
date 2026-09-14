@@ -1,0 +1,74 @@
+[
+  {
+    "id": "api-access",
+    "source": "api",
+    "target": "caller-junction",
+    "relationship": "API shares persistent services",
+    "evidence": "k8s/base/api-deployment.yaml:338-354,404-409",
+    "result": "clean"
+  },
+  {
+    "id": "worker-access",
+    "source": "worker",
+    "target": "caller-junction",
+    "relationship": "Worker shares persistent services",
+    "evidence": "k8s/base/worker-deployment.yaml:146-160,256-260",
+    "result": "clean"
+  },
+  {
+    "id": "shared-access",
+    "source": "caller-junction",
+    "target": "access-junction",
+    "relationship": "Both platform roles access both persistent services",
+    "evidence": "k8s/base/api-deployment.yaml:338-354; k8s/base/worker-deployment.yaml:146-160",
+    "result": "clean"
+  },
+  {
+    "id": "database-access",
+    "source": "access-junction",
+    "target": "postgres",
+    "relationship": "state / leases",
+    "evidence": "apps/Agentweaver.Api/Program.cs:1027-1074",
+    "result": "clean"
+  },
+  {
+    "id": "workspace-access",
+    "source": "access-junction",
+    "target": "files",
+    "relationship": "workspace",
+    "evidence": "k8s/base/pvc-workspace.yaml:34-51",
+    "result": "clean"
+  },
+  {
+    "id": "a2a-control",
+    "source": "worker",
+    "target": "agenthost",
+    "relationship": "A2A",
+    "evidence": "k8s/base/networkpolicy-agenthost.yaml:35-48; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:326-353",
+    "result": "clean"
+  },
+  {
+    "id": "local-execution",
+    "source": "agenthost",
+    "target": "local",
+    "relationship": "execute",
+    "evidence": "k8s/base/sandbox-template-agenthost.yaml:151-160,332-371",
+    "result": "clean"
+  },
+  {
+    "id": "source-fetch",
+    "source": "files",
+    "target": "local",
+    "relationship": "fetch",
+    "evidence": "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:98-135",
+    "result": "clean"
+  },
+  {
+    "id": "temp-ref",
+    "source": "local",
+    "target": "files",
+    "relationship": "publish ref",
+    "evidence": "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:328-348",
+    "result": "clean"
+  }
+]

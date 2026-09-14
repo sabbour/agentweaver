@@ -1,0 +1,205 @@
+{
+  "diagram": "workflow-software-delivery",
+  "orientation": "A5-portrait",
+  "pitch": {
+    "drawio": "workflow-software-delivery-pitch.drawio",
+    "png": "workflow-software-delivery-pitch.png",
+    "change_record": "workflow-software-delivery-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "workflow-software-delivery-pass-01.drawio",
+      "png": "workflow-software-delivery-pass-01.png",
+      "change_record": "workflow-software-delivery-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 2399,
+      "result_meaningful_xml": 49869,
+      "growth_ratio": 20.787411
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "workflow-software-delivery-pass-02.drawio",
+      "png": "workflow-software-delivery-pass-02.png",
+      "change_record": "workflow-software-delivery-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "workflow-software-delivery-pass-03.drawio",
+      "png": "workflow-software-delivery-pass-03.png",
+      "change_record": "workflow-software-delivery-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "workflow-software-delivery-pass-04.drawio",
+      "png": "workflow-software-delivery-pass-04.png",
+      "change_record": "workflow-software-delivery-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "edge-01",
+          "source": "plan",
+          "target": "implement",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:100\u2013101",
+          "result": "clean"
+        },
+        {
+          "id": "edge-02",
+          "source": "implement",
+          "target": "test-gate",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:103\u2013104",
+          "result": "clean"
+        },
+        {
+          "id": "edge-03",
+          "source": "test-gate",
+          "target": "rai-check",
+          "relationship": "pass",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:107\u2013109",
+          "result": "clean"
+        },
+        {
+          "id": "edge-04",
+          "source": "test-gate",
+          "target": "implement",
+          "relationship": "fail",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:111\u2013113",
+          "result": "clean"
+        },
+        {
+          "id": "edge-05",
+          "source": "rai-check",
+          "target": "implement",
+          "relationship": "revise",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:116\u2013118",
+          "result": "clean"
+        },
+        {
+          "id": "edge-06",
+          "source": "rai-check",
+          "target": "terminal-safety-failed",
+          "relationship": "safety-failed",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:120\u2013122",
+          "result": "clean"
+        },
+        {
+          "id": "edge-07",
+          "source": "rai-check",
+          "target": "done",
+          "relationship": "no-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:124\u2013126",
+          "result": "clean"
+        },
+        {
+          "id": "edge-08",
+          "source": "rai-check",
+          "target": "rubberduck",
+          "relationship": "review",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:128\u2013130",
+          "result": "clean"
+        },
+        {
+          "id": "edge-09",
+          "source": "rubberduck",
+          "target": "code-review",
+          "relationship": "pass",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:132\u2013134",
+          "result": "clean"
+        },
+        {
+          "id": "edge-10",
+          "source": "rubberduck",
+          "target": "implement",
+          "relationship": "revise",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:136\u2013138",
+          "result": "clean"
+        },
+        {
+          "id": "edge-11",
+          "source": "code-review",
+          "target": "build-test",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:141\u2013142",
+          "result": "clean"
+        },
+        {
+          "id": "edge-12",
+          "source": "build-test",
+          "target": "review-gate",
+          "relationship": "approved",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:145\u2013147",
+          "result": "clean"
+        },
+        {
+          "id": "edge-13",
+          "source": "build-test",
+          "target": "implement",
+          "relationship": "request-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:149\u2013151",
+          "result": "clean"
+        },
+        {
+          "id": "edge-14",
+          "source": "build-test",
+          "target": "terminal-declined",
+          "relationship": "declined",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:153\u2013155",
+          "result": "clean"
+        },
+        {
+          "id": "edge-15",
+          "source": "review-gate",
+          "target": "done",
+          "relationship": "approved",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:158\u2013160",
+          "result": "clean"
+        },
+        {
+          "id": "edge-16",
+          "source": "review-gate",
+          "target": "implement",
+          "relationship": "request-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:162\u2013164",
+          "result": "clean"
+        },
+        {
+          "id": "edge-17",
+          "source": "review-gate",
+          "target": "terminal-declined",
+          "relationship": "declined",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/software_delivery.yaml:166\u2013168",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

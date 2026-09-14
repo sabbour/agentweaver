@@ -1,0 +1,424 @@
+{
+  "title": "Specific routes before frontend fallback",
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Public client",
+      "subLabel": "Browser / API / MCP",
+      "meta": "One HTTPS entry point",
+      "icon": "box",
+      "shape": "mxgraph.c4.person",
+      "library": "c4",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=mxgraph.c4.person;html=1;aspect=fixed;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.4;"
+    },
+    {
+      "id": "gateway",
+      "label": "Gateway listener",
+      "subLabel": "Terminate TLS",
+      "meta": "Gateway API routing",
+      "icon": "box",
+      "shape": "mxgraph.cisco19.router",
+      "library": "network",
+      "badge": {
+        "text": "Component",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=mxgraph.cisco19.router;html=1;aspect=fixed;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.4;"
+    },
+    {
+      "id": "match",
+      "label": "HTTPRoute match",
+      "subLabel": "Prefix and exact rules",
+      "meta": "Not every /oauth path",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "api",
+      "label": "API backend",
+      "subLabel": "/api /auth /openapi prefixes",
+      "meta": "Exact OAuth + AS/OIDC discovery",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP backend",
+      "subLabel": "/mcp + protected discovery",
+      "meta": "/mcp/health rewrites /healthz",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend fallback",
+      "subLabel": "/ catches remaining traffic",
+      "meta": "Service :80 -> pod :8080",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "gateway",
+      "label": "HTTPS",
+      "loopback": false
+    },
+    {
+      "from": "gateway",
+      "to": "match",
+      "label": "select",
+      "loopback": false
+    },
+    {
+      "from": "match",
+      "to": "api",
+      "label": "API",
+      "loopback": false
+    },
+    {
+      "from": "match",
+      "to": "mcp",
+      "label": "MCP",
+      "loopback": false
+    },
+    {
+      "from": "match",
+      "to": "frontend",
+      "label": "fallback",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "client",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "client",
+          "label": "Public client",
+          "subLabel": "Browser / API / MCP",
+          "meta": "One HTTPS entry point",
+          "icon": "box",
+          "shape": "mxgraph.c4.person",
+          "library": "c4",
+          "badge": {
+            "text": "Component",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=mxgraph.c4.person;html=1;aspect=fixed;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "gateway",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "gateway",
+          "label": "Gateway listener",
+          "subLabel": "Terminate TLS",
+          "meta": "Gateway API routing",
+          "icon": "box",
+          "shape": "mxgraph.cisco19.router",
+          "library": "network",
+          "badge": {
+            "text": "Component",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=mxgraph.cisco19.router;html=1;aspect=fixed;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "match",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "match",
+          "label": "HTTPRoute match",
+          "subLabel": "Prefix and exact rules",
+          "meta": "Not every /oauth path",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "api",
+          "label": "API backend",
+          "subLabel": "/api /auth /openapi prefixes",
+          "meta": "Exact OAuth + AS/OIDC discovery",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "mcp",
+          "label": "MCP backend",
+          "subLabel": "/mcp + protected discovery",
+          "meta": "/mcp/health rewrites /healthz",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "frontend",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "frontend",
+          "label": "Frontend fallback",
+          "subLabel": "/ catches remaining traffic",
+          "meta": "Service :80 -> pod :8080",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "client",
+        "target": "gateway",
+        "label": "HTTPS",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "gateway",
+        "target": "match",
+        "label": "select",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "match",
+        "target": "api",
+        "label": "API",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1223.5894736842106,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 1223.5894736842106,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 794.6894736842105,
+            "y": 390.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "match",
+        "target": "mcp",
+        "label": "MCP",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1274.5894736842106,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 1274.5894736842106,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 1249.5994736842106,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 1249.5994736842106,
+              "y": 466.66666666666663
+            },
+            {
+              "x": 820.1894736842105,
+              "y": 466.66666666666663
+            },
+            {
+              "x": 820.1894736842105,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1262.0944736842107,
+            "y": 390.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "match",
+        "target": "frontend",
+        "label": "fallback",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1325.5894736842106,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 1325.5894736842106,
+              "y": 466.66666666666663
+            },
+            {
+              "x": 1274.5894736842106,
+              "y": 466.66666666666663
+            },
+            {
+              "x": 1274.5894736842106,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1300.0894736842106,
+            "y": 466.66666666666663
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1639.9315789473685,
+    "canvasHeight": 1047.2710526315789
+  }
+}

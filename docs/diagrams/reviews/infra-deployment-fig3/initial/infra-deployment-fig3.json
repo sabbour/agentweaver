@@ -1,0 +1,129 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Build, retag, deploy, rollout logic",
+  "alt": "Build, retag, deploy, rollout logic: Resolve release variables, Ensure images exist for tag, Build changed images, Retag/import unchanged images, Render manifests with host, ACR, tag, identity, Apply prerequisites, Apply services, gateway, routes, Apply deployments, Wait for rollout and verify",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Vars",
+      "label": "Resolve release variables",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "cluster, ACR, namespace, tag"
+    },
+    {
+      "id": "Images",
+      "label": "Ensure images exist for tag",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "BuildChanged",
+      "label": "Build changed images",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RetagUnchanged",
+      "label": "Retag/import unchanged images",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Render",
+      "label": "Render manifests with host, ACR, tag, identity",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Prereqs",
+      "label": "Apply prerequisites",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "identity, secrets, RBAC, PVCs, policies"
+    },
+    {
+      "id": "Routing",
+      "label": "Apply services, gateway, routes",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Workloads",
+      "label": "Apply deployments",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Rollout",
+      "label": "Wait for rollout and verify",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Vars",
+      "to": "Images"
+    },
+    {
+      "from": "Images",
+      "to": "BuildChanged"
+    },
+    {
+      "from": "Images",
+      "to": "RetagUnchanged"
+    },
+    {
+      "from": "BuildChanged",
+      "to": "Render"
+    },
+    {
+      "from": "RetagUnchanged",
+      "to": "Render"
+    },
+    {
+      "from": "Render",
+      "to": "Prereqs"
+    },
+    {
+      "from": "Prereqs",
+      "to": "Routing"
+    },
+    {
+      "from": "Routing",
+      "to": "Workloads"
+    },
+    {
+      "from": "Workloads",
+      "to": "Rollout"
+    }
+  ]
+}

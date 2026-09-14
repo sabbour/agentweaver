@@ -4,12 +4,11 @@ Project generation model settings let one project choose different GitHub Copilo
 
 ## Flow
 
-![Flow: Project Settings, ProjectRecord, Blueprint generate endpoint, CopilotBlueprintGenerator, IWorkflowGenerator fallback, CoordinatorRunService.ActivateAsync, CopilotCoordinatorSpecDrafter](../diagrams/project-generation-model-settings-fig1.png)
+![Three project model preferences feed generation consumers without replacing provider admission](../diagrams/project-generation-model-settings-fig1.png)
 
-<!-- Rendered from ../diagrams/src/project-generation-model-settings-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/project-generation-model-settings-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec project-generation-model-settings-fig1.
+     Review lineage: ../diagrams/reviews/project-generation-model-settings-fig1/iteration-manifest.json. -->
 
 ## Stored fields
 
@@ -20,6 +19,12 @@ Project generation model settings let one project choose different GitHub Copilo
 The web settings page has a **Generation models** section with three text fields and a **Reset to inherit** action (`apps/web/src/pages/ProjectSettingsPage.tsx:538`). Saving calls `PUT /api/projects/{id}/provider-settings` with the three generation model ids plus the existing default-provider fields (`ProjectSettingsPage.tsx:334`). The API rejects model ids that are not allowed by `IsAllowedModelId` and persists the three values through `ProjectService.UpdateProviderSettingsAsync` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:270`).
 
 Blank values are saved as `null`, which means inherit the configured global generation default in the resolver path (`ProjectSettingsPage.tsx:342`).
+
+Resolution follows project preference, per-flow configuration, shared generation model, then the
+built-in default. These are model preferences, not credential or provider authority. Generative
+operations still require [effective model-provider admission](./api-core.md#effective-model-provider-admission),
+including caller/project/operation binding and pre-call provider revalidation. A saved model ID
+cannot bypass that fence or select an ambient credential.
 
 ## Runtime consumers
 
@@ -49,3 +54,52 @@ The generation paths now preserve the model chosen for the specific project surf
 - [Project generation model settings — Experience](../experience/project-generation-model-settings.md)
 - [Repository blueprint suggestions](../experience/repo-blueprint-suggestions.md)
 - [Coordinator & orchestration](../experience/coordinator-orchestration.md)
+
+<!-- diagram-context:project-generation-model-settings-fig1:start -->
+<details id="diagram-context-project-generation-model-settings-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Generation preferences, not authority</td></tr>
+<tr><td>takeaway</td><td>Three project preferences select models; execution admission separately authorizes use.</td></tr>
+<tr><td>group-title-0</td><td>PERSISTED SELECTION + PRECEDENCE</td></tr>
+<tr><td>group-title-1</td><td>FLOW CONSUMERS + AUTHORITY</td></tr>
+<tr><td>Project settings</td><td>Project settings</td></tr>
+<tr><td>Project settings</td><td>Blueprint · workflow · outcome spec</td></tr>
+<tr><td>Project settings</td><td>Three nullable model preferences</td></tr>
+<tr><td>Project settings</td><td>ProjectSettingsPage.tsx:617-648</td></tr>
+<tr><td>Blueprint generation</td><td>Blueprint generation</td></tr>
+<tr><td>Blueprint generation</td><td>Resolved blueprint preference</td></tr>
+<tr><td>Blueprint generation</td><td>Generation still requires admission</td></tr>
+<tr><td>Blueprint generation</td><td>BlueprintEndpoints.cs:119-141</td></tr>
+<tr><td>Project record</td><td>Project record</td></tr>
+<tr><td>Project record</td><td>Save nullable preference values</td></tr>
+<tr><td>Project record</td><td>Preferences do not contain credentials</td></tr>
+<tr><td>Project record</td><td>ProjectEndpoints.cs:815-817</td></tr>
+<tr><td>Fallback workflow generation</td><td>Fallback workflow generation</td></tr>
+<tr><td>Fallback workflow generation</td><td>Resolved workflow preference</td></tr>
+<tr><td>Fallback workflow generation</td><td>Used when no library workflow selected</td></tr>
+<tr><td>Fallback workflow generation</td><td>BlueprintService.cs:765-773</td></tr>
+<tr><td>Generation model resolver</td><td>Generation model resolver</td></tr>
+<tr><td>Generation model resolver</td><td>Project → per-flow configuration</td></tr>
+<tr><td>Generation model resolver</td><td>Then shared generation model → default</td></tr>
+<tr><td>Generation model resolver</td><td>GenerationModelOptions.cs:37-75</td></tr>
+<tr><td>Coordinator spec drafter</td><td>Coordinator spec drafter</td></tr>
+<tr><td>Coordinator spec drafter</td><td>Resolved outcome-spec preference</td></tr>
+<tr><td>Coordinator spec drafter</td><td>Coordinator input supplies the preference</td></tr>
+<tr><td>Coordinator spec drafter</td><td>CopilotCoordinatorSpecDrafter:145</td></tr>
+<tr><td>Caller + project authority</td><td>Caller + project authority</td></tr>
+<tr><td>Caller + project authority</td><td>Execution-plan / provider admission</td></tr>
+<tr><td>Caller + project authority</td><td>Selection never grants credential access</td></tr>
+<tr><td>Caller + project authority</td><td>AiExecutionPlanService.cs</td></tr>
+<tr><td>Admitted model invocation</td><td>Admitted model invocation</td></tr>
+<tr><td>Admitted model invocation</td><td>Authorized provider execution</td></tr>
+<tr><td>Admitted model invocation</td><td>Selected model and admitted access differ</td></tr>
+<tr><td>Project settings</td><td>save</td></tr>
+<tr><td>Project record</td><td>preferences</td></tr>
+<tr><td>Generation model resolver</td><td>model</td></tr>
+<tr><td>Caller + project authority</td><td>authorize</td></tr>
+<tr><td>scope</td><td>Consumer cards are separate generation flows. The authority row is not a preference inheritance step.</td></tr>
+<tr><td>groups</td><td>PERSISTED SELECTION + PRECEDENCE; FLOW CONSUMERS + AUTHORITY</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:project-generation-model-settings-fig1:end -->

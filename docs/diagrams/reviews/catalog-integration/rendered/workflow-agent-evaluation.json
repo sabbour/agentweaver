@@ -1,0 +1,14 @@
+{
+  "name": "workflow-agent-evaluation",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-agent-evaluation.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-agent-evaluation.png",
+  "source_sha256": "6b0c9b8f57cc1379ee4129f59153aa2cf2864d174f1a3cccad4d9f7d7f6b2c29",
+  "png_sha256": "964e8cc0d28b4ad21f78115ba1e29ab8f32a9499b32bb85a140974e778c5ee9e",
+  "dimensions": [
+    2122,
+    3154
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

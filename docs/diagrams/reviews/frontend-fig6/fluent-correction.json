@@ -1,0 +1,275 @@
+{
+  "diagram": "frontend-fig6",
+  "source_sha256": "6e868b55f0fb1f46fe8d629bcd5256df3a049c05af5f967ee3cba82ae567df95",
+  "png_sha256": "57e6f03c508184fabba529523c3e0846bff4579a870524764197ac7eb2eaee6c",
+  "prior_model": "docs\\diagrams\\reviews\\frontend-fig6\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Entra sign-in and browser session"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The callback returns a one-time code; session exchange delivers the SPA bearer."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "SIGN-IN · API + ENTRA"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "SESSION · PER-TAB BROWSER STATE"
+    },
+    {
+      "cell": "begin-title",
+      "text": "Browser sign-in"
+    },
+    {
+      "cell": "begin-subtitle",
+      "text": "Begin API Entra authorization"
+    },
+    {
+      "cell": "begin-detail",
+      "text": "State binds the browser callback"
+    },
+    {
+      "cell": "begin-meta",
+      "text": "AuthEndpoints.cs"
+    },
+    {
+      "cell": "begin-pill",
+      "text": "AUTHORIZE"
+    },
+    {
+      "cell": "exchange-title",
+      "text": "Session exchange"
+    },
+    {
+      "cell": "exchange-subtitle",
+      "text": "POST the one-time exchange code"
+    },
+    {
+      "cell": "exchange-detail",
+      "text": "Returns validated token + browser session"
+    },
+    {
+      "cell": "exchange-meta",
+      "text": "AuthEndpoints.cs:398-455"
+    },
+    {
+      "cell": "exchange-pill",
+      "text": "EXCHANGE"
+    },
+    {
+      "cell": "entra-title",
+      "text": "Microsoft Entra ID"
+    },
+    {
+      "cell": "entra-subtitle",
+      "text": "Authenticate the user"
+    },
+    {
+      "cell": "entra-detail",
+      "text": "Identity authority, not GitHub OAuth"
+    },
+    {
+      "cell": "entra-meta",
+      "text": "AuthEndpoints.cs"
+    },
+    {
+      "cell": "entra-pill",
+      "text": "IDENTITY"
+    },
+    {
+      "cell": "storage-title",
+      "text": "Per-tab sessionStorage"
+    },
+    {
+      "cell": "storage-subtitle",
+      "text": "Store the SPA bearer"
+    },
+    {
+      "cell": "storage-detail",
+      "text": "No durable localStorage token"
+    },
+    {
+      "cell": "storage-meta",
+      "text": "config.ts:60-138"
+    },
+    {
+      "cell": "storage-pill",
+      "text": "TAB"
+    },
+    {
+      "cell": "callback-title",
+      "text": "API callback"
+    },
+    {
+      "cell": "callback-subtitle",
+      "text": "Validate callback and state"
+    },
+    {
+      "cell": "callback-detail",
+      "text": "Issue a one-time frontend exchange code"
+    },
+    {
+      "cell": "callback-meta",
+      "text": "AuthEndpoints.cs:398-455"
+    },
+    {
+      "cell": "callback-pill",
+      "text": "CALLBACK"
+    },
+    {
+      "cell": "peer-title",
+      "text": "Same-origin peer tab"
+    },
+    {
+      "cell": "peer-subtitle",
+      "text": "BroadcastChannel request/response"
+    },
+    {
+      "cell": "peer-detail",
+      "text": "Transient token transfer to a new tab"
+    },
+    {
+      "cell": "peer-meta",
+      "text": "config.ts:207-240"
+    },
+    {
+      "cell": "peer-pill",
+      "text": "PEER"
+    },
+    {
+      "cell": "frontend-title",
+      "text": "Frontend callback"
+    },
+    {
+      "cell": "frontend-subtitle",
+      "text": "Receive exchange code"
+    },
+    {
+      "cell": "frontend-detail",
+      "text": "Do not treat the code as an access token"
+    },
+    {
+      "cell": "frontend-meta",
+      "text": "AuthEndpoints.cs:398-455"
+    },
+    {
+      "cell": "frontend-pill",
+      "text": "ONE-TIME"
+    },
+    {
+      "cell": "requests-title",
+      "text": "Authenticated requests"
+    },
+    {
+      "cell": "requests-subtitle",
+      "text": "REST and fetch-based SSE"
+    },
+    {
+      "cell": "requests-detail",
+      "text": "Bearer token; API authorizes resources"
+    },
+    {
+      "cell": "requests-meta",
+      "text": "api/sse.ts:239-337"
+    },
+    {
+      "cell": "requests-pill",
+      "text": "BEARER"
+    },
+    {
+      "cell": "begin-to-entra",
+      "text": "sign in"
+    },
+    {
+      "cell": "entra-to-callback",
+      "text": "callback"
+    },
+    {
+      "cell": "callback-to-frontend",
+      "text": "code"
+    },
+    {
+      "cell": "frontend-to-exchange",
+      "text": "POST code"
+    },
+    {
+      "cell": "exchange-to-storage",
+      "text": "session"
+    },
+    {
+      "cell": "storage-to-peer",
+      "text": "transfer"
+    },
+    {
+      "cell": "storage-to-requests",
+      "text": "bearer"
+    },
+    {
+      "cell": "scope",
+      "text": "Only a one-time exchange code crosses the callback URL; the session token stays out of URLs."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/frontend.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "begin",
+      "to": "entra",
+      "label": "sign in",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "entra",
+      "to": "callback",
+      "label": "callback",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "callback",
+      "to": "frontend",
+      "label": "code",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "frontend",
+      "to": "exchange",
+      "label": "POST code",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "exchange",
+      "to": "storage",
+      "label": "session",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "storage",
+      "to": "peer",
+      "label": "transfer",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "storage",
+      "to": "requests",
+      "label": "bearer",
+      "result": "clean"
+    }
+  ]
+}

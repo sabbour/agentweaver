@@ -1,0 +1,14 @@
+{
+  "name": "canonical-api-host",
+  "family": "deep-dive-core",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-api-host.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-api-host.png",
+  "source_sha256": "0fd5c909daeb09f4047ca79d32361fdd68df91f60a83a07c11a19f84aa32d1bc",
+  "png_sha256": "ada7c0e316347b2c19db1a4b9c3939dda5eb52d2c150712afbadd346c4bf648d",
+  "dimensions": [
+    2134,
+    1942
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

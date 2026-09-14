@@ -1,0 +1,149 @@
+{
+  "diagram": "workflow-engine-fig9",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pitch.drawio",
+    "png": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pitch.png",
+    "change_record": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-01.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-01.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1546,
+      "result_meaningful_xml": 23802,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 15.39586
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-02.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-02.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-03.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-03.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-04.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-04.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig9/v2/workflow-engine-fig9-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "Classify node types/gates independently of arbitrary IDs",
+          "evidence": "apps/Agentweaver.Api/Workflows/NodeClassifier.cs:66-105",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "Unsupported node kinds fail closed",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:122-151",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "Bind supported classified nodes to executors",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:818-850",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "Wire typed transition predicates and adapters",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-151",
+          "result": "corrected"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n5",
+          "relationship": "Associate terminal output contracts",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-151",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n4",
+          "target": "n6",
+          "relationship": "Validate start and edge message compatibility",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:156-205",
+          "result": "corrected"
+        },
+        {
+          "id": "e6",
+          "source": "n5",
+          "target": "n6",
+          "relationship": "Validate terminal and start contracts",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:156-205",
+          "result": "corrected"
+        },
+        {
+          "id": "e7",
+          "source": "n6",
+          "target": "n7",
+          "relationship": "Return validated executable graph",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-151",
+          "result": "corrected"
+        },
+        {
+          "id": "e8",
+          "source": "n6",
+          "target": "n8",
+          "relationship": "Invalid start/edge contract raises bind exception",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:156-205",
+          "result": "corrected"
+        },
+        {
+          "id": "e9",
+          "source": "n2",
+          "target": "n8",
+          "relationship": "Unsupported node classification reports binding failure",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:122-151",
+          "result": "corrected"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

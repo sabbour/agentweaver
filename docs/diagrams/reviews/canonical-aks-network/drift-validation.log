@@ -1,0 +1,8 @@
+
+> agentweaver@0.31.0 docs:check-diagrams
+> node scripts/docs/render-diagrams.mjs --check --spec canonical-aks-network --spec guide-architecture-aks-fig1 --spec guide-architecture-aks-fig5 --spec guide-example-scenarios-fig3
+
+OK: canonical-aks-network.png and editable draw.io source are in sync with canonical-aks-network.drawio
+OK: guide-architecture-aks-fig1.png and editable draw.io source are in sync with guide-architecture-aks-fig1.drawio
+OK: guide-architecture-aks-fig5.png and editable draw.io source are in sync with guide-architecture-aks-fig5.drawio
+OK: guide-example-scenarios-fig3.png and editable draw.io source are in sync with guide-example-scenarios-fig3.drawio

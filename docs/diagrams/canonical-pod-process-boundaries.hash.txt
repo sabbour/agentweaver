@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-pod-process-boundaries.drawio",
+    "sha256": "409d3bfa2502a089da45e7e97e453f778ee33699ddbaec9924a609773b0a5c08"
+  },
+  "drawio": {
+    "file": "canonical-pod-process-boundaries.drawio",
+    "sha256": "db9b5433e6afb6f87933e46941aa6f87539afa44d6114024c41e022b685c64de"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-pod-process-boundaries.png",
+    "sha256": "e4dd4759f9dec662a8ced3417d307089be6d05943b415a8c32d28dc867808ff2"
+  }
+}

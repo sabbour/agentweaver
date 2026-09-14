@@ -1,0 +1,141 @@
+{
+  "diagram": "memory-decisions-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pitch.drawio",
+    "png": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pitch.png",
+    "change_record": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-01.drawio",
+      "png": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-01.png",
+      "change_record": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 1526,
+      "result_meaningful_xml": 23454,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 15.369594
+    },
+    {
+      "drawio": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-02.drawio",
+      "png": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-02.png",
+      "change_record": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-03.drawio",
+      "png": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-03.png",
+      "change_record": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-04.drawio",
+      "png": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-04.png",
+      "change_record": "docs/diagrams/reviews/memory-decisions-fig1/v2/memory-decisions-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "Verified authorship is persisted on inbox proposals",
+          "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:49-152",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n0",
+          "target": "n2",
+          "relationship": "Verified authorship accompanies pending memory",
+          "evidence": "apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:125-160",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "Authorized decision promotion is transactional",
+          "evidence": "apps/Agentweaver.Api/Memory/DecisionPromotion.cs:22-55",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n1",
+          "target": "n4",
+          "relationship": "Authorized rejection preserves the row",
+          "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:285-301",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n1",
+          "target": "n5",
+          "relationship": "Only scoped low-risk inbox entries reach Scribe",
+          "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:42-104",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n3",
+          "target": "n6",
+          "relationship": "Compiler selects approved active architecture/scope decisions",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:58-65",
+          "result": "corrected"
+        },
+        {
+          "id": "e6",
+          "source": "n2",
+          "target": "n7",
+          "relationship": "Memory must pass ownership, trust and budget filters",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:68-140",
+          "result": "corrected"
+        },
+        {
+          "id": "e7",
+          "source": "n6",
+          "target": "n8",
+          "relationship": "Selected decisions become untrusted JSON data",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:175-217",
+          "result": "corrected"
+        },
+        {
+          "id": "e8",
+          "source": "n7",
+          "target": "n8",
+          "relationship": "Selected memories and current session become untrusted data",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:175-217",
+          "result": "corrected"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

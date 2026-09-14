@@ -1,0 +1,1017 @@
+{
+  "nodes": [
+    {
+      "id": "request",
+      "label": "Authorize request",
+      "subLabel": "Project ownership + AI execution plan",
+      "meta": "POST …/workflows/generate",
+      "shape": "process",
+      "nativeStyle": "shape=process;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "neutral"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "context",
+      "label": "Prompt context",
+      "subLabel": "Roles, schema, examples",
+      "meta": "Project model override",
+      "shape": "document",
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "neutral"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "generator",
+      "label": "Generate candidate",
+      "subLabel": "CopilotWorkflowGenerator",
+      "meta": "Model returns YAML, not a saved file",
+      "shape": "component",
+      "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "lavender"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "validation",
+      "label": "Validate candidate",
+      "subLabel": "WorkflowDefinitionLoader + binder dry-run",
+      "meta": "Structure AND runtime bindability",
+      "shape": "rhombus",
+      "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "teal"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "repair",
+      "label": "One correction",
+      "subLabel": "Failed YAML + error",
+      "meta": "Re-run same checks",
+      "shape": "process",
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "marigold"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "generation-error",
+      "label": "Explicit error",
+      "subLabel": "Second invalid result",
+      "meta": "400 · not persisted",
+      "shape": "mxgraph.flowchart.terminator",
+      "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "marigold"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "review",
+      "label": "Review & edit draft",
+      "subLabel": "Human edits YAML or the visual graph",
+      "meta": "Valid draft stays unsaved",
+      "shape": "document",
+      "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "lavender"
+      },
+      "group": "generation-boundary"
+    },
+    {
+      "id": "save-validation",
+      "label": "Save: validate again",
+      "subLabel": "Parse + structure + route id + binder",
+      "meta": "PUT …/workflows/{workflowId}",
+      "shape": "rhombus",
+      "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "teal"
+      },
+      "group": "persistence-boundary"
+    },
+    {
+      "id": "save-error",
+      "label": "Reject save",
+      "subLabel": "Parse / id / bind error",
+      "meta": "400 or 422 · no write",
+      "shape": "mxgraph.flowchart.terminator",
+      "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "marigold"
+      },
+      "group": "persistence-boundary"
+    },
+    {
+      "id": "write",
+      "label": "Write project YAML",
+      "subLabel": "Resolve the path inside the workspace",
+      "meta": ".agentweaver/workflows/{id}.yaml",
+      "shape": "document",
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "teal"
+      },
+      "group": "persistence-boundary"
+    },
+    {
+      "id": "write-error",
+      "label": "Write can fail",
+      "subLabel": "Path guard or file I/O",
+      "meta": "400 / 500 · stop here",
+      "shape": "mxgraph.flowchart.terminator",
+      "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "marigold"
+      },
+      "group": "persistence-boundary"
+    },
+    {
+      "id": "registry",
+      "label": "Sync → definition",
+      "subLabel": "Extend allowed set if needed; reload",
+      "meta": "Return saved detail on success",
+      "shape": "component",
+      "nativeStyle": "shape=component;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "green"
+      },
+      "group": "persistence-boundary"
+    },
+    {
+      "id": "reload-error",
+      "label": "Reload failure",
+      "subLabel": "Written, not available",
+      "meta": "422 / 500 · file may exist",
+      "shape": "document",
+      "nativeStyle": "shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+      "badge": {
+        "tone": "marigold"
+      },
+      "group": "persistence-boundary"
+    }
+  ],
+  "edges": [
+    {
+      "from": "request",
+      "to": "generator",
+      "label": "permitted",
+      "source_edges": [
+        "e01"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "context",
+      "to": "generator",
+      "label": "grounds prompt",
+      "source_edges": [
+        "e02"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "generator",
+      "to": "validation",
+      "label": "candidate YAML",
+      "source_edges": [
+        "e03"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "validation",
+      "to": "review",
+      "label": "valid; unsaved",
+      "source_edges": [
+        "e04"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "validation",
+      "to": "repair",
+      "label": "first invalid",
+      "source_edges": [
+        "e05"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "repair",
+      "to": "generator",
+      "label": "one repair",
+      "source_edges": [
+        "e06"
+      ],
+      "loopback": true,
+      "bidirectional": false
+    },
+    {
+      "from": "validation",
+      "to": "generation-error",
+      "label": "invalid again",
+      "source_edges": [
+        "e07"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "review",
+      "to": "save-validation",
+      "label": "explicit Save",
+      "source_edges": [
+        "e08"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "save-validation",
+      "to": "save-error",
+      "label": "invalid",
+      "source_edges": [
+        "e09"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "save-validation",
+      "to": "write",
+      "label": "checks pass",
+      "source_edges": [
+        "e10"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "write",
+      "to": "write-error",
+      "label": "failure",
+      "source_edges": [
+        "e11"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "write",
+      "to": "registry",
+      "label": "write succeeded",
+      "source_edges": [
+        "e12"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "registry",
+      "to": "reload-error",
+      "label": "failure",
+      "source_edges": [
+        "e13"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    }
+  ],
+  "title": "canonical-workflow-authoring",
+  "groups": [
+    {
+      "id": "generation-boundary",
+      "label": "1 GENERATE + REVIEW / No workflow file is saved"
+    },
+    {
+      "id": "persistence-boundary",
+      "label": "2 EXPLICIT SAVE / Project workspace + registry"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "request",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 179.9892522601844
+        },
+        "data": {
+          "id": "request",
+          "label": "Authorize request",
+          "subLabel": "Project ownership + AI execution plan",
+          "meta": "POST …/workflows/generate",
+          "shape": "process",
+          "nativeStyle": "shape=process;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "neutral"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "context",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 193.9892522601844
+        },
+        "data": {
+          "id": "context",
+          "label": "Prompt context",
+          "subLabel": "Roles, schema, examples",
+          "meta": "Project model override",
+          "shape": "document",
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "neutral"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "generator",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 437.9892522601844
+        },
+        "data": {
+          "id": "generator",
+          "label": "Generate candidate",
+          "subLabel": "CopilotWorkflowGenerator",
+          "meta": "Model returns YAML, not a saved file",
+          "shape": "component",
+          "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "lavender"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "validation",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 667.9892522601845
+        },
+        "data": {
+          "id": "validation",
+          "label": "Validate candidate",
+          "subLabel": "WorkflowDefinitionLoader + binder dry-run",
+          "meta": "Structure AND runtime bindability",
+          "shape": "rhombus",
+          "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "teal"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "repair",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 681.9892522601845
+        },
+        "data": {
+          "id": "repair",
+          "label": "One correction",
+          "subLabel": "Failed YAML + error",
+          "meta": "Re-run same checks",
+          "shape": "process",
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "marigold"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "generation-error",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 929.8216934840417
+        },
+        "data": {
+          "id": "generation-error",
+          "label": "Explicit error",
+          "subLabel": "Second invalid result",
+          "meta": "400 · not persisted",
+          "shape": "mxgraph.flowchart.terminator",
+          "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "marigold"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "review",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 907.5529051344994
+        },
+        "data": {
+          "id": "review",
+          "label": "Review & edit draft",
+          "subLabel": "Human edits YAML or the visual graph",
+          "meta": "Valid draft stays unsaved",
+          "shape": "document",
+          "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "lavender"
+          },
+          "group": "generation-boundary"
+        }
+      },
+      {
+        "id": "save-validation",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 1155.9892522601845
+        },
+        "data": {
+          "id": "save-validation",
+          "label": "Save: validate again",
+          "subLabel": "Parse + structure + route id + binder",
+          "meta": "PUT …/workflows/{workflowId}",
+          "shape": "rhombus",
+          "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "teal"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "save-error",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 1169.9892522601845
+        },
+        "data": {
+          "id": "save-error",
+          "label": "Reject save",
+          "subLabel": "Parse / id / bind error",
+          "meta": "400 or 422 · no write",
+          "shape": "mxgraph.flowchart.terminator",
+          "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "marigold"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "write",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 1399.9892522601845
+        },
+        "data": {
+          "id": "write",
+          "label": "Write project YAML",
+          "subLabel": "Resolve the path inside the workspace",
+          "meta": ".agentweaver/workflows/{id}.yaml",
+          "shape": "document",
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "teal"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "write-error",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 1413.9892522601845
+        },
+        "data": {
+          "id": "write-error",
+          "label": "Write can fail",
+          "subLabel": "Path guard or file I/O",
+          "meta": "400 / 500 · stop here",
+          "shape": "mxgraph.flowchart.terminator",
+          "nativeStyle": "shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "marigold"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "registry",
+        "type": "card",
+        "position": {
+          "x": 203.2727792335511,
+          "y": 1643.9892522601845
+        },
+        "data": {
+          "id": "registry",
+          "label": "Sync → definition",
+          "subLabel": "Extend allowed set if needed; reload",
+          "meta": "Return saved detail on success",
+          "shape": "component",
+          "nativeStyle": "shape=component;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "green"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "reload-error",
+        "type": "card",
+        "position": {
+          "x": 719.2727792335511,
+          "y": 1657.9892522601845
+        },
+        "data": {
+          "id": "reload-error",
+          "label": "Reload failure",
+          "subLabel": "Written, not available",
+          "meta": "422 / 500 · file may exist",
+          "shape": "document",
+          "nativeStyle": "shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;",
+          "badge": {
+            "tone": "marigold"
+          },
+          "group": "persistence-boundary"
+        }
+      },
+      {
+        "id": "group-generation-boundary",
+        "type": "band",
+        "position": {
+          "x": 171.2727792335511,
+          "y": 109.9892522601844
+        },
+        "style": {
+          "width": 920,
+          "height": 953.563652874315
+        },
+        "data": {
+          "label": "1 GENERATE + REVIEW / No workflow file is saved",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-generation-boundary-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 191.2727792335511,
+          "y": 125.9892522601844
+        },
+        "data": {
+          "label": "1 GENERATE + REVIEW / No workflow file is saved",
+          "width": 880
+        }
+      },
+      {
+        "id": "group-persistence-boundary",
+        "type": "band",
+        "position": {
+          "x": 171.2727792335511,
+          "y": 1085.9892522601845
+        },
+        "style": {
+          "width": 920,
+          "height": 714
+        },
+        "data": {
+          "label": "2 EXPLICIT SAVE / Project workspace + registry",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-persistence-boundary-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 191.2727792335511,
+          "y": 1101.9892522601845
+        },
+        "data": {
+          "label": "2 EXPLICIT SAVE / Project workspace + registry",
+          "width": 880
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "request",
+        "target": "generator",
+        "label": "permitted",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 373.2727792335511,
+              "y": 311.9892522601844
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 343.9892522601844
+            },
+            {
+              "x": 339.2727792335511,
+              "y": 343.9892522601844
+            },
+            {
+              "x": 339.2727792335511,
+              "y": 437.9892522601844
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 352.8727792335511,
+            "y": 343.9892522601844
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "context",
+        "target": "generator",
+        "label": "grounds prompt",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 889.2727792335511,
+              "y": 297.9892522601844
+            },
+            {
+              "x": 889.2727792335511,
+              "y": 329.9892522601844
+            },
+            {
+              "x": 407.2727792335511,
+              "y": 329.9892522601844
+            },
+            {
+              "x": 407.2727792335511,
+              "y": 437.9892522601844
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 648.2727792335511,
+            "y": 329.9892522601844
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "generator",
+        "target": "validation",
+        "label": "candidate YAML",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 373.2727792335511,
+              "y": 541.9892522601845
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 667.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 373.2727792335511,
+            "y": 604.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "validation",
+        "target": "review",
+        "label": "valid; unsaved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 339.2727792335511,
+              "y": 799.9892522601845
+            },
+            {
+              "x": 339.2727792335511,
+              "y": 831.9892522601845
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 831.9892522601845
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 907.5529051344994
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 373.2727792335511,
+            "y": 869.7710786973419
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "validation",
+        "target": "repair",
+        "label": "first invalid",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 543.2727792335511,
+              "y": 733.9892522601845
+            },
+            {
+              "x": 719.2727792335511,
+              "y": 733.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 631.2727792335511,
+            "y": 733.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "repair",
+        "target": "generator",
+        "label": "one repair",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1059.272779233551,
+              "y": 733.9892522601845
+            },
+            {
+              "x": 1091.272779233551,
+              "y": 733.9892522601845
+            },
+            {
+              "x": 1091.272779233551,
+              "y": 489.9892522601844
+            },
+            {
+              "x": 543.2727792335511,
+              "y": 489.9892522601844
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 817.2727792335511,
+            "y": 489.9892522601844
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "validation",
+        "target": "generation-error",
+        "label": "invalid again",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 407.2727792335511,
+              "y": 799.9892522601845
+            },
+            {
+              "x": 407.2727792335511,
+              "y": 831.9892522601845
+            },
+            {
+              "x": 889.2727792335511,
+              "y": 831.9892522601845
+            },
+            {
+              "x": 889.2727792335511,
+              "y": 929.8216934840417
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 648.2727792335511,
+            "y": 831.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "review",
+        "target": "save-validation",
+        "label": "explicit Save",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 373.2727792335511,
+              "y": 1039.5529051344993
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 1071.5529051344993
+            },
+            {
+              "x": 171.2727792335511,
+              "y": 1071.5529051344993
+            },
+            {
+              "x": 171.2727792335511,
+              "y": 1221.9892522601845
+            },
+            {
+              "x": 203.2727792335511,
+              "y": 1221.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 272.2727792335511,
+            "y": 1071.5529051344993
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "save-validation",
+        "target": "save-error",
+        "label": "invalid",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 543.2727792335511,
+              "y": 1221.9892522601845
+            },
+            {
+              "x": 719.2727792335511,
+              "y": 1221.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 631.2727792335511,
+            "y": 1221.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "save-validation",
+        "target": "write",
+        "label": "checks pass",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 373.2727792335511,
+              "y": 1287.9892522601845
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 1399.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 373.2727792335511,
+            "y": 1343.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e10",
+        "source": "write",
+        "target": "write-error",
+        "label": "failure",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 543.2727792335511,
+              "y": 1465.9892522601845
+            },
+            {
+              "x": 719.2727792335511,
+              "y": 1465.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 631.2727792335511,
+            "y": 1465.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e11",
+        "source": "write",
+        "target": "registry",
+        "label": "write succeeded",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 373.2727792335511,
+              "y": 1531.9892522601845
+            },
+            {
+              "x": 373.2727792335511,
+              "y": 1643.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 373.2727792335511,
+            "y": 1587.9892522601845
+          }
+        }
+      },
+      {
+        "id": "e12",
+        "source": "registry",
+        "target": "reload-error",
+        "label": "failure",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 543.2727792335511,
+              "y": 1709.9892522601845
+            },
+            {
+              "x": 719.2727792335511,
+              "y": 1709.9892522601845
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 631.2727792335511,
+            "y": 1709.9892522601845
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1185.5818790192827,
+    "canvasHeight": 1848.628427575686
+  }
+}

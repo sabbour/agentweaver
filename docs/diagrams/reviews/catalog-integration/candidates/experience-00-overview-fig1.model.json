@@ -1,0 +1,554 @@
+{
+  "title": "Two front doors, one product",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Human operator",
+      "subLabel": "Inspect and decide",
+      "meta": "browser or assistant",
+      "icon": "globe",
+      "shape": "mxgraph.c4.person",
+      "badge": {
+        "text": "INTENT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.c4.person;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Web UI",
+      "subLabel": "Project and run views",
+      "meta": "REST + stream request",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "BROWSER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "MCP client",
+      "subLabel": "Assistant tool caller",
+      "meta": "tool result + progress",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "ASSISTANT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Product state",
+      "subLabel": "Projects, teams, runs",
+      "meta": "knowledge + workspaces",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "SHARED",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Agentweaver API",
+      "subLabel": "Authorization boundary",
+      "meta": "run snapshots + events",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "API",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "MCP server",
+      "subLabel": "Authenticated adapter",
+      "meta": "validated broker bearer",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "MCP",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "inspect",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n4",
+      "label": "requests",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n1",
+      "label": "SSE events",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n5",
+      "label": "tool call",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n2",
+      "label": "result",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n4",
+      "label": "forward",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "API result",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n3",
+      "label": "access",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "PEOPLE AND CLIENTS"
+    },
+    {
+      "id": "1",
+      "label": "AUTHORITATIVE BACKEND"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n0",
+          "label": "Human operator",
+          "subLabel": "Inspect and decide",
+          "meta": "browser or assistant",
+          "icon": "globe",
+          "shape": "mxgraph.c4.person",
+          "badge": {
+            "text": "INTENT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.c4.person;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 540.3253588516747,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n1",
+          "label": "Web UI",
+          "subLabel": "Project and run views",
+          "meta": "REST + stream request",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "BROWSER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1012.3253588516745,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n2",
+          "label": "MCP client",
+          "subLabel": "Assistant tool caller",
+          "meta": "tool result + progress",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "ASSISTANT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n3",
+          "label": "Product state",
+          "subLabel": "Projects, teams, runs",
+          "meta": "knowledge + workspaces",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "SHARED",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 540.3253588516747,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n4",
+          "label": "Agentweaver API",
+          "subLabel": "Authorization boundary",
+          "meta": "run snapshots + events",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "API",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1012.3253588516745,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n5",
+          "label": "MCP server",
+          "subLabel": "Authenticated adapter",
+          "meta": "validated broker bearer",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "MCP",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 212.61244019138758
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "PEOPLE AND CLIENTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 228.61244019138758
+        },
+        "data": {
+          "label": "PEOPLE AND CLIENTS",
+          "width": 1308
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 588.4019138755981
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "AUTHORITATIVE BACKEND",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 604.4019138755981
+        },
+        "data": {
+          "label": "AUTHORITATIVE BACKEND",
+          "width": 1308
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "inspect",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 408.32535885167465,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 540.3253588516747,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 474.32535885167465,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n4",
+        "label": "requests",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 632.1253588516747,
+              "y": 380.6124401913876
+            },
+            {
+              "x": 632.1253588516747,
+              "y": 652.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 632.1253588516747,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n4",
+        "target": "n1",
+        "label": "SSE events",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 788.5253588516746,
+              "y": 652.4019138755981
+            },
+            {
+              "x": 788.5253588516746,
+              "y": 380.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 788.5253588516746,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n2",
+        "target": "n5",
+        "label": "tool call",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1104.1253588516745,
+              "y": 380.6124401913876
+            },
+            {
+              "x": 1104.1253588516745,
+              "y": 652.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1104.1253588516745,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n5",
+        "target": "n2",
+        "label": "result",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1260.5253588516746,
+              "y": 652.4019138755981
+            },
+            {
+              "x": 1260.5253588516746,
+              "y": 380.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1260.5253588516746,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n5",
+        "target": "n4",
+        "label": "forward",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1012.3253588516745,
+              "y": 689.841913875598
+            },
+            {
+              "x": 880.3253588516747,
+              "y": 689.841913875598
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 946.3253588516745,
+            "y": 689.841913875598
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n4",
+        "target": "n5",
+        "label": "API result",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 880.3253588516747,
+              "y": 729.3619138755981
+            },
+            {
+              "x": 1012.3253588516745,
+              "y": 729.3619138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 946.3253588516745,
+            "y": 729.3619138755981
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n4",
+        "target": "n3",
+        "label": "access",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 540.3253588516747,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 408.32535885167465,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 474.32535885167465,
+            "y": 704.4019138755981
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1420.6507177033493,
+    "canvasHeight": 948.4210526315791
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "experience-team-casting-memory-fig1.drawio",
+    "sha256": "b73fbd9b9d47a4daeecedab89ef7f98ec619c343b7e0c2f474a6d1beda00e340"
+  },
+  "drawio": {
+    "file": "experience-team-casting-memory-fig1.drawio",
+    "sha256": "88efd9dc8a9666f48dcf624d78cfe8aef3cc9bc3e779ee761bac13a7a9775b76"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "experience-team-casting-memory-fig1.png",
+    "sha256": "ddf4e97424c9329ac581ca391f26723297a5c45c68c204ceb5e215c049ac3910"
+  }
+}

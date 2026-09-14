@@ -15,14 +15,17 @@ A rebuild should preserve the same separation of concerns: databases answer “w
 
 ## Architecture at a glance
 
-The operational control plane lives in `SqliteDb` (projects, runs, backlog tasks, revisions); the memory and orchestration plane lives in EF Core (`MemoryDbContext`). Both stores are provider-aware: `Database:Provider=Postgres` routes everything through PostgreSQL Flexible Server (the AKS production deployment), while `sqlite` (the default for local dev) uses separate SQLite files. EF Core migrations manage the schema. Run worktrees live on the workspace volume. MAF JSON checkpoints are stored in the shared `workflow_checkpoints` table (Postgres) and fall back to JSON files on the workspace volume in SQLite/dev mode.
+Provider selection happens at composition: Postgres registers EF operational stores, shared events,
+checkpoints, and leases through `MemoryDbContext`; local SQLite registers raw operational stores
+and a separate EF memory database. `SqliteDb` is not the production control-plane owner.
+Worktrees remain filesystem state. Postgres checkpoints live in `workflow_checkpoints`; file
+checkpoints are a SQLite/dev choice, not a response to a production database failure.
 
-![Architecture at a glance: Agentweaver API (single writer), EF Core migrations + startup ALTERs, projects / workspaces, runs, backlog_tasks, run revisions, decisions + decision_inbox, agent_memory + session_context, outcome_spec → work_plan → subtask → dependency, steering_directives, mcp refresh tokens + jti + client registrations, RunEvents, …](../diagrams/data-persistence-fig1.png)
+![Production Postgres EF stores, shared events and checkpoints versus local SQLite stores and file checkpoints](../diagrams/data-persistence-fig1.png)
 
-<!-- Rendered from ../diagrams/src/data-persistence-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/data-persistence-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec data-persistence-fig1.
+     Review lineage: ../diagrams/reviews/data-persistence-fig1/iteration-manifest.json. -->
 
 ## Design Goals
 
@@ -50,62 +53,16 @@ Agentweaver’s durable domain has two halves: **work execution** and **team mem
 - **Run revision**: immutable review feedback against a run. Revisions are append-only because they are part of the audit trail.
 - **Run event**: an ordered event in a run’s stream. Events power live UI updates and restart-safe replay.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-classDiagram
-    class Project {
-      ProjectId Id
-      string WorkspaceLocation
-      string DefaultBranch
-      string ModelDefaults
-      string WorkflowReviewPolicy
-      string SandboxProfile
-    }
-    class WorkflowRun {
-      WorkflowRunId Id
-      ProjectId Project
-      string UserTask
-      string SharedOrchestrationWorktree
-    }
-    class Run {
-      RunId Id
-      Status
-      string TaskAndModel
-      string WorktreePathAndBranch
-      string ResultTreeHash
-      string MergeOutcome
-      string ParentSubtaskLinkage
-    }
-    class BacklogTask {
-      TaskId Id
-      ProjectId Project
-      State
-      string OrderKey
-      RunId ClaimedRun
-    }
-    class RunRevision {
-      RunId Run
-      int RevisionNumber
-      string Reviewer
-      string SanitizedComment
-      string PreviousTreeHash
-    }
-    class RunEvent {
-      RunId Run
-      int Sequence
-      string Type
-      object Payload
-    }
+| Relationship | Contract |
+| --- | --- |
+| Project / run | Project-backed runs carry project identity; Operator conversations need not have a project or repository. |
+| Workflow envelope / run | A run can participate in an envelope, but participation is not universal. |
+| Parent / child run | Parent/subtask linkage identifies coordination; each child owns its worktree and branch. |
+| Backlog task / claimed run | The task is project-scoped and points to at most one claimed run. |
+| Run / revision | Append-only numbered review feedback belongs to the run. |
+| Run / event | Ordered events are unique by `(run_id, sequence)`. |
 
-    Project "1" --> "many" WorkflowRun
-    Project "1" --> "many" Run
-    Project "1" --> "many" BacklogTask
-    WorkflowRun "1" --> "many" Run
-    Run "1" --> "many" RunRevision
-    Run "1" --> "many" RunEvent
-    Run "1" --> "many" Run : parent/child
-    BacklogTask "0..1" --> "0..1" Run
-```
+This table describes participation and ownership, not a universal execution sequence.
 
 ### Team memory and orchestration concepts
 
@@ -115,77 +72,20 @@ classDiagram
 - **Session context**: the current work focus for a project. It captures active issues, summary, and serialized state. At most one session should be considered “current” for a project.
 - **Outcome spec / work plan / subtask / dependency**: coordinator planning records. They describe what successful completion means, how the work was decomposed, how subtasks depend on each other, and how assembly/recovery should proceed.
 - **Steering directive**: human guidance injected into an active coordinator workflow.
-- **MCP OAuth state**: refresh tokens, revoked JWT IDs, and dynamic client registrations needed for MCP authentication flows.
+- **MCP OAuth state**: OpenIddict client, authorization and token entries, consent, and refresh-family state owned by the API authorization server.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-erDiagram
-    PROJECT ||--o{ DECISION : owns
-    PROJECT ||--o{ DECISION_INBOX : reviews
-    PROJECT ||--o{ AGENT_MEMORY : remembers
-    PROJECT ||--o{ SESSION_CONTEXT : tracks
-    PROJECT ||--o{ OUTCOME_SPEC : defines
-    OUTCOME_SPEC ||--o{ WORK_PLAN : plans
-    WORK_PLAN ||--o{ SUBTASK : decomposes
-    SUBTASK ||--o{ SUBTASK_DEPENDENCY : depends_on
-    DECISION ||--o{ DECISION : supersedes
-    DECISION ||--o{ DECISION_INBOX : promoted_from
+| Record/link | Ownership and uniqueness |
+| --- | --- |
+| Decision / inbox / agent memory | Project-scoped knowledge; promotion links an inbox entry to an accepted decision. Rejection preserves the inbox record. |
+| Inbox slug | Unique by `(project_id, slug)`, not globally unique across projects. |
+| Session context | Unique by `(project_id, session_id)`; open-session selection is project-relative. |
+| Outcome spec / work plan | The plan references its spec and coordinator run. |
+| Work plan / subtask | The plan owns its subtasks; deleting a plan cascades to owned records. |
+| Subtask dependency | Two different roles: owning `subtask_id` and prerequisite `depends_on_subtask_id`. The prerequisite is not an owned child and its deletion is restricted. |
+| Supersession | A decision may reference a successor; that does not make every decision have a successor or promoted inbox entry. |
 
-    DECISION {
-      int id PK
-      string project_id
-      string agent_name
-      string type
-      string status
-      int superseded_by_id FK
-    }
-    DECISION_INBOX {
-      int id PK
-      string project_id
-      string slug UK
-      string type
-      string status
-      int decision_id FK
-    }
-    AGENT_MEMORY {
-      int id PK
-      string project_id
-      string agent_name
-      string type
-      string importance
-      string tags
-      string session_id
-    }
-    SESSION_CONTEXT {
-      int id PK
-      string project_id
-      string session_id UK
-      string focus_area
-      string active_issues_json
-      datetime ended_at
-    }
-    OUTCOME_SPEC {
-      int id PK
-      string project_id
-      string coordinator_run_id
-    }
-    WORK_PLAN {
-      int id PK
-      int outcome_spec_id FK
-      string coordinator_run_id
-      string assembly_stage
-    }
-    SUBTASK {
-      int id PK
-      int work_plan_id FK
-      string status
-      string agent_name
-    }
-    SUBTASK_DEPENDENCY {
-      int subtask_id FK
-      int depends_on_subtask_id FK
-    }
-```
+Source: `apps/Agentweaver.Api.Data/Memory/MemoryDbContext.cs`. Tables make these optional
+links and composite keys clearer than a broad, mandatory-cardinality entity diagram.
 
 ## Database architecture
 
@@ -211,7 +111,7 @@ SQLite is a good fit for local development because:
 - Database files are easy to inspect and reset between tests.
 - No external dependency to install or configure.
 
-## Operational Store: `agentweaver.db`
+## Operational Store: local `agentweaver.db`, production EF stores
 
 The operational store is the source of truth for the run control plane. If rebuilding Agentweaver, design this database around **state transitions and invariants**, not around object persistence.
 
@@ -238,7 +138,7 @@ Operational writes should be small, explicit, and guarded by invariants:
 
 ### Migration approach
 
-The operational database uses a bootstrap-and-patch model:
+The local raw SQLite operational database uses a bootstrap-and-patch model:
 
 1. Create missing tables if they do not exist.
 2. Apply idempotent schema changes for newer columns or indexes.
@@ -259,7 +159,7 @@ It should hold:
 - **Run events** for replayable streams.
 - **Outcome specs**, **work plans**, **subtasks**, and **subtask dependencies**.
 - **Steering directives**.
-- **OAuth refresh tokens**, revoked JWT IDs, and MCP client registrations.
+- **OpenIddict applications, authorizations, and token entries**, consent, and refresh-family state.
 
 ### Why EF Core here?
 
@@ -296,26 +196,21 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `apps/Agentweaver.Api/Migration
 
 ## Durable Run Event Streams
 
-Run events are persisted in the database, not just kept in memory. The design is a two-layer stream:
+Events are appended durably before acknowledgement. Delivery has distinct implementations:
 
-1. **Durable write-through**: append the event row to the database (Postgres in production, SQLite in dev) and assign/record its run-local sequence number.
-2. **Live fan-out**: publish the same event to an in-process channel for active subscribers.
+| Path | Delivery |
+| --- | --- |
+| `EfRunEventStream.SubscribeAsync` | Queries shared rows after the cursor; waits 250 ms when no rows are available. This supports subscribers on other replicas. |
+| `SqliteRunEventStream` | Replays durable rows and tails a bounded process-local channel, deduplicating overlap. |
+| Endpoint with local `RunStreamStore` entry | Takes an atomic snapshot and waits for local changes; it need not call the durable subscription path. |
 
-The ordering matters: an event is written to the database before subscribers can observe it. That means a client may miss a live channel message, but it should not miss the event permanently.
-
-Subscribers use a **replay-then-tail** pattern:
-
-1. Create or find the live channel.
-2. Replay persisted rows after the caller’s cursor.
-3. Tail the channel.
-4. Skip any channel event already delivered during replay.
-5. Stop cleanly after terminal event types.
-
-The live channel is bounded. If a subscriber is slow or absent, live copies can be dropped; durability is still preserved by the database. This is the key design trade-off: the channel optimizes latency, while the database guarantees recovery.
+An in-memory channel is not a cross-replica bus. Terminal replay drains its batch and ends;
+transport `done` at a review gate does not mean the run completed. The durable log can still
+accept permitted late diagnostic events; completion is not a promise that no future append exists.
 
 The essential invariant is **unique `(run_id, sequence)`**. It makes replay deterministic and lets clients resume from “last event I saw.”
 
-Where this lives: `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs` (SQLite/dev), `apps/Agentweaver.Api/Memory/EfRunEventStream.cs` (Postgres/production).
+Where this lives: `apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:457-555`.
 
 ## Decisions, Memory, and Context Assembly
 
@@ -332,8 +227,8 @@ This ordering is the most important conceptual rule. Decisions are first because
 
 ![Decisions, Memory, and Context Assembly: Accepted architectural/scope decisions, Agent core context, High-importance learnings and patterns, Current open session, Compiled prompt context](../diagrams/canonical-memory-context.png)
 
-<!-- Rendered from ../diagrams/src/canonical-memory-context.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/canonical-memory-context.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -396,11 +291,14 @@ This provides strong isolation: unreviewed changes are real git changes, but the
 
 A revision reuses the existing run worktree and branch. That is intentional: reviewer feedback should apply on top of the prior candidate result, not start from scratch unless the run is retried as a new run.
 
-### Coordinator shared worktrees
+### Coordinator child isolation
 
-Coordinator workflows have a different isolation rule. Child runs can share the coordinator’s orchestration worktree so one child can read files produced by another child. The database stores the shared worktree path on the workflow/coordinator metadata so orchestration can resume or recover.
+Each child receives its own worktree and branch. Dependencies advance through coordinator
+integration/assembly rather than concurrent editing of one mutable checkout. Durable child
+worktree, branch, and tree-hash metadata identifies the artifact the coordinator can assemble.
 
-The trade-off is explicit: ordinary runs maximize isolation; coordinator child runs allow controlled collaboration inside a shared workspace.
+The shared workspace volume provides storage visibility, not a shared Git index.
+Source: `apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317`.
 
 ### Merge consistency
 
@@ -463,3 +361,112 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 ## See also
 
 - [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — telemetry events, metrics, and traces.
+
+<!-- diagram-context:canonical-memory-context:start -->
+<details id="diagram-context-canonical-memory-context" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Context is selected data, not instructions</td></tr>
+<tr><td>takeaway</td><td>Approved decisions, jointly ranked memories and the open session converge into untrusted JSON.</td></tr>
+<tr><td>group-title0</td><td>SCOPED INPUTS</td></tr>
+<tr><td>group-title1</td><td>SELECTION AND SERIALIZATION</td></tr>
+<tr><td>Active decisions</td><td>Active decisions</td></tr>
+<tr><td>Active decisions</td><td>Project-wide boundaries</td></tr>
+<tr><td>Active decisions</td><td>Approved architecture / scope</td></tr>
+<tr><td>Active decisions</td><td>Oldest-created first</td></tr>
+<tr><td>Active decisions</td><td>Child prompts: decisions only</td></tr>
+<tr><td>Core + learnings</td><td>Core + learnings</td></tr>
+<tr><td>Core + learnings</td><td>Agent-scoped candidates</td></tr>
+<tr><td>Core + learnings</td><td>Core: exclude legacy trust</td></tr>
+<tr><td>Core + learnings</td><td>High learning / pattern</td></tr>
+<tr><td>Core + learnings</td><td>Approved cross-team allowed</td></tr>
+<tr><td>Open session</td><td>Open session</td></tr>
+<tr><td>Open session</td><td>Latest active session</td></tr>
+<tr><td>Open session</td><td>Focus / issues / summary</td></tr>
+<tr><td>Open session</td><td>Ended sessions excluded</td></tr>
+<tr><td>Open session</td><td>Latest StartedAt wins</td></tr>
+<tr><td>Joint rank + budget</td><td>Joint rank + budget</td></tr>
+<tr><td>Joint rank + budget</td><td>One combined memory list</td></tr>
+<tr><td>Joint rank + budget</td><td>Importance, then recency</td></tr>
+<tr><td>Joint rank + budget</td><td>Stop at item / char limit</td></tr>
+<tr><td>Joint rank + budget</td><td>Approximation: 4 chars/token</td></tr>
+<tr><td>Context compiler</td><td>Context compiler</td></tr>
+<tr><td>Context compiler</td><td>Assemble scoped sections</td></tr>
+<tr><td>Context compiler</td><td>Decisions + selected memory</td></tr>
+<tr><td>Context compiler</td><td>Add current session</td></tr>
+<tr><td>Context compiler</td><td>Empty inputs → null</td></tr>
+<tr><td>Untrusted JSON</td><td>Untrusted JSON</td></tr>
+<tr><td>Untrusted JSON</td><td>Historical data, not authority</td></tr>
+<tr><td>Untrusted JSON</td><td>Explicit boundary markers</td></tr>
+<tr><td>Untrusted JSON</td><td>Ignore embedded instructions</td></tr>
+<tr><td>Untrusted JSON</td><td>untrusted-context.v1</td></tr>
+<tr><td>relation-0</td><td>1 combine / sort</td></tr>
+<tr><td>relation-1</td><td>2 approved</td></tr>
+<tr><td>relation-2</td><td>3 latest open</td></tr>
+<tr><td>relation-3</td><td>4 selected</td></tr>
+<tr><td>relation-4</td><td>5 serialize</td></tr>
+<tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. That budget bounds selected memories—not decisions or the entire context.</td></tr>
+<tr><td>assurance-0-label</td><td>Joint memory ordering</td></tr>
+<tr><td>assurance-0-fact</td><td>Importance first; recency breaks ties.</td></tr>
+<tr><td>assurance-0-source</td><td>MemoryContextCompiler.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Bounded selection</td></tr>
+<tr><td>assurance-1-fact</td><td>Item / character limits cover memory.</td></tr>
+<tr><td>assurance-2-label</td><td>Injection resistance</td></tr>
+<tr><td>assurance-2-fact</td><td>Context is wrapped as untrusted JSON.</td></tr>
+<tr><td>assurance-2-source</td><td>MemoryContextCompilerSecurityTests.cs</td></tr>
+<tr><td>n0</td><td>Approved architecture / scope; Oldest-created first</td></tr>
+<tr><td>n1</td><td>Core: exclude legacy trust; High learning / pattern</td></tr>
+<tr><td>n2</td><td>Focus / issues / summary; Ended sessions excluded</td></tr>
+<tr><td>n3</td><td>Importance, then recency; Stop at item / char limit</td></tr>
+<tr><td>n4</td><td>Decisions + selected memory; Add current session</td></tr>
+<tr><td>n5</td><td>Explicit boundary markers; Ignore embedded instructions</td></tr>
+<tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-memory-context:end -->
+
+<!-- diagram-context:data-persistence-fig1:start -->
+<details id="diagram-context-data-persistence-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Persistence · provider-selected, not one SQLite file</td></tr>
+<tr><td>takeaway</td><td>Production PostgreSQL and local SQLite have different operational, event and checkpoint seams.</td></tr>
+<tr><td>group-0-title</td><td>POSTGRESQL PROVIDER</td></tr>
+<tr><td>group-1-title</td><td>SQLITE / LOCAL PROVIDER</td></tr>
+<tr><td>PostgreSQL / EF</td><td>PostgreSQL / EF</td></tr>
+<tr><td>PostgreSQL / EF</td><td>Fresh DbContext per store call</td></tr>
+<tr><td>PostgreSQL / EF</td><td>Runs, revisions, workflow runs and memory</td></tr>
+<tr><td>PostgreSQL / EF</td><td>Program.cs:1026–1049</td></tr>
+<tr><td>Raw SQLite operations</td><td>Raw SQLite operations</td></tr>
+<tr><td>Raw SQLite operations</td><td>Operational database via raw stores</td></tr>
+<tr><td>Raw SQLite operations</td><td>Separate EF MemoryDbContext database</td></tr>
+<tr><td>Raw SQLite operations</td><td>Program.cs:875–903,1050</td></tr>
+<tr><td>Durable EF event log</td><td>Durable EF event log</td></tr>
+<tr><td>Durable EF event log</td><td>Append before acknowledgement</td></tr>
+<tr><td>Durable EF event log</td><td>Per-run sequence serialization; shared-row polling</td></tr>
+<tr><td>Durable EF event log</td><td>EfRunEventStream:18–37,143–167</td></tr>
+<tr><td>SQLite event stream</td><td>SQLite event stream</td></tr>
+<tr><td>SQLite event stream</td><td>WAL write-through then channel</td></tr>
+<tr><td>SQLite event stream</td><td>In-process channel is not cross-replica fanout</td></tr>
+<tr><td>SQLite event stream</td><td>SqliteRunEventStream:92–116</td></tr>
+<tr><td>Shared checkpoints + leases</td><td>Shared checkpoints + leases</td></tr>
+<tr><td>Shared checkpoints + leases</td><td>PostgreSQL checkpoint rows</td></tr>
+<tr><td>Shared checkpoints + leases</td><td>CAS lease store supports multi-replica ownership</td></tr>
+<tr><td>Shared checkpoints + leases</td><td>Program.cs:1058–1075</td></tr>
+<tr><td>File checkpoints / no-op lease</td><td>File checkpoints / no-op lease</td></tr>
+<tr><td>File checkpoints / no-op lease</td><td>Chosen by SQLite/dev configuration</td></tr>
+<tr><td>File checkpoints / no-op lease</td><td>Not automatic fallback after a PG failure</td></tr>
+<tr><td>RunStreamStore snapshot</td><td>RunStreamStore snapshot</td></tr>
+<tr><td>RunStreamStore snapshot</td><td>Endpoint chooses local entry if present</td></tr>
+<tr><td>RunStreamStore snapshot</td><td>Otherwise durable SubscribeAsync(cursor) path</td></tr>
+<tr><td>RunStreamStore snapshot</td><td>RunEndpoints:457–555</td></tr>
+<tr><td>Workspace files</td><td>Workspace files</td></tr>
+<tr><td>Workspace files</td><td>Base checkout + isolated worktrees</td></tr>
+<tr><td>Workspace files</td><td>Memory mirrors are exports; Git index per child</td></tr>
+<tr><td>Workspace files</td><td>RunOrchestrator:277–317</td></tr>
+<tr><td>PostgreSQL / EF</td><td>selected</td></tr>
+<tr><td>scope</td><td>Columns are configuration alternatives, not failover. Durable event polling and local snapshots coexist.</td></tr>
+<tr><td>groups</td><td>POSTGRESQL PROVIDER; SQLITE / LOCAL PROVIDER</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:data-persistence-fig1:end -->

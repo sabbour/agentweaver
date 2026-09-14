@@ -1,0 +1,14 @@
+{
+  "name": "canonical-aks-network",
+  "family": "guide",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-aks-network.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-aks-network.png",
+  "source_sha256": "f03c52e805e6a46f921ec83b885783c99c744b2c223b51bfdb5f38caa8063071",
+  "png_sha256": "f12dfeb738f8138fcc7b4f175e47975f85c3030c88387e29a4e2528397a38089",
+  "dimensions": [
+    6503,
+    1661
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

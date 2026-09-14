@@ -1,0 +1,518 @@
+{
+  "title": "Three channels, three different jobs",
+  "nodes": [
+    {
+      "id": "state",
+      "label": "Project state API",
+      "subLabel": "Decisions and eligible memory",
+      "meta": "Pending writes are not authority",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "compile",
+      "label": "Host compilation",
+      "subLabel": "Approved scope/architecture",
+      "meta": "Children: no full memory stack",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "context",
+      "label": "Prepared child context",
+      "subLabel": "Charter + skills composed too",
+      "meta": "Injection failure is logged",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "coordinator",
+      "label": "Coordinator",
+      "subLabel": "Owns subtask structure",
+      "meta": "No peer-chat protocol",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "child",
+      "label": "Child run",
+      "subLabel": "Bounded assigned outcome",
+      "meta": "Results return upward",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "handoff",
+      "label": "Assemble-ready result",
+      "subLabel": "Parent integrates fragments",
+      "meta": "Not independent child merge",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "proxy",
+      "label": "Worker proxy",
+      "subLabel": "One leaf execution request",
+      "meta": "Setup data + task text",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "host",
+      "label": "AgentHost pod",
+      "subLabel": "Provider session and tools",
+      "meta": "No prompt-compilation DB read",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "events",
+      "label": "Returned stream",
+      "subLabel": "Output + structured RunEvents",
+      "meta": "Caller owns persistence",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "state",
+      "to": "compile",
+      "label": "select",
+      "loopback": false
+    },
+    {
+      "from": "compile",
+      "to": "context",
+      "label": "inject",
+      "loopback": false
+    },
+    {
+      "from": "coordinator",
+      "to": "child",
+      "label": "dispatch",
+      "loopback": false
+    },
+    {
+      "from": "child",
+      "to": "handoff",
+      "label": "report",
+      "loopback": false
+    },
+    {
+      "from": "proxy",
+      "to": "host",
+      "label": "A2A",
+      "loopback": false
+    },
+    {
+      "from": "host",
+      "to": "events",
+      "label": "stream",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "state",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 240.66666666666666
+        },
+        "data": {
+          "id": "state",
+          "label": "Project state API",
+          "subLabel": "Decisions and eligible memory",
+          "meta": "Pending writes are not authority",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "compile",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "compile",
+          "label": "Host compilation",
+          "subLabel": "Approved scope/architecture",
+          "meta": "Children: no full memory stack",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "context",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 240.66666666666666
+        },
+        "data": {
+          "id": "context",
+          "label": "Prepared child context",
+          "subLabel": "Charter + skills composed too",
+          "meta": "Injection failure is logged",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "coordinator",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "coordinator",
+          "label": "Coordinator",
+          "subLabel": "Owns subtask structure",
+          "meta": "No peer-chat protocol",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "child",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "child",
+          "label": "Child run",
+          "subLabel": "Bounded assigned outcome",
+          "meta": "Results return upward",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "handoff",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "handoff",
+          "label": "Assemble-ready result",
+          "subLabel": "Parent integrates fragments",
+          "meta": "Not independent child merge",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "proxy",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "proxy",
+          "label": "Worker proxy",
+          "subLabel": "One leaf execution request",
+          "meta": "Setup data + task text",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "host",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "host",
+          "label": "AgentHost pod",
+          "subLabel": "Provider session and tools",
+          "meta": "No prompt-compilation DB read",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "events",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 728.6666666666666
+        },
+        "data": {
+          "id": "events",
+          "label": "Returned stream",
+          "subLabel": "Output + structured RunEvents",
+          "meta": "Caller owns persistence",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "state",
+        "target": "compile",
+        "label": "select",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "compile",
+        "target": "context",
+        "label": "inject",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "coordinator",
+        "target": "child",
+        "label": "dispatch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "child",
+        "target": "handoff",
+        "label": "report",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "proxy",
+        "target": "host",
+        "label": "A2A",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 794.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "host",
+        "target": "events",
+        "label": "stream",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 794.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1639.9315789473685,
+    "canvasHeight": 1100.3938596491228
+  }
+}

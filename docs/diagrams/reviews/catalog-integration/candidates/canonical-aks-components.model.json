@@ -1,0 +1,478 @@
+{
+  "title": "AKS separates control from execution",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Application ingress",
+      "subLabel": "Frontend deployment",
+      "meta": "Preview gateway separate",
+      "icon": "box",
+      "shape": "image",
+      "badge": {
+        "text": "EDGE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n1",
+      "label": "API deployment",
+      "subLabel": "Request and run control",
+      "meta": "Shared workspace mount",
+      "icon": "bot",
+      "shape": "mxgraph.kubernetes.deploy",
+      "badge": {
+        "text": "CONTROL",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n2",
+      "label": "MCP deployment",
+      "subLabel": "Broker-authenticated tools",
+      "meta": "No CSI secret mount",
+      "icon": "bot",
+      "shape": "mxgraph.kubernetes.deploy",
+      "badge": {
+        "text": "TOOLS",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n3",
+      "label": "Worker deployment",
+      "subLabel": "Background orchestration",
+      "meta": "Postgres + CSI secrets",
+      "icon": "bot",
+      "shape": "mxgraph.kubernetes.deploy",
+      "badge": {
+        "text": "WORKERS",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n4",
+      "label": "AgentHost pods",
+      "subLabel": "SandboxClaim warm pool",
+      "meta": "No ambient user secrets",
+      "icon": "bot",
+      "shape": "mxgraph.kubernetes.pod",
+      "badge": {
+        "text": "SANDBOX",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;fillColor=#635c57;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n5",
+      "label": "Durable services",
+      "subLabel": "Postgres + Azure Files",
+      "meta": "Key Vault via API/worker CSI",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "STATE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "HTTPS",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n1",
+      "label": "API tools",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n5",
+      "label": "persist / mount",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n5",
+      "label": "persist / mount",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "claim + dispatch",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "boundary0",
+      "label": "APPLICATION CONTROL"
+    },
+    {
+      "id": "boundary1",
+      "label": "EXECUTION / DURABLE STATE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n0",
+          "label": "Application ingress",
+          "subLabel": "Frontend deployment",
+          "meta": "Preview gateway separate",
+          "icon": "box",
+          "shape": "image",
+          "badge": {
+            "text": "EDGE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 585.5142857142856,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n1",
+          "label": "API deployment",
+          "subLabel": "Request and run control",
+          "meta": "Shared workspace mount",
+          "icon": "bot",
+          "shape": "mxgraph.kubernetes.deploy",
+          "badge": {
+            "text": "CONTROL",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1110.3142857142857,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n2",
+          "label": "MCP deployment",
+          "subLabel": "Broker-authenticated tools",
+          "meta": "No CSI secret mount",
+          "icon": "bot",
+          "shape": "mxgraph.kubernetes.deploy",
+          "badge": {
+            "text": "TOOLS",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n3",
+          "label": "Worker deployment",
+          "subLabel": "Background orchestration",
+          "meta": "Postgres + CSI secrets",
+          "icon": "bot",
+          "shape": "mxgraph.kubernetes.deploy",
+          "badge": {
+            "text": "WORKERS",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.deploy;fillColor=#326ce5;strokeColor=none;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 585.5142857142856,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n4",
+          "label": "AgentHost pods",
+          "subLabel": "SandboxClaim warm pool",
+          "meta": "No ambient user secrets",
+          "icon": "bot",
+          "shape": "mxgraph.kubernetes.pod",
+          "badge": {
+            "text": "SANDBOX",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;fillColor=#635c57;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1110.3142857142857,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n5",
+          "label": "Durable services",
+          "subLabel": "Postgres + Azure Files",
+          "meta": "Key Vault via API/worker CSI",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "STATE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "group-boundary0",
+        "type": "band",
+        "position": {
+          "x": 28.714285714285694,
+          "y": 173.91071428571428
+        },
+        "style": {
+          "width": 1453.6,
+          "height": 192
+        },
+        "data": {
+          "label": "APPLICATION CONTROL",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 48.714285714285694,
+          "y": 189.91071428571428
+        },
+        "data": {
+          "label": "APPLICATION CONTROL",
+          "width": 1413.6
+        }
+      },
+      {
+        "id": "group-boundary1",
+        "type": "band",
+        "position": {
+          "x": 28.714285714285694,
+          "y": 456.2321428571429
+        },
+        "style": {
+          "width": 1453.6,
+          "height": 192
+        },
+        "data": {
+          "label": "EXECUTION / DURABLE STATE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 48.714285714285694,
+          "y": 472.2321428571429
+        },
+        "data": {
+          "label": "EXECUTION / DURABLE STATE",
+          "width": 1413.6
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "HTTPS",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 585.5142857142856,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 493.11428571428564,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n2",
+        "target": "n1",
+        "label": "API tools",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1110.3142857142857,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 925.5142857142856,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1017.9142857142856,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n1",
+        "target": "n5",
+        "label": "persist / mount",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 806.5142857142856,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 806.5142857142856,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 1331.3142857142857,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 1331.3142857142857,
+              "y": 520.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1068.9142857142856,
+            "y": 437.1428571428571
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n5",
+        "label": "persist / mount",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 551.4321428571429
+            },
+            {
+              "x": 491.1112322791712,
+              "y": 551.4321428571429
+            },
+            {
+              "x": 491.1112322791712,
+              "y": 418.9285714285714
+            },
+            {
+              "x": 1399.3142857142857,
+              "y": 418.9285714285714
+            },
+            {
+              "x": 1399.3142857142857,
+              "y": 520.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 907.1112322791712,
+            "y": 418.9285714285714
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n4",
+        "label": "claim + dispatch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 585.5142857142856,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 493.11428571428564,
+            "y": 572.2321428571429
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1509.5107142857141,
+    "canvasHeight": 884.9107142857142
+  }
+}

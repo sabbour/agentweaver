@@ -1,0 +1,456 @@
+{
+  "title": "Components and project references",
+  "nodes": [
+    {
+      "id": "api",
+      "label": "Agentweaver.Api",
+      "subLabel": "Control plane + workers",
+      "meta": "apps/Agentweaver.Api",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "EXECUTABLE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "host",
+      "label": "Agentweaver.AgentHost",
+      "subLabel": "Sandbox turn host",
+      "meta": "apps/Agentweaver.AgentHost",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "EXECUTABLE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=component;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "mcp",
+      "label": "Agentweaver.Mcp",
+      "subLabel": "Remote tool surface",
+      "meta": "apps/Agentweaver.Mcp",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "EXECUTABLE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "runtime",
+      "label": "AgentRuntime",
+      "subLabel": "Agent workflow execution",
+      "meta": "packages/Agentweaver.AgentRuntime",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "PACKAGE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "tools",
+      "label": "AgentTools",
+      "subLabel": "Agent-facing tool adapters",
+      "meta": "packages/Agentweaver.AgentTools",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "PACKAGE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "domain",
+      "label": "Domain",
+      "subLabel": "Shared domain contracts",
+      "meta": "packages/Agentweaver.Domain",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "PACKAGE",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=component;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.4;",
+      "group": "group1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "api",
+      "to": "runtime",
+      "label": "references",
+      "loopback": false
+    },
+    {
+      "from": "host",
+      "to": "runtime",
+      "label": "references",
+      "loopback": false
+    },
+    {
+      "from": "runtime",
+      "to": "tools",
+      "label": "references",
+      "loopback": false
+    },
+    {
+      "from": "tools",
+      "to": "domain",
+      "label": "references",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "group0",
+      "label": "Executable projects"
+    },
+    {
+      "id": "group1",
+      "label": "Shared packages"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "api",
+          "label": "Agentweaver.Api",
+          "subLabel": "Control plane + workers",
+          "meta": "apps/Agentweaver.Api",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "EXECUTABLE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "host",
+        "type": "card",
+        "position": {
+          "x": 534.6728110599079,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "host",
+          "label": "Agentweaver.AgentHost",
+          "subLabel": "Sandbox turn host",
+          "meta": "apps/Agentweaver.AgentHost",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "EXECUTABLE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=component;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 1006.6728110599079,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "mcp",
+          "label": "Agentweaver.Mcp",
+          "subLabel": "Remote tool surface",
+          "meta": "apps/Agentweaver.Mcp",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "EXECUTABLE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "runtime",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "runtime",
+          "label": "AgentRuntime",
+          "subLabel": "Agent workflow execution",
+          "meta": "packages/Agentweaver.AgentRuntime",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "PACKAGE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "tools",
+        "type": "card",
+        "position": {
+          "x": 534.6728110599079,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "tools",
+          "label": "AgentTools",
+          "subLabel": "Agent-facing tool adapters",
+          "meta": "packages/Agentweaver.AgentTools",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "PACKAGE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "domain",
+        "type": "card",
+        "position": {
+          "x": 1006.6728110599079,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "domain",
+          "label": "Domain",
+          "subLabel": "Shared domain contracts",
+          "meta": "packages/Agentweaver.Domain",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "PACKAGE",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=component;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "group-group0",
+        "type": "band",
+        "position": {
+          "x": 30.672811059907843,
+          "y": 229.48387096774195
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "Executable projects",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 50.67281105990784,
+          "y": 245.48387096774195
+        },
+        "data": {
+          "label": "Executable projects",
+          "width": 1308
+        }
+      },
+      {
+        "id": "group-group1",
+        "type": "band",
+        "position": {
+          "x": 30.672811059907843,
+          "y": 533.447004608295
+        },
+        "style": {
+          "width": 1348,
+          "height": 192
+        },
+        "data": {
+          "label": "Shared packages",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 50.67281105990784,
+          "y": 549.447004608295
+        },
+        "data": {
+          "label": "Shared packages",
+          "width": 1308
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "api",
+        "target": "runtime",
+        "label": "references",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 62.67281105990784,
+              "y": 355.8838709677419
+            },
+            {
+              "x": 29.7695852534562,
+              "y": 355.8838709677419
+            },
+            {
+              "x": 29.7695852534562,
+              "y": 649.447004608295
+            },
+            {
+              "x": 62.67281105990784,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 29.7695852534562,
+              "y": 502.66543778801844
+            },
+            "to": {
+              "x": 37.7695852534562,
+              "y": 502.66543778801844
+            }
+          },
+          "labelPos": {
+            "x": 91.7695852534562,
+            "y": 502.66543778801844
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "host",
+        "target": "runtime",
+        "label": "references",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 704.6728110599079,
+              "y": 397.48387096774195
+            },
+            {
+              "x": 704.6728110599079,
+              "y": 476.3133640552996
+            },
+            {
+              "x": 445.51809407877573,
+              "y": 476.3133640552996
+            },
+            {
+              "x": 445.51809407877573,
+              "y": 628.647004608295
+            },
+            {
+              "x": 402.6728110599079,
+              "y": 628.647004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 575.0954525693418,
+            "y": 476.3133640552996
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "runtime",
+        "target": "tools",
+        "label": "references",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 402.6728110599079,
+              "y": 649.447004608295
+            },
+            {
+              "x": 534.6728110599079,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 468.6728110599079,
+            "y": 649.447004608295
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "tools",
+        "target": "domain",
+        "label": "references",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 874.6728110599079,
+              "y": 649.447004608295
+            },
+            {
+              "x": 1006.6728110599079,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 940.6728110599079,
+            "y": 649.447004608295
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1409.345622119816,
+    "canvasHeight": 913.4562211981568
+  }
+}

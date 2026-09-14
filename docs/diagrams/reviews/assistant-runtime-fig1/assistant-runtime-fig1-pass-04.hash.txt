@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "assistant-runtime-fig1-pass-04.drawio",
+    "sha256": "05ddcfe88bb6b33e97ead79599166dd2e0d9db5f012acf14350cb524c309d1c8"
+  },
+  "drawio": {
+    "file": "assistant-runtime-fig1-pass-04.drawio",
+    "sha256": "3ede8d2b5100bd454591ab5e7037bf1afd50184fcef58190a58b1ba063295777"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "assistant-runtime-fig1-pass-04.png",
+    "sha256": "41dccba9b605ce5891b4ecaeacc366801ab4148ca796b9cea85ddc899c93ca56"
+  }
+}

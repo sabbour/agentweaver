@@ -1,1 +1,22 @@
-a3870cf2672c7900f4228487b925323521c173cff035aba791eec7e7e9e0f909
+{
+  "version": 2,
+  "source": {
+    "file": "email-architecture.drawio",
+    "sha256": "6cc18844b3b21f35ec4edd860a3bbf960e87cb5ccfb5dce2b609b104bbe36ab6"
+  },
+  "drawio": {
+    "file": "email-architecture.drawio",
+    "sha256": "7ab1207fe5f1c053354a672b2db7bd53297f136d1450ddb5275f44a61e73f1a4"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "email-architecture.png",
+    "sha256": "f37da1c824cad178fde1dce6107a10ca4f6ba1522f6b9f9cdaf18c197da57c48"
+  }
+}

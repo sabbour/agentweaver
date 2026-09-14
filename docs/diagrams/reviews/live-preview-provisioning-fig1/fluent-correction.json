@@ -1,0 +1,272 @@
+{
+  "diagram": "live-preview-provisioning-fig1",
+  "source_sha256": "41fcd2a84df4451f283a1e007527cd52712036156c799300888b8370f2ce6511",
+  "png_sha256": "6bfd9ab7db3a9ce2d0aba4ac94f9f7d537ec614382d17b877b1cb863231bf173",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Preview ready means validated publication"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Platform-owned orchestration still has explicit skip, denial, expiry and failure outcomes."
+    },
+    {
+      "cell": "verdict-title",
+      "text": "Build/Test verdict"
+    },
+    {
+      "cell": "verdict-subtitle",
+      "text": "Approved or request-changes"
+    },
+    {
+      "cell": "verdict-metadata",
+      "text": "Declined: no preview stage"
+    },
+    {
+      "cell": "verdict-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "resolve-title",
+      "text": "Command resolution"
+    },
+    {
+      "cell": "resolve-subtitle",
+      "text": "Heuristic then bounded model"
+    },
+    {
+      "cell": "resolve-metadata",
+      "text": "Unavailable infra: skipped"
+    },
+    {
+      "cell": "resolve-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "start-title",
+      "text": "AgentHost runner"
+    },
+    {
+      "cell": "start-subtitle",
+      "text": "Map effective workspace"
+    },
+    {
+      "cell": "start-metadata",
+      "text": "Start authenticated process"
+    },
+    {
+      "cell": "start-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "observe-title",
+      "text": "App + forwarder health"
+    },
+    {
+      "cell": "observe-subtitle",
+      "text": "Observe actual app port"
+    },
+    {
+      "cell": "observe-metadata",
+      "text": "Bind reachable public port"
+    },
+    {
+      "cell": "observe-badge",
+      "text": "NET"
+    },
+    {
+      "cell": "approval-title",
+      "text": "Preview approval"
+    },
+    {
+      "cell": "approval-subtitle",
+      "text": "Grant / deny / expire"
+    },
+    {
+      "cell": "approval-metadata",
+      "text": "Policy auto-approval is explicit"
+    },
+    {
+      "cell": "approval-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "publish-title",
+      "text": "Approved publication"
+    },
+    {
+      "cell": "publish-subtitle",
+      "text": "Active run + process recheck"
+    },
+    {
+      "cell": "publish-metadata",
+      "text": "Create Service and HTTPRoute"
+    },
+    {
+      "cell": "publish-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "private-title",
+      "text": "No publication"
+    },
+    {
+      "cell": "private-subtitle",
+      "text": "Deny: stop; expire: private retry"
+    },
+    {
+      "cell": "private-metadata",
+      "text": "Never emit ready on rejection"
+    },
+    {
+      "cell": "private-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "validate-title",
+      "text": "Generated HTTPS URL"
+    },
+    {
+      "cell": "validate-subtitle",
+      "text": "Bounded DNS/readiness checks"
+    },
+    {
+      "cell": "validate-metadata",
+      "text": "Failure: rollback publication"
+    },
+    {
+      "cell": "validate-badge",
+      "text": "NET"
+    },
+    {
+      "cell": "ready-title",
+      "text": "preview_ready"
+    },
+    {
+      "cell": "ready-subtitle",
+      "text": "Exact URL validated"
+    },
+    {
+      "cell": "ready-metadata",
+      "text": "Return to authored gate handling"
+    },
+    {
+      "cell": "ready-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "prepare"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "start"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "observe"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "request"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "grant"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "reject"
+    },
+    {
+      "cell": "arrow-7",
+      "text": "probe"
+    },
+    {
+      "cell": "arrow-8",
+      "text": "healthy"
+    },
+    {
+      "cell": "note-0",
+      "text": "Denial/expiry branch stays private; unresolved commands fail explicitly."
+    },
+    {
+      "cell": "note-1",
+      "text": "Rows summarize stages; the page retains detailed failure and retry rules."
+    },
+    {
+      "cell": "note-2",
+      "text": "Resource creation alone is not readiness; API does not probe pod preview ports."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/live-preview-provisioning.md",
+    "docs/experience/live-preview-provisioning.md",
+    "docs/reference/live-preview-provisioning.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "verdict",
+      "to": "resolve",
+      "label": "prepare",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "resolve",
+      "to": "start",
+      "label": "start",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "start",
+      "to": "observe",
+      "label": "observe",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "observe",
+      "to": "approval",
+      "label": "request",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "approval",
+      "to": "publish",
+      "label": "grant",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "approval",
+      "to": "private",
+      "label": "reject",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "publish",
+      "to": "validate",
+      "label": "probe",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "validate",
+      "to": "ready",
+      "label": "healthy",
+      "result": "clean"
+    }
+  ]
+}

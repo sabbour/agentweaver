@@ -1,0 +1,117 @@
+{
+  "diagram": "project-generation-model-settings-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "project-generation-model-settings-fig1-pitch.drawio",
+    "png": "project-generation-model-settings-fig1-pitch.png",
+    "change_record": "project-generation-model-settings-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "project-generation-model-settings-fig1-pass-01.drawio",
+      "png": "project-generation-model-settings-fig1-pass-01.png",
+      "change_record": "project-generation-model-settings-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2180,
+      "result_meaningful_xml": 23502,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.780734
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "project-generation-model-settings-fig1-pass-02.drawio",
+      "png": "project-generation-model-settings-fig1-pass-02.png",
+      "change_record": "project-generation-model-settings-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "project-generation-model-settings-fig1-pass-03.drawio",
+      "png": "project-generation-model-settings-fig1-pass-03.png",
+      "change_record": "project-generation-model-settings-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "project-generation-model-settings-fig1-pass-04.drawio",
+      "png": "project-generation-model-settings-fig1-pass-04.png",
+      "change_record": "project-generation-model-settings-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "settings-to-record",
+          "source": "settings",
+          "target": "record",
+          "relationship": "save",
+          "evidence": "apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:815-817",
+          "result": "clean"
+        },
+        {
+          "id": "record-to-resolve",
+          "source": "record",
+          "target": "resolve",
+          "relationship": "preferences",
+          "evidence": "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:37-75",
+          "result": "clean"
+        },
+        {
+          "id": "resolve-to-blueprint",
+          "source": "resolve",
+          "target": "blueprint",
+          "relationship": "model",
+          "evidence": "apps/Agentweaver.Api/Endpoints/BlueprintEndpoints.cs:140-141",
+          "result": "clean"
+        },
+        {
+          "id": "resolve-to-workflow",
+          "source": "resolve",
+          "target": "workflow",
+          "relationship": "model",
+          "evidence": "apps/Agentweaver.Api/Blueprints/BlueprintService.cs:765-773",
+          "result": "clean"
+        },
+        {
+          "id": "resolve-to-outcome",
+          "source": "resolve",
+          "target": "outcome",
+          "relationship": "model",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CopilotCoordinatorSpecDrafter.cs:145",
+          "result": "clean"
+        },
+        {
+          "id": "caller-to-invoke",
+          "source": "caller",
+          "target": "invoke",
+          "relationship": "authorize",
+          "evidence": "apps/Agentweaver.Api/Auth/AiExecutionPlanService.cs:293-330,384-402",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

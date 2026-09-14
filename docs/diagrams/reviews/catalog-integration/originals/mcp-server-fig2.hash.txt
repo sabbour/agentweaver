@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "mcp-server-fig2.drawio",
+    "sha256": "ed77ab4828ce90dd3268224d744ad79e69148998445333b0050d5b040010a24b"
+  },
+  "drawio": {
+    "file": "mcp-server-fig2.drawio",
+    "sha256": "b2146630e6f595740b40a661af76ee39efdaf2e14aa0b6afa2bca4acba06285e"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "mcp-server-fig2.png",
+    "sha256": "d263a5e186036df8ea3b0c17262bc5a78308d33121d226fef2d31e7fdb667195"
+  }
+}

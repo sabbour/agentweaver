@@ -23,6 +23,16 @@ The exact per-area build/test commands live in
 workflow). Run only the suite(s) relevant to what you changed; use the commands there
 rather than guessing, so the two don't drift.
 
+## Diagram impact gate
+
+Whenever documentation changes introduce, update, invalidate, consolidate, or remove an
+architectural/process visual, consider the on-demand
+[`docs-diagram-audit`](.github/skills/docs-diagram-audit/SKILL.md) workflow before the
+change is complete. Use the full audit for repository-wide or cross-page impact, and
+record why the single-diagram `docs-diagram-pitch`/`docs-diagram-iterate` path is sufficient
+when no catalog audit is needed. Product code and behavior are visual/factual references
+only; diagram work remains docs-only.
+
 ## Other key docs
 
 - **[`RELEASING.md`](RELEASING.md)** — versioning (semver), branching model, and how a

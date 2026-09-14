@@ -1,0 +1,64 @@
+{
+  "diagram": "canonical-sandbox-experience",
+  "status": "completed",
+  "promoted": true,
+  "final_pass": 5,
+  "lineage": "docs/diagrams/reviews/canonical-sandbox-experience/native-pitch-remediation",
+  "canonical_source": "docs/diagrams/src/canonical-sandbox-experience.drawio",
+  "canonical_png": "docs/diagrams/canonical-sandbox-experience.png",
+  "canonical_hash": "docs/diagrams/canonical-sandbox-experience.hash.txt",
+  "source_sha256": "95de604ef98dc5f737de64d42a61dcc64485dd17b46345597652313f7b728049",
+  "png_sha256": "493bbb0dca02f89e4b5fe68abbb751c8d000ab107f945eb6cccc1fad8aa330e1",
+  "source_final_byte_identity": true,
+  "published_final_pixel_identity": true,
+  "schema": "passed",
+  "skill_crossfields": "passed",
+  "selective_render": "passed",
+  "selective_drift": "passed",
+  "a5": {
+    "width": 827,
+    "height": 583,
+    "pageScale": 1,
+    "logical_units_per_inch": 100
+  },
+  "growth": {
+    "growth_metric": "visible-semantic-canonical-xml-v1",
+    "baseline_meaningful_xml": 2184,
+    "result_meaningful_xml": 25370,
+    "baseline_visible_structures": 8,
+    "result_visible_structures": 84,
+    "growth_ratio": 11.6163,
+    "minimum_ratio": 9.0,
+    "invisible_cells": [],
+    "off_page_cells": [],
+    "duplicate_cells": [],
+    "metadata_padding": [],
+    "passed": true,
+    "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-sandbox-experience\\native-pitch-remediation\\canonical-sandbox-experience-pitch.drawio",
+    "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-sandbox-experience\\native-pitch-remediation\\canonical-sandbox-experience-pass-01.drawio"
+  },
+  "inspections": "All pitch/pass PNGs actually opened at print scale and enlarged; final every-arrow trace in final pass MD.",
+  "defects_resolved": [
+    "Sparse generic pitch replaced with native-symbol Fluent responsibility model.",
+    "Long titles fitted without clipping; content hierarchy and 5px accents retained.",
+    "Native Azure AKS / Entra assets and Kubernetes deploy/pod/svc used where applicable; old router-for-Azure mapping superseded.",
+    "Footnote/key overlap and row-transition routing corrected.",
+    "Side-port arrow tangents corrected; final arrows independently traced.",
+    "Windows copy-induced Unicode glyph corruption caught in pass 4 and corrected, not promoted."
+  ],
+  "historical_status": "Older promotion-status/shared-concept-status and old manifests are historical and not authoritative for this remediation.",
+  "archive": "docs/diagrams/reviews/canonical-sandbox-experience/native-pitch-remediation/pre-promotion-archive",
+  "retired_after_clean_promotion": [
+    "docs/diagrams/src/canonical-sandbox-experience.json",
+    "docs/diagrams/drawio/generated/canonical-sandbox-experience.drawio"
+  ],
+  "research": [
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-01.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-02.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-03.md"
+  ],
+  "docs_build": "Not run: parent owns docs build.",
+  "pages_product_pipeline_inventory_plan_changed": false,
+  "commits_or_staging": false,
+  "external_blockers": []
+}

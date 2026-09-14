@@ -1,0 +1,53 @@
+{
+  "redesigned": [
+    {
+      "name": "reference-a2a-fig1",
+      "growth": 12.368921,
+      "arrows": 5,
+      "retired": [
+        "docs/diagrams/src/reference-a2a-fig1.json",
+        "docs/diagrams/drawio/generated/reference-a2a-fig1.drawio"
+      ],
+      "final_pass": 4
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "growth": 11.986494,
+      "arrows": 9,
+      "retired": [
+        "docs/diagrams/src/reference-scaling-data-layer-fig1.json",
+        "docs/diagrams/drawio/generated/reference-scaling-data-layer-fig1.drawio"
+      ],
+      "final_pass": 5
+    }
+  ],
+  "merged": {
+    "diagram": "reference-sandbox-pods-fig1",
+    "disposition": "merge",
+    "target": "sandbox-browser-preview-fig1",
+    "consumer": "docs/reference/sandbox-pods.md",
+    "replacement_png": "docs/diagrams/sandbox-browser-preview-fig1.png",
+    "replacement_source": "docs/diagrams/src/sandbox-browser-preview-fig1.drawio",
+    "consumer_updated_before_retirement": true,
+    "target_assets_modified": false,
+    "reason": "Gateway-primary shared preview model; disabled-preview API-host loopback retained in prose/table.",
+    "retired_assets": [
+      {
+        "path": "docs/diagrams/drawio/generated/reference-sandbox-pods-fig1.drawio",
+        "sha256": "c2515ff533de0e61528106b4d65fb6eea889413e788f533b1989315a885a2114"
+      },
+      {
+        "path": "docs/diagrams/reference-sandbox-pods-fig1.hash.txt",
+        "sha256": "ea1d040d390f3075279cb5e36427da2de80c3cfcc272f019f9aae3f50fda9ed4"
+      },
+      {
+        "path": "docs/diagrams/reference-sandbox-pods-fig1.png",
+        "sha256": "7bb644fcf5de27693d418b3840ed015e9b893dbf7a5a778da3c25edf97973980"
+      },
+      {
+        "path": "docs/diagrams/src/reference-sandbox-pods-fig1.json",
+        "sha256": "cca38107936d632cc1abbadd8db379ace3e82d565253670ec96b7da2f0462569"
+      }
+    ]
+  }
+}

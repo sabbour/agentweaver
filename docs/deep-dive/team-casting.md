@@ -9,19 +9,17 @@ Think of casting as a controlled compiler:
 1. **Inputs** describe desired work: a blueprint, template, goal, or project signals.
 2. **Catalogs** provide the allowed vocabulary: role archetypes, charter templates, workflows, and built-ins.
 3. **Casting state** preserves identity: naming policy, already-used names, and universe history.
-4. **Proposal generation** is read-only: it suggests a roster, names, rationale, and charters.
+4. **Proposal generation** leaves `.squad/` unchanged: it suggests a roster, names, rationale, and charters, while storing the pending proposal and any model-run metadata.
 5. **Confirmation** is the write boundary: it commits the roster to `.squad/`, records events, and seeds memory.
 
 The design keeps creative choice and persistent state separate. Model-assisted steps may help select roles, but deterministic code owns naming, validation, persistence, and file writes.
 
 Runtime workflow execution is intentionally out of scope here; see [Orchestration](./orchestration.md) for how cast teams are run.
 
-![Purpose and mental model: Intent, Load project casting state, Resolve role roster, Select or validate universe, Allocate names, Compile charters, Store pending proposal, Confirm?, No workspace changes, Merge proposal with existing team, Add built-in agents, Write .squad workspace, …](../diagrams/team-casting-fig1.png)
+![Compile a proposal before writing a team: Proposal generation may persist a draft; .squad writes wait for guarded confirmation.](../diagrams/team-casting-fig1.png)
 
-<!-- Rendered from ../diagrams/src/team-casting-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/team-casting-fig1.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig1/v2/iteration-manifest.json. -->
 
 Where this lives:
 
@@ -32,7 +30,7 @@ Where this lives:
 
 ### Blueprint
 
-A blueprint is a reusable project-starting recipe. It answers: "What kind of team and workflow should this project begin with?" It contains a human name and description, a roster of role IDs, workflow IDs, a review policy, a sandbox profile, and optional bespoke roles with inline charters.
+A blueprint is a reusable project-starting recipe. It answers: "What kind of team and workflow should this project begin with?" It contains a human name and description, a roster of role IDs, workflow IDs, retained review-policy metadata, a sandbox profile, and optional bespoke roles with inline charters. The `review_policy` field currently accepts only `default`; it does not select a custom policy registry.
 
 Blueprints are higher level than casts. Applying a blueprint does not write the team directly. Instead, the blueprint is translated into a manual cast proposal, then immediately confirmed as a new team. This keeps every path through the system using the same validation, naming, charter compilation, event recording, and persistence logic.
 
@@ -150,6 +148,10 @@ classDiagram
     CastHistory "1" o-- "*" CastSnapshot
 ```
 
+The class diagram is a conceptual content model. Its review-policy field means the
+default-only metadata described above, not selectable custom policy behavior. Proposal
+concurrency is covered separately under [Confirmation flow](#confirmation-flow).
+
 Where this lives:
 
 - `packages/Agentweaver.Squad/Model`
@@ -187,12 +189,10 @@ If no signals are found, the model is asked for a small general-purpose starting
 
 Universe selection remains deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
 
-![Analysis casting: Repository workspace, Bounded signal scan, Language/framework/test/docs/CI/size summary, Prompt with catalog role menu, Model returns JSON role IDs, Resolve IDs against catalog, Allocate names + compile charters, Fail proposal generation](../diagrams/team-casting-fig2.png)
+![Analyze summaries, not raw source: The model sees bounded signals and a role menu; recognized roles become a deterministic proposal.](../diagrams/team-casting-fig2.png)
 
-<!-- Rendered from ../diagrams/src/team-casting-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/team-casting-fig2.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig2/v2/iteration-manifest.json. -->
 
 Where this lives:
 
@@ -232,7 +232,7 @@ Validation checks that a blueprint is complete and safe to apply:
 
 - identity fields exist;
 - at least one workflow is available after fallback;
-- review policy exists;
+- review policy is `default` (case-insensitive); other values are rejected;
 - sandbox profile is one of the bounded known profiles;
 - roster is non-empty;
 - each rostered role is either a catalog role or a declared bespoke role;
@@ -378,7 +378,12 @@ Where this lives:
 
 ### Why proposals are temporary
 
-A proposal is a review checkpoint, not durable project truth. The store keeps at most one active proposal per project, replaces older proposals with newer ones, and expires proposals after a short TTL. This avoids stale proposals being confirmed against a project whose team state has moved on.
+A proposal is a review checkpoint, not the confirmed team. Both proposal stores use a
+30-minute TTL and replace older pending proposals for the project. PostgreSQL uses
+`EfCastProposalStore`; SQLite uses `CastProposalStore`, a write-through in-memory cache
+with best-effort SQLite persistence and restart reads. Short-lived does not mean
+memory-only. Expiry limits draft lifetime; the `TeamRevision` check at confirmation,
+not expiry alone, detects a team that changed after proposal generation.
 
 A model-assisted proposal also records a run so users can see that a casting run happened, but the run record is not the source of truth. The proposal and later `.squad/` events are what matter for casting state.
 
@@ -386,7 +391,7 @@ A model-assisted proposal also records a run so users can see that a casting run
 
 When a project already has a team, confirmation must state intent:
 
-- **new**: replace the team with the proposal. Existing members not in the new team are retired.
+- **new**: replace the roster with the proposal and record the old roster as retired.
 - **augment**: keep the current team and add proposed members that are not already present. Nothing is retired.
 - **recast**: use the proposal as the desired final team. Proposed members become active; existing members absent from the proposal are retired.
 
@@ -405,12 +410,22 @@ Built-ins are not part of the user proposal. They are provisioned automatically 
 
 ### Confirmation flow
 
-![Confirmation flow: Load pending proposal, Resolve intent, Read existing team and registry, Intent, Final members = proposal, Final members = existing + new proposal names, Final members = proposal, Ensure built-ins, Write team.md and routing.md, Write charters and histories, Archive retired charters, Append registry events, …](../diagrams/team-casting-fig3.png)
+Confirmation resolves explicit `new`/`augment`/`recast` intent, then acquires a project
+team-mutation lease using the proposal's captured `TeamRevision`. A revision mismatch
+or a change in whether the team exists returns a conflict **before workspace writes**.
+The caller must generate a fresh proposal rather than apply stale intent.
 
-<!-- Rendered from ../diagrams/src/team-casting-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+After that guard, confirmation computes membership, ensures built-ins, writes the
+workspace files, appends registry/history events, and regenerates canonical JSON.
+It completes the mutation lease and removes the proposal before best-effort memory
+seeding and a best-effort `.squad/` auto-commit. This is an ordered series of operations,
+not one atomic filesystem/event/database/git transaction; a later failure does not
+imply that earlier file writes were rolled back.
+
+![Confirm a team against its revision: Validate proposal and team revision before writes; later side effects are ordered, not atomic.](../diagrams/team-casting-fig3.png)
+
+<!-- Editable A5 source: ../diagrams/src/team-casting-fig3.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/team-casting-fig3/v2/iteration-manifest.json. -->
 
 ### What confirmation writes
 
@@ -489,9 +504,13 @@ The sync algorithm:
 6. Stage only `.squad/` paths; reject anything outside that prefix.
 7. Commit with the provided or default message.
 
-The expected-hash check prevents committing a `.squad/` state different from the one the user reviewed. The prefix restriction prevents sync from accidentally staging application code or generated context files outside `.squad/`.
+The expected-hash check detects changes to the reviewed `.squad/` change set. The
+prefix restriction prevents this method from staging application code or generated
+context outside `.squad/`. It does not clear unrelated entries already staged in the
+repository index before calling `repo.Commit`; keep unrelated changes unstaged when
+using this path.
 
-Note: memory export can write `.agentweaver/context/*`, but the sync path described here commits only `.squad/` changes.
+Note: memory export can write `.agentweaver/context/*`, but the sync path described here only selects `.squad/` paths for staging.
 
 Where this lives:
 
@@ -500,39 +519,22 @@ Where this lives:
 
 ## Memory import and export
 
-Memory bridges database-backed decisions/session state and the file ledger agents can read.
+Memory bridges database-backed decisions/session state and the file ledger agents can
+read. The API owns persistence and trust filtering; the Squad package owns DTO-based
+file formats, without an EF dependency.
 
-The squad package deliberately uses DTOs rather than EF entities. The API layer owns persistence; the squad package owns file import/export formats. This keeps the core squad library independent of the database implementation.
-
-### Import
-
-Import scans `.squad/decisions/inbox/*.md`. Each file must contain front matter with:
-
-- `agent`
-- `slug`
-- `type`
-- `title`
-
-The body becomes the inbox content. A trailing `**Rationale:**` section, if present, is split into rationale. Files that cannot be parsed are skipped rather than blocking the whole import.
-
-This makes the inbox a lightweight interoperability surface: agents or users can drop markdown decisions into a known folder, and the API can import them into structured state.
-
-### Export
-
-Export rewrites file artifacts from materialized database data:
-
-- `.squad/decisions.md` from active decisions;
-- `.squad/decisions/inbox/{slug}.md` from pending inbox entries;
-- `.squad/agents/{agent}/history.md` from learning and update memory;
-- `.squad/identity/now.md` from current session context;
-- `.agentweaver/context/boundaries.md` from architectural and scope decisions;
-- `.agentweaver/context/patterns.md` from pattern memories.
-
-Pending inbox files are regenerated from the database, and stale pending markdown is removed. That makes the database the authoritative source after import/export synchronization.
+Use the shared [memory import/export model](./memory-decisions.md#import-and-export)
+for the database-authoritative mirror and inbox-only import. This is the same mechanism,
+not a second casting-specific synchronization pipeline.
 
 ### Memory seeded by casting
 
-After confirmation, the casting service best-effort seeds `core_context` memory for newly added non-built-in agents using their charters. It also starts an initial session if no session is open. This gives newly cast agents immediate context without requiring a separate memory operation.
+After confirmation, the casting service best-effort seeds high-importance
+`core_context` rows from charters for newly added non-built-in agents, skipping an
+agent that already has core context. It starts an initial session if none is open.
+The current seeding code does not set provenance or approval fields: those rows retain
+the model's `legacy` defaults and are excluded by the memory compiler until approved.
+Do not confuse the written charter with immediately eligible database memory.
 
 Where this lives:
 
@@ -597,5 +599,152 @@ To rebuild the casting engine from scratch, implement these pieces in order:
 - Built-ins are automatic and are not part of user proposals.
 - Registry/history events must be followed by canonical JSON regeneration.
 - Conflicts between canonical and alternate flat casting state should block reads/writes until resolved.
-- Git sync stages only `.squad/`; it does not commit `.agentweaver/context/*`.
+- Git sync stages only `.squad/`; it does not stage `.agentweaver/context/*`, but callers must keep unrelated entries out of the existing index.
 - Memory import/export is DTO-based so the squad package remains database-agnostic.
+
+<!-- diagram-context:team-casting-fig1:start -->
+<details id="diagram-context-team-casting-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Compile a proposal before writing a team</td></tr>
+<tr><td>takeaway</td><td>Proposal generation may persist a draft; .squad writes wait for guarded confirmation.</td></tr>
+<tr><td>group-title-0</td><td>INTENT AND NAMING CONTEXT</td></tr>
+<tr><td>group-title-1</td><td>DETERMINISTIC PROPOSAL COMPILATION</td></tr>
+<tr><td>group-title-2</td><td>GUARDED CONFIRMATION AND SIDE EFFECTS</td></tr>
+<tr><td>Intent -&gt; known roles</td><td>Intent -&gt; known roles</td></tr>
+<tr><td>Intent -&gt; known roles</td><td>Scenario, manual or model</td></tr>
+<tr><td>Intent -&gt; known roles</td><td>catalog role resolution</td></tr>
+<tr><td>Policy + history</td><td>Policy + history</td></tr>
+<tr><td>Policy + history</td><td>Current team and registry</td></tr>
+<tr><td>Policy + history</td><td>naming context</td></tr>
+<tr><td>Choose universe</td><td>Choose universe</td></tr>
+<tr><td>Choose universe</td><td>Policy, override and seed</td></tr>
+<tr><td>Choose universe</td><td>not repository signals</td></tr>
+<tr><td>Allocate names</td><td>Allocate names</td></tr>
+<tr><td>Allocate names</td><td>Reserve names case-insensitively</td></tr>
+<tr><td>Allocate names</td><td>member-N overflow</td></tr>
+<tr><td>Compile charters</td><td>Compile charters</td></tr>
+<tr><td>Compile charters</td><td>Trusted role metadata</td></tr>
+<tr><td>Compile charters</td><td>deterministic compiler</td></tr>
+<tr><td>Pending proposal</td><td>Pending proposal</td></tr>
+<tr><td>Pending proposal</td><td>Roster + charters + revision</td></tr>
+<tr><td>Pending proposal</td><td>short-lived proposal store</td></tr>
+<tr><td>Reject or expire</td><td>Reject or expire</td></tr>
+<tr><td>Reject or expire</td><td>Remove pending proposal</td></tr>
+<tr><td>Reject or expire</td><td>no .squad mutation</td></tr>
+<tr><td>Guarded confirmation</td><td>Guarded confirmation</td></tr>
+<tr><td>Guarded confirmation</td><td>Check current team revision</td></tr>
+<tr><td>Guarded confirmation</td><td>new / augment / recast</td></tr>
+<tr><td>Persist team + extras</td><td>Persist team + extras</td></tr>
+<tr><td>Persist team + extras</td><td>Files/events, then best effort</td></tr>
+<tr><td>Persist team + extras</td><td>seed / .squad commit</td></tr>
+<tr><td>e0</td><td>roles</td></tr>
+<tr><td>e1</td><td>context</td></tr>
+<tr><td>e2</td><td>allocate</td></tr>
+<tr><td>e3</td><td>compile</td></tr>
+<tr><td>e4</td><td>store</td></tr>
+<tr><td>e5</td><td>reject</td></tr>
+<tr><td>e6</td><td>confirm</td></tr>
+<tr><td>e7</td><td>valid</td></tr>
+<tr><td>groups</td><td>INTENT AND NAMING CONTEXT; DETERMINISTIC PROPOSAL COMPILATION; GUARDED CONFIRMATION AND SIDE EFFECTS</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:team-casting-fig1:end -->
+
+<!-- diagram-context:team-casting-fig2:start -->
+<details id="diagram-context-team-casting-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Analyze summaries, not raw source</td></tr>
+<tr><td>takeaway</td><td>The model sees bounded signals and a role menu; recognized roles become a deterministic proposal.</td></tr>
+<tr><td>group-title-0</td><td>LOCAL SCAN BOUNDARY</td></tr>
+<tr><td>group-title-1</td><td>MODEL-BOUND SUMMARY</td></tr>
+<tr><td>group-title-2</td><td>VALIDATION AND DETERMINISTIC OUTPUT</td></tr>
+<tr><td>Repository</td><td>Repository</td></tr>
+<tr><td>Repository</td><td>Local manifests and filenames</td></tr>
+<tr><td>Repository</td><td>not model-bound source</td></tr>
+<tr><td>Bounded scanner</td><td>Bounded scanner</td></tr>
+<tr><td>Bounded scanner</td><td>Skip excluded/reparse paths</td></tr>
+<tr><td>Bounded scanner</td><td>500-file cap</td></tr>
+<tr><td>Signal summary</td><td>Signal summary</td></tr>
+<tr><td>Signal summary</td><td>Languages, tests, docs, CI</td></tr>
+<tr><td>Signal summary</td><td>framework + size signals</td></tr>
+<tr><td>Catalog role menu</td><td>Catalog role menu</td></tr>
+<tr><td>Catalog role menu</td><td>Known role IDs only</td></tr>
+<tr><td>Catalog role menu</td><td>trusted catalog metadata</td></tr>
+<tr><td>Analysis prompt</td><td>Analysis prompt</td></tr>
+<tr><td>Analysis prompt</td><td>Summary is fenced data</td></tr>
+<tr><td>Analysis prompt</td><td>no signals: warning</td></tr>
+<tr><td>Parse response</td><td>Parse response</td></tr>
+<tr><td>Parse response</td><td>Malformed output fails</td></tr>
+<tr><td>Parse response</td><td>role selections</td></tr>
+<tr><td>Resolve catalog IDs</td><td>Resolve catalog IDs</td></tr>
+<tr><td>Resolve catalog IDs</td><td>Skip unknown role IDs</td></tr>
+<tr><td>Resolve catalog IDs</td><td>none recognized: fail</td></tr>
+<tr><td>Names + charters</td><td>Names + charters</td></tr>
+<tr><td>Names + charters</td><td>Universe chosen independently</td></tr>
+<tr><td>Names + charters</td><td>deterministic compilation</td></tr>
+<tr><td>Stored proposal</td><td>Stored proposal</td></tr>
+<tr><td>Stored proposal</td><td>No team file writes yet</td></tr>
+<tr><td>Stored proposal</td><td>pending confirmation</td></tr>
+<tr><td>e0</td><td>scan</td></tr>
+<tr><td>e1</td><td>summarize</td></tr>
+<tr><td>e2</td><td>signals</td></tr>
+<tr><td>e3</td><td>menu</td></tr>
+<tr><td>e4</td><td>response</td></tr>
+<tr><td>e5</td><td>parsed</td></tr>
+<tr><td>e6</td><td>known</td></tr>
+<tr><td>e7</td><td>store</td></tr>
+<tr><td>groups</td><td>LOCAL SCAN BOUNDARY; MODEL-BOUND SUMMARY; VALIDATION AND DETERMINISTIC OUTPUT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:team-casting-fig2:end -->
+
+<!-- diagram-context:team-casting-fig3:start -->
+<details id="diagram-context-team-casting-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Confirm a team against its revision</td></tr>
+<tr><td>takeaway</td><td>Validate proposal and team revision before writes; later side effects are ordered, not atomic.</td></tr>
+<tr><td>group-title-0</td><td>PROPOSAL AND CONCURRENCY ADMISSION</td></tr>
+<tr><td>group-title-1</td><td>ROSTER SEMANTICS</td></tr>
+<tr><td>group-title-2</td><td>ORDERED PERSISTENCE AND BEST-EFFORT WORK</td></tr>
+<tr><td>Live proposal?</td><td>Live proposal?</td></tr>
+<tr><td>Live proposal?</td><td>Missing or expired exits</td></tr>
+<tr><td>Live proposal?</td><td>proposal ID</td></tr>
+<tr><td>Resolve intent</td><td>Resolve intent</td></tr>
+<tr><td>Resolve intent</td><td>Existing-team choice matters</td></tr>
+<tr><td>Resolve intent</td><td>new / augment / recast</td></tr>
+<tr><td>Revision lease</td><td>Revision lease</td></tr>
+<tr><td>Revision lease</td><td>Captured TeamRevision</td></tr>
+<tr><td>Revision lease</td><td>conflict before writes</td></tr>
+<tr><td>Apply roster intent</td><td>Apply roster intent</td></tr>
+<tr><td>Apply roster intent</td><td>Augment keeps; recast retires</td></tr>
+<tr><td>Apply roster intent</td><td>explicit chosen semantics</td></tr>
+<tr><td>Ensure built-ins</td><td>Ensure built-ins</td></tr>
+<tr><td>Ensure built-ins</td><td>Scribe, Ralph, Rai, Coordinator</td></tr>
+<tr><td>Ensure built-ins</td><td>required built-in members</td></tr>
+<tr><td>Workspace files</td><td>Workspace files</td></tr>
+<tr><td>Workspace files</td><td>Team, routing, charters, alumni</td></tr>
+<tr><td>Workspace files</td><td>ordered filesystem writes</td></tr>
+<tr><td>Events + canonical state</td><td>Events + canonical state</td></tr>
+<tr><td>Events + canonical state</td><td>Registry and history events</td></tr>
+<tr><td>Events + canonical state</td><td>canonical JSON</td></tr>
+<tr><td>Complete lease</td><td>Complete lease</td></tr>
+<tr><td>Complete lease</td><td>Remove pending proposal</td></tr>
+<tr><td>Complete lease</td><td>after core writes</td></tr>
+<tr><td>Best-effort extras</td><td>Best-effort extras</td></tr>
+<tr><td>Best-effort extras</td><td>Seed context; .squad commit</td></tr>
+<tr><td>Best-effort extras</td><td>failures logged</td></tr>
+<tr><td>e0</td><td>found</td></tr>
+<tr><td>e1</td><td>guard</td></tr>
+<tr><td>e2</td><td>valid</td></tr>
+<tr><td>e3</td><td>ensure</td></tr>
+<tr><td>e4</td><td>write</td></tr>
+<tr><td>e5</td><td>persist</td></tr>
+<tr><td>e6</td><td>complete</td></tr>
+<tr><td>e7</td><td>best effort</td></tr>
+<tr><td>groups</td><td>PROPOSAL AND CONCURRENCY ADMISSION; ROSTER SEMANTICS; ORDERED PERSISTENCE AND BEST-EFFORT WORK</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:team-casting-fig3:end -->

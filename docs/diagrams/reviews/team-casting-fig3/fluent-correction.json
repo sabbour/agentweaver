@@ -1,0 +1,270 @@
+{
+  "diagram": "team-casting-fig3",
+  "source_sha256": "7544ca841437de384bcd28f309e14d75ab1289aad48daa3804dd6a68462faad1",
+  "png_sha256": "f0eeb946e1c22951dde11faa4aca16c433afb574ee73c586396ab8f594a6a3ed",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Confirm a team against its revision"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Validate proposal and team revision before writes; later side effects are ordered, not atomic."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "PROPOSAL AND CONCURRENCY ADMISSION"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "ROSTER SEMANTICS"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "ORDERED PERSISTENCE AND BEST-EFFORT WORK"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "LOOKUP"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Live proposal?"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Missing or expired exits"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "proposal ID"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "INTENT"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Resolve intent"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Existing-team choice matters"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "new / augment / recast"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "GUARD"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Revision lease"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Captured TeamRevision"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "conflict before writes"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "ROSTER"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Apply roster intent"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Augment keeps; recast retires"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "explicit chosen semantics"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "BUILT-INS"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Ensure built-ins"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Scribe, Ralph, Rai, Coordinator"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "required built-in members"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "FILES"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Workspace files"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Team, routing, charters, alumni"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "ordered filesystem writes"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Events + canonical state"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Registry and history events"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "canonical JSON"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "COMMIT"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Complete lease"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Remove pending proposal"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "after core writes"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "EXTRAS"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Best-effort extras"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Seed context; .squad commit"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "failures logged"
+    },
+    {
+      "cell": "e0",
+      "text": "found"
+    },
+    {
+      "cell": "e1",
+      "text": "guard"
+    },
+    {
+      "cell": "e2",
+      "text": "valid"
+    },
+    {
+      "cell": "e3",
+      "text": "ensure"
+    },
+    {
+      "cell": "e4",
+      "text": "write"
+    },
+    {
+      "cell": "e5",
+      "text": "persist"
+    },
+    {
+      "cell": "e6",
+      "text": "complete"
+    },
+    {
+      "cell": "e7",
+      "text": "best effort"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/team-casting.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "found",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "guard",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "valid",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "ensure",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "write",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n5",
+      "to": "n6",
+      "label": "persist",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n6",
+      "to": "n7",
+      "label": "complete",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n7",
+      "to": "n8",
+      "label": "best effort",
+      "result": "clean"
+    }
+  ]
+}

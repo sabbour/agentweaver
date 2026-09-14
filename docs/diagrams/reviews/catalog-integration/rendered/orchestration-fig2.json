@@ -1,0 +1,14 @@
+{
+  "name": "orchestration-fig2",
+  "family": "deep-dive-orchestration",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig2.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig2.png",
+  "source_sha256": "396f5f9baf3e95732ec7a2872414e99b0031a2c80bef40ed36269f86f90dfe6a",
+  "png_sha256": "6efca1a7f3991530caad4b272f880906ee0fb1f9c14a0517c035bed879c59da6",
+  "dimensions": [
+    2868,
+    1632
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

@@ -1,0 +1,468 @@
+{
+  "title": "Local checkout, explicit authoritative writeback",
+  "nodes": [
+    {
+      "id": "source",
+      "label": "Source coordinates",
+      "subLabel": "Shared repository + ref",
+      "meta": "Expected base commit and tree",
+      "icon": "box",
+      "shape": "cylinder3",
+      "library": "database",
+      "badge": {
+        "text": "Component",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;"
+    },
+    {
+      "id": "fetch",
+      "label": "Materialize checkout",
+      "subLabel": "Initialize + shallow fetch",
+      "meta": "Verify both commit and tree",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "local",
+      "label": "Ephemeral checkout",
+      "subLabel": "Detached immutable base",
+      "meta": "HOME/XDG outside checkout",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "readonly",
+      "label": "LocalReadOnly",
+      "subLabel": "Build / test can write locally",
+      "meta": "Publication is refused",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "writable",
+      "label": "LocalWritable",
+      "subLabel": "Implementation edits",
+      "meta": "Alternate-index final tree",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "prepare",
+      "label": "Prepare publication",
+      "subLabel": "Flatten nested repo content",
+      "meta": "No gitlinks; restore metadata",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "unchanged",
+      "label": "Equal result tree",
+      "subLabel": "No-change descriptor",
+      "meta": "No temporary ref push",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "ref",
+      "label": "Changed result tree",
+      "subLabel": "Single-parent commit",
+      "meta": "Push unique temporary ref",
+      "icon": "box",
+      "shape": "cylinder3",
+      "library": "database",
+      "badge": {
+        "text": "Component",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;"
+    },
+    {
+      "id": "apply",
+      "label": "Worker validation",
+      "subLabel": "Run / ref / base / tree / clean",
+      "meta": "Fast-forward authoritative branch",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "source",
+      "to": "fetch",
+      "label": "fetch",
+      "loopback": false
+    },
+    {
+      "from": "fetch",
+      "to": "local",
+      "label": "verify",
+      "loopback": false
+    },
+    {
+      "from": "writable",
+      "to": "prepare",
+      "label": "stage",
+      "loopback": false
+    },
+    {
+      "from": "ref",
+      "to": "apply",
+      "label": "validate",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "source",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "source",
+          "label": "Source coordinates",
+          "subLabel": "Shared repository + ref",
+          "meta": "Expected base commit and tree",
+          "icon": "box",
+          "shape": "cylinder3",
+          "library": "database",
+          "badge": {
+            "text": "Component",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "fetch",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "fetch",
+          "label": "Materialize checkout",
+          "subLabel": "Initialize + shallow fetch",
+          "meta": "Verify both commit and tree",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "local",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "local",
+          "label": "Ephemeral checkout",
+          "subLabel": "Detached immutable base",
+          "meta": "HOME/XDG outside checkout",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "readonly",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 484.66666666666663
+        },
+        "data": {
+          "id": "readonly",
+          "label": "LocalReadOnly",
+          "subLabel": "Build / test can write locally",
+          "meta": "Publication is refused",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "writable",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "writable",
+          "label": "LocalWritable",
+          "subLabel": "Implementation edits",
+          "meta": "Alternate-index final tree",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "prepare",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "prepare",
+          "label": "Prepare publication",
+          "subLabel": "Flatten nested repo content",
+          "meta": "No gitlinks; restore metadata",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "unchanged",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "unchanged",
+          "label": "Equal result tree",
+          "subLabel": "No-change descriptor",
+          "meta": "No temporary ref push",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "ref",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "ref",
+          "label": "Changed result tree",
+          "subLabel": "Single-parent commit",
+          "meta": "Push unique temporary ref",
+          "icon": "box",
+          "shape": "cylinder3",
+          "library": "database",
+          "badge": {
+            "text": "Component",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "apply",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 728.6666666666666
+        },
+        "data": {
+          "id": "apply",
+          "label": "Worker validation",
+          "subLabel": "Run / ref / base / tree / clean",
+          "meta": "Fast-forward authoritative branch",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "source",
+        "target": "fetch",
+        "label": "fetch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "fetch",
+        "target": "local",
+        "label": "verify",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "writable",
+        "target": "prepare",
+        "label": "stage",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "ref",
+        "target": "apply",
+        "label": "validate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 794.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1639.9315789473685,
+    "canvasHeight": 1100.3938596491228
+  }
+}

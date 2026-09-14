@@ -1,0 +1,133 @@
+{
+  "diagram": "workflow-agent-evaluation",
+  "orientation": "A5-portrait",
+  "pitch": {
+    "drawio": "fullfluent-remediation/workflow-agent-evaluation-pitch.drawio",
+    "png": "fullfluent-remediation/workflow-agent-evaluation-pitch.png",
+    "change_record": "fullfluent-remediation/workflow-agent-evaluation-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "fullfluent-remediation/workflow-agent-evaluation-pass-01.drawio",
+      "png": "fullfluent-remediation/workflow-agent-evaluation-pass-01.png",
+      "change_record": "fullfluent-remediation/workflow-agent-evaluation-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 2364,
+      "result_meaningful_xml": 31250,
+      "growth_ratio": 13.21912
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "fullfluent-remediation/workflow-agent-evaluation-pass-02.drawio",
+      "png": "fullfluent-remediation/workflow-agent-evaluation-pass-02.png",
+      "change_record": "fullfluent-remediation/workflow-agent-evaluation-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "fullfluent-remediation/workflow-agent-evaluation-pass-03.drawio",
+      "png": "fullfluent-remediation/workflow-agent-evaluation-pass-03.png",
+      "change_record": "fullfluent-remediation/workflow-agent-evaluation-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "fullfluent-remediation/workflow-agent-evaluation-pass-04.drawio",
+      "png": "fullfluent-remediation/workflow-agent-evaluation-pass-04.png",
+      "change_record": "fullfluent-remediation/workflow-agent-evaluation-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "edge-01",
+          "source": "eval-setup",
+          "target": "eval-run",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:63\u201364",
+          "result": "clean"
+        },
+        {
+          "id": "edge-02",
+          "source": "eval-run",
+          "target": "eval-collect",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:66\u201367",
+          "result": "clean"
+        },
+        {
+          "id": "edge-03",
+          "source": "eval-collect",
+          "target": "safety-gate",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:69\u201370",
+          "result": "clean"
+        },
+        {
+          "id": "edge-04",
+          "source": "safety-gate",
+          "target": "eval-setup",
+          "relationship": "revise",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:73\u201375",
+          "result": "clean"
+        },
+        {
+          "id": "edge-05",
+          "source": "safety-gate",
+          "target": "terminal-safety-failed",
+          "relationship": "safety-failed",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:77\u201379",
+          "result": "clean"
+        },
+        {
+          "id": "edge-06",
+          "source": "safety-gate",
+          "target": "done",
+          "relationship": "no-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:81\u201383",
+          "result": "clean"
+        },
+        {
+          "id": "edge-07",
+          "source": "safety-gate",
+          "target": "report",
+          "relationship": "review",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:85\u201387",
+          "result": "clean"
+        },
+        {
+          "id": "edge-08",
+          "source": "report",
+          "target": "done",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/agent_evaluation.yaml:89\u201390",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

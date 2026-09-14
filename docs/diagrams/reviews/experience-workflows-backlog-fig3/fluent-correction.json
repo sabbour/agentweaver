@@ -1,0 +1,214 @@
+{
+  "diagram": "experience-workflows-backlog-fig3",
+  "source_sha256": "b2d605e6569d3c08ae449002c95273dda39b9db48eecbd008603279876d7d1f5",
+  "png_sha256": "940361e0f5067a5d0f08e865e8a56c1e882b36e62f0d1afdb5d8e27188642176",
+  "prior_model": "docs\\diagrams\\reviews\\experience-00-overview-fig1\\experience-content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "One won claim, one reserved run"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Ready pickup commits claim and reservation before activation; other outcomes do not launch."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "SELECTION AND ATOMIC RESERVATION"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "POST-CLAIM OUTCOMES"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "READY"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Ranked Ready tasks"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Heartbeat candidates"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "eligible project + workspace"
+    },
+    {
+      "cell": "n0-detail",
+      "text": "Top-N limits candidates per tick, not total concurrency."
+    },
+    {
+      "cell": "n1-badge",
+      "text": "STORE"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Atomic transaction"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Claim + run + policy"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "task-scoped reservation"
+    },
+    {
+      "cell": "n1-detail",
+      "text": "Commit all together; no orphan losing run."
+    },
+    {
+      "cell": "n2-badge",
+      "text": "WON"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Activate winner"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Use reserved run ID"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "post-commit activation"
+    },
+    {
+      "cell": "n2-detail",
+      "text": "Schedule unattended confirm attributed to CapturedBy."
+    },
+    {
+      "cell": "n3-badge",
+      "text": "NO START"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Lost / unavailable"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "No launch by this pickup"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "rollback / preserve rank"
+    },
+    {
+      "cell": "n3-detail",
+      "text": "A winner may own a lost claim; unavailable leaves Ready."
+    },
+    {
+      "cell": "n4-badge",
+      "text": "FAILED"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Claimed failed run"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Visible failure reason"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "preflight / activation failure"
+    },
+    {
+      "cell": "n4-detail",
+      "text": "Do not silently requeue. Terminalization may log failure."
+    },
+    {
+      "cell": "n5-badge",
+      "text": "RUNNING"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Coordinator work"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Unattended execution"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "claim-time policy snapshot"
+    },
+    {
+      "cell": "n5-detail",
+      "text": "No second manual start for the same captured goal."
+    },
+    {
+      "cell": "e0",
+      "text": "attempt"
+    },
+    {
+      "cell": "e1",
+      "text": "won"
+    },
+    {
+      "cell": "e2",
+      "text": "not won"
+    },
+    {
+      "cell": "e3",
+      "text": "activate"
+    },
+    {
+      "cell": "e4",
+      "text": "failure"
+    },
+    {
+      "cell": "note",
+      "text": "A won preflight-failure reservation also stays Claimed/Failed. Claim-once is not tool-execution-once."
+    }
+  ],
+  "context_pages": [
+    "docs/experience/operations.md",
+    "docs/experience/workflows-backlog.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "attempt",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "won",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "not won",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n5",
+      "label": "activate",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n2",
+      "to": "n4",
+      "label": "failure",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "diagram": "infra-deployment-fig4",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "infra-deployment-fig4-pass-01.drawio",
+  "png": "infra-deployment-fig4-pass-01.png",
+  "evidence": "k8s/base/httproute-api.yaml:25-63; k8s/base/mcp-httproute.yaml:14-46; k8s/base/httproute-frontend.yaml:27-34; k8s/base/worker-deployment.yaml:111-117",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "client": "native:c4",
+    "gateway": "native:network",
+    "match": "native:flowchart",
+    "api": "native:kubernetes",
+    "mcp": "native:kubernetes",
+    "frontend": "native:kubernetes"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "b24cede4dbe6a85752283b4436d31ade51d8eb7cc14a7e6f484c4997b2f37166",
+    "png": "516ab8377c0e3ec0e3ba1c6d1f03c54fe7b19c158c03491ec594530824bb1cba"
+  },
+  "png_dimensions": [
+    1565,
+    866
+  ],
+  "xml_edge_count": 5
+}

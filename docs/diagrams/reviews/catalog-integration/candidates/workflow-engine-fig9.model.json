@@ -1,0 +1,868 @@
+{
+  "title": "Bind contracts, not just node names",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Parsed definition",
+      "subLabel": "Loader-valid graph data",
+      "meta": "not execution proof",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "INPUT",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Type/gate classifier",
+      "subLabel": "Known node kinds",
+      "meta": "renamed IDs still work",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "CLASSIFY",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Unsupported kind",
+      "subLabel": "No concrete runtime contract",
+      "meta": "fail closed",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "ERROR",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Executor bindings",
+      "subLabel": "Concrete executor instances",
+      "meta": "factory integrations",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "EXECUTORS",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Transition adapters",
+      "subLabel": "Typed predicates and messages",
+      "meta": "not arbitrary arrows",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "EDGES",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Terminal outputs",
+      "subLabel": "Known result contracts",
+      "meta": "typed completion",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "TERMINALS",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Start + edge checks",
+      "subLabel": "Dry-run bindability",
+      "meta": "verdict start may fail",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "VALIDATE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "MAF graph",
+      "subLabel": "Validated executable graph",
+      "meta": "start executor resolved",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "READY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "WorkflowBindException",
+      "subLabel": "Unsupported contract reported",
+      "meta": "no silent fallback graph",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "FAIL",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "classify",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "unknown",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "known",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "wire",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n5",
+      "label": "outputs",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n6",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n6",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "valid",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n8",
+      "label": "invalid",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n8",
+      "label": "raise",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DEFINITION AND CLASSIFICATION"
+    },
+    {
+      "id": "1",
+      "label": "EXECUTOR AND MESSAGE CONTRACTS"
+    },
+    {
+      "id": "2",
+      "label": "START, EDGE AND TERMINAL VALIDATION"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Parsed definition",
+          "subLabel": "Loader-valid graph data",
+          "meta": "not execution proof",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "INPUT",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Type/gate classifier",
+          "subLabel": "Known node kinds",
+          "meta": "renamed IDs still work",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "CLASSIFY",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Unsupported kind",
+          "subLabel": "No concrete runtime contract",
+          "meta": "fail closed",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "ERROR",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Executor bindings",
+          "subLabel": "Concrete executor instances",
+          "meta": "factory integrations",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "EXECUTORS",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 521.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Transition adapters",
+          "subLabel": "Typed predicates and messages",
+          "meta": "not arbitrary arrows",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "EDGES",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Terminal outputs",
+          "subLabel": "Known result contracts",
+          "meta": "typed completion",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "TERMINALS",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Start + edge checks",
+          "subLabel": "Dry-run bindability",
+          "meta": "verdict start may fail",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "VALIDATE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "MAF graph",
+          "subLabel": "Validated executable graph",
+          "meta": "start executor resolved",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "READY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 765.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "WorkflowBindException",
+          "subLabel": "Unsupported contract reported",
+          "meta": "no silent fallback graph",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "FAIL",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 221.73831775700933
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 198
+        },
+        "data": {
+          "label": "DEFINITION AND CLASSIFICATION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 237.73831775700933
+        },
+        "data": {
+          "label": "DEFINITION AND CLASSIFICATION",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 451.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 226
+        },
+        "data": {
+          "label": "EXECUTOR AND MESSAGE CONTRACTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 467.7383177570093
+        },
+        "data": {
+          "label": "EXECUTOR AND MESSAGE CONTRACTS",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 695.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 226
+        },
+        "data": {
+          "label": "START, EDGE AND TERMINAL VALIDATION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 711.7383177570093
+        },
+        "data": {
+          "label": "START, EDGE AND TERMINAL VALIDATION",
+          "width": 1272.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "classify",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 652.5308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 595.3308411214953,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "unknown",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 992.5308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1049.7308411214954,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n1",
+        "target": "n3",
+        "label": "known",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 822.5308411214953,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 494.3308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "wire",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 620.5308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 620.5308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 652.5308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 579.3308411214953,
+            "y": 575.0716510903427
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n5",
+        "label": "outputs",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 707.7383177570093
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 707.7383177570093
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 822.5308411214953,
+            "y": 707.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n4",
+        "target": "n6",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 822.5308411214953,
+              "y": 653.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 685.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 685.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 494.3308411214953,
+            "y": 685.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n5",
+        "target": "n6",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1276.9308411214952,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1276.9308411214952,
+              "y": 747.394984423676
+            },
+            {
+              "x": 1014.9308411214952,
+              "y": 747.394984423676
+            },
+            {
+              "x": 1014.9308411214952,
+              "y": 897.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 897.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 844.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1068.9308411214952,
+            "y": 747.394984423676
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n6",
+        "target": "n7",
+        "label": "valid",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 620.5308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 620.5308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 652.5308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 595.8108411214953,
+              "y": 844.404984423676
+            },
+            "to": {
+              "x": 595.8108411214953,
+              "y": 796.404984423676
+            }
+          },
+          "labelPos": {
+            "x": 595.8108411214953,
+            "y": 781.2049844236759
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n8",
+        "label": "invalid",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 594.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 594.1308411214953,
+              "y": 916.0816510903427
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 916.0816510903427
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 834.5308411214953,
+            "y": 916.0816510903427
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n2",
+        "target": "n8",
+        "label": "raise",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1446.9308411214952,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1478.9308411214952,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1478.9308411214952,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1446.9308411214952,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1478.9308411214952,
+            "y": 663.7383177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1645.0616822429902,
+    "canvasHeight": 1053.1401869158876
+  }
+}

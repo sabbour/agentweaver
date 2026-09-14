@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "phase": "pass-3",
+      "issue": "Native segment routing alone retained a two-pixel planned hairpin and difficult label association.",
+      "resolution": "Applied route-only near-parallel clearance and label/connector collision checks. Added finer bounded label positions when the collective approved edge had no valid placement. Preserved all vertices and relationships; inspected every new export."
+    },
+    {
+      "phase": "pass-4",
+      "issue": "The foreign-owned temporary Desktop executable disappeared before the first export.",
+      "resolution": "Downloaded the official 31.4.5 Windows archive into exclusive review scope, verified its GitHub SHA256 and executable version, and resumed the unchanged saved XML. No shared renderer files were recreated or modified."
+    },
+    {
+      "phase": "validation",
+      "issue": "The test process succeeded, but the local summary parser expected TAP while Node selected a different reporter.",
+      "resolution": "Selected Node's built-in TAP reporter explicitly and reran the focused diagram tests."
+    },
+    {
+      "phase": "rendered-anchor-validation",
+      "issue": "The owned workflow-selection page linked to an obsolete heading in the coordinator reference.",
+      "resolution": "Updated only the owned link to the current workflow-selection anchor and rebuilt documentation. The reference page was not edited."
+    }
+  ]
+}

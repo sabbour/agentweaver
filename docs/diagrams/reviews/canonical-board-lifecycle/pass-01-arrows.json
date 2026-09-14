@@ -1,0 +1,42 @@
+[
+  {
+    "id": "e1",
+    "source": "backlog",
+    "target": "ready",
+    "relationship": "queue",
+    "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+    "result": "clean"
+  },
+  {
+    "id": "e2",
+    "source": "ready",
+    "target": "progress",
+    "relationship": "claim<br>+ start",
+    "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+    "result": "clean"
+  },
+  {
+    "id": "e3",
+    "source": "progress",
+    "target": "review",
+    "relationship": "await review",
+    "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+    "result": "clean"
+  },
+  {
+    "id": "e4",
+    "source": "review",
+    "target": "done",
+    "relationship": "finish",
+    "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+    "result": "clean"
+  },
+  {
+    "id": "e5",
+    "source": "progress",
+    "target": "failed",
+    "relationship": "problem",
+    "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+    "result": "clean"
+  }
+]

@@ -1,0 +1,163 @@
+{
+  "name": "agent-framework-fig2",
+  "title": "Coordinator · MAF hands off to services",
+  "takeaway": "Confirmed spec can start dispatch; later collective phases are relational and service-driven.",
+  "pitch": [
+    "MAF spec phase|Produce CoordinatorOutcome|Checkpointed graph",
+    "Collective phase|Dispatch and assembly services|Persisted phase driver"
+  ],
+  "groups": [
+    "SPEC HANDOFF",
+    "SERVICE-DRIVEN COLLECTIVE"
+  ],
+  "nodes": [
+    {
+      "id": "outcome",
+      "title": "CoordinatorOutcome",
+      "sub": "Spec confirmed",
+      "detail": "Check persisted work plan and subtasks",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "MAF",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "dispatch",
+      "title": "StartDispatch",
+      "sub": "Auto-dispatch + nonempty plan",
+      "detail": "Confirmation alone is insufficient",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "CONDITIONAL",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "release",
+      "title": "Release MAF state",
+      "sub": "Registry and checkpoints released",
+      "detail": "Coordinator run + event stream remain active",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "HANDOFF",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "services",
+      "title": "Dispatch / assembly",
+      "sub": "Service drivers own later phases",
+      "detail": "Read and update relational phase state",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "SERVICE",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "records",
+      "title": "Work plan + child runs",
+      "sub": "Relational durable coordination",
+      "detail": "Subtasks retain artifact and phase information",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "DURABLE",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:database"
+    },
+    {
+      "id": "executors",
+      "title": "Direct executor calls",
+      "sub": "Rai / rubberduck / build-test / Scribe",
+      "detail": "HandleAsync with NoOpWorkflowContext.Instance",
+      "meta": "CollectiveAssemblyPipeline",
+      "badge": "DIRECT",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:132-169,327,499",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "restart",
+      "title": "Restart recovery",
+      "sub": "Read persisted coordinator phase",
+      "detail": "Re-arm services; only spec resumes MAF",
+      "meta": "CoordinatorRunService:1172–1250",
+      "badge": "RECOVER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "gate",
+      "title": "Assembly review gate",
+      "sub": "Service-owned pending approval",
+      "detail": "TaskCompletionSource, not MAF RequestPort",
+      "meta": "AssemblyReviewGate:6–44",
+      "badge": "GATE",
+      "shape": "rhombus",
+      "evidence": "apps/Agentweaver.Api/Coordinator/AssemblyReviewGate.cs:6-44",
+      "classification": "native:flowchart"
+    }
+  ],
+  "edges": [
+    {
+      "id": "outcome-to-dispatch",
+      "source": "outcome",
+      "target": "dispatch",
+      "label": "eligible handoff",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250"
+    },
+    {
+      "id": "outcome-to-release",
+      "source": "outcome",
+      "target": "release",
+      "label": "release after handoff",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250"
+    },
+    {
+      "id": "dispatch-to-services",
+      "source": "dispatch",
+      "target": "services",
+      "label": "start services",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250"
+    },
+    {
+      "id": "services-to-records",
+      "source": "services",
+      "target": "records",
+      "label": "persist phase",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250"
+    },
+    {
+      "id": "services-to-executors",
+      "source": "services",
+      "target": "executors",
+      "label": "invoke directly",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:132-169,327,499"
+    },
+    {
+      "id": "records-to-restart",
+      "source": "records",
+      "target": "restart",
+      "label": "persisted phase",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250"
+    },
+    {
+      "id": "executors-to-gate",
+      "source": "executors",
+      "target": "gate",
+      "label": "service review",
+      "evidence": "apps/Agentweaver.Api/Coordinator/AssemblyReviewGate.cs:6-44"
+    },
+    {
+      "id": "restart-to-services",
+      "source": "restart",
+      "target": "services",
+      "label": "re-arm driver",
+      "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1250",
+      "route": "left"
+    }
+  ],
+  "scope": "No checkpointed MAF assembly graph. Operator history/session handling is a separate exception."
+}

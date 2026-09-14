@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 1048,
+  "result_meaningful_xml": 17919,
+  "baseline_visible_structures": 4,
+  "result_visible_structures": 61,
+  "growth_ratio": 17.098282,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "experience-team-casting-memory-fig1-pitch.drawio",
+  "pass_one": "experience-team-casting-memory-fig1-pass-01.drawio"
+}

@@ -1,0 +1,838 @@
+{
+  "title": "Child content and integration bases",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Origin tip",
+      "subLabel": "Reset integration branch",
+      "meta": "authoritative repository",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "BASE",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Published children",
+      "subLabel": "Isolated execution checkouts",
+      "meta": "committed branches",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "INPUTS",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Ordered accumulator",
+      "subLabel": "Skip empty or contained tips",
+      "meta": "caller supplies order",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "ASSEMBLE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Merge conflict?",
+      "subLabel": "A merge base is required",
+      "meta": "not always terminal",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "CHECK",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Later-child overlay",
+      "subLabel": "Apply delta from merge base",
+      "meta": "record auto-resolution",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESOLVE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Unresolved conflict",
+      "subLabel": "No merge base: fail assembly",
+      "meta": "no partial success",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "BLOCK",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Integration snapshot",
+      "subLabel": "Ref, tree, diff, resolutions",
+      "meta": "content contract",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "OUTPUT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Dependent-child base",
+      "subLabel": "Verify prerequisite reachability",
+      "meta": "isolated new checkout",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "DISPATCH",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Final aggregate review",
+      "subLabel": "Authored checks, reviewed tree",
+      "meta": "then guarded merge",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "REVIEW",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n2",
+      "label": "reset",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "ordered",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "conflict",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "base",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n5",
+      "label": "no base",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n6",
+      "label": "resolved",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n6",
+      "label": "clean",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "dependency",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n8",
+      "label": "final",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "AUTHORITATIVE INPUTS"
+    },
+    {
+      "id": "1",
+      "label": "ACCUMULATION AND CONFLICT HANDLING"
+    },
+    {
+      "id": "2",
+      "label": "DEPENDENT CHILD OR FINAL REVIEW"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Origin tip",
+          "subLabel": "Reset integration branch",
+          "meta": "authoritative repository",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "BASE",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Published children",
+          "subLabel": "Isolated execution checkouts",
+          "meta": "committed branches",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "INPUTS",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Ordered accumulator",
+          "subLabel": "Skip empty or contained tips",
+          "meta": "caller supplies order",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "ASSEMBLE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Merge conflict?",
+          "subLabel": "A merge base is required",
+          "meta": "not always terminal",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "CHECK",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Later-child overlay",
+          "subLabel": "Apply delta from merge base",
+          "meta": "record auto-resolution",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESOLVE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Unresolved conflict",
+          "subLabel": "No merge base: fail assembly",
+          "meta": "no partial success",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "BLOCK",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Integration snapshot",
+          "subLabel": "Ref, tree, diff, resolutions",
+          "meta": "content contract",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "OUTPUT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 765.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Dependent-child base",
+          "subLabel": "Verify prerequisite reachability",
+          "meta": "isolated new checkout",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "DISPATCH",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 765.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Final aggregate review",
+          "subLabel": "Authored checks, reviewed tree",
+          "meta": "then guarded merge",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "REVIEW",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 227.73831775700933
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 192
+        },
+        "data": {
+          "label": "AUTHORITATIVE INPUTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 243.73831775700933
+        },
+        "data": {
+          "label": "AUTHORITATIVE INPUTS",
+          "width": 1308.0000000000002
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 465.7383177570093
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 198
+        },
+        "data": {
+          "label": "ACCUMULATION AND CONFLICT HANDLING",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 481.7383177570093
+        },
+        "data": {
+          "label": "ACCUMULATION AND CONFLICT HANDLING",
+          "width": 1308.0000000000002
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 695.7383177570093
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 226
+        },
+        "data": {
+          "label": "DEPENDENT CHILD OR FINAL REVIEW",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 711.7383177570093
+        },
+        "data": {
+          "label": "DEPENDENT CHILD OR FINAL REVIEW",
+          "width": 1308.0000000000002
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n2",
+        "label": "reset",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 274.72831775700934
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 274.72831775700934
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 331.07165109034264
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 634.1308411214953,
+            "y": 274.72831775700934
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "ordered",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1010.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 356.404984423676
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 356.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1092.1308411214955,
+            "y": 356.404984423676
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "conflict",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1312.1308411214955,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1312.1308411214955,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 739.1308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "base",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 670.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 588.1308411214953,
+            "y": 575.0716510903427
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n5",
+        "label": "no base",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 691.7383177570093
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 691.7383177570093
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 840.1308411214955,
+            "y": 691.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n4",
+        "target": "n6",
+        "label": "resolved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 840.1308411214953,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 840.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 503.13084112149534,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n2",
+        "target": "n6",
+        "label": "clean",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1482.1308411214955,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 747.394984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 747.394984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 538.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1050.1308411214955,
+            "y": 747.394984423676
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n6",
+        "target": "n7",
+        "label": "dependency",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 670.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 598.1308411214953,
+            "y": 844.404984423676
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n8",
+        "label": "final",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 198.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 916.0816510903427
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 916.0816510903427
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 630.1308411214953,
+            "y": 916.0816510903427
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1680.261682242991,
+    "canvasHeight": 1053.1401869158876
+  }
+}

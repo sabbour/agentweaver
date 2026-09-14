@@ -1,0 +1,484 @@
+{
+  "stages": [
+    {
+      "stage": "pitch",
+      "meaningful_xml": 3223,
+      "visible_structures": 11,
+      "arrow_count": 1,
+      "a5_page_scale_one": true,
+      "anchor_checks": [
+        {
+          "arrow": "handoff",
+          "end": "source",
+          "cell": "role0",
+          "point": [
+            378.0,
+            322.0
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "handoff",
+          "end": "target",
+          "cell": "role1",
+          "point": [
+            443.0,
+            322.0
+          ],
+          "within_page": true
+        }
+      ]
+    },
+    {
+      "stage": "pass-01",
+      "meaningful_xml": 36459,
+      "visible_structures": 131,
+      "arrow_count": 5,
+      "a5_page_scale_one": true,
+      "anchor_checks": [
+        {
+          "arrow": "e1",
+          "end": "source",
+          "cell": "producer",
+          "point": [
+            257.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e1",
+          "end": "target",
+          "cell": "append",
+          "point": [
+            305.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "source",
+          "cell": "append",
+          "point": [
+            522.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "target",
+          "cell": "store",
+          "point": [
+            570.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "source",
+          "cell": "store",
+          "point": [
+            787.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "target",
+          "cell": "reader",
+          "point": [
+            787.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "source",
+          "cell": "reader",
+          "point": [
+            570.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "target",
+          "cell": "sse",
+          "point": [
+            522.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "source",
+          "cell": "sse",
+          "point": [
+            305.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "target",
+          "cell": "client",
+          "point": [
+            257.0,
+            414.5
+          ],
+          "within_page": true
+        }
+      ]
+    },
+    {
+      "stage": "pass-02",
+      "meaningful_xml": 36459,
+      "visible_structures": 131,
+      "arrow_count": 5,
+      "a5_page_scale_one": true,
+      "anchor_checks": [
+        {
+          "arrow": "e1",
+          "end": "source",
+          "cell": "producer",
+          "point": [
+            257.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e1",
+          "end": "target",
+          "cell": "append",
+          "point": [
+            305.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "source",
+          "cell": "append",
+          "point": [
+            522.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "target",
+          "cell": "store",
+          "point": [
+            570.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "source",
+          "cell": "store",
+          "point": [
+            787.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "target",
+          "cell": "reader",
+          "point": [
+            787.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "source",
+          "cell": "reader",
+          "point": [
+            570.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "target",
+          "cell": "sse",
+          "point": [
+            522.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "source",
+          "cell": "sse",
+          "point": [
+            305.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "target",
+          "cell": "client",
+          "point": [
+            257.0,
+            414.5
+          ],
+          "within_page": true
+        }
+      ]
+    },
+    {
+      "stage": "pass-03",
+      "meaningful_xml": 36459,
+      "visible_structures": 131,
+      "arrow_count": 5,
+      "a5_page_scale_one": true,
+      "anchor_checks": [
+        {
+          "arrow": "e1",
+          "end": "source",
+          "cell": "producer",
+          "point": [
+            257.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e1",
+          "end": "target",
+          "cell": "append",
+          "point": [
+            305.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "source",
+          "cell": "append",
+          "point": [
+            522.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "target",
+          "cell": "store",
+          "point": [
+            570.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "source",
+          "cell": "store",
+          "point": [
+            787.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "target",
+          "cell": "reader",
+          "point": [
+            787.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "source",
+          "cell": "reader",
+          "point": [
+            570.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "target",
+          "cell": "sse",
+          "point": [
+            522.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "source",
+          "cell": "sse",
+          "point": [
+            305.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "target",
+          "cell": "client",
+          "point": [
+            257.0,
+            414.5
+          ],
+          "within_page": true
+        }
+      ]
+    },
+    {
+      "stage": "pass-04",
+      "meaningful_xml": 36459,
+      "visible_structures": 131,
+      "arrow_count": 5,
+      "a5_page_scale_one": true,
+      "anchor_checks": [
+        {
+          "arrow": "e1",
+          "end": "source",
+          "cell": "producer",
+          "point": [
+            257.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e1",
+          "end": "target",
+          "cell": "append",
+          "point": [
+            305.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "source",
+          "cell": "append",
+          "point": [
+            522.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e2",
+          "end": "target",
+          "cell": "store",
+          "point": [
+            570.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "source",
+          "cell": "store",
+          "point": [
+            787.0,
+            220.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e3",
+          "end": "target",
+          "cell": "reader",
+          "point": [
+            787.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "source",
+          "cell": "reader",
+          "point": [
+            570.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e4",
+          "end": "target",
+          "cell": "sse",
+          "point": [
+            522.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "source",
+          "cell": "sse",
+          "point": [
+            305.0,
+            414.5
+          ],
+          "within_page": true
+        },
+        {
+          "arrow": "e5",
+          "end": "target",
+          "cell": "client",
+          "point": [
+            257.0,
+            414.5
+          ],
+          "within_page": true
+        }
+      ]
+    }
+  ],
+  "schema": "draft-2020-12",
+  "lineage_and_root_manifest_valid": true,
+  "selective_render_and_stamp": true,
+  "selective_drift_check": true,
+  "pinned_renderer": "31.4.5",
+  "export_border": 16,
+  "export_scale": 2,
+  "canonical_source_equals_review": true,
+  "published_pixels_equal_inspected_pass_04": true,
+  "published_dimensions": [
+    1641,
+    1145
+  ],
+  "published_sha256": "e7e07f2531954fe2f33681ff5d0cfad8995765d8d8401cea0837670c1ec51fc8",
+  "derived_email_copy_identical": false
+}

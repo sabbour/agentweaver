@@ -1,0 +1,14 @@
+{
+  "name": "canonical-durable-event-stream-sequence",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-durable-event-stream-sequence.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-durable-event-stream-sequence.png",
+  "source_sha256": "7d31061041eebdc28ae374215a09cf1ed164dac8766dbf8d8b9c2a408138520a",
+  "png_sha256": "ad85a5980e8590e333b194bb00499b28d7b0f144d5f061887751ba7858048cd1",
+  "dimensions": [
+    4114,
+    2067
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

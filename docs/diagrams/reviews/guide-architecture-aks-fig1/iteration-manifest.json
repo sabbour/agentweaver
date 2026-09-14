@@ -1,0 +1,141 @@
+{
+  "diagram": "guide-architecture-aks-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "guide-architecture-aks-fig1-pitch.drawio",
+    "png": "guide-architecture-aks-fig1-pitch.png",
+    "change_record": "guide-architecture-aks-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "guide-architecture-aks-fig1-pass-01.drawio",
+      "png": "guide-architecture-aks-fig1-pass-01.png",
+      "change_record": "guide-architecture-aks-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 2,
+      "arrow_defects": 2,
+      "baseline_meaningful_xml": 2335,
+      "result_meaningful_xml": 24136,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.336617
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig1-pass-02.drawio",
+      "png": "guide-architecture-aks-fig1-pass-02.png",
+      "change_record": "guide-architecture-aks-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 1,
+      "overlap_defects": 0,
+      "arrow_defects": 1
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig1-pass-03.drawio",
+      "png": "guide-architecture-aks-fig1-pass-03.png",
+      "change_record": "guide-architecture-aks-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig1-pass-04.drawio",
+      "png": "guide-architecture-aks-fig1-pass-04.png",
+      "change_record": "guide-architecture-aks-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "l1",
+          "source": "claim",
+          "target": "reachable",
+          "relationship": "Rightward bound claim to reachable listener; head clear of bound label.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+          "result": "clean"
+        },
+        {
+          "id": "l2",
+          "source": "reachable",
+          "target": "configure",
+          "relationship": "Rightward reachability to configure; HTTP success is not setup readiness.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+          "result": "clean"
+        },
+        {
+          "id": "l3",
+          "source": "configure",
+          "target": "workspace",
+          "relationship": "Downward accepted configure to workspace; one-shot gate stays consumed.",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+          "result": "clean"
+        },
+        {
+          "id": "l4",
+          "source": "workspace",
+          "target": "setup",
+          "relationship": "Leftward workspace preparation to setup; label below the rail.",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+          "result": "clean"
+        },
+        {
+          "id": "l5",
+          "source": "setup",
+          "target": "ready",
+          "relationship": "Leftward finished setup to ready; head points to ready, not the reverse.",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+          "result": "clean"
+        },
+        {
+          "id": "l6",
+          "source": "ready",
+          "target": "turn",
+          "relationship": "Downward ready to turn; dispatch label is in the gutter, title moved aside.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303; apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+          "result": "clean"
+        },
+        {
+          "id": "l7",
+          "source": "turn",
+          "target": "retain",
+          "relationship": "Rightward successful Assistant turn to retention; not every run retains.",
+          "evidence": "apps/Agentweaver.Api/Assistant/RemoteOperatorAssistantAgent.cs:185-208",
+          "result": "clean"
+        },
+        {
+          "id": "l8",
+          "source": "retain",
+          "target": "turn",
+          "relationship": "Dashed marigold bottom return from retention to turn; enters at 85%, separate from cleanup.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+          "result": "clean"
+        },
+        {
+          "id": "l9",
+          "source": "turn",
+          "target": "release",
+          "relationship": "Gray lower rail from turn bottom to release bottom; upward final head; no shared junction with l8.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

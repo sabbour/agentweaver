@@ -1,0 +1,34 @@
+[
+  {
+    "diagram": "reference-a2a-fig1",
+    "final_pass": 4,
+    "growth_metric": "visible-semantic-canonical-xml-v1",
+    "baseline_meaningful_xml": 1686,
+    "result_meaningful_xml": 20854,
+    "baseline_visible_structures": 6,
+    "result_visible_structures": 72,
+    "growth_ratio": 12.368921,
+    "minimum_ratio": 9.0,
+    "invisible_cells": [],
+    "off_page_cells": [],
+    "duplicate_cells": [],
+    "metadata_padding": [],
+    "passed": true
+  },
+  {
+    "diagram": "reference-scaling-data-layer-fig1",
+    "final_pass": 5,
+    "growth_metric": "visible-semantic-canonical-xml-v1",
+    "baseline_meaningful_xml": 1703,
+    "result_meaningful_xml": 20421,
+    "baseline_visible_structures": 6,
+    "result_visible_structures": 68,
+    "growth_ratio": 11.991192,
+    "minimum_ratio": 9.0,
+    "invisible_cells": [],
+    "off_page_cells": [],
+    "duplicate_cells": [],
+    "metadata_padding": [],
+    "passed": true
+  }
+]

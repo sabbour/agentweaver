@@ -1,0 +1,253 @@
+{
+  "diagram": "frontend-fig2",
+  "source_sha256": "256dd8b8c0c524f6a5881234d13c932024425630420098ad9cbf541e491c3a67",
+  "png_sha256": "11f1ce6d32e17c316c8cf167334a293e2d7ca46d23c415f64a19831f5071ef0e",
+  "prior_model": "docs\\diagrams\\reviews\\frontend-fig2\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Routes: global and project scope"
+    },
+    {
+      "cell": "takeaway",
+      "text": "App.tsx declares routes; AppShell supplies shared context, not a route registry."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "GLOBAL · NO PROJECT PARAMETER"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "SHARED SHELL + PROJECT ROUTES"
+    },
+    {
+      "cell": "router-title",
+      "text": "App.tsx Routes"
+    },
+    {
+      "cell": "router-subtitle",
+      "text": "/ · /overview · /projects"
+    },
+    {
+      "cell": "router-detail",
+      "text": "Global sessions, settings and assistant"
+    },
+    {
+      "cell": "router-meta",
+      "text": "App.tsx:80-100"
+    },
+    {
+      "cell": "router-pill",
+      "text": "GLOBAL"
+    },
+    {
+      "cell": "shell-title",
+      "text": "AppShell"
+    },
+    {
+      "cell": "shell-subtitle",
+      "text": "ProjectListProvider"
+    },
+    {
+      "cell": "shell-detail",
+      "text": "NotificationsProvider wraps shell content"
+    },
+    {
+      "cell": "shell-meta",
+      "text": "AppShell.tsx:134-182"
+    },
+    {
+      "cell": "shell-pill",
+      "text": "CONTEXT"
+    },
+    {
+      "cell": "operator-title",
+      "text": "Operator destinations"
+    },
+    {
+      "cell": "operator-subtitle",
+      "text": "/console → /assistant"
+    },
+    {
+      "cell": "operator-detail",
+      "text": "/sessions is global; ?project scopes it"
+    },
+    {
+      "cell": "operator-meta",
+      "text": "App.tsx:93-100,130-135"
+    },
+    {
+      "cell": "operator-pill",
+      "text": "REDIRECT"
+    },
+    {
+      "cell": "project-title",
+      "text": "Project route family"
+    },
+    {
+      "cell": "project-subtitle",
+      "text": "/projects/:projectId"
+    },
+    {
+      "cell": "project-detail",
+      "text": "Dashboard · board · flow · orchestrations"
+    },
+    {
+      "cell": "project-meta",
+      "text": "App.tsx:104-126"
+    },
+    {
+      "cell": "project-pill",
+      "text": "PROJECT"
+    },
+    {
+      "cell": "admin-title",
+      "text": "Platform settings"
+    },
+    {
+      "cell": "admin-subtitle",
+      "text": "/platform-settings"
+    },
+    {
+      "cell": "admin-detail",
+      "text": "Non-admin users redirect to /overview"
+    },
+    {
+      "cell": "admin-meta",
+      "text": "App.tsx:87-92"
+    },
+    {
+      "cell": "admin-pill",
+      "text": "GUARDED"
+    },
+    {
+      "cell": "assets-title",
+      "text": "Project resources"
+    },
+    {
+      "cell": "assets-subtitle",
+      "text": "Workspace · settings · team"
+    },
+    {
+      "cell": "assets-detail",
+      "text": "Cast · agent memory · memories · skills"
+    },
+    {
+      "cell": "assets-meta",
+      "text": "App.tsx:110-117"
+    },
+    {
+      "cell": "assets-pill",
+      "text": "RESOURCES"
+    },
+    {
+      "cell": "global-observe-title",
+      "text": "Global observability"
+    },
+    {
+      "cell": "global-observe-subtitle",
+      "text": "/observability · /traces · /agents"
+    },
+    {
+      "cell": "global-observe-detail",
+      "text": "Redirect pages resolve destination scope"
+    },
+    {
+      "cell": "global-observe-meta",
+      "text": "App.tsx:99-101"
+    },
+    {
+      "cell": "global-observe-pill",
+      "text": "REDIRECT"
+    },
+    {
+      "cell": "operations-title",
+      "text": "Project operations"
+    },
+    {
+      "cell": "operations-subtitle",
+      "text": "Observability · workflows"
+    },
+    {
+      "cell": "operations-detail",
+      "text": "Diagnostics · heartbeat · cluster"
+    },
+    {
+      "cell": "operations-meta",
+      "text": "App.tsx:118-125"
+    },
+    {
+      "cell": "operations-pill",
+      "text": "OPERATE"
+    },
+    {
+      "cell": "shell-to-router",
+      "text": "wraps"
+    },
+    {
+      "cell": "router-to-operator",
+      "text": "declares"
+    },
+    {
+      "cell": "router-to-project",
+      "text": "declares"
+    },
+    {
+      "cell": "router-to-assets",
+      "text": "declares"
+    },
+    {
+      "cell": "router-to-operations",
+      "text": "declares"
+    },
+    {
+      "cell": "scope",
+      "text": "Cards group declared paths, not navigation dependencies. Global admin/observability are independent routes."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/frontend.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "shell",
+      "to": "router",
+      "label": "wraps",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "router",
+      "to": "operator",
+      "label": "declares",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "router",
+      "to": "project",
+      "label": "declares",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "router",
+      "to": "assets",
+      "label": "declares",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "router",
+      "to": "operations",
+      "label": "declares",
+      "result": "clean"
+    }
+  ]
+}

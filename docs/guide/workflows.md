@@ -46,9 +46,10 @@ override it at submission time.
 
 ## Workflows in your project
 
-Each project stores its active workflows in `.agentweaver/workflows/` inside the project's working directory. The **Workflows** page in the web UI shows all workflows discovered from that directory, their validation status, and which one is the project default.
-
-![Workflows page](/guide/images/workflows-page.png)
+The **Workflows** page distinguishes built-in catalog workflows from project-local
+definitions in `.agentweaver/workflows/`, with validation status and the project default.
+A blueprint's allowed selection set is not the entire global catalog. Built-ins are
+read-only; duplicate one into the project to customize it.
 
 ### Viewing workflows
 
@@ -268,10 +269,10 @@ generation keeps that target repository in the prompt context so the draft acts 
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 
-![Generate from description: Describe workflow, LLM generates YAML, Review in editor, Validate, Save to .agentweaver/workflows/](../diagrams/canonical-workflow-authoring.png)
+![Workflow authoring: Describe, generate YAML, validate with at most one server correction, review the valid editor draft, then explicitly save to the project](../diagrams/canonical-workflow-authoring.png)
 
-<!-- Rendered from ../diagrams/src/canonical-workflow-authoring.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/canonical-workflow-authoring.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -284,15 +285,88 @@ A workflow references specific roles by name. If your project's cast doesn't inc
 When a run executes against a workflow:
 
 1. The workflow is resolved — built-in or project-local
-2. The coordinator decomposes the workflow's steps into the WorkPlan
-3. Each step is dispatched to the agent whose role matches the step's role binding
-4. Steps execute in the order the workflow specifies (parallel where there are no dependencies)
-5. Outputs from one step become inputs to the next
+2. Workflow roles and stages are bound to runtime execution
+3. Separately, the coordinator decomposes the outcome into WorkPlan tasks and assigns child agents
+4. Child work follows task dependencies and hands off assemble-ready output
+5. Collective gates evaluate the assembled output according to the selected workflow
 
-The live topology view shows each workflow step as a node, with edges representing the data flow between steps.
+Workflow binding is not a one-step-to-one-child mapping. The run topology shows the
+coordinator's task graph; a workflow viewer shows authored stages and their dependencies.
 
 ## Blueprints bundle workflows
 
 When you save a team as a **Blueprint**, the Blueprint bundles the team's roster, one or more workflows (with a designated default), and the project's review and sandbox policies. Instantiating the Blueprint into a new project automatically materializes the workflow files into the new project's `.agentweaver/workflows/` directory.
 
 → [Agent Teams & Blueprints](./teams)
+
+<!-- diagram-context:canonical-workflow-authoring:start -->
+<details id="diagram-context-canonical-workflow-authoring" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Workflow authoring</td></tr>
+<tr><td>takeaway</td><td>Generate a draft. Review it. Save deliberately.</td></tr>
+<tr><td>generation-boundary</td><td>1 GENERATE + REVIEW / No workflow file is saved</td></tr>
+<tr><td>persistence-boundary</td><td>2 EXPLICIT SAVE / Project workspace + registry</td></tr>
+<tr><td>Authorize request</td><td>Authorize request</td></tr>
+<tr><td>Authorize request</td><td>Project ownership + AI execution plan</td></tr>
+<tr><td>Authorize request</td><td>POST …/workflows/generate</td></tr>
+<tr><td>Authorize request</td><td>Description required</td></tr>
+<tr><td>Prompt context</td><td>Prompt context</td></tr>
+<tr><td>Prompt context</td><td>Roles, schema, examples</td></tr>
+<tr><td>Prompt context</td><td>Project model override</td></tr>
+<tr><td>Prompt context</td><td>Catalog fallback</td></tr>
+<tr><td>Generate candidate</td><td>Generate candidate</td></tr>
+<tr><td>Generate candidate</td><td>CopilotWorkflowGenerator</td></tr>
+<tr><td>Generate candidate</td><td>Model returns YAML, not a saved file</td></tr>
+<tr><td>Generate candidate</td><td>Create or edit</td></tr>
+<tr><td>Validate candidate</td><td>Validate candidate</td></tr>
+<tr><td>Validate candidate</td><td>WorkflowDefinitionLoader + binder dry-run</td></tr>
+<tr><td>Validate candidate</td><td>Structure AND runtime bindability</td></tr>
+<tr><td>Validate candidate</td><td>Strip fences; ensure id</td></tr>
+<tr><td>One correction</td><td>One correction</td></tr>
+<tr><td>One correction</td><td>Failed YAML + error</td></tr>
+<tr><td>One correction</td><td>Re-run same checks</td></tr>
+<tr><td>One correction</td><td>No third attempt</td></tr>
+<tr><td>Explicit error</td><td>Explicit error</td></tr>
+<tr><td>Explicit error</td><td>Second invalid result</td></tr>
+<tr><td>Explicit error</td><td>400 · not persisted</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Review &amp; edit draft</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Human edits YAML or the visual graph</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Valid draft stays unsaved</td></tr>
+<tr><td>Save: validate again</td><td>Save: validate again</td></tr>
+<tr><td>Save: validate again</td><td>Parse + structure + route id + binder</td></tr>
+<tr><td>Save: validate again</td><td>PUT …/workflows/{workflowId}</td></tr>
+<tr><td>Save: validate again</td><td>Ownership required</td></tr>
+<tr><td>Reject save</td><td>Reject save</td></tr>
+<tr><td>Reject save</td><td>Parse / id / bind error</td></tr>
+<tr><td>Reject save</td><td>400 or 422 · no write</td></tr>
+<tr><td>Reject save</td><td>Fix the draft</td></tr>
+<tr><td>Write project YAML</td><td>Write project YAML</td></tr>
+<tr><td>Write project YAML</td><td>Resolve the path inside the workspace</td></tr>
+<tr><td>Write project YAML</td><td>.agentweaver/workflows/{id}.yaml</td></tr>
+<tr><td>Write project YAML</td><td>Contained-path guard</td></tr>
+<tr><td>Write can fail</td><td>Write can fail</td></tr>
+<tr><td>Write can fail</td><td>Path guard or file I/O</td></tr>
+<tr><td>Write can fail</td><td>400 / 500 · stop here</td></tr>
+<tr><td>Write can fail</td><td>No success response</td></tr>
+<tr><td>Sync → definition</td><td>Sync → definition</td></tr>
+<tr><td>Sync → definition</td><td>Extend allowed set if needed; reload</td></tr>
+<tr><td>Sync → definition</td><td>Return saved detail on success</td></tr>
+<tr><td>Reload failure</td><td>Reload failure</td></tr>
+<tr><td>Reload failure</td><td>Written, not available</td></tr>
+<tr><td>Reload failure</td><td>422 / 500 · file may exist</td></tr>
+<tr><td>e01</td><td>permitted</td></tr>
+<tr><td>e02</td><td>grounds prompt</td></tr>
+<tr><td>e03</td><td>candidate YAML</td></tr>
+<tr><td>e04</td><td>valid; unsaved</td></tr>
+<tr><td>e05</td><td>first invalid</td></tr>
+<tr><td>e06</td><td>one repair</td></tr>
+<tr><td>e07</td><td>invalid again</td></tr>
+<tr><td>e08</td><td>explicit Save</td></tr>
+<tr><td>e09</td><td>invalid</td></tr>
+<tr><td>e10</td><td>checks pass</td></tr>
+<tr><td>e11</td><td>failure</td></tr>
+<tr><td>e12</td><td>write succeeded</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-workflow-authoring:end -->

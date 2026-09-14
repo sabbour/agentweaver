@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "guide-architecture-aks-fig1.drawio",
+    "sha256": "fbcde66524dc005b890201580a66b5981e991c81842cc2eaa3e67b4879477e35"
+  },
+  "drawio": {
+    "file": "guide-architecture-aks-fig1.drawio",
+    "sha256": "66b61eae72b9d38beb233d68083e83861e5ecd6d80c1c849a308cfba821e03a2"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "guide-architecture-aks-fig1.png",
+    "sha256": "5b283ad10407890f4d9078ad5ebaa72c5151bec1cbef1b945bfec1fa5a1a6ef7"
+  }
+}

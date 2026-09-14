@@ -1,0 +1,133 @@
+{
+  "diagram": "workflow-engine-fig4",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pitch.drawio",
+    "png": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pitch.png",
+    "change_record": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-01.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-01.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 1540,
+      "result_meaningful_xml": 22887,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 14.861688
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-02.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-02.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-03.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-03.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-04.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-04.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig4/v2/workflow-engine-fig4-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "role/kind are render metadata fields",
+          "evidence": "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:66-70",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n0",
+          "target": "n2",
+          "relationship": "Prompt/publish nodes supply worker context fields",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:935-955",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "Visual metadata affects presentation, not executing identity",
+          "evidence": "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:66-70",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n4",
+          "relationship": "Generic worker receives prompt and charter",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:935-955",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n0",
+          "target": "n5",
+          "relationship": "Peer-review binding uses agent and charter fields",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:987-1006",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n5",
+          "target": "n6",
+          "relationship": "Bind peer-review context to Rubberduck executor",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:987-1006",
+          "result": "corrected"
+        },
+        {
+          "id": "e6",
+          "source": "n0",
+          "target": "n7",
+          "relationship": "Build & Test binding reads agent context",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:961-980",
+          "result": "corrected"
+        },
+        {
+          "id": "e7",
+          "source": "n7",
+          "target": "n8",
+          "relationship": "Bind agent context to platform Build & Test executor",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:961-980",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

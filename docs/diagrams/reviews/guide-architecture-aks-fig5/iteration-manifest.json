@@ -1,0 +1,133 @@
+{
+  "diagram": "guide-architecture-aks-fig5",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "guide-architecture-aks-fig5-pitch.drawio",
+    "png": "guide-architecture-aks-fig5-pitch.png",
+    "change_record": "guide-architecture-aks-fig5-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "guide-architecture-aks-fig5-pass-01.drawio",
+      "png": "guide-architecture-aks-fig5-pass-01.png",
+      "change_record": "guide-architecture-aks-fig5-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 3,
+      "arrow_defects": 2,
+      "baseline_meaningful_xml": 2373,
+      "result_meaningful_xml": 24256,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.22166
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig5-pass-02.drawio",
+      "png": "guide-architecture-aks-fig5-pass-02.png",
+      "change_record": "guide-architecture-aks-fig5-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 1,
+      "overlap_defects": 1,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig5-pass-03.drawio",
+      "png": "guide-architecture-aks-fig5-pass-03.png",
+      "change_record": "guide-architecture-aks-fig5-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "guide-architecture-aks-fig5-pass-04.drawio",
+      "png": "guide-architecture-aks-fig5-pass-04.png",
+      "change_record": "guide-architecture-aks-fig5-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "s1",
+          "source": "sa",
+          "target": "mi",
+          "relationship": "Rightward SA federation to API identity; API and Worker both included.",
+          "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+          "result": "clean"
+        },
+        {
+          "id": "s2",
+          "source": "mi",
+          "target": "vault",
+          "relationship": "Downward identity authority to vault, not an AgentHost grant.",
+          "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+          "result": "clean"
+        },
+        {
+          "id": "s3",
+          "source": "vault",
+          "target": "broker",
+          "relationship": "Leftward credential response from vault to broker; label corrected from redeem and placed below rail.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:78-119; apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:81-117",
+          "result": "clean"
+        },
+        {
+          "id": "s4",
+          "source": "broker",
+          "target": "configured",
+          "relationship": "Broker bottom to configured-runtime bottom via y=386; upward head; CSI/certificate crossings have bridge arcs.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+          "result": "clean"
+        },
+        {
+          "id": "s5",
+          "source": "hmi",
+          "target": "configured",
+          "relationship": "Downward separate AgentHost pod identity to runtime; no authority edge to vault.",
+          "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+          "result": "clean"
+        },
+        {
+          "id": "s6",
+          "source": "vault",
+          "target": "csi",
+          "relationship": "Vault right around y=408 to CSI top; downward head, bridges at crossings, app-secrets label on rail.",
+          "evidence": "k8s/base/secret-provider-class.yaml:1-62",
+          "result": "clean"
+        },
+        {
+          "id": "s7",
+          "source": "vault",
+          "target": "oauth",
+          "relationship": "Vault bottom to OAuth certificates top; downward head; two bridge crossings are not joins.",
+          "evidence": "apps/Agentweaver.Api/Auth/OAuth/OAuthServerConfiguration.cs:319-377",
+          "result": "clean"
+        },
+        {
+          "id": "s8",
+          "source": "configured",
+          "target": "mcp",
+          "relationship": "Runtime right around exterior gutter to MCP right; leftward head, Assistant JWT label stays inside page.",
+          "evidence": "apps/Agentweaver.Api/Auth/OAuth/OperatorAssistantBrokerTokenIssuer.cs:23-37,102-113",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

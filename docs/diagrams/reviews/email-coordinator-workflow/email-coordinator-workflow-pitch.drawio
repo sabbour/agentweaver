@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Agentweaver" agent="Agentweaver draw.io generator" version="31.4.5" type="device" compressed="false">
+  <diagram id="fluent-template" name="The Coordinator, over time">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="583" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="pitch-title" value="The Coordinator, over time" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=25;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="30" width="770" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="human" value="Human" style="rounded=1;fontFamily=Segoe UI;fontSize=17;fillColor=#fdfbf8;" vertex="1" parent="1">
+          <mxGeometry x="28" y="115" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="life0" value="" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;endArrow=none;dashed=1;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="98" y="170" as="sourcePoint" />
+            <mxPoint x="98" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="coord" value="Coordinator" style="rounded=1;fontFamily=Segoe UI;fontSize=17;fillColor=#fdfbf8;" vertex="1" parent="1">
+          <mxGeometry x="186" y="115" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="life1" value="" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;endArrow=none;dashed=1;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="256" y="170" as="sourcePoint" />
+            <mxPoint x="256" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="children" value="Children" style="rounded=1;fontFamily=Segoe UI;fontSize=17;fillColor=#fdfbf8;" vertex="1" parent="1">
+          <mxGeometry x="344" y="115" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="life2" value="" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;endArrow=none;dashed=1;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="414" y="170" as="sourcePoint" />
+            <mxPoint x="414" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="assembly" value="Assembly" style="rounded=1;fontFamily=Segoe UI;fontSize=17;fillColor=#fdfbf8;" vertex="1" parent="1">
+          <mxGeometry x="502" y="115" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="life3" value="" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;endArrow=none;dashed=1;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="572" y="170" as="sourcePoint" />
+            <mxPoint x="572" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="scribe" value="Git / Scribe" style="rounded=1;fontFamily=Segoe UI;fontSize=17;fillColor=#fdfbf8;" vertex="1" parent="1">
+          <mxGeometry x="660" y="115" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="life4" value="" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;endArrow=none;dashed=1;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="730" y="170" as="sourcePoint" />
+            <mxPoint x="730" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="message1" value="1  submit goal; draft and persist OutcomeSpec" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="98" y="225" as="sourcePoint" />
+            <mxPoint x="256" y="225" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="message2" value="2  request confirmation / revision" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="256" y="300" as="sourcePoint" />
+            <mxPoint x="98" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="message3" value="3  confirm; persist WorkPlan DAG" edge="1" parent="1" style="endArrow=block;fontFamily=Segoe UI;fontSize=14;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="98" y="375" as="sourcePoint" />
+            <mxPoint x="256" y="375" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pitch-takeaway" value="A sequence of bounded handoffs and one collective review—not a process-map substitute" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=18;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="460" width="770" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

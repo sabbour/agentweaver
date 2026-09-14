@@ -1,1 +1,22 @@
-323e4ecedf954dbb0bcb3e54294b40eb5e2fa94af83336ebd1f300ae711832e3
+{
+  "version": 2,
+  "source": {
+    "file": "guide-example-scenarios-fig3.drawio",
+    "sha256": "424ffd86aff7baadf0dd718e87b3ca92ed20a0b103ad48a0368dddae472a8e8d"
+  },
+  "drawio": {
+    "file": "guide-example-scenarios-fig3.drawio",
+    "sha256": "1495517e48e53c2d604e868404ac605b4106ad3565a508f46df5d6cc4e65b21a"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "guide-example-scenarios-fig3.png",
+    "sha256": "69325da81b0756b0899a92882dc0f426b6d398debea07ef3248090ca46acab5b"
+  }
+}

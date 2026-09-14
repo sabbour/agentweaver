@@ -1,0 +1,66 @@
+{
+  "phase": "research-only",
+  "coordinator_model": "gpt-6-astra",
+  "authority": "Area reports are historical research evidence; this file and the merged catalog/ownership report are the centrally reconciled plan. The authorized follow-up integrates the completed Astra pilot without authoring. Catalog cleanup findings are downstream work, not blockers to completing the audit deliverable.",
+  "concept_overrides": {
+    "reference-provider-context-lifecycle": {
+      "disposition": "reuse",
+      "target": "deep-dive-core-provider-admission",
+      "owner_area": "shared",
+      "rationale": "API/MCP prepare-accept-fence provenance and provider admission are the same sequence, not two new diagrams. One shared canonical-provider-admission target serves both the reference and API-core consumers."
+    },
+    "deep-dive-core-provider-admission": {
+      "canonical_diagram": "canonical-provider-admission",
+      "owner_area": "shared",
+      "rationale": "One proposed shared sequence incorporates the independently researched core and reference admission contracts; do not fork an API-only or MCP-only copy."
+    },
+    "deep-dive-execution-pod-process-boundaries": {
+      "canonical_diagram": "canonical-pod-process-boundaries",
+      "owner_area": "deep-dive-execution",
+      "rationale": "A process/mount/IPC boundary view is distinct from the existing infrastructure, pod lifecycle and preview-routing graphics."
+    },
+    "deep-dive-orchestration-memory-entities": {
+      "disposition": "reuse",
+      "target": "deep-dive-core-persistence-memory-domain",
+      "owner_area": "shared",
+      "rationale": "Consolidate the overlapping memory entity model into one schema-oriented canonical concept, retaining composite uniqueness and cross-store conceptual ownership qualifications. Reuse a focused view of that model rather than a competing ER source."
+    },
+    "deep-dive-core-persistence-memory-domain": {
+      "owner_area": "shared",
+      "rationale": "The schema-oriented memory/coordinator ER concept owns the shared memory entity definition; compiler/trust-flow canonicals remain distinct."
+    },
+    "experience-decision-inbox-state": {
+      "disposition": "reuse",
+      "target": "deep-dive-orchestration-inbox-state",
+      "owner_area": "shared",
+      "rationale": "Reuse one inbox state concept with reader-friendly labels, keeping contributor/owner authorization and approved-active eligibility in page-specific prose. Do not author another Proposed/Finalized/Rejection state graphic."
+    },
+    "deep-dive-orchestration-inbox-state": {
+      "owner_area": "shared",
+      "rationale": "One state-model owner reconciles persisted Pending/Merged/Rejected names, source-bound idempotency, and experience-facing labels."
+    }
+  },
+  "reserved_names": ["canonical-provider-admission", "canonical-pod-process-boundaries"],
+  "protected_pilot": {
+    "name": "canonical-coordinator-architecture",
+    "owner": "coordinator-pilot",
+    "disposition": "redesign",
+    "status": "done",
+    "rule": "Completed Astra pilot; inventory claim reconciled under explicit follow-up authorization. Preserve docs/diagrams/canonical-coordinator-architecture.png and all three consumers. No research worker or later area batch may rewrite its source, PNG, hash or review artifacts without a new explicit coordinator assignment."
+  },
+  "publication_blockers": [
+    "Full-catalog publication validation still requires downstream authoring and cleanup. Under follow-up authorization, 21 unconsumed identities, unreferenced/placeholder screenshots and existing broken links/anchors do not block audit-deliverable completion. The completed pilot passes its scoped final validation.",
+    "Current authentication, sandbox credential and privileged resource-access documentation conflicts with implementation. Preserve factual evidence and distinguish normative desired contracts from shipped behavior.",
+    "Legacy screenshots include placeholders; source/hash consistency does not establish factual or visual correctness.",
+    "The supplied discovery script omits root-relative diagrams/name.png, non-PNG/inline visuals and derived assets, and drops supplemental fields on refresh. Keep area and reconciliation reports alongside the strict catalog report.",
+    "All source/PNG/hash checks in this audit are read-only. No render, migration, source deletion, prose correction or commit is authorized."
+  ],
+  "path_policy": {
+    "existing_surviving_pngs": "Preserve exact existing paths.",
+    "consolidated_pngs": "Record future source and destination plus every consumer; do not change paths in this research phase.",
+    "inline_visuals": "Preserve current page/anchor identity unless a recorded concept consolidation changes the consumer; retaining concise inline notation does not require a new PNG.",
+    "screenshots": "Preserve stable screenshot paths when replacing placeholders with real captures; capture is not draw.io authoring.",
+    "consumer_edits": "Documentation page owner performs consumer changes only after the canonical owner integrates the target. Canonical asset workers do not edit foreign pages.",
+    "global_reports": "Coordinator-only writes. Area batches update only their own plan shard; coordinator regenerates the consolidated reports."
+  }
+}

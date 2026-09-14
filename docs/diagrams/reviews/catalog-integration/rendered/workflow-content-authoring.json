@@ -1,0 +1,14 @@
+{
+  "name": "workflow-content-authoring",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-content-authoring.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-content-authoring.png",
+  "source_sha256": "79b64be454a4fa5305cc241ca7646caf729619f09330eee685cdb19e890bdcc9",
+  "png_sha256": "171727cbfba0f4b7ad98bafcaea28468616ff0f8931bcbb81c6b6b1b879a4b8f",
+  "dimensions": [
+    2337,
+    3378
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

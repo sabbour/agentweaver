@@ -1,0 +1,740 @@
+{
+  "title": "Typed MAF adapters · state completes the contract",
+  "nodes": [
+    {
+      "id": "output",
+      "label": "AgentTurnOutput",
+      "subLabel": "Repository / worktree / tree data",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "TYPED",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "adapter",
+      "label": "Review adapter",
+      "subLabel": "Save output in workflow state",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "ADAPT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "state",
+      "label": "Workflow state",
+      "subLabel": "Saved AgentTurnOutput",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "STATE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "port",
+      "label": "RequestPort",
+      "subLabel": "Suspend for external reviewer",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "GATE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "decision",
+      "label": "Approved decision",
+      "subLabel": "WorkflowReviewDecision",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "RESPONSE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "mergeadapter",
+      "label": "Merge adapter",
+      "subLabel": "Read the saved output",
+      "meta": "RunWorkflowFactory:409–440",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "ADAPT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked adapter",
+      "subLabel": "MergeOutput says blocked",
+      "meta": "RunWorkflowFactory:532–545",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "RETURN",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "merge",
+      "label": "Merge executor",
+      "subLabel": "Consume typed MergeInput",
+      "meta": "RunWorkflowFactory:532–545",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "EXECUTE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "output",
+      "to": "adapter",
+      "label": "turn output",
+      "loopback": false
+    },
+    {
+      "from": "adapter",
+      "to": "state",
+      "label": "save output",
+      "loopback": false
+    },
+    {
+      "from": "adapter",
+      "to": "port",
+      "label": "request",
+      "loopback": false
+    },
+    {
+      "from": "port",
+      "to": "decision",
+      "label": "matching response",
+      "loopback": false
+    },
+    {
+      "from": "state",
+      "to": "mergeadapter",
+      "label": "read saved output",
+      "loopback": false
+    },
+    {
+      "from": "decision",
+      "to": "mergeadapter",
+      "label": "approved",
+      "loopback": false
+    },
+    {
+      "from": "mergeadapter",
+      "to": "merge",
+      "label": "MergeInput",
+      "loopback": false
+    },
+    {
+      "from": "merge",
+      "to": "blocked",
+      "label": "blocked output",
+      "loopback": false
+    },
+    {
+      "from": "blocked",
+      "to": "port",
+      "label": "same review port",
+      "loopback": true
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "REVIEW / STATE"
+    },
+    {
+      "id": "1",
+      "label": "RESPONSE / MERGE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "output",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "output",
+          "label": "AgentTurnOutput",
+          "subLabel": "Repository / worktree / tree data",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "TYPED",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "adapter",
+        "type": "card",
+        "position": {
+          "x": 569.2851311953353,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "adapter",
+          "label": "Review adapter",
+          "subLabel": "Save output in workflow state",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "ADAPT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "state",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "state",
+          "label": "Workflow state",
+          "subLabel": "Saved AgentTurnOutput",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "STATE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "port",
+        "type": "card",
+        "position": {
+          "x": 569.2851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "port",
+          "label": "RequestPort",
+          "subLabel": "Suspend for external reviewer",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "GATE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "decision",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "decision",
+          "label": "Approved decision",
+          "subLabel": "WorkflowReviewDecision",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "RESPONSE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "mergeadapter",
+        "type": "card",
+        "position": {
+          "x": 569.2851311953353,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "mergeadapter",
+          "label": "Merge adapter",
+          "subLabel": "Read the saved output",
+          "meta": "RunWorkflowFactory:409–440",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "ADAPT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "blocked",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "blocked",
+          "label": "Blocked adapter",
+          "subLabel": "MergeOutput says blocked",
+          "meta": "RunWorkflowFactory:532–545",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "RETURN",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "merge",
+        "type": "card",
+        "position": {
+          "x": 569.2851311953353,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "merge",
+          "label": "Merge executor",
+          "subLabel": "Consume typed MergeInput",
+          "meta": "RunWorkflowFactory:532–545",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "EXECUTE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 30.087463556851304
+        },
+        "style": {
+          "width": 937.6,
+          "height": 464
+        },
+        "data": {
+          "label": "REVIEW / STATE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 46.087463556851304
+        },
+        "data": {
+          "label": "REVIEW / STATE",
+          "width": 897.6
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 532.0874635568513
+        },
+        "style": {
+          "width": 937.6,
+          "height": 436
+        },
+        "data": {
+          "label": "RESPONSE / MERGE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 548.0874635568513
+        },
+        "data": {
+          "label": "RESPONSE / MERGE",
+          "width": 897.6
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "output",
+        "target": "adapter",
+        "label": "turn output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 569.2851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 472.4851311953353,
+            "y": 160.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "adapter",
+        "target": "state",
+        "label": "save output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 569.2851311953353,
+              "y": 186.4874635568513
+            },
+            {
+              "x": 443.4851311953353,
+              "y": 186.4874635568513
+            },
+            {
+              "x": 443.4851311953353,
+              "y": 440.48746355685125
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 440.48746355685125
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 443.4851311953353,
+            "y": 322.4874635568513
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "adapter",
+        "target": "port",
+        "label": "request",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 739.2851311953353,
+              "y": 226.0874635568513
+            },
+            {
+              "x": 739.2851311953353,
+              "y": 338.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 739.2851311953353,
+            "y": 259.6874635568513
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "port",
+        "target": "decision",
+        "label": "matching response",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 569.2851311953353,
+              "y": 430.48746355685125
+            },
+            {
+              "x": 469.2629089731131,
+              "y": 430.48746355685125
+            },
+            {
+              "x": 469.2629089731131,
+              "y": 684.4874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 684.4874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 469.2629089731131,
+              "y": 557.4874635568513
+            },
+            "to": {
+              "x": 461.2629089731131,
+              "y": 557.4874635568513
+            }
+          },
+          "labelPos": {
+            "x": 376.4629089731131,
+            "y": 557.4874635568513
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "state",
+        "target": "mergeadapter",
+        "label": "read saved output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 393.6874635568513
+            },
+            {
+              "x": 495.0406867508908,
+              "y": 393.6874635568513
+            },
+            {
+              "x": 495.0406867508908,
+              "y": 684.4874635568513
+            },
+            {
+              "x": 569.2851311953353,
+              "y": 684.4874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 495.0406867508908,
+              "y": 539.0874635568513
+            },
+            "to": {
+              "x": 503.0406867508908,
+              "y": 539.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 587.8406867508909,
+            "y": 539.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "decision",
+        "target": "mergeadapter",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 648.0874635568513
+            },
+            {
+              "x": 569.2851311953353,
+              "y": 648.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 472.4851311953353,
+              "y": 648.0874635568513
+            },
+            "to": {
+              "x": 472.4851311953353,
+              "y": 696.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 472.4851311953353,
+            "y": 711.2874635568513
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "mergeadapter",
+        "target": "merge",
+        "label": "MergeInput",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 739.2851311953353,
+              "y": 700.0874635568513
+            },
+            {
+              "x": 739.2851311953353,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 739.2851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "merge",
+        "target": "blocked",
+        "label": "blocked output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 569.2851311953353,
+              "y": 892.0874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 892.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 472.4851311953353,
+            "y": 892.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "blocked",
+        "target": "port",
+        "label": "same review port",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 35.68513119533529,
+              "y": 892.0874635568513
+            },
+            {
+              "x": 13.877551020408163,
+              "y": 892.0874635568513
+            },
+            {
+              "x": 13.877551020408163,
+              "y": 282.08746355685133
+            },
+            {
+              "x": 841.2851311953353,
+              "y": 282.08746355685133
+            },
+            {
+              "x": 841.2851311953353,
+              "y": 338.0874635568513
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 357.8775510204082,
+            "y": 282.08746355685133
+          }
+        }
+      }
+    ],
+    "canvasWidth": 942.9877551020408,
+    "canvasHeight": 993.6909620991254
+  }
+}

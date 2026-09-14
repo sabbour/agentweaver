@@ -1,0 +1,242 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n3",
+    "relationship": "Load embedded default definition",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:122-180",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        248,
+        166.0
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n3",
+    "relationship": "Load conformance-checked catalog definitions",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:122-180",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        166.0
+      ],
+      [
+        280,
+        166.0
+      ],
+      [
+        280,
+        86
+      ],
+      [
+        14,
+        86
+      ],
+      [
+        14,
+        318.0
+      ],
+      [
+        24,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Load project YAML definitions",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:122-180",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        166.0
+      ],
+      [
+        546,
+        166.0
+      ],
+      [
+        546,
+        382
+      ],
+      [
+        131.0,
+        382
+      ],
+      [
+        131.0,
+        372
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Validate identity and reserved-name behavior",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:183-265",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        278,
+        293.16
+      ],
+      [
+        278,
+        254
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        397.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n3",
+    "target": "n6",
+    "relationship": "Keep invalid diagnostics in registry result",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:18-25",
+    "result": "clean",
+    "route": [
+      [
+        81.78,
+        372
+      ],
+      [
+        81.78,
+        382
+      ],
+      [
+        14,
+        382
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        24,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Apply allowed-set filter to valid definitions",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:211-242",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        514,
+        318.0
+      ],
+      [
+        514,
+        392
+      ],
+      [
+        663.0,
+        392
+      ],
+      [
+        663.0,
+        372
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n5",
+    "target": "n7",
+    "relationship": "Cache project resolution using signature",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:57-83",
+    "result": "clean",
+    "route": [
+      [
+        613.78,
+        372
+      ],
+      [
+        613.78,
+        400
+      ],
+      [
+        514,
+        400
+      ],
+      [
+        514,
+        470.0
+      ],
+      [
+        504,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Expose valid available candidates",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs:18-25",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        524
+      ],
+      [
+        397.0,
+        534
+      ],
+      [
+        546,
+        534
+      ],
+      [
+        546,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  }
+]

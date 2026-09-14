@@ -1,0 +1,14 @@
+{
+  "name": "workflow-infra-ops",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-infra-ops.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-infra-ops.png",
+  "source_sha256": "71db030733eedb7d0de35a7139664504f1b2a99739839d319b89cb95c752d331",
+  "png_sha256": "1c40298f7be3f0dca6ece80e7a5b28603a755ae07e2a3755fdd72dec7924feed",
+  "dimensions": [
+    2277,
+    3378
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

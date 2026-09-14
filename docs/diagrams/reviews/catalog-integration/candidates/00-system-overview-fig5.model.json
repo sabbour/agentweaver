@@ -1,0 +1,670 @@
+{
+  "title": "Memory · promotion before reuse",
+  "nodes": [
+    {
+      "id": "agent",
+      "label": "Agent observation",
+      "subLabel": "Submit pending decision",
+      "meta": "DecisionsEndpoints:125–143",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CAPTURE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "inbox",
+      "label": "Decision inbox",
+      "subLabel": "Unapproved observation",
+      "meta": "DecisionsEndpoints:125–143",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "PENDING",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "scribe",
+      "label": "Post-run Scribe",
+      "subLabel": "Select eligible run entries",
+      "meta": "PostRunScribeService:25–150",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "FILTER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "approved",
+      "label": "Approved active state",
+      "subLabel": "Low-risk learning / pattern / update",
+      "meta": "PostRunScribeService:25–150",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "PROMOTE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "session",
+      "label": "Current open session",
+      "subLabel": "Append the run summary",
+      "meta": "PostRunScribeService:25–150",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "SESSION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "compiler",
+      "label": "Context compiler",
+      "subLabel": "Trust filters + memory budgets",
+      "meta": "MemoryContextCompiler:55–160",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "SELECT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "mirrors",
+      "label": "Workspace mirrors",
+      "subLabel": "Exporter refreshes committed memory",
+      "meta": "PostRunScribeService:25–150",
+      "icon": "box",
+      "shape": "folder",
+      "classification": "native:uml",
+      "badge": {
+        "text": "MIRROR",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=folder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "prompt",
+      "label": "Subsequent prompt",
+      "subLabel": "Include selected context",
+      "meta": "MemoryContextCompiler:55–160",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONTEXT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "agent",
+      "to": "inbox",
+      "label": "submit",
+      "loopback": false
+    },
+    {
+      "from": "inbox",
+      "to": "scribe",
+      "label": "eligible entries",
+      "loopback": false
+    },
+    {
+      "from": "scribe",
+      "to": "approved",
+      "label": "low-risk only",
+      "loopback": false
+    },
+    {
+      "from": "scribe",
+      "to": "session",
+      "label": "append summary",
+      "loopback": false
+    },
+    {
+      "from": "approved",
+      "to": "compiler",
+      "label": "approved state",
+      "loopback": false
+    },
+    {
+      "from": "session",
+      "to": "compiler",
+      "label": "current session",
+      "loopback": false
+    },
+    {
+      "from": "session",
+      "to": "mirrors",
+      "label": "export committed",
+      "loopback": false
+    },
+    {
+      "from": "compiler",
+      "to": "prompt",
+      "label": "compile",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "CAPTURE / PROMOTION"
+    },
+    {
+      "id": "1",
+      "label": "COMMITTED STATE / USE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "agent",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "agent",
+          "label": "Agent observation",
+          "subLabel": "Submit pending decision",
+          "meta": "DecisionsEndpoints:125–143",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CAPTURE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "inbox",
+        "type": "card",
+        "position": {
+          "x": 560.4851311953353,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "inbox",
+          "label": "Decision inbox",
+          "subLabel": "Unapproved observation",
+          "meta": "DecisionsEndpoints:125–143",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "PENDING",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "scribe",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "scribe",
+          "label": "Post-run Scribe",
+          "subLabel": "Select eligible run entries",
+          "meta": "PostRunScribeService:25–150",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "FILTER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "approved",
+        "type": "card",
+        "position": {
+          "x": 560.4851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "approved",
+          "label": "Approved active state",
+          "subLabel": "Low-risk learning / pattern / update",
+          "meta": "PostRunScribeService:25–150",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "PROMOTE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "session",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "session",
+          "label": "Current open session",
+          "subLabel": "Append the run summary",
+          "meta": "PostRunScribeService:25–150",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "SESSION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "compiler",
+        "type": "card",
+        "position": {
+          "x": 560.4851311953353,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "compiler",
+          "label": "Context compiler",
+          "subLabel": "Trust filters + memory budgets",
+          "meta": "MemoryContextCompiler:55–160",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "SELECT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "mirrors",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "mirrors",
+          "label": "Workspace mirrors",
+          "subLabel": "Exporter refreshes committed memory",
+          "meta": "PostRunScribeService:25–150",
+          "icon": "box",
+          "shape": "folder",
+          "classification": "native:uml",
+          "badge": {
+            "text": "MIRROR",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=folder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "prompt",
+        "type": "card",
+        "position": {
+          "x": 560.4851311953353,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "prompt",
+          "label": "Subsequent prompt",
+          "subLabel": "Include selected context",
+          "meta": "MemoryContextCompiler:55–160",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONTEXT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 44.087463556851304
+        },
+        "style": {
+          "width": 928.8,
+          "height": 450
+        },
+        "data": {
+          "label": "CAPTURE / PROMOTION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 60.087463556851304
+        },
+        "data": {
+          "label": "CAPTURE / PROMOTION",
+          "width": 888.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 518.0874635568513
+        },
+        "style": {
+          "width": 928.8,
+          "height": 464
+        },
+        "data": {
+          "label": "COMMITTED STATE / USE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 534.0874635568513
+        },
+        "data": {
+          "label": "COMMITTED STATE / USE",
+          "width": 888.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "agent",
+        "target": "inbox",
+        "label": "submit",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 560.4851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 468.0851311953353,
+              "y": 160.0874635568513
+            },
+            "to": {
+              "x": 468.0851311953353,
+              "y": 152.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 468.0851311953353,
+            "y": 136.88746355685132
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "inbox",
+        "target": "scribe",
+        "label": "eligible entries",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 560.4851311953353,
+              "y": 182.9674635568513
+            },
+            {
+              "x": 439.56339206490054,
+              "y": 182.9674635568513
+            },
+            {
+              "x": 439.56339206490054,
+              "y": 426.96746355685127
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 426.96746355685127
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 475.83991380403097,
+            "y": 182.9674635568513
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "scribe",
+        "target": "approved",
+        "label": "low-risk only",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 404.0874635568513
+            },
+            {
+              "x": 560.4851311953353,
+              "y": 404.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 468.0851311953353,
+              "y": 404.0874635568513
+            },
+            "to": {
+              "x": 468.0851311953353,
+              "y": 452.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 468.0851311953353,
+            "y": 467.28746355685126
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "scribe",
+        "target": "session",
+        "label": "append summary",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 456.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 596.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 526.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "approved",
+        "target": "compiler",
+        "label": "approved state",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 730.4851311953353,
+              "y": 470.0874635568513
+            },
+            {
+              "x": 730.4851311953353,
+              "y": 582.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 730.4851311953353,
+            "y": 526.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "session",
+        "target": "compiler",
+        "label": "current session",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 648.0874635568513
+            },
+            {
+              "x": 560.4851311953353,
+              "y": 648.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 468.0851311953353,
+            "y": 648.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "session",
+        "target": "mirrors",
+        "label": "export committed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 700.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 826.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 763.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "compiler",
+        "target": "prompt",
+        "label": "compile",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 730.4851311953353,
+              "y": 714.0874635568513
+            },
+            {
+              "x": 730.4851311953353,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 730.4851311953353,
+            "y": 777.0874635568513
+          }
+        }
+      }
+    ],
+    "canvasWidth": 934.1877551020408,
+    "canvasHeight": 993.6909620991254
+  }
+}

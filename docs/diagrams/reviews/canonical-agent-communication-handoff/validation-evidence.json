@@ -1,0 +1,90 @@
+{
+  "schema_valid": true,
+  "ordered_passes_valid": true,
+  "arrow_count": 6,
+  "final_arrow_ids": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+  ],
+  "passes": [
+    {
+      "pass_number": 1,
+      "png_sha256": "c2b1fdc22d753cce09b62c7a5f8926fe816a7fec4cdff03648ff8dce75ce66c9",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 84,
+        "meaningful_count": 23647,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 2,
+      "png_sha256": "5e5c1f0f65d731068bb91d3d9166e3f49517e719e78ebe8264797eb5cadec0ad",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 84,
+        "meaningful_count": 23601,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 3,
+      "png_sha256": "5e5c1f0f65d731068bb91d3d9166e3f49517e719e78ebe8264797eb5cadec0ad",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 84,
+        "meaningful_count": 23601,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 4,
+      "png_sha256": "5e5c1f0f65d731068bb91d3d9166e3f49517e719e78ebe8264797eb5cadec0ad",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 84,
+        "meaningful_count": 23601,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    }
+  ],
+  "promotion": {
+    "canonical_xml_matches_review": true,
+    "published_png_pixel_identical_to_inspected_pass_04": true,
+    "png_dimensions": [
+      1638,
+      1145
+    ],
+    "png_sha256": "5e5c1f0f65d731068bb91d3d9166e3f49517e719e78ebe8264797eb5cadec0ad",
+    "selective_renderer": "draw.io Desktop 31.4.5",
+    "selective_render_passed": true,
+    "selective_drift_check_passed": true,
+    "duplicate_json_and_generated_sources_removed": true,
+    "derived_email_export_matches": false,
+    "docs_build": "Parent-owned: this worker may not write documentation pages or build output outside its exclusive assets."
+  }
+}

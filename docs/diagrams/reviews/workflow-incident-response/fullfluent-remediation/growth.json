@@ -1,0 +1,14 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 2376,
+  "result_meaningful_xml": 30455,
+  "baseline_visible_structures": 8,
+  "result_visible_structures": 107,
+  "growth_ratio": 12.817761,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true
+}

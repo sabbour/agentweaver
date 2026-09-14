@@ -1,0 +1,169 @@
+{
+  "title": "Commit first. Replay by cursor.",
+  "subtitle": "EF / PostgreSQL sequence · durable delivery across API replicas",
+  "identity": "UML SEQUENCE / EF POSTGRES",
+  "disposition": "redesign",
+  "evidence": "events",
+  "participants": [
+    {
+      "id": "producer",
+      "title": "Producer",
+      "sub": "run execution",
+      "meta": "replica A",
+      "pill": "WRITE",
+      "tone": "green",
+      "shape": "hexagon",
+      "facts": []
+    },
+    {
+      "id": "stream",
+      "title": "EF stream",
+      "sub": "append + subscribe",
+      "meta": "service",
+      "pill": "EF",
+      "tone": "teal",
+      "shape": "component",
+      "facts": []
+    },
+    {
+      "id": "store",
+      "title": "Postgres",
+      "sub": "RunEvents",
+      "meta": "shared store",
+      "pill": "DATA",
+      "tone": "teal",
+      "shape": "cylinder3",
+      "facts": []
+    },
+    {
+      "id": "sse",
+      "title": "SSE",
+      "sub": "run endpoint",
+      "meta": "replica B",
+      "pill": "READ",
+      "tone": "teal",
+      "shape": "component",
+      "facts": []
+    },
+    {
+      "id": "client",
+      "title": "Watcher",
+      "sub": "web / MCP",
+      "meta": "cursor",
+      "pill": "CLIENT",
+      "tone": "lavender",
+      "shape": "umlActor",
+      "facts": []
+    }
+  ],
+  "messages": [
+    [
+      "producer",
+      "stream",
+      "1  append(runId, event)"
+    ],
+    [
+      "stream",
+      "store",
+      "2  lock run · allocate MAX + 1 · save"
+    ],
+    [
+      "store",
+      "stream",
+      "3  commit succeeds"
+    ],
+    [
+      "stream",
+      "producer",
+      "4  acknowledge assigned sequence"
+    ],
+    [
+      "client",
+      "sse",
+      "5  reconnect with last delivered cursor"
+    ],
+    [
+      "sse",
+      "store",
+      "6  query Sequence > cursor"
+    ],
+    [
+      "store",
+      "sse",
+      "7  return ordered durable batch"
+    ],
+    [
+      "sse",
+      "client",
+      "8  emit id + event + data; advance cursor"
+    ]
+  ],
+  "notes": [
+    "LOOP · repeat durable reads; idle wait = 250 ms",
+    "Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.",
+    "Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane."
+  ],
+  "grounding": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs",
+  "nodes_or_participants": [
+    {
+      "id": "producer",
+      "title": "Producer",
+      "sub": "run execution",
+      "meta": "replica A",
+      "pill": "WRITE",
+      "tone": "green",
+      "shape": "hexagon",
+      "facts": [],
+      "classification": "custom:agentweaver",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"
+    },
+    {
+      "id": "stream",
+      "title": "EF stream",
+      "sub": "append + subscribe",
+      "meta": "service",
+      "pill": "EF",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"
+    },
+    {
+      "id": "store",
+      "title": "Postgres",
+      "sub": "RunEvents",
+      "meta": "shared store",
+      "pill": "DATA",
+      "tone": "teal",
+      "shape": "cylinder3",
+      "facts": [],
+      "classification": "native:database",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"
+    },
+    {
+      "id": "sse",
+      "title": "SSE",
+      "sub": "run endpoint",
+      "meta": "replica B",
+      "pill": "READ",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"
+    },
+    {
+      "id": "client",
+      "title": "Watcher",
+      "sub": "web / MCP",
+      "meta": "cursor",
+      "pill": "CLIENT",
+      "tone": "lavender",
+      "shape": "umlActor",
+      "facts": [],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"
+    }
+  ]
+}

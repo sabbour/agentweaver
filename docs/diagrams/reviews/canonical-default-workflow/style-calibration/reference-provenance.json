@@ -1,0 +1,45 @@
+{
+  "git_revision": "a46721ae77efeba505d2fbfa58c69cdae8b4f3eb",
+  "files": [
+    {
+      "git_path": "docs/diagrams/canonical-default-workflow.png",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\original-react.png",
+      "sha256": "9e221ab854874260328c54860728ee83ea65297c38ef1bebf920d2d4dbf714d2"
+    },
+    {
+      "git_path": "docs/diagrams/src/canonical-default-workflow.json",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\original-graph.json",
+      "sha256": "f7f62a7f93e4c661fec1caf904d221650c1af78555e96d7948511c7959e68369"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/theme.ts",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\theme.ts",
+      "sha256": "0ad26c69f6988a266b09029166a31d28f537c9107b4681cc9ba1f78ce79817b7"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/nodes.tsx",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\nodes.tsx",
+      "sha256": "22a54ed13147859678d7672ba2c89214124073b4fad891344fefbd471edc9568"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/edges.tsx",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\edges.tsx",
+      "sha256": "35eafe3c42076cd47ec8993c9a94cf93bb0593adae58c724f9cbb430b555bc05"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/DiagramCanvas.tsx",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\DiagramCanvas.tsx",
+      "sha256": "02bd4e9241aefdcce3da5ed5e663cd78197f7e738ef22a2788bac752163c1d20"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/icons.ts",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\icons.ts",
+      "sha256": "0fd8a219e5b4856e23891b66e60382f23b27b8f2e32bca0386d13e098840dfab"
+    },
+    {
+      "git_path": "docs/diagram-renderer/src/types.ts",
+      "local_path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\react-source\\types.ts",
+      "sha256": "ab48331412cabc8793de8198516e7c69e62a3ea3c7d07b013e80f7225cd26167"
+    }
+  ]
+}

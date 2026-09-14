@@ -1,0 +1,253 @@
+{
+  "diagram": "frontend-fig3",
+  "source_sha256": "ec81bd721febb3924c0a829ffdc104a107393d624dc4f9b6a2fbfcaa27dda56c",
+  "png_sha256": "0c40432aa93eb6ed9468c6862969ef21322617a69d6cb5063f75d259fd3a4152",
+  "prior_model": "docs\\diagrams\\reviews\\frontend-fig3\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Static hosting and API origins"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The Web host serves the SPA; API_URL is an origin or empty, never /api."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "WEB HOST · STATIC DELIVERY"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "BROWSER · RUNTIME DESTINATIONS"
+    },
+    {
+      "cell": "browser-title",
+      "text": "Browser request"
+    },
+    {
+      "cell": "browser-subtitle",
+      "text": "Assets or a client-side route"
+    },
+    {
+      "cell": "browser-detail",
+      "text": "The Web host is not the API host"
+    },
+    {
+      "cell": "browser-meta",
+      "text": "Web/Program.cs:39-65"
+    },
+    {
+      "cell": "browser-pill",
+      "text": "HTTP"
+    },
+    {
+      "cell": "config-title",
+      "text": "Runtime configuration"
+    },
+    {
+      "cell": "config-subtitle",
+      "text": "window.__AGENTWEAVER_CONFIG__"
+    },
+    {
+      "cell": "config-detail",
+      "text": "API_URL selects the API origin"
+    },
+    {
+      "cell": "config-meta",
+      "text": "config.ts:13-36"
+    },
+    {
+      "cell": "config-pill",
+      "text": "CONFIG"
+    },
+    {
+      "cell": "static-title",
+      "text": "Static file middleware"
+    },
+    {
+      "cell": "static-subtitle",
+      "text": "Default files + static assets"
+    },
+    {
+      "cell": "static-detail",
+      "text": "Non-HTML assets get immutable caching"
+    },
+    {
+      "cell": "static-meta",
+      "text": "Web/Program.cs:39-50"
+    },
+    {
+      "cell": "static-pill",
+      "text": "FILES"
+    },
+    {
+      "cell": "client-origin-title",
+      "text": "Origin resolution"
+    },
+    {
+      "cell": "client-origin-subtitle",
+      "text": "Origin string, or \"\" = same-origin"
+    },
+    {
+      "cell": "client-origin-detail",
+      "text": "Client endpoints append their own /api"
+    },
+    {
+      "cell": "client-origin-meta",
+      "text": "config.ts:13-36"
+    },
+    {
+      "cell": "client-origin-pill",
+      "text": "ORIGIN"
+    },
+    {
+      "cell": "fallback-title",
+      "text": "SPA route fallback"
+    },
+    {
+      "cell": "fallback-subtitle",
+      "text": "Unknown route → index.html"
+    },
+    {
+      "cell": "fallback-detail",
+      "text": "React handles the resulting route"
+    },
+    {
+      "cell": "fallback-meta",
+      "text": "Web/Program.cs:61-65"
+    },
+    {
+      "cell": "fallback-pill",
+      "text": "SPA"
+    },
+    {
+      "cell": "api-host-title",
+      "text": "API destination"
+    },
+    {
+      "cell": "api-host-subtitle",
+      "text": "REST + authenticated fetch SSE"
+    },
+    {
+      "cell": "api-host-detail",
+      "text": "Same-origin still uses /api endpoints"
+    },
+    {
+      "cell": "api-host-meta",
+      "text": "api/sse.ts:239-337"
+    },
+    {
+      "cell": "api-host-pill",
+      "text": "API"
+    },
+    {
+      "cell": "docs-route-title",
+      "text": "Documentation route"
+    },
+    {
+      "cell": "docs-route-subtitle",
+      "text": "/docs and /docs/{path}"
+    },
+    {
+      "cell": "docs-route-detail",
+      "text": "Temporary redirect preserves suffix"
+    },
+    {
+      "cell": "docs-route-meta",
+      "text": "Web/Program.cs:52-59"
+    },
+    {
+      "cell": "docs-route-pill",
+      "text": "REDIRECT"
+    },
+    {
+      "cell": "external-docs-title",
+      "text": "External documentation"
+    },
+    {
+      "cell": "external-docs-subtitle",
+      "text": "Configured documentation base URL"
+    },
+    {
+      "cell": "external-docs-detail",
+      "text": "Not the local SPA fallback"
+    },
+    {
+      "cell": "external-docs-meta",
+      "text": "Web/Program.cs:52-59"
+    },
+    {
+      "cell": "external-docs-pill",
+      "text": "EXTERNAL"
+    },
+    {
+      "cell": "browser-to-static",
+      "text": "asset"
+    },
+    {
+      "cell": "static-to-fallback",
+      "text": "unmatched"
+    },
+    {
+      "cell": "config-to-client-origin",
+      "text": "supplies"
+    },
+    {
+      "cell": "client-origin-to-api-host",
+      "text": "requests"
+    },
+    {
+      "cell": "docs-route-to-external-docs",
+      "text": "302 redirect"
+    },
+    {
+      "cell": "scope",
+      "text": "Parallel concerns: static delivery, runtime API selection and external docs redirection."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/frontend.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "browser",
+      "to": "static",
+      "label": "asset",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "static",
+      "to": "fallback",
+      "label": "unmatched",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "config",
+      "to": "client-origin",
+      "label": "supplies",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "client-origin",
+      "to": "api-host",
+      "label": "requests",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "docs-route",
+      "to": "external-docs",
+      "label": "302 redirect",
+      "result": "clean"
+    }
+  ]
+}

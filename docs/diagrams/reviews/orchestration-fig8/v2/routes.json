@@ -1,0 +1,244 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Intent confirmation obeys approval/autopilot policy",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:370-408",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Check for an existing persisted plan",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:133-150",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Without a reusable plan, select workflow",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:157-160",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Selection precedes decomposition and compatibility check",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:157-182",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        278,
+        293.16
+      ],
+      [
+        278,
+        254
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        397.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Persist selected workflow and work-plan DAG",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:230-249",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n2",
+    "target": "n6",
+    "relationship": "Existing plan goes to durable dispatch supervision",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:133-150",
+    "result": "clean",
+    "route": [
+      [
+        770,
+        166.0
+      ],
+      [
+        780,
+        166.0
+      ],
+      [
+        780,
+        400
+      ],
+      [
+        248,
+        400
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n5",
+    "target": "n6",
+    "relationship": "Persisted subtasks feed frontier evaluation",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:387-427",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        372
+      ],
+      [
+        663.0,
+        382
+      ],
+      [
+        544,
+        382
+      ],
+      [
+        544,
+        534
+      ],
+      [
+        131.0,
+        534
+      ],
+      [
+        131.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Admitted ready tasks become child runs",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:387-427",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        278,
+        445.16
+      ],
+      [
+        278,
+        392
+      ],
+      [
+        397.0,
+        392
+      ],
+      [
+        397.0,
+        416
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Child supervision hands settled work to assembly",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:798-799",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        470.0
+      ],
+      [
+        514,
+        470.0
+      ],
+      [
+        514,
+        546
+      ],
+      [
+        663.0,
+        546
+      ],
+      [
+        663.0,
+        524
+      ]
+    ]
+  }
+]

@@ -1,0 +1,101 @@
+{
+  "diagram": "email-components",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "fluent-pitch-remediation/email-components-pitch.drawio",
+    "png": "fluent-pitch-remediation/email-components-pitch.png",
+    "change_record": "fluent-pitch-remediation/email-components-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "fluent-pitch-remediation/email-components-pass-01.drawio",
+      "png": "fluent-pitch-remediation/email-components-pass-01.png",
+      "change_record": "fluent-pitch-remediation/email-components-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 3249,
+      "result_meaningful_xml": 36025,
+      "growth_ratio": 11.088027
+    },
+    {
+      "drawio": "fluent-pitch-remediation/email-components-pass-02.drawio",
+      "png": "fluent-pitch-remediation/email-components-pass-02.png",
+      "change_record": "fluent-pitch-remediation/email-components-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "fluent-pitch-remediation/email-components-pass-03.drawio",
+      "png": "fluent-pitch-remediation/email-components-pass-03.png",
+      "change_record": "fluent-pitch-remediation/email-components-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "fluent-pitch-remediation/email-components-pass-04.drawio",
+      "png": "fluent-pitch-remediation/email-components-pass-04.png",
+      "change_record": "fluent-pitch-remediation/email-components-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e1",
+          "source": "api",
+          "target": "runtime",
+          "relationship": "ref.",
+          "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "host",
+          "target": "runtime",
+          "relationship": "ref.",
+          "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "runtime",
+          "target": "tools",
+          "relationship": "ref.",
+          "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "tools",
+          "target": "domain",
+          "relationship": "ref.",
+          "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

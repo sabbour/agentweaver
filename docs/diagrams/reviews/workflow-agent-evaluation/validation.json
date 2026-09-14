@@ -1,0 +1,52 @@
+{
+  "diagram": "workflow-agent-evaluation",
+  "renderer": "31.4.5",
+  "manifest_schema_valid": true,
+  "manifest_cross_fields_valid": true,
+  "sources": [
+    {
+      "source": "workflow-agent-evaluation-pitch.drawio",
+      "sha256": "05d24aa0d8bfaeeb69bf3841b0db028588b7e6bb86b1db69724f34be0780218f",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-agent-evaluation-pass-01-upgrade.drawio",
+      "sha256": "b7b02b9c515203f7aa80cdb1ca4bfcbae0483ea94c64eeca86ff12c47ffc0643",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-agent-evaluation-pass-02.drawio",
+      "sha256": "a44ff36ac19713eb3c2632448c9afae9631fee159ada13fa78a0306ade5fa822",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-agent-evaluation-pass-03.drawio",
+      "sha256": "8c65a0c4b054b3d953cd8d201f339eee5f128875048f22f7f5f7ff9dab10535e",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-agent-evaluation-pass-04.drawio",
+      "sha256": "8c65a0c4b054b3d953cd8d201f339eee5f128875048f22f7f5f7ff9dab10535e",
+      "xml_valid": true
+    }
+  ],
+  "final_arrows": 8,
+  "legacy_yaml_comparison": {
+    "legacy_yaml_node_sets_equal": true,
+    "legacy_yaml_edge_tuples_equal": true,
+    "edges": 8,
+    "missing": [],
+    "extra": []
+  },
+  "final_remaining_visual_defects": 0,
+  "canonical_promoted": true,
+  "residuals": [
+    "Full independent component/flow transcript text supplied under Temp was not copied; summarized handoff and direct code evidence are retained."
+  ],
+  "promotion_source_sha256": "8c65a0c4b054b3d953cd8d201f339eee5f128875048f22f7f5f7ff9dab10535e",
+  "promotion_png_sha256": "592de5484e43dd15240520be4ec8950ac25cf845dad884e4a3bd819daa2e6c5f",
+  "scoped_repository_drift_check": "passed",
+  "renderer_stamp_verified": true,
+  "published_png_matches_inspected_pixels": true,
+  "publication_png_sha256": "592de5484e43dd15240520be4ec8950ac25cf845dad884e4a3bd819daa2e6c5f"
+}

@@ -1,0 +1,271 @@
+{
+  "diagram": "testing-strategy-fig4",
+  "source_sha256": "7c2ab53a1cf775e06efba9b5563f03b302a900b8999cf40f0ed45bccc52ea71a",
+  "png_sha256": "98467e523655466f01a5d6a2c0967d3059eb899fb406f36b2cc756b25ac65967",
+  "prior_model": "docs\\diagrams\\reviews\\testing-strategy-fig4\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "API test hosting · configure, substitute, request"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Specialized factories keep Program wiring real while selecting isolated state and controlled seams."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "FACTORY SETUP"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "HOST / REQUEST / ASSERT"
+    },
+    {
+      "cell": "test-title",
+      "text": "Test case"
+    },
+    {
+      "cell": "test-subtitle",
+      "text": "Select a specialized factory"
+    },
+    {
+      "cell": "test-detail",
+      "text": "Choose the subsystem and behavior to preserve"
+    },
+    {
+      "cell": "test-metadata",
+      "text": "Helpers/*WebApplicationFactory"
+    },
+    {
+      "cell": "test-badge",
+      "text": "ARRANGE"
+    },
+    {
+      "cell": "config-title",
+      "text": "Fixture configuration"
+    },
+    {
+      "cell": "config-subtitle",
+      "text": "Isolated DB, worktree, checkpoints"
+    },
+    {
+      "cell": "config-detail",
+      "text": "Required provider settings; explicit identity seams"
+    },
+    {
+      "cell": "config-metadata",
+      "text": "WorkflowWebApplicationFactory:34–60"
+    },
+    {
+      "cell": "config-badge",
+      "text": "CONFIG"
+    },
+    {
+      "cell": "substitute-title",
+      "text": "Service replacement"
+    },
+    {
+      "cell": "substitute-subtitle",
+      "text": "Swap IAgentRunner / agent factory"
+    },
+    {
+      "cell": "substitute-detail",
+      "text": "Deterministic writes; some gates short-circuited"
+    },
+    {
+      "cell": "substitute-metadata",
+      "text": "WorkflowWebApplicationFactory:61–82"
+    },
+    {
+      "cell": "substitute-badge",
+      "text": "DI"
+    },
+    {
+      "cell": "host-title",
+      "text": "Real Program host"
+    },
+    {
+      "cell": "host-subtitle",
+      "text": "Startup + DI + middleware"
+    },
+    {
+      "cell": "host-detail",
+      "text": "Not a direct service-method-only test"
+    },
+    {
+      "cell": "host-metadata",
+      "text": "WebApplicationFactory"
+    },
+    {
+      "cell": "host-badge",
+      "text": "HOST"
+    },
+    {
+      "cell": "state-title",
+      "text": "Isolated real state"
+    },
+    {
+      "cell": "state-subtitle",
+      "text": "SQLite + filesystem / Git as needed"
+    },
+    {
+      "cell": "state-detail",
+      "text": "Dispose fixture-owned databases and directories"
+    },
+    {
+      "cell": "state-metadata",
+      "text": "WorkflowWebApplicationFactory:86–111"
+    },
+    {
+      "cell": "state-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "request-title",
+      "text": "Test HTTP client"
+    },
+    {
+      "cell": "request-subtitle",
+      "text": "Route, JSON and identity contract"
+    },
+    {
+      "cell": "request-detail",
+      "text": "Request traverses the configured host"
+    },
+    {
+      "cell": "request-metadata",
+      "text": "WorkflowIntegrationTests:20–31"
+    },
+    {
+      "cell": "request-badge",
+      "text": "ACT"
+    },
+    {
+      "cell": "seam-title",
+      "text": "Controlled execution"
+    },
+    {
+      "cell": "seam-subtitle",
+      "text": "No live model invocation required"
+    },
+    {
+      "cell": "seam-detail",
+      "text": "Fake preserves relevant input/output shape"
+    },
+    {
+      "cell": "seam-metadata",
+      "text": "TestFileEditAgentRunner:44–80"
+    },
+    {
+      "cell": "seam-badge",
+      "text": "SEAM"
+    },
+    {
+      "cell": "assert-title",
+      "text": "Assertions + cleanup"
+    },
+    {
+      "cell": "assert-subtitle",
+      "text": "Status / payload / state as applicable"
+    },
+    {
+      "cell": "assert-detail",
+      "text": "Retired POST /api/runs test accepts 401 or 410"
+    },
+    {
+      "cell": "assert-metadata",
+      "text": "WorkflowIntegrationTests:20–31"
+    },
+    {
+      "cell": "assert-badge",
+      "text": "ASSERT"
+    },
+    {
+      "cell": "test-to-config",
+      "text": "configure"
+    },
+    {
+      "cell": "test-to-substitute",
+      "text": "replace"
+    },
+    {
+      "cell": "config-to-host",
+      "text": "build"
+    },
+    {
+      "cell": "substitute-to-host",
+      "text": "inject"
+    },
+    {
+      "cell": "seam-to-state",
+      "text": "writes"
+    },
+    {
+      "cell": "request-to-assert",
+      "text": "assert"
+    },
+    {
+      "cell": "scope",
+      "text": "Fixture legacy auth settings are not production architecture. The retired-route test proves no full workflow."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/testing-strategy.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "test",
+      "to": "config",
+      "label": "configure",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "test",
+      "to": "substitute",
+      "label": "replace",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "config",
+      "to": "host",
+      "label": "build",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "substitute",
+      "to": "host",
+      "label": "inject",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "request",
+      "to": "host",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "seam",
+      "to": "state",
+      "label": "writes",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "request",
+      "to": "assert",
+      "label": "assert",
+      "result": "clean"
+    }
+  ]
+}

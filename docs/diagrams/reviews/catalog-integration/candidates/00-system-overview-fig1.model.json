@@ -1,0 +1,614 @@
+{
+  "title": "Agentweaver · boundaries, not one process",
+  "nodes": [
+    {
+      "id": "web",
+      "label": "Browser / Web host",
+      "subLabel": "SPA assets and API requests",
+      "meta": "Web/Program.cs:39–65",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "STATIC",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "api",
+      "label": "API web role",
+      "subLabel": "Endpoint-classified authority",
+      "meta": "Program.cs:1274–1295",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "AUTHORITY",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP host",
+      "subLabel": "Validate broker JWT",
+      "meta": "McpBrokerAuthenticationHandler",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "BROKER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "worker",
+      "label": "Worker role",
+      "subLabel": "Shared application code",
+      "meta": "Program.cs:1255–1264",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "WORKER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "orchestration",
+      "label": "Run orchestration",
+      "subLabel": "MAF graphs + service drivers",
+      "meta": "RunWorkflowFactory / Coordinator",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONTROL",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "host",
+      "label": "AgentHost leaf",
+      "subLabel": "Governed remote agent execution",
+      "meta": "RemoteOperatorAssistantAgent",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "EXECUTION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "subLabel": "Shared EF operational state",
+      "meta": "Program.cs:1026–1075",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "DURABLE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "workspace",
+      "label": "Workspace + worktrees",
+      "subLabel": "Files are not the database",
+      "meta": "RunOrchestrator.cs:277–317",
+      "icon": "box",
+      "shape": "folder",
+      "classification": "native:uml",
+      "badge": {
+        "text": "FILES",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=folder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "web",
+      "to": "api",
+      "label": "REST / SSE",
+      "loopback": false
+    },
+    {
+      "from": "mcp",
+      "to": "api",
+      "label": "forward broker",
+      "loopback": false
+    },
+    {
+      "from": "api",
+      "to": "orchestration",
+      "label": "delegate",
+      "loopback": false
+    },
+    {
+      "from": "orchestration",
+      "to": "host",
+      "label": "execute",
+      "loopback": false
+    },
+    {
+      "from": "orchestration",
+      "to": "postgres",
+      "label": "persist",
+      "loopback": false
+    },
+    {
+      "from": "host",
+      "to": "workspace",
+      "label": "worktree",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "INTENT / CONTROL"
+    },
+    {
+      "id": "1",
+      "label": "EXECUTION / STATE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "web",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "web",
+          "label": "Browser / Web host",
+          "subLabel": "SPA assets and API requests",
+          "meta": "Web/Program.cs:39–65",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "STATIC",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 542.8851311953354,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "api",
+          "label": "API web role",
+          "subLabel": "Endpoint-classified authority",
+          "meta": "Program.cs:1274–1295",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "AUTHORITY",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "mcp",
+          "label": "MCP host",
+          "subLabel": "Validate broker JWT",
+          "meta": "McpBrokerAuthenticationHandler",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "BROKER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "worker",
+        "type": "card",
+        "position": {
+          "x": 542.8851311953354,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "worker",
+          "label": "Worker role",
+          "subLabel": "Shared application code",
+          "meta": "Program.cs:1255–1264",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "WORKER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "orchestration",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "orchestration",
+          "label": "Run orchestration",
+          "subLabel": "MAF graphs + service drivers",
+          "meta": "RunWorkflowFactory / Coordinator",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONTROL",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "host",
+        "type": "card",
+        "position": {
+          "x": 542.8851311953354,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "host",
+          "label": "AgentHost leaf",
+          "subLabel": "Governed remote agent execution",
+          "meta": "RemoteOperatorAssistantAgent",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "EXECUTION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "postgres",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "postgres",
+          "label": "PostgreSQL",
+          "subLabel": "Shared EF operational state",
+          "meta": "Program.cs:1026–1075",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "DURABLE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "workspace",
+        "type": "card",
+        "position": {
+          "x": 542.8851311953354,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "workspace",
+          "label": "Workspace + worktrees",
+          "subLabel": "Files are not the database",
+          "meta": "RunOrchestrator.cs:277–317",
+          "icon": "box",
+          "shape": "folder",
+          "classification": "native:uml",
+          "badge": {
+            "text": "FILES",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=folder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 30.087463556851304
+        },
+        "style": {
+          "width": 911.2,
+          "height": 450
+        },
+        "data": {
+          "label": "INTENT / CONTROL",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 46.087463556851304
+        },
+        "data": {
+          "label": "INTENT / CONTROL",
+          "width": 871.2
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 518.0874635568513
+        },
+        "style": {
+          "width": 911.2,
+          "height": 450
+        },
+        "data": {
+          "label": "EXECUTION / STATE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 534.0874635568513
+        },
+        "data": {
+          "label": "EXECUTION / STATE",
+          "width": 871.2
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "web",
+        "target": "api",
+        "label": "REST / SSE",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 542.8851311953354,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 459.28513119533534,
+            "y": 160.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "mcp",
+        "target": "api",
+        "label": "forward broker",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 393.6874635568513
+            },
+            {
+              "x": 431.71991380403097,
+              "y": 393.6874635568513
+            },
+            {
+              "x": 431.71991380403097,
+              "y": 206.28746355685132
+            },
+            {
+              "x": 542.8851311953354,
+              "y": 206.28746355685132
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 431.71991380403097,
+              "y": 299.9874635568513
+            },
+            "to": {
+              "x": 423.71991380403097,
+              "y": 299.9874635568513
+            }
+          },
+          "labelPos": {
+            "x": 352.11991380403094,
+            "y": 299.9874635568513
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "api",
+        "target": "orchestration",
+        "label": "delegate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 542.8851311953354,
+              "y": 186.4874635568513
+            },
+            {
+              "x": 456.2223292629682,
+              "y": 186.4874635568513
+            },
+            {
+              "x": 456.2223292629682,
+              "y": 684.4874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 684.4874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 432.06116984267834,
+            "y": 684.4874635568513
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "orchestration",
+        "target": "host",
+        "label": "execute",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 648.0874635568513
+            },
+            {
+              "x": 542.8851311953354,
+              "y": 648.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 492.72513119533534,
+              "y": 648.0874635568513
+            },
+            "to": {
+              "x": 492.72513119533534,
+              "y": 728.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 492.72513119533534,
+            "y": 743.2874635568513
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "orchestration",
+        "target": "postgres",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 700.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "host",
+        "target": "workspace",
+        "label": "worktree",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 712.8851311953354,
+              "y": 714.0874635568513
+            },
+            {
+              "x": 712.8851311953354,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 712.8851311953354,
+            "y": 777.0874635568513
+          }
+        }
+      }
+    ],
+    "canvasWidth": 916.5877551020409,
+    "canvasHeight": 993.6909620991254
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "stage": "pass-01",
+  "reviewer": "gpt-6-astra",
+  "sample_notification": {
+    "diagram": "agent-runtime-fig2",
+    "absolute_png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\agent-runtime-fig2\\agent-runtime-fig2-pass-01.png",
+    "sent_before_continuing_shard": true,
+    "qualification": "Fully styled and enlarged-inspected draft; not final-quality approval."
+  },
+  "print_evidence": [
+    "pass-01-print-sheet-1.png",
+    "pass-01-print-sheet-2.png",
+    "pass-01-print-sheet-3.png",
+    "pass-01-print-sheet-4.png",
+    "pass-01-print-sheet-5.png"
+  ],
+  "print_scale": "794-pixel maximum width per diagram, approximately A5 landscape width at 96 dpi; Desktop PNGs are content-cropped.",
+  "inspections": [
+    {
+      "diagram": "agent-runtime-fig2",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["URL permission is disconnected; native file permission is only a footer note.", "The three-row arrangement does not expose all five grounded capability branches."]
+    },
+    {
+      "diagram": "agent-runtime-fig3",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Workflow-to-leaf routing crosses the Prepare context and Reserve run cards.", "Validate/apply-to-commit routing crosses Prepared writeback and obscures relationship ownership."]
+    },
+    {
+      "diagram": "canonical-agent-communication-shared",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Three rows are readable but their channel boundaries are stated only in the footer.", "Generic square AW icons remain placeholders rather than a finished product-specific icon inventory."]
+    },
+    {
+      "diagram": "canonical-agent-communication-a2a",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["The serpentine return path is readable, but worker/AgentHost ownership needs explicit grouped boundaries.", "The bridge is represented by a Pod icon although it is a logical runtime component."]
+    },
+    {
+      "diagram": "canonical-sandbox-pod-evolution",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Before/Now rows lack explicit enclosing worker and pod boundaries.", "The command connector label consumes nearly the whole inter-card gutter."]
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig3",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Worker persistence crosses AgentHost, visually suggesting pod-to-database ownership.", "HPA and Deployment use Pod icons; the PostgreSQL icon reads as a circle rather than a database."]
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig4",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Database acknowledgement crosses RecordNext and EF append.", "Replica poll routes cross browser cards and share a rail, visually suggesting direct browser database access.", "Person icons conflate software watchers with human actors."]
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig5",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["The expires edge starts at A renews and ends at A stops renewing, reversing the causal order of stop then expiry.", "Lease ownership and renewal are not visibly connected; Pod icons do not identify worker processes precisely."]
+    },
+    {
+      "diagram": "infra-deployment-fig2",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Vault-to-CSI routing crosses authorization cards and their labels.", "ServiceAccounts, CSI and workloads all use the same Pod icon despite distinct resource types."]
+    },
+    {
+      "diagram": "infra-deployment-fig3",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Cross-row apply and CRDs connectors pass through preceding cards.", "Namespace, storage, Service and rollout objects need correct native resource classifications rather than generic Pod icons."]
+    },
+    {
+      "diagram": "infra-deployment-fig4",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["API/MCP branch rails overlap the HTTPS/select route and cross Gateway/client cards.", "Backend Services use Pod icons, conflating service selection with pod execution."]
+    },
+    {
+      "diagram": "live-preview-provisioning-fig1",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Observe, reject and probe connectors cross content cards instead of using phase gutters.", "Approved publication combines Service/HTTPRoute creation behind a Pod icon."]
+    },
+    {
+      "diagram": "sandbox-browser-preview-fig2",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Grant/reject return branches overprint the POST/request rail and cross tool/API cards.", "The software start path is represented by a network-router icon without a clear component boundary."]
+    },
+    {
+      "diagram": "sandbox-fig2",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Windows/Linux selection and unavailable branches share a rail and cross the Windows card.", "This routing suggests a Windows-to-Linux chain despite the footer correctly saying they are alternatives."]
+    },
+    {
+      "diagram": "sandbox-fig3",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Cleanup alternatives are detached from the execution flow.", "Production preview lookup is an isolated card outside the retained command-path takeaway; keep that distinction inline.", "The sandbox controller is not a Pod and needs an appropriate native classification."]
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig4",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Read-only/writable and equal/changed-tree branches are mostly disconnected.", "The missing branch connectors hide the materialization-to-publication lifecycle even though card text describes it."]
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig5",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["The progress return rail crosses dispatch and child-executor cards.", "Claim binding and setup are represented as Pods rather than separate state transitions."]
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig6",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Launch and ready rails cross launch/configuration cards.", "Configuration guards are disconnected from the route/state they constrain."]
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig7",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Unknown fallback routing crosses the API approval card.", "Request/result arrows between the HTTP client and pod gate overlap, preventing a clean two-way trace.", "The durable gate's database-style circle does not communicate a gate decision."]
+    },
+    {
+      "diagram": "canonical-pod-process-boundaries",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "findings": ["Flat cards do not depict two container/PID boundaries and the narrower child mount view.", "A mount-view card has a spawn arrow, incorrectly turning a boundary into the spawning process.", "Pod symbols are used for containers and an IPC volume; the Kata boundary is an isolated cloud card."]
+    }
+  ],
+  "all_arrows_traced": false,
+  "publication_status": "blocked",
+  "qualification": "Actual print-scale and enlarged inspection of all 20 first-upgrade PNGs; not a correction pass or final arrow trace."
+}

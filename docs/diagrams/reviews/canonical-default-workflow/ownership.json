@@ -1,0 +1,6 @@
+{
+  "name": "canonical-default-workflow",
+  "owner": "astra-workflow-assets",
+  "scope": "exclusive_asset_paths",
+  "inventory_write": false
+}

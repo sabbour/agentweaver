@@ -1,0 +1,10 @@
+{
+  "stage": "pitch",
+  "png_opened": true,
+  "print_opened": true,
+  "observations": "Both populated responsibility cards, native process/decision glyphs, colored pill badges and full Fluent hierarchy are visible and legible. No text clipping, card overlap or off-page content observed at print size or enlarged view. The central arrow is an overview relationship, not an exhaustive execution branch list; pass 1 expands the source-backed topology.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0,
+  "method": "Direct image-view calls on actual exported PNG and print-size PNG in this session"
+}

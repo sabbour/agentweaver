@@ -1,0 +1,37 @@
+{
+  "diagram": "sandbox-fig2",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "sandbox-fig2-pass-01.drawio",
+  "png": "sandbox-fig2-pass-01.png",
+  "evidence": "apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:89-109,162-172; packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:20-71; packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:28-34",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "router": "native:flowchart",
+    "cluster": "native:kubernetes",
+    "claim": "custom:agentweaver",
+    "factory": "native:flowchart",
+    "windows": "native:flowchart",
+    "linux": "native:flowchart",
+    "fallback": "native:flowchart",
+    "direct": "native:flowchart",
+    "shell": "native:flowchart"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "cd331dd47f06a6e0d91aeaa6e20875cda2799576e88edaae9c5a655ac5f2f35b",
+    "png": "d7c1339f2d79b441140c1bdb9cc3fbd7342466901b10c42581b660567ab84129"
+  },
+  "png_dimensions": [
+    1565,
+    1114
+  ],
+  "xml_edge_count": 9
+}

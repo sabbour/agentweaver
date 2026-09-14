@@ -1,0 +1,275 @@
+{
+  "diagram": "mcp-server-fig2",
+  "source_sha256": "db8dd190ec9fee1ed192d0da01f079fad8b8c3cae79e66322746011359cc77b1",
+  "png_sha256": "1d8cae74566e6cee48588ad84245baa0e4531bc69771909d90a15ce1f29e6403",
+  "prior_model": "docs\\diagrams\\reviews\\mcp-server-fig2\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "MCP: discover, consent, invoke"
+    },
+    {
+      "cell": "takeaway",
+      "text": "API-owned OAuth issues broker tokens; MCP validates and forwards the same bearer."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DISCOVERY + API AUTHORIZATION"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "TOKEN USE + INDEPENDENT API CHECK"
+    },
+    {
+      "cell": "client-title",
+      "text": "MCP client"
+    },
+    {
+      "cell": "client-subtitle",
+      "text": "/mcp challenge → resource metadata"
+    },
+    {
+      "cell": "client-detail",
+      "text": "Configured resource, issuer and scope"
+    },
+    {
+      "cell": "client-meta",
+      "text": "mcp-httproute.yaml:30-46"
+    },
+    {
+      "cell": "client-pill",
+      "text": "DISCOVER"
+    },
+    {
+      "cell": "token-title",
+      "text": "API /oauth/token"
+    },
+    {
+      "cell": "token-subtitle",
+      "text": "Authorization code + PKCE"
+    },
+    {
+      "cell": "token-detail",
+      "text": "OpenIddict issues access / refresh tokens"
+    },
+    {
+      "cell": "token-meta",
+      "text": "Program.cs:982-998"
+    },
+    {
+      "cell": "token-pill",
+      "text": "TOKEN"
+    },
+    {
+      "cell": "authorize-title",
+      "text": "API authorization server"
+    },
+    {
+      "cell": "authorize-subtitle",
+      "text": "Exact resource + mcp:invoke"
+    },
+    {
+      "cell": "authorize-detail",
+      "text": "OpenIddict owns OAuth endpoint state"
+    },
+    {
+      "cell": "authorize-meta",
+      "text": "OAuthAuthorizationServerEndpoints"
+    },
+    {
+      "cell": "authorize-pill",
+      "text": "VALIDATE"
+    },
+    {
+      "cell": "refresh-title",
+      "text": "Refresh grant checks"
+    },
+    {
+      "cell": "refresh-subtitle",
+      "text": "Exact resource + grant state"
+    },
+    {
+      "cell": "refresh-detail",
+      "text": "Family revocation can reject renewal"
+    },
+    {
+      "cell": "refresh-meta",
+      "text": "OAuthAuthorizationServerEndpoints"
+    },
+    {
+      "cell": "refresh-pill",
+      "text": "REFRESH"
+    },
+    {
+      "cell": "entra-title",
+      "text": "Microsoft Entra ID"
+    },
+    {
+      "cell": "entra-subtitle",
+      "text": "Sign in when needed"
+    },
+    {
+      "cell": "entra-detail",
+      "text": "API broker authenticates the human"
+    },
+    {
+      "cell": "entra-meta",
+      "text": "OAuthAuthorizationServerEndpoints"
+    },
+    {
+      "cell": "entra-pill",
+      "text": "IDENTITY"
+    },
+    {
+      "cell": "mcp-title",
+      "text": "MCP broker validation"
+    },
+    {
+      "cell": "mcp-subtitle",
+      "text": "Validate accepted broker JWT only"
+    },
+    {
+      "cell": "mcp-detail",
+      "text": "Tool call forwards that same bearer"
+    },
+    {
+      "cell": "mcp-meta",
+      "text": "McpBrokerAuthenticationHandler"
+    },
+    {
+      "cell": "mcp-pill",
+      "text": "INVOKE"
+    },
+    {
+      "cell": "consent-title",
+      "text": "Consent decision"
+    },
+    {
+      "cell": "consent-subtitle",
+      "text": "Approve → authorization code"
+    },
+    {
+      "cell": "consent-detail",
+      "text": "Deny → access_denied; grant may skip UI"
+    },
+    {
+      "cell": "consent-meta",
+      "text": "OAuthAuthorizationServerEndpoints"
+    },
+    {
+      "cell": "consent-pill",
+      "text": "CONSENT"
+    },
+    {
+      "cell": "api-title",
+      "text": "API resource authorization"
+    },
+    {
+      "cell": "api-subtitle",
+      "text": "Forwarded broker bearer"
+    },
+    {
+      "cell": "api-detail",
+      "text": "API independently checks access"
+    },
+    {
+      "cell": "api-meta",
+      "text": "AgentweaverApiClient.cs:353-391"
+    },
+    {
+      "cell": "api-pill",
+      "text": "AUTHORIZE"
+    },
+    {
+      "cell": "client-to-authorize",
+      "text": "discover issuer"
+    },
+    {
+      "cell": "authorize-to-entra",
+      "text": "if needed"
+    },
+    {
+      "cell": "entra-to-consent",
+      "text": "identity"
+    },
+    {
+      "cell": "consent-to-token",
+      "text": "code + PKCE"
+    },
+    {
+      "cell": "token-to-refresh",
+      "text": "renewal"
+    },
+    {
+      "cell": "token-to-mcp",
+      "text": "bearer"
+    },
+    {
+      "cell": "mcp-to-api",
+      "text": "same bearer"
+    },
+    {
+      "cell": "scope",
+      "text": "Gateway routes MCP + metadata to MCP; authorization/token/revocation/JWKS belong to the API."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/mcp-server.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "client",
+      "to": "authorize",
+      "label": "discover issuer",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "authorize",
+      "to": "entra",
+      "label": "if needed",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "entra",
+      "to": "consent",
+      "label": "identity",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "consent",
+      "to": "token",
+      "label": "code + PKCE",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "token",
+      "to": "refresh",
+      "label": "renewal",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "token",
+      "to": "mcp",
+      "label": "bearer",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "mcp",
+      "to": "api",
+      "label": "same bearer",
+      "result": "clean"
+    }
+  ]
+}

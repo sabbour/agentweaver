@@ -1,0 +1,422 @@
+{
+  "status": "done",
+  "diagram_records": 151,
+  "public_canonicals": 121,
+  "dispositions": {
+    "redesign": 72,
+    "retain": 49,
+    "reuse": 3,
+    "merge": 21,
+    "remove": 6
+  },
+  "original_audited_dispositions": {
+    "redesign": 70,
+    "retain": 49,
+    "reuse": 3,
+    "merge": 21,
+    "remove": 6
+  },
+  "added_proposals": [
+    "canonical-pod-process-boundaries",
+    "canonical-provider-admission"
+  ],
+  "integrity": {
+    "orphan_sources": [],
+    "orphan_images": [],
+    "orphan_hashes": [],
+    "broken_references": [],
+    "ambiguous_sources": []
+  },
+  "iteration_evidence_by_canonical": {
+    "00-system-overview-fig1": [
+      "docs/diagrams/reviews/00-system-overview-fig1/iteration-manifest.json"
+    ],
+    "00-system-overview-fig2": [
+      "docs/diagrams/reviews/00-system-overview-fig2/iteration-manifest.json"
+    ],
+    "00-system-overview-fig5": [
+      "docs/diagrams/reviews/00-system-overview-fig5/iteration-manifest.json"
+    ],
+    "agent-definition-fig1": [
+      "docs/diagrams/reviews/agent-definition-fig1/iteration-manifest.json"
+    ],
+    "agent-framework-fig1": [
+      "docs/diagrams/reviews/agent-framework-fig1/iteration-manifest.json"
+    ],
+    "agent-framework-fig2": [
+      "docs/diagrams/reviews/agent-framework-fig2/iteration-manifest.json"
+    ],
+    "agent-framework-fig3": [
+      "docs/diagrams/reviews/agent-framework-fig3/iteration-manifest.json"
+    ],
+    "agent-runtime-fig2": [
+      "docs/diagrams/reviews/agent-runtime-fig2/completion-20260913/iteration-manifest.json"
+    ],
+    "agent-runtime-fig3": [
+      "docs/diagrams/reviews/agent-runtime-fig3/completion-20260913/iteration-manifest.json"
+    ],
+    "api-core-fig4": [
+      "docs/diagrams/reviews/api-core-fig4/iteration-manifest.json"
+    ],
+    "api-core-fig6": [
+      "docs/diagrams/reviews/api-core-fig6/iteration-manifest.json"
+    ],
+    "assistant-runtime-fig1": [
+      "docs/diagrams/reviews/assistant-runtime-fig1/iteration-manifest.json",
+      "docs/diagrams/reviews/assistant-runtime-fig1/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "auth-security-fig1": [
+      "docs/diagrams/reviews/auth-security-fig1/iteration-manifest.json",
+      "docs/diagrams/reviews/auth-security-fig1/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "auth-security-fig4": [
+      "docs/diagrams/reviews/auth-security-fig4/iteration-manifest.json",
+      "docs/diagrams/reviews/auth-security-fig4/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-a2a-execution": [
+      "docs/diagrams/reviews/canonical-a2a-execution/iteration-manifest.json"
+    ],
+    "canonical-agent-communication-a2a": [
+      "docs/diagrams/reviews/canonical-agent-communication-a2a/completion-20260913/iteration-manifest.json"
+    ],
+    "canonical-agent-communication-handoff": [
+      "docs/diagrams/reviews/canonical-agent-communication-handoff/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-agent-communication-handoff/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-agent-communication-shared": [
+      "docs/diagrams/reviews/canonical-agent-communication-shared/completion-20260913/iteration-manifest.json"
+    ],
+    "canonical-aks-components": [
+      "docs/diagrams/reviews/canonical-aks-components/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-aks-components/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-aks-network": [
+      "docs/diagrams/reviews/canonical-aks-network/iteration-manifest.json"
+    ],
+    "canonical-api-host": [
+      "docs/diagrams/reviews/canonical-api-host/iteration-manifest.json"
+    ],
+    "canonical-board-lifecycle": [
+      "docs/diagrams/reviews/canonical-board-lifecycle/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-board-lifecycle/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-coordinator-architecture": [
+      "docs/diagrams/reviews/canonical-coordinator-architecture/original-pilot/iteration-manifest.json"
+    ],
+    "canonical-coordinator-journey": [
+      "docs/diagrams/reviews/canonical-coordinator-journey/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-coordinator-journey/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-default-workflow": [
+      "docs/diagrams/reviews/canonical-default-workflow/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-default-workflow/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "canonical-durable-event-stream": [
+      "docs/diagrams/reviews/canonical-durable-event-stream/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-durable-event-stream/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-durable-event-stream-sequence": [
+      "docs/diagrams/reviews/canonical-durable-event-stream-sequence/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-durable-event-stream-sequence/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-memory-context": [
+      "docs/diagrams/reviews/canonical-memory-context/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-memory-context/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-pod-process-boundaries": [
+      "docs/diagrams/reviews/canonical-pod-process-boundaries/completion-20260913/iteration-manifest.json"
+    ],
+    "canonical-provider-admission": [
+      "docs/diagrams/reviews/canonical-provider-admission/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-provider-admission/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-sandbox-boundary": [
+      "docs/diagrams/reviews/canonical-sandbox-boundary/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-sandbox-boundary/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-sandbox-experience": [
+      "docs/diagrams/reviews/canonical-sandbox-experience/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-sandbox-experience/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "canonical-sandbox-pod-evolution": [
+      "docs/diagrams/reviews/canonical-sandbox-pod-evolution/completion-20260913/iteration-manifest.json"
+    ],
+    "canonical-testing-boundary": [
+      "docs/diagrams/reviews/canonical-testing-boundary/iteration-manifest.json"
+    ],
+    "canonical-workflow-authoring": [
+      "docs/diagrams/reviews/canonical-workflow-authoring/iteration-manifest.json"
+    ],
+    "canonical-workflow-invocation": [
+      "docs/diagrams/reviews/canonical-workflow-invocation/v2/iteration-manifest.json"
+    ],
+    "canonical-workflow-selection": [
+      "docs/diagrams/reviews/canonical-workflow-selection/iteration-manifest.json",
+      "docs/diagrams/reviews/canonical-workflow-selection/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "coordinator-internals-fig2": [
+      "docs/diagrams/reviews/coordinator-internals-fig2/v2/iteration-manifest.json"
+    ],
+    "coordinator-internals-fig3": [
+      "docs/diagrams/reviews/coordinator-internals-fig3/v2/iteration-manifest.json"
+    ],
+    "coordinator-internals-fig4": [
+      "docs/diagrams/reviews/coordinator-internals-fig4/iteration-manifest.json",
+      "docs/diagrams/reviews/coordinator-internals-fig4/v2/iteration-manifest.json"
+    ],
+    "data-persistence-fig1": [
+      "docs/diagrams/reviews/data-persistence-fig1/iteration-manifest.json"
+    ],
+    "distributed-execution-scaling-fig3": [
+      "docs/diagrams/reviews/distributed-execution-scaling-fig3/completion-20260913/iteration-manifest.json"
+    ],
+    "distributed-execution-scaling-fig4": [
+      "docs/diagrams/reviews/distributed-execution-scaling-fig4/completion-20260913/iteration-manifest.json"
+    ],
+    "distributed-execution-scaling-fig5": [
+      "docs/diagrams/reviews/distributed-execution-scaling-fig5/completion-20260913/iteration-manifest.json"
+    ],
+    "email-architecture": [
+      "docs/diagrams/reviews/email-architecture/iteration-manifest.json",
+      "docs/diagrams/reviews/email-architecture/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "email-components": [
+      "docs/diagrams/reviews/email-components/iteration-manifest.json",
+      "docs/diagrams/reviews/email-components/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "email-coordinator-workflow": [
+      "docs/diagrams/reviews/email-coordinator-workflow/iteration-manifest.json",
+      "docs/diagrams/reviews/email-coordinator-workflow/fluent-pitch-remediation/iteration-manifest.json"
+    ],
+    "experience-00-overview-fig1": [
+      "docs/diagrams/reviews/experience-00-overview-fig1/iteration-manifest.json"
+    ],
+    "experience-a2a-distributed-agents-fig2": [
+      "docs/diagrams/reviews/experience-a2a-distributed-agents-fig2/iteration-manifest.json"
+    ],
+    "experience-mcp-client-fig1": [
+      "docs/diagrams/reviews/experience-mcp-client-fig1/iteration-manifest.json"
+    ],
+    "experience-onboarding-auth-fig1": [
+      "docs/diagrams/reviews/experience-onboarding-auth-fig1/iteration-manifest.json"
+    ],
+    "experience-onboarding-auth-fig2": [
+      "docs/diagrams/reviews/experience-onboarding-auth-fig2/iteration-manifest.json"
+    ],
+    "experience-operations-fig1": [
+      "docs/diagrams/reviews/experience-operations-fig1/iteration-manifest.json"
+    ],
+    "experience-review-workspace-merge-fig1": [
+      "docs/diagrams/reviews/experience-review-workspace-merge-fig1/iteration-manifest.json"
+    ],
+    "experience-review-workspace-merge-fig2": [
+      "docs/diagrams/reviews/experience-review-workspace-merge-fig2/iteration-manifest.json"
+    ],
+    "experience-sandbox-pod-execution-fig3": [
+      "docs/diagrams/reviews/experience-sandbox-pod-execution-fig3/iteration-manifest.json"
+    ],
+    "experience-scaling-operations-fig1": [
+      "docs/diagrams/reviews/experience-scaling-operations-fig1/iteration-manifest.json"
+    ],
+    "experience-scaling-operations-fig3": [
+      "docs/diagrams/reviews/experience-scaling-operations-fig3/iteration-manifest.json"
+    ],
+    "experience-team-casting-memory-fig1": [
+      "docs/diagrams/reviews/experience-team-casting-memory-fig1/iteration-manifest.json"
+    ],
+    "experience-workflows-backlog-fig3": [
+      "docs/diagrams/reviews/experience-workflows-backlog-fig3/iteration-manifest.json"
+    ],
+    "frontend-fig1": [
+      "docs/diagrams/reviews/frontend-fig1/iteration-manifest.json"
+    ],
+    "frontend-fig2": [
+      "docs/diagrams/reviews/frontend-fig2/iteration-manifest.json"
+    ],
+    "frontend-fig3": [
+      "docs/diagrams/reviews/frontend-fig3/iteration-manifest.json"
+    ],
+    "frontend-fig6": [
+      "docs/diagrams/reviews/frontend-fig6/iteration-manifest.json"
+    ],
+    "frontend-fig7": [
+      "docs/diagrams/reviews/frontend-fig7/iteration-manifest.json"
+    ],
+    "git-integration-fig1": [
+      "docs/diagrams/reviews/git-integration-fig1/v2/iteration-manifest.json"
+    ],
+    "git-integration-fig2": [
+      "docs/diagrams/reviews/git-integration-fig2/v2/iteration-manifest.json"
+    ],
+    "guide-architecture-aks-fig1": [
+      "docs/diagrams/reviews/guide-architecture-aks-fig1/iteration-manifest.json"
+    ],
+    "guide-architecture-aks-fig5": [
+      "docs/diagrams/reviews/guide-architecture-aks-fig5/iteration-manifest.json"
+    ],
+    "guide-example-scenarios-fig3": [
+      "docs/diagrams/reviews/guide-example-scenarios-fig3/iteration-manifest.json"
+    ],
+    "infra-deployment-fig2": [
+      "docs/diagrams/reviews/infra-deployment-fig2/completion-20260913/iteration-manifest.json"
+    ],
+    "infra-deployment-fig3": [
+      "docs/diagrams/reviews/infra-deployment-fig3/completion-20260913/iteration-manifest.json"
+    ],
+    "infra-deployment-fig4": [
+      "docs/diagrams/reviews/infra-deployment-fig4/completion-20260913/iteration-manifest.json"
+    ],
+    "live-preview-provisioning-fig1": [
+      "docs/diagrams/reviews/live-preview-provisioning-fig1/completion-20260913/iteration-manifest.json"
+    ],
+    "mcp-server-fig2": [
+      "docs/diagrams/reviews/mcp-server-fig2/iteration-manifest.json"
+    ],
+    "memory-decisions-fig1": [
+      "docs/diagrams/reviews/memory-decisions-fig1/v2/iteration-manifest.json"
+    ],
+    "memory-decisions-fig2": [
+      "docs/diagrams/reviews/memory-decisions-fig2/v2/iteration-manifest.json"
+    ],
+    "memory-decisions-fig4": [
+      "docs/diagrams/reviews/memory-decisions-fig4/v2/iteration-manifest.json"
+    ],
+    "orchestration-fig10": [
+      "docs/diagrams/reviews/orchestration-fig10/v2/iteration-manifest.json"
+    ],
+    "orchestration-fig2": [
+      "docs/diagrams/reviews/orchestration-fig2/v2/iteration-manifest.json"
+    ],
+    "orchestration-fig3": [
+      "docs/diagrams/reviews/orchestration-fig3/v2/iteration-manifest.json"
+    ],
+    "orchestration-fig8": [
+      "docs/diagrams/reviews/orchestration-fig8/v2/iteration-manifest.json"
+    ],
+    "orchestration-fig9": [
+      "docs/diagrams/reviews/orchestration-fig9/v2/iteration-manifest.json"
+    ],
+    "project-generation-model-settings-fig1": [
+      "docs/diagrams/reviews/project-generation-model-settings-fig1/iteration-manifest.json"
+    ],
+    "project-skills-fig1": [
+      "docs/diagrams/reviews/project-skills-fig1/iteration-manifest.json"
+    ],
+    "projects-fig1": [
+      "docs/diagrams/reviews/projects-fig1/iteration-manifest.json"
+    ],
+    "projects-fig2": [
+      "docs/diagrams/reviews/projects-fig2/iteration-manifest.json"
+    ],
+    "reference-a2a-fig1": [
+      "docs/diagrams/reviews/reference-a2a-fig1/iteration-manifest.json"
+    ],
+    "reference-scaling-data-layer-fig1": [
+      "docs/diagrams/reviews/reference-scaling-data-layer-fig1/iteration-manifest.json"
+    ],
+    "repo-blueprint-suggestions-fig1": [
+      "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/iteration-manifest.json"
+    ],
+    "resilient-assembly-review-fig1": [
+      "docs/diagrams/reviews/resilient-assembly-review-fig1/v2/iteration-manifest.json"
+    ],
+    "review-merge-fig1": [
+      "docs/diagrams/reviews/review-merge-fig1/v2/iteration-manifest.json"
+    ],
+    "review-merge-fig4": [
+      "docs/diagrams/reviews/review-merge-fig4/v2/iteration-manifest.json"
+    ],
+    "review-merge-fig5": [
+      "docs/diagrams/reviews/review-merge-fig5/v2/iteration-manifest.json"
+    ],
+    "sandbox-browser-preview-fig1": [
+      "docs/diagrams/reviews/sandbox-browser-preview-fig1/iteration-manifest.json",
+      "docs/diagrams/reviews/sandbox-browser-preview-fig1/native-pitch-remediation/iteration-manifest.json"
+    ],
+    "sandbox-browser-preview-fig2": [
+      "docs/diagrams/reviews/sandbox-browser-preview-fig2/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-fig2": [
+      "docs/diagrams/reviews/sandbox-fig2/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-fig3": [
+      "docs/diagrams/reviews/sandbox-fig3/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-pod-execution-fig4": [
+      "docs/diagrams/reviews/sandbox-pod-execution-fig4/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-pod-execution-fig5": [
+      "docs/diagrams/reviews/sandbox-pod-execution-fig5/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-pod-execution-fig6": [
+      "docs/diagrams/reviews/sandbox-pod-execution-fig6/completion-20260913/iteration-manifest.json"
+    ],
+    "sandbox-pod-execution-fig7": [
+      "docs/diagrams/reviews/sandbox-pod-execution-fig7/completion-20260913/iteration-manifest.json"
+    ],
+    "team-casting-fig1": [
+      "docs/diagrams/reviews/team-casting-fig1/v2/iteration-manifest.json"
+    ],
+    "team-casting-fig2": [
+      "docs/diagrams/reviews/team-casting-fig2/v2/iteration-manifest.json"
+    ],
+    "team-casting-fig3": [
+      "docs/diagrams/reviews/team-casting-fig3/v2/iteration-manifest.json"
+    ],
+    "testing-strategy-fig1": [
+      "docs/diagrams/reviews/testing-strategy-fig1/iteration-manifest.json"
+    ],
+    "testing-strategy-fig4": [
+      "docs/diagrams/reviews/testing-strategy-fig4/iteration-manifest.json"
+    ],
+    "unified-steering-fig1": [
+      "docs/diagrams/reviews/unified-steering-fig1/v2/iteration-manifest.json"
+    ],
+    "workflow-agent-evaluation": [
+      "docs/diagrams/reviews/workflow-agent-evaluation/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-agent-evaluation/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-bug-fix": [
+      "docs/diagrams/reviews/workflow-bug-fix/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-bug-fix/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-content-authoring": [
+      "docs/diagrams/reviews/workflow-content-authoring/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-content-authoring/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-engine-fig1": [
+      "docs/diagrams/reviews/workflow-engine-fig1/v2/iteration-manifest.json"
+    ],
+    "workflow-engine-fig11": [
+      "docs/diagrams/reviews/workflow-engine-fig11/v2/iteration-manifest.json"
+    ],
+    "workflow-engine-fig2": [
+      "docs/diagrams/reviews/workflow-engine-fig2/v2/iteration-manifest.json"
+    ],
+    "workflow-engine-fig4": [
+      "docs/diagrams/reviews/workflow-engine-fig4/v2/iteration-manifest.json"
+    ],
+    "workflow-engine-fig5": [
+      "docs/diagrams/reviews/workflow-engine-fig5/v2/iteration-manifest.json"
+    ],
+    "workflow-engine-fig9": [
+      "docs/diagrams/reviews/workflow-engine-fig9/v2/iteration-manifest.json"
+    ],
+    "workflow-incident-response": [
+      "docs/diagrams/reviews/workflow-incident-response/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-incident-response/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-infra-ops": [
+      "docs/diagrams/reviews/workflow-infra-ops/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-infra-ops/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-pm-discovery": [
+      "docs/diagrams/reviews/workflow-pm-discovery/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-pm-discovery/fullfluent-remediation/iteration-manifest.json"
+    ],
+    "workflow-software-delivery": [
+      "docs/diagrams/reviews/workflow-software-delivery/iteration-manifest.json",
+      "docs/diagrams/reviews/workflow-software-delivery/fullfluent-remediation/iteration-manifest.json"
+    ]
+  }
+}

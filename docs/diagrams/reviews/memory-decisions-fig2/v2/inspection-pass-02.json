@@ -1,0 +1,11 @@
+{
+  "diagram": "memory-decisions-fig2",
+  "phase": "pass-02",
+  "png_sha256": "a13f994ade7a80ade29fb5ceb0713a63fc832bb5c341d440d00b1c764242ab22",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven print sheets and fourteen original-pixel pairs. The Review API heading collision and resilient budget title wrap are corrected. Existing content and Fluent styling remain intact; residual close-lane issues are recorded per diagram.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

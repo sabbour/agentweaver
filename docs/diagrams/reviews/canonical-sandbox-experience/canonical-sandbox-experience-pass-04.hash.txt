@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-sandbox-experience-pass-04.drawio",
+    "sha256": "f4a12c5c76932777768ae15c9f9acc2f84837faa259b651a20d84e9f8079df46"
+  },
+  "drawio": {
+    "file": "canonical-sandbox-experience-pass-04.drawio",
+    "sha256": "e4e5009e040a852fa47effc604cfe8676137d91bad28183218bae3b5b5805e52"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-sandbox-experience-pass-04.png",
+    "sha256": "c63df1083a0d79a14970a968cf8bbcb1b74d1bc499502eecad374ef213941b68"
+  }
+}

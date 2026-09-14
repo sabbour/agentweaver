@@ -1,0 +1,14 @@
+{
+  "name": "canonical-workflow-selection",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-workflow-selection.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-workflow-selection.png",
+  "source_sha256": "880a163472aaa07d9a0aa2df87085cf8d2bf020bf97d84188524ad966adcbbd3",
+  "png_sha256": "550f8f7045542f71f4a707fdb5bc3c64a4cc330efe5ff3a184a0ea1716c2c163",
+  "dimensions": [
+    2210,
+    3393
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

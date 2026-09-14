@@ -1,0 +1,280 @@
+{
+  "diagram": "workflow-pm-discovery",
+  "source_sha256": "4b3ba534c7d5613e714b83f6e22f60dc1a341bd7090c10df856ed8e16e1fdac9",
+  "png_sha256": "2a5645c37718ab0a733fda293bc8463a457675dfda7e9ccffdddb79164e4c896",
+  "prior_model": "packages\\Agentweaver.Squad\\Catalog\\Resources\\workflows\\pm_discovery.yaml",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "eyebrow",
+      "text": "AGENTWEAVER / WORKFLOWS"
+    },
+    {
+      "cell": "title",
+      "text": "Product discovery workflow"
+    },
+    {
+      "cell": "subtitle",
+      "text": "Authored graph • all YAML branches retained"
+    },
+    {
+      "cell": "returns-heading",
+      "text": "SOURCE / RETURN"
+    },
+    {
+      "cell": "outcomes-heading",
+      "text": "OUTCOMES"
+    },
+    {
+      "cell": "footer",
+      "text": "Solid: advance / outcome Dashed marigold: revision / return"
+    },
+    {
+      "cell": "research-title",
+      "text": "Research"
+    },
+    {
+      "cell": "research-subtitle",
+      "text": "Agent task"
+    },
+    {
+      "cell": "research-metadata",
+      "text": "agent"
+    },
+    {
+      "cell": "research-badge",
+      "text": "TASK"
+    },
+    {
+      "cell": "research-ordinal",
+      "text": "01"
+    },
+    {
+      "cell": "research-source-location",
+      "text": "SOURCE 13"
+    },
+    {
+      "cell": "research-source-id",
+      "text": "research"
+    },
+    {
+      "cell": "research-source-type",
+      "text": "prompt"
+    },
+    {
+      "cell": "synthesis-title",
+      "text": "Synthesis"
+    },
+    {
+      "cell": "synthesis-subtitle",
+      "text": "Agent task"
+    },
+    {
+      "cell": "synthesis-metadata",
+      "text": "agent"
+    },
+    {
+      "cell": "synthesis-badge",
+      "text": "TASK"
+    },
+    {
+      "cell": "synthesis-ordinal",
+      "text": "02"
+    },
+    {
+      "cell": "synthesis-source-location",
+      "text": "SOURCE 19"
+    },
+    {
+      "cell": "synthesis-source-id",
+      "text": "synthesis"
+    },
+    {
+      "cell": "synthesis-source-type",
+      "text": "prompt"
+    },
+    {
+      "cell": "review-title",
+      "text": "Stakeholder Review"
+    },
+    {
+      "cell": "review-subtitle",
+      "text": "Agent task"
+    },
+    {
+      "cell": "review-metadata",
+      "text": "review"
+    },
+    {
+      "cell": "review-badge",
+      "text": "TASK"
+    },
+    {
+      "cell": "review-ordinal",
+      "text": "03"
+    },
+    {
+      "cell": "review-source-location",
+      "text": "SOURCE 25"
+    },
+    {
+      "cell": "review-source-id",
+      "text": "review"
+    },
+    {
+      "cell": "review-source-type",
+      "text": "prompt"
+    },
+    {
+      "cell": "review-gate-title",
+      "text": "Review Gate"
+    },
+    {
+      "cell": "review-gate-subtitle",
+      "text": "Verdict routing"
+    },
+    {
+      "cell": "review-gate-metadata",
+      "text": "human-review"
+    },
+    {
+      "cell": "review-gate-badge",
+      "text": "GATE"
+    },
+    {
+      "cell": "review-gate-ordinal",
+      "text": "04"
+    },
+    {
+      "cell": "review-gate-source-location",
+      "text": "SOURCE 32"
+    },
+    {
+      "cell": "review-gate-source-id",
+      "text": "review-gate"
+    },
+    {
+      "cell": "review-gate-source-type",
+      "text": "check"
+    },
+    {
+      "cell": "terminal-declined-title",
+      "text": "Declined"
+    },
+    {
+      "cell": "terminal-declined-subtitle",
+      "text": "Workflow endpoint"
+    },
+    {
+      "cell": "terminal-declined-ordinal",
+      "text": "END"
+    },
+    {
+      "cell": "done-title",
+      "text": "Done"
+    },
+    {
+      "cell": "done-subtitle",
+      "text": "Workflow endpoint"
+    },
+    {
+      "cell": "done-ordinal",
+      "text": "END"
+    },
+    {
+      "cell": "edge-04-label",
+      "text": "approved"
+    },
+    {
+      "cell": "edge-05-label",
+      "text": "request-changes"
+    },
+    {
+      "cell": "edge-06-label",
+      "text": "declined"
+    },
+    {
+      "cell": "discovery-output-title",
+      "text": "Discovery output"
+    },
+    {
+      "cell": "discovery-output-sub",
+      "text": "Research, requirements and feature definition produce documents and specs, not deployable code."
+    },
+    {
+      "cell": "discovery-output-meta",
+      "text": "pm_discovery.yaml · description"
+    },
+    {
+      "cell": "discovery-output-pill",
+      "text": "PRODUCT DISCOVERY"
+    },
+    {
+      "cell": "stakeholder-contract-title",
+      "text": "Prepare, then decide"
+    },
+    {
+      "cell": "stakeholder-contract-sub",
+      "text": "Stakeholder Review prepares synthesis for approval. Only Review Gate emits verdicts."
+    },
+    {
+      "cell": "stakeholder-contract-meta",
+      "text": "review prompt · human-review gate"
+    },
+    {
+      "cell": "stakeholder-contract-pill",
+      "text": "REVISION RETURNS TO SYNTHESIS"
+    }
+  ],
+  "context_pages": [
+    "docs/workflow-library.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "research",
+      "to": "synthesis",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "synthesis",
+      "to": "review",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "review",
+      "to": "review-gate",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "review-gate",
+      "to": "done",
+      "label": "approved",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "review-gate",
+      "to": "synthesis",
+      "label": "request-changes",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "review-gate",
+      "to": "terminal-declined",
+      "label": "declined",
+      "result": "clean"
+    }
+  ]
+}

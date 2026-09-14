@@ -1,0 +1,133 @@
+{
+  "diagram": "workflow-engine-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pitch.drawio",
+    "png": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pitch.png",
+    "change_record": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-01.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-01.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 1531,
+      "result_meaningful_xml": 22922,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 14.971914
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-02.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-02.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-03.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-03.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-04.drawio",
+      "png": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-04.png",
+      "change_record": "docs/diagrams/reviews/workflow-engine-fig1/v2/workflow-engine-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "Classify authored node types and gates",
+          "evidence": "apps/Agentweaver.Api/Workflows/NodeClassifier.cs:66-105",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "Bind classified definitions to runtime contracts",
+          "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-156",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n2",
+          "target": "n3",
+          "relationship": "Run the resulting executable graph",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1386-1439",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "Execution uses provider-aware checkpoint persistence",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1386-1439",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n0",
+          "target": "n5",
+          "relationship": "Default definition includes push-pr between merge and Scribe",
+          "evidence": "apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:42-161",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n3",
+          "target": "n6",
+          "relationship": "Runtime updates are consumed by watcher",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:313-335",
+          "result": "clean"
+        },
+        {
+          "id": "e6",
+          "source": "n6",
+          "target": "n7",
+          "relationship": "Watcher persists pending requests and status projection",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:363-377",
+          "result": "corrected"
+        },
+        {
+          "id": "e7",
+          "source": "n6",
+          "target": "n8",
+          "relationship": "Watcher exposes workflow-step events",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:313-409",
+          "result": "corrected"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

@@ -1,0 +1,225 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "How the controller provisions a run's pod",
+  "alt": "How the controller provisions a run's pod: KubernetesSandboxExecutor, SandboxClaim (CR), agent-sandbox controller, SandboxWarmPool, Kata sandbox pod, PodNameRegistry",
+  "participants": [
+    {
+      "id": "Exec",
+      "label": "KubernetesSandboxExecutor",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Claim",
+      "label": "SandboxClaim (CR)",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Ctrl",
+      "label": "agent-sandbox controller",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pool",
+      "label": "SandboxWarmPool",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Kata sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Reg",
+      "label": "PodNameRegistry",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Exec",
+      "to": "Claim",
+      "label": "CreateClaimAsync(warmPoolRef, lifecycle)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Claim",
+      "to": "Ctrl",
+      "label": "reconcile new claim",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Ctrl",
+      "to": "Pool",
+      "label": "adopt a warm pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pool",
+      "to": "Pod",
+      "label": "pod assigned to claim",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Ctrl",
+      "to": "Claim",
+      "label": "Ready condition = True,<br/>status.sandbox.name = pod",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "poll every 2s",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Claim",
+              "label": "WaitForBoundAsync (read status)",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "Claim",
+      "to": "Exec",
+      "label": "Ready True → pod name",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Exec",
+      "to": "Reg",
+      "label": "Register(runId, podName)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "opt",
+      "label": "AgentHost pod-per-run",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Exec",
+              "label": "Generate 256-bit turn bearer token",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Reg",
+              "label": "RegisterTurnToken(runId, token)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Pod",
+              "label": "GetPodIpAsync → status.podIP",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Pod",
+              "label": "POST /configure(runId, token, copilotCredential, workingDirectory)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Pod",
+              "to": "Pod",
+              "label": "TryConfigure once + SetupAsync in workingDirectory",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "fragment",
+              "operator": "loop",
+              "label": "poll /healthz until 200 (≤90s)",
+              "sections": [
+                {
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "Exec",
+                      "to": "Pod",
+                      "label": "GET http[s]://podIP:8088/healthz",
+                      "line": "solid",
+                      "arrow": "filled"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "from": "Exec",
+              "to": "Reg",
+              "label": "RegisterAgentEndpoint(http[s]://podIP:8088/a2a/agent)",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "over": [
+        "Exec",
+        "Ctrl"
+      ],
+      "label": "claim delete (ad-hoc) or TTL →<br/>controller GCs pod + service"
+    }
+  ]
+}

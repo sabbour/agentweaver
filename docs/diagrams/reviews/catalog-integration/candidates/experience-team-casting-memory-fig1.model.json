@@ -1,0 +1,458 @@
+{
+  "title": "Named teams, governed memory",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Cast proposal",
+      "subLabel": "Roles, names, charters",
+      "meta": "new / augment / recast",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "PROPOSE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Named team",
+      "subLabel": "Persist roster and work",
+      "meta": "charters + team history",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "CONFIRM",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Review knowledge",
+      "subLabel": "Memory and decision inbox",
+      "meta": "approve / reject / retain",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "GOVERN",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Future context",
+      "subLabel": "Untrusted structured data",
+      "meta": "children: narrower scope",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "COMPILE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Eligibility",
+      "subLabel": "Filter and budget",
+      "meta": "exclude legacy records",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "SELECT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Knowledge DB",
+      "subLabel": "Authoritative records",
+      "meta": "memory + decisions",
+      "icon": "database",
+      "shape": "cylinder3",
+      "badge": {
+        "text": "STORE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "confirm",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "record",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n5",
+      "label": "persist",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n4",
+      "label": "select",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n3",
+      "label": "compile",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "TEAM AND KNOWLEDGE GOVERNANCE"
+    },
+    {
+      "id": "1",
+      "label": "AUTHORITATIVE CONTEXT"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n0",
+          "label": "Cast proposal",
+          "subLabel": "Roles, names, charters",
+          "meta": "new / augment / recast",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "PROPOSE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 513.9253588516747,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n1",
+          "label": "Named team",
+          "subLabel": "Persist roster and work",
+          "meta": "charters + team history",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "CONFIRM",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 959.5253588516748,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n2",
+          "label": "Review knowledge",
+          "subLabel": "Memory and decision inbox",
+          "meta": "approve / reject / retain",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "GOVERN",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n3",
+          "label": "Future context",
+          "subLabel": "Untrusted structured data",
+          "meta": "children: narrower scope",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "COMPILE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 513.9253588516747,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n4",
+          "label": "Eligibility",
+          "subLabel": "Filter and budget",
+          "meta": "exclude legacy records",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "SELECT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 959.5253588516748,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n5",
+          "label": "Knowledge DB",
+          "subLabel": "Authoritative records",
+          "meta": "memory + decisions",
+          "icon": "database",
+          "shape": "cylinder3",
+          "badge": {
+            "text": "STORE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 206.61244019138758
+        },
+        "style": {
+          "width": 1295.2000000000003,
+          "height": 198
+        },
+        "data": {
+          "label": "TEAM AND KNOWLEDGE GOVERNANCE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 222.61244019138758
+        },
+        "data": {
+          "label": "TEAM AND KNOWLEDGE GOVERNANCE",
+          "width": 1255.2000000000003
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 588.4019138755981
+        },
+        "style": {
+          "width": 1295.2000000000003,
+          "height": 192
+        },
+        "data": {
+          "label": "AUTHORITATIVE CONTEXT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 604.4019138755981
+        },
+        "data": {
+          "label": "AUTHORITATIVE CONTEXT",
+          "width": 1255.2000000000003
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "confirm",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 408.32535885167465,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 513.9253588516747,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 461.12535885167466,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "record",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 853.9253588516747,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 959.5253588516748,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 906.7253588516747,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n5",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1129.5253588516748,
+              "y": 380.6124401913876
+            },
+            {
+              "x": 1129.5253588516748,
+              "y": 652.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1129.5253588516748,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n5",
+        "target": "n4",
+        "label": "select",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 959.5253588516748,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 853.9253588516747,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 906.7253588516747,
+            "y": 704.4019138755981
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n3",
+        "label": "compile",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 513.9253588516747,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 408.32535885167465,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 461.12535885167466,
+            "y": 704.4019138755981
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1367.8507177033496,
+    "canvasHeight": 948.4210526315791
+  }
+}

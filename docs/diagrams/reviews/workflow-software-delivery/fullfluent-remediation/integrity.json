@@ -1,0 +1,79 @@
+{
+  "diagram": "workflow-software-delivery",
+  "semantic_edges": 17,
+  "exact_source_tuples": true,
+  "manifest_schema": true,
+  "manifest_crossfields": true,
+  "artifacts": [
+    {
+      "stage": "pitch",
+      "png_dimensions": [
+        1115,
+        1585
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "753f0c8c100c63375518df13ecce68829159587679d79b50318c625f11115350",
+      "visible_structures": 8
+    },
+    {
+      "stage": "pass-01",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "679164a60a8e64a61e6b441f183d6be9a30bd48886686d20a3c92a1e2ba1686e",
+      "visible_structures": 169
+    },
+    {
+      "stage": "pass-02",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "ed1e2ecc316eba89c49998836992226b7b13dd7d9b359a84fb62a836edcbdb84",
+      "visible_structures": 169
+    },
+    {
+      "stage": "pass-03",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "ed1e2ecc316eba89c49998836992226b7b13dd7d9b359a84fb62a836edcbdb84",
+      "visible_structures": 169
+    },
+    {
+      "stage": "pass-04",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "ed1e2ecc316eba89c49998836992226b7b13dd7d9b359a84fb62a836edcbdb84",
+      "visible_structures": 169
+    }
+  ]
+}

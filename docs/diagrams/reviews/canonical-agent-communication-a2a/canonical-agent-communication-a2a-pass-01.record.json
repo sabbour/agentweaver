@@ -1,0 +1,34 @@
+{
+  "diagram": "canonical-agent-communication-a2a",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "canonical-agent-communication-a2a-pass-01.drawio",
+  "png": "canonical-agent-communication-a2a-pass-01.png",
+  "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:202-265; tests/Agentweaver.Tests/AgentHost/A2ATurnBridgeAgentTests.cs:341-366",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "graph": "custom:agentweaver",
+    "proxy": "custom:agentweaver",
+    "bridge": "native:kubernetes",
+    "writer": "custom:agentweaver",
+    "decode": "native:flowchart",
+    "runtime": "native:flowchart"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "a432734ae39b1284650e7fcb5ba396d793c06fa0d96cdd8702d349288fa653e5",
+    "png": "d4b3c68ab0c083a1255d909c6a3ca7e80c80a26a08fa180d4eade7a12c563114"
+  },
+  "png_dimensions": [
+    1565,
+    836
+  ],
+  "xml_edge_count": 5
+}

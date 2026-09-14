@@ -1,0 +1,26 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Agentweaver" agent="Agentweaver draw.io generator" version="31.4.5" type="device" compressed="false">
+  <diagram id="fluent-template" name="Components and project references">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="583" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="pitch-title" value="Components and project references" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=24;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="Agentweaver.Api" style="rounded=1;fillColor=#fdfbf8;fontFamily=Segoe UI;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="217" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="host" value="Agentweaver.AgentHost" style="rounded=1;fillColor=#fdfbf8;fontFamily=Segoe UI;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="305" y="200" width="217" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp" value="Agentweaver.Mcp" style="rounded=1;fillColor=#fdfbf8;fontFamily=Segoe UI;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="570" y="200" width="217" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="Arrows mean compile-time ProjectReference—not HTTP calls or deployment routing." style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=20;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="390" width="740" height="80" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

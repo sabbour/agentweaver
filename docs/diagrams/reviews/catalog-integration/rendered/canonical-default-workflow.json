@@ -1,0 +1,14 @@
+{
+  "name": "canonical-default-workflow",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-default-workflow.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-default-workflow.png",
+  "source_sha256": "d6d7d778727f271f65492ee3d3d4cae1e1b6e81c5b8bc142efe5986f9f45cdd8",
+  "png_sha256": "912c560da2ca98276685342e25e0135193a1ec6c1e057ded495476976849b1ee",
+  "dimensions": [
+    2190,
+    2514
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

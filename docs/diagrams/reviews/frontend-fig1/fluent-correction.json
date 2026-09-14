@@ -1,0 +1,275 @@
+{
+  "diagram": "frontend-fig1",
+  "source_sha256": "0147a7e8615a120444c7cafffc8b35425ccc35fa71145cfa0c011c93526197b1",
+  "png_sha256": "84ab0e9b4c804f84adbed00f333c61e39ba4e4e0fc48a05361086026e674a7e0",
+  "prior_model": "docs\\diagrams\\reviews\\frontend-fig1\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Frontend: intent and projection"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The browser presents backend facts; the API remains the authority."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "BROWSER · OPERATOR INTENT"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "BACKEND FACTS · UI PROJECTION"
+    },
+    {
+      "cell": "auth-title",
+      "text": "AuthGate"
+    },
+    {
+      "cell": "auth-subtitle",
+      "text": "Validated SPA session"
+    },
+    {
+      "cell": "auth-detail",
+      "text": "REST and SSE use the session bearer"
+    },
+    {
+      "cell": "auth-meta",
+      "text": "App.tsx"
+    },
+    {
+      "cell": "auth-pill",
+      "text": "SESSION"
+    },
+    {
+      "cell": "controls-title",
+      "text": "Rendered controls"
+    },
+    {
+      "cell": "controls-subtitle",
+      "text": "Status, timeline and graph"
+    },
+    {
+      "cell": "controls-detail",
+      "text": "Operator decisions become new API calls"
+    },
+    {
+      "cell": "controls-meta",
+      "text": "CoordinatorRunPage.tsx"
+    },
+    {
+      "cell": "controls-pill",
+      "text": "PRESENT"
+    },
+    {
+      "cell": "shell-title",
+      "text": "AppShell"
+    },
+    {
+      "cell": "shell-subtitle",
+      "text": "TopBar · LeftNav · project switcher"
+    },
+    {
+      "cell": "shell-detail",
+      "text": "ProjectList + Notifications providers"
+    },
+    {
+      "cell": "shell-meta",
+      "text": "AppShell.tsx:134-182"
+    },
+    {
+      "cell": "shell-pill",
+      "text": "CONTEXT"
+    },
+    {
+      "cell": "projection-title",
+      "text": "Client projection"
+    },
+    {
+      "cell": "projection-subtitle",
+      "text": "Reducers combine backend facts"
+    },
+    {
+      "cell": "projection-detail",
+      "text": "Topology is server-authored, not invented"
+    },
+    {
+      "cell": "projection-meta",
+      "text": "CoordinatorRunPage.tsx"
+    },
+    {
+      "cell": "projection-pill",
+      "text": "DERIVE"
+    },
+    {
+      "cell": "pages-title",
+      "text": "Route pages"
+    },
+    {
+      "cell": "pages-subtitle",
+      "text": "Board · run · workspace"
+    },
+    {
+      "cell": "pages-detail",
+      "text": "Route parameters select the current scope"
+    },
+    {
+      "cell": "pages-meta",
+      "text": "App.tsx:80-127"
+    },
+    {
+      "cell": "pages-pill",
+      "text": "ROUTES"
+    },
+    {
+      "cell": "live-title",
+      "text": "Seed + live events"
+    },
+    {
+      "cell": "live-subtitle",
+      "text": "Independent REST and SSE inputs"
+    },
+    {
+      "cell": "live-detail",
+      "text": "Positive sequence IDs deduplicate events"
+    },
+    {
+      "cell": "live-meta",
+      "text": "useSeededRunStream.ts"
+    },
+    {
+      "cell": "live-pill",
+      "text": "MERGE"
+    },
+    {
+      "cell": "client-title",
+      "text": "API client"
+    },
+    {
+      "cell": "client-subtitle",
+      "text": "Typed requests and error handling"
+    },
+    {
+      "cell": "client-detail",
+      "text": "API_URL origin + endpoint /api paths"
+    },
+    {
+      "cell": "client-meta",
+      "text": "config.ts:13-36"
+    },
+    {
+      "cell": "client-pill",
+      "text": "REQUEST"
+    },
+    {
+      "cell": "api-title",
+      "text": "Agentweaver API"
+    },
+    {
+      "cell": "api-subtitle",
+      "text": "Projects · runs · graph · events"
+    },
+    {
+      "cell": "api-detail",
+      "text": "Server owns persisted state and topology"
+    },
+    {
+      "cell": "api-meta",
+      "text": "CoordinatorRunPage.tsx"
+    },
+    {
+      "cell": "api-pill",
+      "text": "AUTHORITY"
+    },
+    {
+      "cell": "auth-to-shell",
+      "text": "enter"
+    },
+    {
+      "cell": "shell-to-pages",
+      "text": "contains"
+    },
+    {
+      "cell": "pages-to-client",
+      "text": "request"
+    },
+    {
+      "cell": "client-to-api",
+      "text": "HTTP"
+    },
+    {
+      "cell": "api-to-live",
+      "text": "history + SSE"
+    },
+    {
+      "cell": "live-to-projection",
+      "text": "events"
+    },
+    {
+      "cell": "projection-to-controls",
+      "text": "render"
+    },
+    {
+      "cell": "scope",
+      "text": "Read direction: intent down the left; backend facts rise on the right."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/frontend.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "auth",
+      "to": "shell",
+      "label": "enter",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "shell",
+      "to": "pages",
+      "label": "contains",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "pages",
+      "to": "client",
+      "label": "request",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "client",
+      "to": "api",
+      "label": "HTTP",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "api",
+      "to": "live",
+      "label": "history + SSE",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "live",
+      "to": "projection",
+      "label": "events",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "projection",
+      "to": "controls",
+      "label": "render",
+      "result": "clean"
+    }
+  ]
+}

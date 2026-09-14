@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pitch-edge0",
+    "source": "producer",
+    "target": "append",
+    "relationship": "append",
+    "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs",
+    "result": "clean"
+  },
+  {
+    "id": "pitch-edge1",
+    "source": "append",
+    "target": "store",
+    "relationship": "commit",
+    "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs",
+    "result": "clean"
+  }
+]

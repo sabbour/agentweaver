@@ -1,0 +1,250 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Compute dependency-satisfied pending frontier",
+    "evidence": "apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs:63-85",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Check retry eligibility and conflicting scopes",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:387-427",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Admitted subtask starts child execution",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:422-427",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Dispatcher observes launched child",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1827-1880",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        278,
+        293.16
+      ],
+      [
+        278,
+        254
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        397.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Apply classified terminal outcome",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:459-537",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "Recover a stalled child within bounds",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:463-474",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        318.0
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n6",
+    "target": "n1",
+    "relationship": "Fresh recovery re-enters frontier processing",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:463-474",
+    "result": "clean",
+    "route": [
+      [
+        24,
+        470.0
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        14,
+        86
+      ],
+      [
+        280,
+        86
+      ],
+      [
+        280,
+        141.16
+      ],
+      [
+        290,
+        141.16
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n5",
+    "target": "n1",
+    "relationship": "Recompute readiness after applying a result",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:536-537",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        264
+      ],
+      [
+        663.0,
+        254
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        397.0,
+        220
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n1",
+    "target": "n7",
+    "relationship": "No in-flight or eligible work becomes quiescent",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:430-455",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        190.84
+      ],
+      [
+        266,
+        190.84
+      ],
+      [
+        266,
+        406
+      ],
+      [
+        397.0,
+        406
+      ],
+      [
+        397.0,
+        416
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Handoff still checks assembly eligibility",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:736-761",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  }
+]

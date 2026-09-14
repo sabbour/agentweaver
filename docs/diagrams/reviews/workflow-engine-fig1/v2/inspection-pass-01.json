@@ -1,0 +1,11 @@
+{
+  "diagram": "workflow-engine-fig1",
+  "phase": "pass-01",
+  "png_sha256": "de450a0a011e3c46d8d0e53212294d10f2e4197e7d495cf17ed33c9f3374241d",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

@@ -1,0 +1,28 @@
+{
+  "diagram": "canonical-pod-process-boundaries",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-pod-process-boundaries-pitch.drawio",
+    "png": "canonical-pod-process-boundaries-pitch.png",
+    "change_record": "canonical-pod-process-boundaries-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-pod-process-boundaries-pass-01.drawio",
+      "png": "canonical-pod-process-boundaries-pass-01.png",
+      "change_record": "canonical-pod-process-boundaries-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "all_arrows_traced": false,
+      "baseline_meaningful_xml": 6736,
+      "result_meaningful_xml": 25852,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 3.837886
+    }
+  ],
+  "final_pass": null
+}

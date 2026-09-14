@@ -1,0 +1,109 @@
+{
+  "diagram": "canonical-a2a-execution",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-a2a-execution-pitch.drawio",
+    "png": "canonical-a2a-execution-pitch.png",
+    "change_record": "canonical-a2a-execution-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "canonical-a2a-execution-pass-01.drawio",
+      "png": "canonical-a2a-execution-pass-01.png",
+      "change_record": "canonical-a2a-execution-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1032,
+      "result_meaningful_xml": 17990,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 17.43217054263566
+    },
+    {
+      "drawio": "canonical-a2a-execution-pass-02.drawio",
+      "png": "canonical-a2a-execution-pass-02.png",
+      "change_record": "canonical-a2a-execution-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "canonical-a2a-execution-pass-03.drawio",
+      "png": "canonical-a2a-execution-pass-03.png",
+      "change_record": "canonical-a2a-execution-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "canonical-a2a-execution-pass-04.drawio",
+      "png": "canonical-a2a-execution-pass-04.png",
+      "change_record": "canonical-a2a-execution-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "invoke leaf",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:36-63",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "A2A call",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:38-53",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n3",
+          "target": "n2",
+          "relationship": "RunEvents",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:58-63",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n4",
+          "relationship": "record",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:68-87",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "API / SSE",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:144-167",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

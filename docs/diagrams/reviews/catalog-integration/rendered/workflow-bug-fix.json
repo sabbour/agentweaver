@@ -1,0 +1,14 @@
+{
+  "name": "workflow-bug-fix",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-bug-fix.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-bug-fix.png",
+  "source_sha256": "bc427776d692dc2ae51a79ae01d42b5ee970e10c73ec4d988d09a383ecbe41f3",
+  "png_sha256": "8709c152099df6817bea7bc47f689f95d0e4e5ac07a877740754b52015e7ef84",
+  "dimensions": [
+    2204,
+    3378
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

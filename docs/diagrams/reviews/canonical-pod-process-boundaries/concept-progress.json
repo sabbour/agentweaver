@@ -1,0 +1,488 @@
+[
+  {
+    "id": "deep-dive-execution-a2a-leaf-transport",
+    "document": "docs/deep-dive/a2a-bridge.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "canonical-agent-communication-a2a",
+    "target": "canonical-agent-communication-a2a",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-a2a-warm-configure",
+    "document": "docs/deep-dive/a2a-bridge.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "sandbox-pod-execution-fig6",
+    "target": "sandbox-pod-execution-fig6",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-shared-communication",
+    "document": "docs/deep-dive/agent-communication.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-agent-communication-shared",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-blackboard-authority",
+    "document": "docs/deep-dive/agent-communication.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-coordinator-handoff",
+    "document": "docs/deep-dive/agent-communication.md",
+    "disposition": "reuse",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-agent-communication-handoff",
+    "target": "canonical-agent-communication-handoff",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-a2a-sequence",
+    "document": "docs/deep-dive/agent-communication.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-agent-communication-a2a",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-communication-rollup",
+    "document": "docs/deep-dive/agent-communication.md",
+    "disposition": "merge",
+    "representation": "diagram",
+    "canonical_diagram": "agent-communication-fig5",
+    "target": "canonical-agent-communication-shared",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-run-lifecycle",
+    "document": "docs/deep-dive/agent-runtime.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "agent-runtime-fig3",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-tool-governance",
+    "document": "docs/deep-dive/agent-runtime.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "agent-runtime-fig2",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-runtime-tools-context",
+    "document": "docs/deep-dive/agent-runtime.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-runtime-events",
+    "document": "docs/deep-dive/agent-runtime.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "distributed-execution-scaling-fig4",
+    "target": "distributed-execution-scaling-fig4",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-runtime-reviewers",
+    "document": "docs/deep-dive/agent-runtime.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-purpose-bound-credentials",
+    "document": "docs/deep-dive/agent-token-delivery.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-credential-configure-reference",
+    "document": "docs/deep-dive/agent-token-delivery.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "sandbox-pod-execution-fig6",
+    "target": "sandbox-pod-execution-fig6",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-migration-phases",
+    "document": "docs/deep-dive/distributed-execution-scaling.md",
+    "disposition": "merge",
+    "representation": "diagram",
+    "canonical_diagram": "distributed-execution-scaling-fig1",
+    "target": "canonical-sandbox-pod-evolution",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-web-worker-topology",
+    "document": "docs/deep-dive/distributed-execution-scaling.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "distributed-execution-scaling-fig3",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-run-leases",
+    "document": "docs/deep-dive/distributed-execution-scaling.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "distributed-execution-scaling-fig5",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-cross-replica-events",
+    "document": "docs/deep-dive/distributed-execution-scaling.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "distributed-execution-scaling-fig4",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-event-stream-reference",
+    "document": "docs/deep-dive/events-observability.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "distributed-execution-scaling-fig4",
+    "target": "distributed-execution-scaling-fig4",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-observability-surfaces",
+    "document": "docs/deep-dive/events-observability.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-aks-infrastructure-map",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "merge",
+    "representation": "diagram",
+    "canonical_diagram": "infra-deployment-fig1",
+    "target": "canonical-aks-components",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-public-route-selection",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "infra-deployment-fig4",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-workload-secret-path",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "infra-deployment-fig2",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-build-deploy-convergence",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "infra-deployment-fig3",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-production-storage",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-production-network-policy",
+    "document": "docs/deep-dive/infra-deployment.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-deterministic-preview",
+    "document": "docs/deep-dive/live-preview-provisioning.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "live-preview-provisioning-fig1",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-preview-lifetime",
+    "document": "docs/deep-dive/live-preview-provisioning.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-preview-control-credentials",
+    "document": "docs/deep-dive/live-preview-provisioning.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-preview-gateway-path",
+    "document": "docs/deep-dive/sandbox-browser-preview.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-browser-preview-fig1",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-preview-agent-approval",
+    "document": "docs/deep-dive/sandbox-browser-preview.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-browser-preview-fig2",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-preview-replica-lifecycle",
+    "document": "docs/deep-dive/sandbox-browser-preview.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-evolution",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-sandbox-pod-evolution",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-backend-ladder",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "merge",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-pod-execution-fig3",
+    "target": "sandbox-fig2",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-process-boundaries",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "redesign",
+    "representation": "proposed-diagram",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-claim-configure",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-pod-execution-fig6",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-local-workspace-publication",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-pod-execution-fig4",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-hybrid-pod-state",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "redesign",
+    "representation": "mermaid",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-approval-return",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-pod-execution-fig7",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-admission-heartbeat",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-pod-execution-fig5",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-capability-contract",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-kata-pool-topology",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-pod-credential-and-preview-references",
+    "document": "docs/deep-dive/sandbox-pod-execution.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": null,
+    "target": "deep-dive-execution-purpose-bound-credentials",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-sandbox-layered-boundary",
+    "document": "docs/deep-dive/sandbox.md",
+    "disposition": "reuse",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-sandbox-boundary",
+    "target": "canonical-sandbox-boundary",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-host-backend-router",
+    "document": "docs/deep-dive/sandbox.md",
+    "disposition": "retain",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-fig2",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-command-claim-lifecycle",
+    "document": "docs/deep-dive/sandbox.md",
+    "disposition": "redesign",
+    "representation": "diagram",
+    "canonical_diagram": "sandbox-fig3",
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-filesystem-controls",
+    "document": "docs/deep-dive/sandbox.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-sandbox-configure-hardening",
+    "document": "docs/deep-dive/sandbox.md",
+    "disposition": "reuse",
+    "representation": "reference",
+    "canonical_diagram": "sandbox-pod-execution-fig6",
+    "target": "sandbox-pod-execution-fig6",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-local-sandbox-overview",
+    "document": "docs/deep-dive/sandboxed-execution.md",
+    "disposition": "reuse",
+    "representation": "diagram",
+    "canonical_diagram": "canonical-sandbox-boundary",
+    "target": "canonical-sandbox-boundary",
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-local-backend-tool-policy",
+    "document": "docs/deep-dive/sandboxed-execution.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-local-approvals-and-credentials",
+    "document": "docs/deep-dive/sandboxed-execution.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-local-platform-runbooks",
+    "document": "docs/deep-dive/sandboxed-execution.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-token-telemetry-flow",
+    "document": "docs/deep-dive/token-usage-monitoring.md",
+    "disposition": "retain",
+    "representation": "prose",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  },
+  {
+    "id": "deep-dive-execution-token-query-units",
+    "document": "docs/deep-dive/token-usage-monitoring.md",
+    "disposition": "retain",
+    "representation": "table",
+    "canonical_diagram": null,
+    "target": null,
+    "execution_status": "partial-docs-only; visual completion not certified"
+  }
+]

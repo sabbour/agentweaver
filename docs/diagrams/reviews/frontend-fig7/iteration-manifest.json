@@ -1,0 +1,133 @@
+{
+  "diagram": "frontend-fig7",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "frontend-fig7-pitch.drawio",
+    "png": "frontend-fig7-pitch.png",
+    "change_record": "frontend-fig7-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "frontend-fig7-pass-01.drawio",
+      "png": "frontend-fig7-pass-01.png",
+      "change_record": "frontend-fig7-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2165,
+      "result_meaningful_xml": 24182,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 11.169515
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "frontend-fig7-pass-02.drawio",
+      "png": "frontend-fig7-pass-02.png",
+      "change_record": "frontend-fig7-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "frontend-fig7-pass-03.drawio",
+      "png": "frontend-fig7-pass-03.png",
+      "change_record": "frontend-fig7-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "frontend-fig7-pass-04.drawio",
+      "png": "frontend-fig7-pass-04.png",
+      "change_record": "frontend-fig7-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "run-to-rest",
+          "source": "run",
+          "target": "rest",
+          "relationship": "seed",
+          "evidence": "apps/web/src/hooks/useSeededRunStream.ts:85-134",
+          "result": "clean"
+        },
+        {
+          "id": "run-to-sse",
+          "source": "run",
+          "target": "sse",
+          "relationship": "live",
+          "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-51",
+          "result": "clean"
+        },
+        {
+          "id": "rest-to-merge",
+          "source": "rest",
+          "target": "merge",
+          "relationship": "seed events",
+          "evidence": "apps/web/src/hooks/useSeededRunStream.ts:139-142",
+          "result": "clean"
+        },
+        {
+          "id": "sse-to-buffer",
+          "source": "sse",
+          "target": "buffer",
+          "relationship": "frames",
+          "evidence": "apps/web/src/api/sse.ts:239-337",
+          "result": "clean"
+        },
+        {
+          "id": "buffer-to-merge",
+          "source": "buffer",
+          "target": "merge",
+          "relationship": "events",
+          "evidence": "apps/web/src/hooks/useSeededRunStream.ts:139-142",
+          "result": "clean"
+        },
+        {
+          "id": "merge-to-project",
+          "source": "merge",
+          "target": "project",
+          "relationship": "merged",
+          "evidence": "apps/web/src/timeline/mergeRunEvents.ts:23-79",
+          "result": "clean"
+        },
+        {
+          "id": "sse-to-reconnect",
+          "source": "sse",
+          "target": "reconnect",
+          "relationship": "disconnect",
+          "evidence": "apps/web/src/api/sse.ts:239-337",
+          "result": "clean"
+        },
+        {
+          "id": "buffer-to-stop",
+          "source": "buffer",
+          "target": "stop",
+          "relationship": "done",
+          "evidence": "apps/web/src/api/sse.ts:239-337",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

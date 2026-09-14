@@ -1,0 +1,12 @@
+{
+  "diagram": "coordinator-internals-fig4",
+  "phase": "pass-04",
+  "png_sha256": "2e58a69bb04ff6b4a685a8abadc65b59f156cdd4f5badc1a56c31949bda55304",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Individually opened every final diagram PNG and all seven final A5-approximation sheets. Traced each evidenced edge against the final PNG and XML: actor/state endpoints, direction, arrowhead, label association, orthogonal path, native crossing bridges and semantic return rails. No remaining defects; no pass-4 edits were necessary. Independently re-exported all final images with verified official Desktop 31.4.5.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0,
+  "all_arrows_traced": true
+}

@@ -1,0 +1,264 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Parse start and typed node declarations",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:58-103",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n0",
+    "target": "n2",
+    "relationship": "Parse edge and metadata declarations",
+    "evidence": "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:66-103",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        141.16
+      ],
+      [
+        248,
+        141.16
+      ],
+      [
+        248,
+        86
+      ],
+      [
+        546,
+        86
+      ],
+      [
+        546,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n1",
+    "target": "n3",
+    "relationship": "Validate node/start structure before graph execution",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-156",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        220
+      ],
+      [
+        397.0,
+        230
+      ],
+      [
+        14,
+        230
+      ],
+      [
+        14,
+        318.0
+      ],
+      [
+        24,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Validate declarative edge references",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-156",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        141.16
+      ],
+      [
+        516,
+        141.16
+      ],
+      [
+        516,
+        384
+      ],
+      [
+        248,
+        384
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Classify runtime node/gate semantics",
+    "evidence": "apps/Agentweaver.Api/Workflows/NodeClassifier.cs:66-100",
+    "result": "clean",
+    "route": [
+      [
+        131.0,
+        372
+      ],
+      [
+        131.0,
+        392
+      ],
+      [
+        280,
+        392
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        290,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Choose concrete executor contracts",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-139",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n5",
+    "target": "n6",
+    "relationship": "Validate runtime start and transition compatibility",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:156-205",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        372
+      ],
+      [
+        663.0,
+        382
+      ],
+      [
+        532,
+        382
+      ],
+      [
+        532,
+        534
+      ],
+      [
+        248,
+        534
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Compatible bound graph is executable",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:95-151",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        248,
+        445.16
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        290,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n6",
+    "target": "n8",
+    "relationship": "Unsupported runtime contracts fail explicitly",
+    "evidence": "apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs:122-205",
+    "result": "clean",
+    "route": [
+      [
+        24,
+        470.0
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        14,
+        78
+      ],
+      [
+        780,
+        78
+      ],
+      [
+        780,
+        470.0
+      ],
+      [
+        770,
+        470.0
+      ]
+    ]
+  }
+]

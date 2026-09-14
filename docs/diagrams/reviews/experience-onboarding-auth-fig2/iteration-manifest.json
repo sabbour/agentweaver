@@ -1,0 +1,109 @@
+{
+  "diagram": "experience-onboarding-auth-fig2",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "experience-onboarding-auth-fig2-pitch.drawio",
+    "png": "experience-onboarding-auth-fig2-pitch.png",
+    "change_record": "experience-onboarding-auth-fig2-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "experience-onboarding-auth-fig2-pass-01.drawio",
+      "png": "experience-onboarding-auth-fig2-pass-01.png",
+      "change_record": "experience-onboarding-auth-fig2-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1041,
+      "result_meaningful_xml": 17903,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 17.19788664745437
+    },
+    {
+      "drawio": "experience-onboarding-auth-fig2-pass-02.drawio",
+      "png": "experience-onboarding-auth-fig2-pass-02.png",
+      "change_record": "experience-onboarding-auth-fig2-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-onboarding-auth-fig2-pass-03.drawio",
+      "png": "experience-onboarding-auth-fig2-pass-03.png",
+      "change_record": "experience-onboarding-auth-fig2-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-onboarding-auth-fig2-pass-04.drawio",
+      "png": "experience-onboarding-auth-fig2-pass-04.png",
+      "change_record": "experience-onboarding-auth-fig2-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "open",
+          "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:87-138",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "allow",
+          "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:148-188",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n2",
+          "target": "n5",
+          "relationship": "code grant",
+          "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:31-76",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n5",
+          "target": "n4",
+          "relationship": "tool bearer",
+          "evidence": "apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:40-87",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n4",
+          "target": "n3",
+          "relationship": "forward",
+          "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359-382",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

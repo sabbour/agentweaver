@@ -7,10 +7,22 @@ Before US1 the binder switched on five hardcoded node ids (`agent`, `rai`, `revi
 and literal edge keys (`"agent->rai:"`). Any other node id hit a `default → throw`, and the loader
 rejected `fan_out` / `fan_in` / `serial` / `peer_review` outright. The generalized binder instead resolves
 each node's executor from its **type** and wires edges from `(from, to, when)` triples — so an authored
-workflow whose node ids differ runs unchanged, while the existing default workflow still produces a
-**byte-for-byte identical** graph.
+workflow whose node ids differ can bind without relying on fixed stage names.
+The original five-stage parity guarantee was historical; the current default is six-stage.
 
 ## Pieces
+
+**Current scope.** Historical parity examples below describe the original five-stage
+binder migration. The current built-in default adds the publish/reuse-PR action between
+Merge and Scribe. Catalog graphs are a separate layer: their YAML does not author
+Merge, PR or Scribe nodes. Collective assembly owns integration, gates, merge and
+recording; the inspected collective path does not establish automatic PR publication.
+
+![Current built-in default with RAI, human review, merge, publish/reuse PR, Scribe and explicit revision and terminal branches](diagrams/canonical-default-workflow.png)
+
+<!-- Editable source: diagrams/src/canonical-default-workflow.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-default-workflow.
+     Review evidence: diagrams/reviews/canonical-default-workflow/. -->
 
 | File | Responsibility |
 | --- | --- |
@@ -26,14 +38,16 @@ canonical `gate_kind`):
 
 | Node `type` | Gate kind | `NodeKind` | Primary executor (`RunWorkflowBindings`) |
 | --- | --- | --- | --- |
-| `prompt` | — | `Agent` | `AgentBinding` |
+| `prompt` / `publish` | — | `Agent` | per-node `Wiring.ResolveAgentNode` |
 | `check` | `rai` | `Rai` | per-node policy gate, else `RaiBinding` |
 | `check` | `human-review` | `HumanReview` | per-node policy gate, else `ReviewBinding` |
 | `check` | `rubberduck` | `Rubberduck` | per-node policy gate |
 | `merge` | — | `Merge` | `MergeBinding` |
 | `scribe` | — | `Scribe` | `ScribeBindingMerge` |
 | `terminal` | — | `Terminal` | resolved from incoming edges (see §3) |
-| `peer_review` | — | `PeerReview` (verdict-routed) **or** `Agent` (plain turn) | per-node peer-review executor, else `AgentBinding` — **wired** (see §2a) |
+| `peer_review` | — | `PeerReview` (verdict-routed) **or** `Agent` (plain turn) | per-node peer-review or producing executor — **wired** (see §2a) |
+| `build_test` | — | `PeerReview` | platform-owned build/test/preview instruction through the per-node review executor |
+| `open_pull_request` | — | `OpenPullRequest` | `Wiring.ResolveOpenPullRequestNode`; deterministic, not an agent turn |
 | `fan_out` / `fan_in` / `serial` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
 
 `NodeExecutorRegistry.ResolveExecutor(node, bindings)` returns the executor a node is *entered* at. It draws
@@ -51,7 +65,8 @@ For each `WorkflowEdge`, the binder classifies both endpoints and dispatches on 
 plus hidden plumbing (adapters, storers, terminals) that the
 [`GraphDescriptorBuilder`](../apps/Agentweaver.Api/Runs/Graph/GraphDescriptorBuilder.cs) later collapses.
 
-The default workflow's transitions and their expansions:
+Historical five-stage transitions and their expansions (not an exhaustive current
+default wiring table):
 
 | `(fromKind, toKind, when)` | Raw expansion |
 | --- | --- |
@@ -81,10 +96,12 @@ workflow always takes the canonical path above.
 
 ## 2a. Peer-review nodes and generic catalog topologies (Feature 015 US3)
 
-The §2 table is the *default* five-stage workflow. The library/catalog workflows
-(`software-delivery`, `bug-fix`, `code-review`, `content-authoring`, `pm-discovery`,
-`incident-response`) bind through an **additional** set of generic transitions wired by
-`RunWorkflowGraphBinder.TryWireCanonicalEdge`. These are **fully wired and runnable today.**
+The §2 table records the historical default five-stage workflow. The current catalog
+contains `software-delivery`, `bug-fix`, `content-authoring`, `pm-discovery`,
+`agent-evaluation`, `incident-response` and `infra-ops`, not standalone `code-review`.
+These definitions use generic transitions in `RunWorkflowGraphBinder`; evaluation's
+setup/run/collect nodes are prompts, not the unsupported fan-out/fan-in forms.
+See the [current workflow library](workflow-library.md).
 
 **`peer_review` effective kind.** `EffectiveKind` decides how a `peer_review` node wires:
 
@@ -114,7 +131,11 @@ The §2 table is the *default* five-stage workflow. The library/catalog workflow
 | `(Merge, PeerReview, blocked)` | Merge blocked → re-enter peer-review gate |
 | `(Merge, Agent, blocked)` | Merge blocked → re-enter producer turn |
 
-Any `(fromKind, toKind, when)` outside both tables fails closed with a `WorkflowBindException`.
+These tables are illustrative, not an exhaustive allowlist: the binder also handles
+`build_test` review routing and `Merge → OpenPullRequest → Scribe` publication wiring.
+Only a transition unsupported by the current `RunWorkflowGraphBinder` fails closed with
+a `WorkflowBindException`. `NodeClassifier.NormalizeGateKind` also retains a legacy
+check-node-id fallback when `gate_kind` is absent; ordinary executor selection is by type.
 
 ## 3. How to author a new node type (extension point)
 
@@ -133,7 +154,7 @@ mis-wires, or partially executes a graph. This is also the governance guard: an 
 never weaken the sandbox boundary, the human-approval gate, or RAI content-safety, because those guarantees
 live in the executors the binder wires, not in the definition.
 
-## 4. Parity guarantee — what it means and how it's verified
+## 4. Historical parity guarantee — what it means and how it was verified
 
 **Parity** means the default workflow, built through the generalized binder, emits the **identical** raw
 `GraphDescriptorBuilder` edges, predicates, idempotent flags, and outputs as the pre-change hand-wired
@@ -142,10 +163,10 @@ unchanged. This is mandatory because the binder is on the **live run pipeline** 
 
 Verified by [`RunWorkflowGraphBinderTests`](../tests/Agentweaver.Tests/Workflows/RunWorkflowGraphBinderTests.cs):
 
-- **`DefaultWorkflow_RealPath_ProducesCanonicalFiveStageGraph`** — builds the descriptor through the **real**
-  `RunWorkflowFactory` (real executors) and asserts the canonical five-stage graph (nodes
-  `agent, rai, review, merge, scribe`; start `agent`; the eight edges with the three expected loopbacks).
-- **`DefaultDefinition_Binder_ProducesCanonicalFiveStageGraph`** — pins the same graph at the binder/unit
+- **`DefaultWorkflow_RealPath_ProducesCanonicalSixStageGraph`** — builds the descriptor through the **real**
+  `RunWorkflowFactory` and asserts the current six-stage graph (nodes
+  `agent, rai, review, merge, push-pr, scribe`; start `agent`).
+- **`DefaultDefinition_Binder_ProducesCanonicalSixStageGraph`** — pins the same graph at the binder/unit
   level over the built-in default definition.
 - **`RenamedNodeIds_ResolveByType_ProduceIdenticalGraph`** — a definition whose node ids are all renamed
   (types unchanged) collapses to the **same** graph, proving resolution is by type, not id.
@@ -171,3 +192,46 @@ per-run graph. Until that lands, a workflow that actually *wires* one of these n
 time** (`RejectUnwiredKind`) with a clear `WorkflowBindException`, rather than being rejected at load time.
 This is the deliberate
 "load-accepted, runtime-pending" boundary for US1.
+
+<!-- diagram-context:canonical-default-workflow:start -->
+<details id="diagram-context-canonical-default-workflow">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Generic default workflow</td></tr>
+<tr><td>subtitle</td><td>Built-in template • merge → PR publication → Scribe</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>PR action can skip / fail and still reach Scribe. No-changes also reaches Scribe.</td></tr>
+<tr><td>Agent work</td><td>Agent</td></tr>
+<tr><td>Agent work</td><td>Agent task</td></tr>
+<tr><td>Agent work</td><td>agent</td></tr>
+<tr><td>RAI gate</td><td>Rai</td></tr>
+<tr><td>RAI gate</td><td>Verdict routing</td></tr>
+<tr><td>RAI gate</td><td>rai</td></tr>
+<tr><td>Human review</td><td>Review</td></tr>
+<tr><td>Human review</td><td>human-review</td></tr>
+<tr><td>Merge</td><td>Merge</td></tr>
+<tr><td>Merge</td><td>Merge outcome routing</td></tr>
+<tr><td>Merge</td><td>merge</td></tr>
+<tr><td>Publish / reuse PR</td><td>Publish / reuse PR</td></tr>
+<tr><td>Publish / reuse PR</td><td>Create / reuse; not git push</td></tr>
+<tr><td>Publish / reuse PR</td><td>action</td></tr>
+<tr><td>Scribe</td><td>Scribe</td></tr>
+<tr><td>Scribe</td><td>Record the run outcome</td></tr>
+<tr><td>Scribe</td><td>scribe</td></tr>
+<tr><td>Safety failed</td><td>Safety failed</td></tr>
+<tr><td>Safety failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-02-label</td><td>revise</td></tr>
+<tr><td>edge-03-label</td><td>safety- failed</td></tr>
+<tr><td>edge-04-label</td><td>no- changes</td></tr>
+<tr><td>edge-05-label</td><td>review</td></tr>
+<tr><td>edge-06-label</td><td>approved</td></tr>
+<tr><td>edge-07-label</td><td>request-changes</td></tr>
+<tr><td>edge-08-label</td><td>declined</td></tr>
+<tr><td>edge-09-label</td><td>merged</td></tr>
+<tr><td>edge-10-label</td><td>blocked</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-default-workflow:end -->

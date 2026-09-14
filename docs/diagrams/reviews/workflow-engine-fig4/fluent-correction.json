@@ -1,0 +1,270 @@
+{
+  "diagram": "workflow-engine-fig4",
+  "source_sha256": "08303aeffbfb14e83c61479cb0323ecef6c86e20d370ffe8e2c817d2fd733499",
+  "png_sha256": "7bd4230ce0360c3d043b24b72d6ba24ecdd1dc717699c6d625060bcfc15f0819",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Visual role versus runtime context"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Node fields feed different executors; role/kind never becomes an executing catalog identity."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "AUTHORED FIELD FAMILIES"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "PRESENTATION AND WORKER CONTEXT"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "SPECIALIZED EXECUTOR CONTEXT"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Authored node"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Fields are not interchangeable"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "node declaration"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "VISUAL"
+    },
+    {
+      "cell": "n1-title",
+      "text": "role / kind"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Rendering metadata"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "not executing identity"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "CONTEXT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "prompt / charter"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Generic worker context"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "prompt or publish node"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "RENDER"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Diagram presentation"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Visual role and grouping"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "no agent assignment"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "WORKER"
+    },
+    {
+      "cell": "n4-title",
+      "text": "AgentTurnExecutor"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Receives prompt + charter"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "not node.Agent"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "REVIEW"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Peer-review fields"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "agent + charter"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "reviewer-specific contract"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "PEER"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Rubberduck executor"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Receives agent + charter"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "peer-review context"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "BUILD"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Build & Test field"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "agent"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "platform executor context"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "PLATFORM"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Build & Test executor"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Receives agent context"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "not role/kind mapping"
+    },
+    {
+      "cell": "e0",
+      "text": "visual"
+    },
+    {
+      "cell": "e1",
+      "text": "worker"
+    },
+    {
+      "cell": "e2",
+      "text": "render"
+    },
+    {
+      "cell": "e3",
+      "text": "bind"
+    },
+    {
+      "cell": "e4",
+      "text": "peer"
+    },
+    {
+      "cell": "e5",
+      "text": "bind"
+    },
+    {
+      "cell": "e6",
+      "text": "build"
+    },
+    {
+      "cell": "e7",
+      "text": "bind"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/workflow-engine.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "visual",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n0",
+      "to": "n2",
+      "label": "worker",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "render",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n4",
+      "label": "bind",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n0",
+      "to": "n5",
+      "label": "peer",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n5",
+      "to": "n6",
+      "label": "bind",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n0",
+      "to": "n7",
+      "label": "build",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n7",
+      "to": "n8",
+      "label": "bind",
+      "result": "clean"
+    }
+  ]
+}

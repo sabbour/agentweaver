@@ -1,0 +1,308 @@
+{
+  "diagram": "assistant-runtime-fig1",
+  "source_sha256": "643c518051c20e4aba7f3d33392533c6889aba1d7841aec68ba1fbfef298746f",
+  "png_sha256": "abb80756cd3e5a511db2d3a33070d625bfd202c1031e1b9de76674232bb9f039",
+  "prior_model": "docs\\diagrams\\reviews\\assistant-runtime-fig1\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "A conversation survives its pod"
+    },
+    {
+      "cell": "takeaway",
+      "text": "API-owned history; a held AgentHost runs a fresh, MCP-only SDK session each turn."
+    },
+    {
+      "cell": "group-title0",
+      "text": "CONVERSATION CONTROL"
+    },
+    {
+      "cell": "group-title1",
+      "text": "DURABILITY / EXECUTION"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Sessions UI"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Entra-authenticated caller"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "Start or append a message"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "Approval replies stay at API"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "/api/assistant/runs"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "CALLER"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Assistant API"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Durable conversation owner"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "Serialize turns per run"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Issue + renew MCP broker"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "broker lifetime: 5 min"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CONTROL"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Held AgentHost"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Pod reused across turns"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "One-shot /configure"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "Per-turn broker refresh"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "A2A turn bearer"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "POD"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Run + event store"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Authoritative conversation"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "Append AgentMessage events"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "Reload latest 24 messages"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "Idle → InProgress (CAS)"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "DURABLE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "MCP server"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Broker-only tool boundary"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "Validate issuer + audience"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "Consequential tools gated"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "RS256 • mcp:invoke"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "TOOLS"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Fresh SDK session"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "OperatorAssistantAgent"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Seed reconstructed history"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "No native shell / files"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "SDK session store: off"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "TURN"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 message"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 configure / turn"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 run turn"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 MCP tools"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 append / reload"
+    },
+    {
+      "cell": "e5",
+      "text": "6"
+    },
+    {
+      "cell": "relation-5",
+      "text": "6 API authorization"
+    },
+    {
+      "cell": "assurance",
+      "text": "Pod quiet 5 min: release • Conversation quiet 30 min: Idle, resumable • Completed: sealed"
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "API durable history"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "History survives pod release."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "AssistantRunService.cs"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Broker lifetime"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "Renew before MCP tool calls."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "OperatorAssistantAgent.cs"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Conversation lifecycle"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "Idle can wake; Completed cannot."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "AssistantRunService.cs"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/assistant-runtime.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "message",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "configure / turn",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n5",
+      "label": "run turn",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n5",
+      "to": "n4",
+      "label": "MCP tools",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n1",
+      "to": "n3",
+      "label": "append / reload",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n1",
+      "label": "API authorization",
+      "result": "clean"
+    }
+  ]
+}

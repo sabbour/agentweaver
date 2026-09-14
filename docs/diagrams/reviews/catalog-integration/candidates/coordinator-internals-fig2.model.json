@@ -1,0 +1,838 @@
+{
+  "title": "Draft, decide and finalize",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Submitted intent",
+      "subLabel": "DefineOutcome mode",
+      "meta": "goal + context",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "INPUT",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Draft executor",
+      "subLabel": "Prepare OutcomeSpec",
+      "meta": "coordinator-draft",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "DRAFT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Confirmation port",
+      "subLabel": "Request human decision",
+      "meta": "confirmation-gate",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "REQUEST",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Revise",
+      "subLabel": "Update draft input",
+      "meta": "same draft loop",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "REVISE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Confirm",
+      "subLabel": "Record affirmative intent",
+      "meta": "confirmed-by user",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "CONFIRM",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Decline",
+      "subLabel": "No decomposition",
+      "meta": "declined status",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "DECLINE",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Finalize spec",
+      "subLabel": "Persist decision status",
+      "meta": "confirm or decline",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "PERSIST",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Confirmed status?",
+      "subLabel": "Guard orchestration",
+      "meta": "not status-blind",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "GUARD",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Plan or pass through",
+      "subLabel": "Confirmed: decompose",
+      "meta": "declined: return",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESULT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "draft",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "request",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "revise",
+      "loopback": true
+    },
+    {
+      "from": "n3",
+      "to": "n1",
+      "label": "redraft",
+      "loopback": true
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "confirm",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n5",
+      "label": "decline",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n6",
+      "label": "persist",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n6",
+      "label": "persist",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "guard",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "route",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DEFINE OUTCOME"
+    },
+    {
+      "id": "1",
+      "label": "DECISION ALTERNATIVES"
+    },
+    {
+      "id": "2",
+      "label": "FINALIZATION AND GUARDED PLANNING"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Submitted intent",
+          "subLabel": "DefineOutcome mode",
+          "meta": "goal + context",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "INPUT",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Draft executor",
+          "subLabel": "Prepare OutcomeSpec",
+          "meta": "coordinator-draft",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "DRAFT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Confirmation port",
+          "subLabel": "Request human decision",
+          "meta": "confirmation-gate",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "REQUEST",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Revise",
+          "subLabel": "Update draft input",
+          "meta": "same draft loop",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "REVISE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Confirm",
+          "subLabel": "Record affirmative intent",
+          "meta": "confirmed-by user",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "CONFIRM",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Decline",
+          "subLabel": "No decomposition",
+          "meta": "declined status",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "DECLINE",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Finalize spec",
+          "subLabel": "Persist decision status",
+          "meta": "confirm or decline",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "PERSIST",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Confirmed status?",
+          "subLabel": "Guard orchestration",
+          "meta": "not status-blind",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "GUARD",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Plan or pass through",
+          "subLabel": "Confirmed: decompose",
+          "meta": "declined: return",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESULT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 227.73831775700933
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 192
+        },
+        "data": {
+          "label": "DEFINE OUTCOME",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 243.73831775700933
+        },
+        "data": {
+          "label": "DEFINE OUTCOME",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 471.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 192
+        },
+        "data": {
+          "label": "DECISION ALTERNATIVES",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 487.7383177570093
+        },
+        "data": {
+          "label": "DECISION ALTERNATIVES",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 709.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 198
+        },
+        "data": {
+          "label": "FINALIZATION AND GUARDED PLANNING",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 725.7383177570093
+        },
+        "data": {
+          "label": "FINALIZATION AND GUARDED PLANNING",
+          "width": 1255.2
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "draft",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 331.07165109034264
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 606.9308411214954,
+            "y": 331.07165109034264
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "request",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 983.7308411214954,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.5308411214953,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "revise",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1429.3308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1461.3308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1461.3308411214953,
+              "y": 477.414984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 477.414984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 538.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1015.7308411214954,
+            "y": 477.414984423676
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n1",
+        "label": "redraft",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 416.7483177570093
+            },
+            {
+              "x": 611.7308411214954,
+              "y": 416.7483177570093
+            },
+            {
+              "x": 611.7308411214954,
+              "y": 356.404984423676
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 356.404984423676
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 388.9308411214953,
+            "y": 416.7483177570093
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n2",
+        "target": "n4",
+        "label": "confirm",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1225.3308411214953,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1225.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 535.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1019.5308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n2",
+        "target": "n5",
+        "label": "decline",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1293.3308411214953,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1293.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 535.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1276.3308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n4",
+        "target": "n6",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 813.7308411214954,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 489.93084112149535,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n5",
+        "target": "n6",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1259.3308411214953,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 711.7383177570093
+            },
+            {
+              "x": 142.1308411214953,
+              "y": 711.7383177570093
+            },
+            {
+              "x": 142.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 844.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 700.7308411214952,
+            "y": 711.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n7",
+        "label": "guard",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.9308411214954,
+            "y": 831.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n7",
+        "target": "n8",
+        "label": "route",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 983.7308411214954,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.5308411214953,
+            "y": 831.7383177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1627.4616822429907,
+    "canvasHeight": 1053.1401869158876
+  }
+}

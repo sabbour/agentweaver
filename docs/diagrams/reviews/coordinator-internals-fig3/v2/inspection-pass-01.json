@@ -1,0 +1,11 @@
+{
+  "diagram": "coordinator-internals-fig3",
+  "phase": "pass-01",
+  "png_sha256": "ff2e0f07c162294934245e4a0504154f9efb5ded187b69cf3a54b340f7503e4b",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

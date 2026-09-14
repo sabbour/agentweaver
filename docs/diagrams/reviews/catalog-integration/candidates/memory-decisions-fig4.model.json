@@ -1,0 +1,820 @@
+{
+  "title": "One authority, asymmetric exchange",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Memory store",
+      "subLabel": "Provider-neutral authority",
+      "meta": "SQLite: memory.db",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "SOURCE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Approved decisions",
+      "subLabel": "Active decisions only",
+      "meta": "decisions.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Approved boundaries",
+      "subLabel": "Architecture / scope only",
+      "meta": "boundaries.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Pending inbox files",
+      "subLabel": "Rewrite current pending set",
+      "meta": "decisions/inbox/*.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Agent history",
+      "subLabel": "Eligible learning / updates",
+      "meta": "agent history.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Current session",
+      "subLabel": "Latest open session only",
+      "meta": "identity/now.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Approved patterns",
+      "subLabel": "Pattern memories only",
+      "meta": "patterns.md",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "EXPORT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Inbox parser",
+      "subLabel": "Parse; skip malformed files",
+      "meta": "not a general file sync",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "IMPORT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Missing-slug proposal",
+      "subLabel": "Existing slugs stay intact",
+      "meta": "pending, not approved",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "UNION",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n2",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n3",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n4",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n5",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n6",
+      "label": "export",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n7",
+      "label": "inbox",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "missing",
+      "loopback": false
+    },
+    {
+      "from": "n8",
+      "to": "n0",
+      "label": "persist",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "AUTHORITATIVE STORE AND POLICY VIEWS"
+    },
+    {
+      "id": "1",
+      "label": "OPERATIONAL FILE VIEWS"
+    },
+    {
+      "id": "2",
+      "label": "PATTERNS AND THE NARROW IMPORT PATH"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Memory store",
+          "subLabel": "Provider-neutral authority",
+          "meta": "SQLite: memory.db",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "SOURCE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Approved decisions",
+          "subLabel": "Active decisions only",
+          "meta": "decisions.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Approved boundaries",
+          "subLabel": "Architecture / scope only",
+          "meta": "boundaries.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Pending inbox files",
+          "subLabel": "Rewrite current pending set",
+          "meta": "decisions/inbox/*.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Agent history",
+          "subLabel": "Eligible learning / updates",
+          "meta": "agent history.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Current session",
+          "subLabel": "Latest open session only",
+          "meta": "identity/now.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Approved patterns",
+          "subLabel": "Pattern memories only",
+          "meta": "patterns.md",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "EXPORT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=document;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Inbox parser",
+          "subLabel": "Parse; skip malformed files",
+          "meta": "not a general file sync",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "IMPORT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Missing-slug proposal",
+          "subLabel": "Existing slugs stay intact",
+          "meta": "pending, not approved",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "UNION",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 221.73831775700933
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 198
+        },
+        "data": {
+          "label": "AUTHORITATIVE STORE AND POLICY VIEWS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 237.73831775700933
+        },
+        "data": {
+          "label": "AUTHORITATIVE STORE AND POLICY VIEWS",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 471.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 192
+        },
+        "data": {
+          "label": "OPERATIONAL FILE VIEWS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 487.7383177570093
+        },
+        "data": {
+          "label": "OPERATIONAL FILE VIEWS",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 709.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 198
+        },
+        "data": {
+          "label": "PATTERNS AND THE NARROW IMPORT PATH",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 725.7383177570093
+        },
+        "data": {
+          "label": "PATTERNS AND THE NARROW IMPORT PATH",
+          "width": 1255.2
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 611.7308411214954,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 611.7308411214954,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 582.2908411214953,
+            "y": 331.07165109034264
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n0",
+        "target": "n2",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 356.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 356.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 416.7483177570093
+            },
+            {
+              "x": 1057.3308411214953,
+              "y": 416.7483177570093
+            },
+            {
+              "x": 1057.3308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 1073.3308411214953,
+              "y": 343.7383177570093
+            },
+            "to": {
+              "x": 1073.3308411214953,
+              "y": 263.7383177570093
+            }
+          },
+          "labelPos": {
+            "x": 1073.3308411214953,
+            "y": 248.53831775700934
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n0",
+        "target": "n3",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 317.13084112149534,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 317.13084112149534,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 241.63084112149534,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n0",
+        "target": "n4",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 368.13084112149534,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 368.13084112149534,
+              "y": 453.414984423676
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 453.414984423676
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 535.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.9308411214954,
+            "y": 453.414984423676
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n0",
+        "target": "n5",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 419.13084112149534,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 419.13084112149534,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 535.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1099.1308411214955,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n0",
+        "target": "n6",
+        "label": "export",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 198.1308411214953,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 148.12084112149535,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 148.12084112149535,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 153.12184112149535,
+            "y": 331.07165109034264
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n3",
+        "target": "n7",
+        "label": "inbox",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 368.13084112149534,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 368.13084112149534,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 779.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.9308411214954,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n7",
+        "target": "n8",
+        "label": "missing",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 983.7308411214954,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.5308411214953,
+            "y": 831.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n8",
+        "target": "n0",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1429.3308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1461.3308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1461.3308411214953,
+              "y": 900.7483177570093
+            },
+            {
+              "x": 118.13084112149531,
+              "y": 900.7483177570093
+            },
+            {
+              "x": 118.13084112149531,
+              "y": 356.404984423676
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 356.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 597.3308411214953,
+            "y": 900.7483177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1627.4616822429907,
+    "canvasHeight": 1053.1401869158876
+  }
+}

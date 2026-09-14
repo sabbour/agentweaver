@@ -1,0 +1,11 @@
+
+C:\Users\asabbour\Git\agentweaver\.worktrees\drawio-diagram-authoring\docs\diagrams\reviews\canonical-provider-admission\native-pitch-remediation\canonical-provider-admission-pitch.drawio -> C:\Users\asabbour\Git\agentweaver\.worktrees\drawio-diagram-authoring\docs\diagrams\reviews\canonical-provider-admission\native-pitch-remediation\canonical-provider-admission-pitch.png
+[108500:0913/133249.196:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[108500:0913/133249.196:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[108500:0913/133249.198:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[108500:0913/133249.200:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[108500:0913/133249.200:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[108500:0913/133249.200:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[108500:0913/133249.200:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[108500:0913/133249.202:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[108500:0913/133249.202:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2

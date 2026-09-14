@@ -1,0 +1,213 @@
+{
+  "diagram": "experience-review-workspace-merge-fig2",
+  "source_sha256": "71336f095103acd5bd669293da7a9ea8f5cac653d8ee2b6cb95a140de709fcc0",
+  "png_sha256": "7166d98d0c36e9ccfd6c761bfb2a9cf51eb1a9c7b9b9b635127d9f7d730eaf91",
+  "prior_model": "docs\\diagrams\\reviews\\experience-00-overview-fig1\\experience-content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Browse a ref without changing it"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Select an allowed ref, inspect its tree, and read content through read-only operations."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "CHOOSE THE REFERENCE"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "READ THE CONTENT"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "READER"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Workspace reader"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Web page or MCP client"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "authorized project access"
+    },
+    {
+      "cell": "n0-detail",
+      "text": "Browsing does not check out, edit, approve or merge."
+    },
+    {
+      "cell": "n1-badge",
+      "text": "REFS"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Available refs"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Base, run, assembly"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "list_project_workspace_refs"
+    },
+    {
+      "cell": "n1-detail",
+      "text": "Only available allowed refs; default is the base branch."
+    },
+    {
+      "cell": "n2-badge",
+      "text": "SELECT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Selected ref"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Explicit browsing context"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "GET only"
+    },
+    {
+      "cell": "n2-detail",
+      "text": "Changing ref clears the previous file selection."
+    },
+    {
+      "cell": "n3-badge",
+      "text": "CONTENT"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Read-only content"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Source / Markdown preview"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "binary / large / missing"
+    },
+    {
+      "cell": "n3-detail",
+      "text": "Render supported content; surface truthful limitations."
+    },
+    {
+      "cell": "n4-badge",
+      "text": "FILE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Selected path"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Relative file name"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "get_project_workspace_file"
+    },
+    {
+      "cell": "n4-detail",
+      "text": "Pass both path and ref; invalid paths are rejected."
+    },
+    {
+      "cell": "n5-badge",
+      "text": "TREE"
+    },
+    {
+      "cell": "n5-title",
+      "text": "File tree"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Paths at the selected ref"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "list_project_workspace"
+    },
+    {
+      "cell": "n5-detail",
+      "text": "Choose a listed file; no working-tree mutation."
+    },
+    {
+      "cell": "e0",
+      "text": "list refs"
+    },
+    {
+      "cell": "e1",
+      "text": "choose"
+    },
+    {
+      "cell": "e2",
+      "text": "list tree"
+    },
+    {
+      "cell": "e3",
+      "text": "select"
+    },
+    {
+      "cell": "e4",
+      "text": "read"
+    },
+    {
+      "cell": "note",
+      "text": "Unknown refs/files can return 404; invalid paths return 400. Ref browsing is not content approval."
+    }
+  ],
+  "context_pages": [
+    "docs/experience/review-workspace-merge.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "list refs",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "choose",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n5",
+      "label": "list tree",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n5",
+      "to": "n4",
+      "label": "select",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n3",
+      "label": "read",
+      "result": "clean"
+    }
+  ]
+}

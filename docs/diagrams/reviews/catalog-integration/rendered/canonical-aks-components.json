@@ -1,0 +1,14 @@
+{
+  "name": "canonical-aks-components",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-aks-components.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-aks-components.png",
+  "source_sha256": "53860bd3891008b71addf332d7d8801edbf22afc5bef98d540e29964cd9b828d",
+  "png_sha256": "cc37c6cdebebfc2f21b7e8ba19b1fc7f3c6be97dd5ebb6e3082b51ce30cb3926",
+  "dimensions": [
+    3150,
+    1192
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

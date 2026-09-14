@@ -1,0 +1,11 @@
+{
+  "diagram": "orchestration-fig3",
+  "phase": "pass-01",
+  "png_sha256": "d25ea7f09be49d43a95eb265a0c455b4e5aa03ea735f14c3a89d9825d9f90f78",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

@@ -1,0 +1,658 @@
+{
+  "title": "Coordinator · MAF hands off to services",
+  "nodes": [
+    {
+      "id": "outcome",
+      "label": "CoordinatorOutcome",
+      "subLabel": "Spec confirmed",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "MAF",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "dispatch",
+      "label": "StartDispatch",
+      "subLabel": "Auto-dispatch + nonempty plan",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONDITIONAL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "release",
+      "label": "Release MAF state",
+      "subLabel": "Registry and checkpoints released",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "HANDOFF",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "services",
+      "label": "Dispatch / assembly",
+      "subLabel": "Service drivers own later phases",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "SERVICE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "records",
+      "label": "Work plan + child runs",
+      "subLabel": "Relational durable coordination",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "DURABLE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "executors",
+      "label": "Direct executor calls",
+      "subLabel": "Rai / rubberduck / build-test / Scribe",
+      "meta": "CollectiveAssemblyPipeline",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "DIRECT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "restart",
+      "label": "Restart recovery",
+      "subLabel": "Read persisted coordinator phase",
+      "meta": "CoordinatorRunService:1172–1250",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "RECOVER",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "gate",
+      "label": "Assembly review gate",
+      "subLabel": "Service-owned pending approval",
+      "meta": "AssemblyReviewGate:6–44",
+      "icon": "box",
+      "shape": "rhombus",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "GATE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "outcome",
+      "to": "dispatch",
+      "label": "eligible handoff",
+      "loopback": false
+    },
+    {
+      "from": "outcome",
+      "to": "release",
+      "label": "release after handoff",
+      "loopback": false
+    },
+    {
+      "from": "dispatch",
+      "to": "services",
+      "label": "start services",
+      "loopback": false
+    },
+    {
+      "from": "services",
+      "to": "records",
+      "label": "persist phase",
+      "loopback": false
+    },
+    {
+      "from": "services",
+      "to": "executors",
+      "label": "invoke directly",
+      "loopback": false
+    },
+    {
+      "from": "records",
+      "to": "restart",
+      "label": "persisted phase",
+      "loopback": false
+    },
+    {
+      "from": "executors",
+      "to": "gate",
+      "label": "service review",
+      "loopback": false
+    },
+    {
+      "from": "restart",
+      "to": "services",
+      "label": "re-arm driver",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "SPEC HANDOFF"
+    },
+    {
+      "id": "1",
+      "label": "SERVICE-DRIVEN COLLECTIVE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "outcome",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "outcome",
+          "label": "CoordinatorOutcome",
+          "subLabel": "Spec confirmed",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "MAF",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "dispatch",
+        "type": "card",
+        "position": {
+          "x": 604.4851311953353,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "dispatch",
+          "label": "StartDispatch",
+          "subLabel": "Auto-dispatch + nonempty plan",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONDITIONAL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "release",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "release",
+          "label": "Release MAF state",
+          "subLabel": "Registry and checkpoints released",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "HANDOFF",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "services",
+        "type": "card",
+        "position": {
+          "x": 604.4851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "services",
+          "label": "Dispatch / assembly",
+          "subLabel": "Service drivers own later phases",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "SERVICE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "records",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "records",
+          "label": "Work plan + child runs",
+          "subLabel": "Relational durable coordination",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "DURABLE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "executors",
+        "type": "card",
+        "position": {
+          "x": 604.4851311953353,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "executors",
+          "label": "Direct executor calls",
+          "subLabel": "Rai / rubberduck / build-test / Scribe",
+          "meta": "CollectiveAssemblyPipeline",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "DIRECT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "restart",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "restart",
+          "label": "Restart recovery",
+          "subLabel": "Read persisted coordinator phase",
+          "meta": "CoordinatorRunService:1172–1250",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "RECOVER",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "gate",
+        "type": "card",
+        "position": {
+          "x": 604.4851311953353,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "gate",
+          "label": "Assembly review gate",
+          "subLabel": "Service-owned pending approval",
+          "meta": "AssemblyReviewGate:6–44",
+          "icon": "box",
+          "shape": "rhombus",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "GATE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 30.087463556851304
+        },
+        "style": {
+          "width": 972.8,
+          "height": 464
+        },
+        "data": {
+          "label": "SPEC HANDOFF",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 46.087463556851304
+        },
+        "data": {
+          "label": "SPEC HANDOFF",
+          "width": 932.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 518.0874635568513
+        },
+        "style": {
+          "width": 972.8,
+          "height": 464
+        },
+        "data": {
+          "label": "SERVICE-DRIVEN COLLECTIVE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 534.0874635568513
+        },
+        "data": {
+          "label": "SERVICE-DRIVEN COLLECTIVE",
+          "width": 932.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "outcome",
+        "target": "dispatch",
+        "label": "eligible handoff",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 604.4851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 490.0851311953353,
+            "y": 160.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "outcome",
+        "target": "release",
+        "label": "release after handoff",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 212.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 338.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 275.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "dispatch",
+        "target": "services",
+        "label": "start services",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 774.4851311953353,
+              "y": 226.0874635568513
+            },
+            {
+              "x": 774.4851311953353,
+              "y": 338.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 774.4851311953353,
+            "y": 282.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "services",
+        "target": "records",
+        "label": "persist phase",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 604.4851311953353,
+              "y": 430.48746355685125
+            },
+            {
+              "x": 459.1720877170744,
+              "y": 430.48746355685125
+            },
+            {
+              "x": 459.1720877170744,
+              "y": 694.2874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 694.2874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 531.8286094562048,
+            "y": 430.48746355685125
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "services",
+        "target": "executors",
+        "label": "invoke directly",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 774.4851311953353,
+              "y": 470.0874635568513
+            },
+            {
+              "x": 774.4851311953353,
+              "y": 582.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 774.4851311953353,
+            "y": 526.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "records",
+        "target": "restart",
+        "label": "persisted phase",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 714.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 826.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "executors",
+        "target": "gate",
+        "label": "service review",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 774.4851311953353,
+              "y": 714.0874635568513
+            },
+            {
+              "x": 774.4851311953353,
+              "y": 826.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 774.4851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "restart",
+        "target": "services",
+        "label": "re-arm driver",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 878.8874635568512
+            },
+            {
+              "x": 486.65034858663967,
+              "y": 878.8874635568512
+            },
+            {
+              "x": 486.65034858663967,
+              "y": 450.28746355685126
+            },
+            {
+              "x": 604.4851311953353,
+              "y": 450.28746355685126
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 447.6851311953353,
+            "y": 878.8874635568512
+          }
+        }
+      }
+    ],
+    "canvasWidth": 978.1877551020408,
+    "canvasHeight": 993.6909620991254
+  }
+}

@@ -1,0 +1,758 @@
+{
+  "title": "Analyze summaries, not raw source",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Repository",
+      "subLabel": "Local manifests and filenames",
+      "meta": "not model-bound source",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "LOCAL",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Bounded scanner",
+      "subLabel": "Skip excluded/reparse paths",
+      "meta": "500-file cap",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "SCAN",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Signal summary",
+      "subLabel": "Languages, tests, docs, CI",
+      "meta": "framework + size signals",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "SUMMARY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Catalog role menu",
+      "subLabel": "Known role IDs only",
+      "meta": "trusted catalog metadata",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "MENU",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Analysis prompt",
+      "subLabel": "Summary is fenced data",
+      "meta": "no signals: warning",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "MODEL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Parse response",
+      "subLabel": "Malformed output fails",
+      "meta": "role selections",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "PARSE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Resolve catalog IDs",
+      "subLabel": "Skip unknown role IDs",
+      "meta": "none recognized: fail",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "VALIDATE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Names + charters",
+      "subLabel": "Universe chosen independently",
+      "meta": "deterministic compilation",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "COMPILE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Stored proposal",
+      "subLabel": "No team file writes yet",
+      "meta": "pending confirmation",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DRAFT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "scan",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "summarize",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "signals",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "menu",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "response",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n6",
+      "label": "parsed",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "known",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "store",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "LOCAL SCAN BOUNDARY"
+    },
+    {
+      "id": "1",
+      "label": "MODEL-BOUND SUMMARY"
+    },
+    {
+      "id": "2",
+      "label": "VALIDATION AND DETERMINISTIC OUTPUT"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 197.73831775700933
+        },
+        "data": {
+          "id": "n0",
+          "label": "Repository",
+          "subLabel": "Local manifests and filenames",
+          "meta": "not model-bound source",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "LOCAL",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 501.33084112149515,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n1",
+          "label": "Bounded scanner",
+          "subLabel": "Skip excluded/reparse paths",
+          "meta": "500-file cap",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "SCAN",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 964.5308411214953,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n2",
+          "label": "Signal summary",
+          "subLabel": "Languages, tests, docs, CI",
+          "meta": "framework + size signals",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "SUMMARY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Catalog role menu",
+          "subLabel": "Known role IDs only",
+          "meta": "trusted catalog metadata",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "MENU",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 501.33084112149515,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Analysis prompt",
+          "subLabel": "Summary is fenced data",
+          "meta": "no signals: warning",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "MODEL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 964.5308411214953,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Parse response",
+          "subLabel": "Malformed output fails",
+          "meta": "role selections",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "PARSE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Resolve catalog IDs",
+          "subLabel": "Skip unknown role IDs",
+          "meta": "none recognized: fail",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "VALIDATE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 501.33084112149515,
+          "y": 685.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Names + charters",
+          "subLabel": "Universe chosen independently",
+          "meta": "deterministic compilation",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "COMPILE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 964.5308411214953,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Stored proposal",
+          "subLabel": "No team file writes yet",
+          "meta": "pending confirmation",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DRAFT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 133.73831775700933
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 220
+        },
+        "data": {
+          "label": "LOCAL SCAN BOUNDARY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 149.73831775700933
+        },
+        "data": {
+          "label": "LOCAL SCAN BOUNDARY",
+          "width": 1290.4
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 391.7383177570093
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 192
+        },
+        "data": {
+          "label": "MODEL-BOUND SUMMARY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 407.7383177570093
+        },
+        "data": {
+          "label": "MODEL-BOUND SUMMARY",
+          "width": 1290.4
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 615.7383177570093
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 226
+        },
+        "data": {
+          "label": "VALIDATION AND DETERMINISTIC OUTPUT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 631.7383177570093
+        },
+        "data": {
+          "label": "VALIDATION AND DETERMINISTIC OUTPUT",
+          "width": 1290.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "scan",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 501.33084112149515,
+              "y": 263.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 439.73084112149525,
+            "y": 263.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "summarize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 841.3308411214952,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 875.0691869861569,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 875.0691869861569,
+              "y": 162.0560747663551
+            },
+            {
+              "x": 1134.5308411214953,
+              "y": 162.0560747663551
+            },
+            {
+              "x": 1134.5308411214953,
+              "y": 211.73831775700933
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1004.8000140538261,
+            "y": 162.0560747663551
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n4",
+        "label": "signals",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 964.5308411214953,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 930.7924952568335,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 930.7924952568335,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 841.3308411214952,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 930.7924952568335,
+            "y": 385.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "menu",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 501.33084112149515,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 439.73084112149525,
+            "y": 507.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "response",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 841.3308411214952,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 875.0691869861569,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 875.0691869861569,
+              "y": 613.6856861780619
+            },
+            {
+              "x": 930.7924952568335,
+              "y": 613.6856861780619
+            },
+            {
+              "x": 930.7924952568335,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 964.5308411214953,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 902.9308411214952,
+            "y": 613.6856861780619
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n5",
+        "target": "n6",
+        "label": "parsed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1134.5308411214953,
+              "y": 559.7383177570093
+            },
+            {
+              "x": 1134.5308411214953,
+              "y": 639.3698967043777
+            },
+            {
+              "x": 464.10978848991635,
+              "y": 639.3698967043777
+            },
+            {
+              "x": 464.10978848991635,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 378.13084112149534,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 799.3203148057058,
+            "y": 639.3698967043777
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n6",
+        "target": "n7",
+        "label": "known",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 411.86918698615693,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 411.86918698615693,
+              "y": 853.4205607476634
+            },
+            {
+              "x": 467.5924952568337,
+              "y": 853.4205607476634
+            },
+            {
+              "x": 467.5924952568337,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 501.33084112149515,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 439.7308411214953,
+            "y": 853.4205607476634
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n7",
+        "target": "n8",
+        "label": "store",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 841.3308411214952,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 964.5308411214953,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 902.9308411214952,
+            "y": 751.7383177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1342.6616822429905,
+    "canvasHeight": 893.1401869158877
+  }
+}

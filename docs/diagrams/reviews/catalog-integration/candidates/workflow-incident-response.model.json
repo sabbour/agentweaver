@@ -1,0 +1,442 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Incident Response workflow",
+  "alt": "Incident Response workflow: Triage, Mitigate, Verify, Review Gate, Postmortem, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "triage",
+      "label": "Triage",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "mitigate",
+      "label": "Mitigate",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "verify",
+      "label": "Verify",
+      "subLabel": "review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "review-gate",
+      "label": "Review Gate",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "postmortem",
+      "label": "Postmortem",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "triage",
+      "to": "mitigate"
+    },
+    {
+      "from": "mitigate",
+      "to": "verify"
+    },
+    {
+      "from": "verify",
+      "to": "review-gate"
+    },
+    {
+      "from": "review-gate",
+      "to": "postmortem",
+      "label": "approved"
+    },
+    {
+      "from": "review-gate",
+      "to": "mitigate",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "review-gate",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "postmortem",
+      "to": "done"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "triage",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 243.06976744186045
+        },
+        "data": {
+          "id": "triage",
+          "label": "Triage",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "mitigate",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 487.06976744186045
+        },
+        "data": {
+          "id": "mitigate",
+          "label": "Mitigate",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "verify",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 731.0697674418604
+        },
+        "data": {
+          "id": "verify",
+          "label": "Verify",
+          "subLabel": "review",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "review-gate",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 975.0697674418604
+        },
+        "data": {
+          "id": "review-gate",
+          "label": "Review Gate",
+          "subLabel": "review",
+          "icon": "branch",
+          "badge": {
+            "text": "Human gate",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "postmortem",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 1199.9545600685885
+        },
+        "data": {
+          "id": "postmortem",
+          "label": "Postmortem",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "terminal-declined",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348837,
+          "y": 1232.5116279069769
+        },
+        "data": {
+          "id": "terminal-declined",
+          "label": "Declined",
+          "icon": "window",
+          "badge": {
+            "text": "Stopped",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "done",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348837,
+          "y": 1548.7906976744187
+        },
+        "data": {
+          "id": "done",
+          "label": "Done",
+          "icon": "window",
+          "badge": {
+            "text": "Done",
+            "tone": "green"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "triage",
+        "target": "mitigate",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 347.06976744186045
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 487.06976744186045
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e1",
+        "source": "mitigate",
+        "target": "verify",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 591.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 731.0697674418604
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e2",
+        "source": "verify",
+        "target": "review-gate",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 835.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 975.0697674418604
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e3",
+        "source": "review-gate",
+        "target": "postmortem",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 588.5581395348837,
+              "y": 1079.0697674418604
+            },
+            {
+              "x": 588.5581395348837,
+              "y": 1167.9545600685885
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1167.9545600685885
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1199.9545600685885
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 605.5581395348837,
+            "y": 1167.9545600685885
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "review-gate",
+        "target": "mitigate",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 539.0697674418604
+            },
+            {
+              "x": 452.5581395348837,
+              "y": 539.0697674418604
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 420.5581395348837,
+            "y": 707.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "review-gate",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 656.5581395348837,
+              "y": 1079.0697674418604
+            },
+            {
+              "x": 656.5581395348837,
+              "y": 1111.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1111.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1232.5116279069769
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 897.5581395348836,
+            "y": 1111.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "postmortem",
+        "target": "done",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1504.7906976744187
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1504.7906976744187
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1600.7906976744187
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1600.7906976744187
+            }
+          ],
+          "junctions": []
+        }
+      }
+    ],
+    "canvasWidth": 1402.9302325581393,
+    "canvasHeight": 1797.8139534883724
+  }
+}

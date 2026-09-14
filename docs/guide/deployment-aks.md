@@ -53,7 +53,7 @@ PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
 
 For non-interactive use, pass flags, environment variables, and/or a params
-file (see [`scripts/azure/params.example.json`](../../scripts/azure/params.example.json)):
+file (see [`scripts/azure/params.example.json`](https://github.com/sabbour/agentweaver/blob/dev/scripts/azure/params.example.json)):
 
 ```bash
 npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
@@ -175,10 +175,21 @@ safe to delete at any time.
 npm run azure:deploy-from-local
 ```
 
-Mints a new immutable image tag from `HEAD` (refuses a dirty working tree),
+Mints a new immutable image tag from `HEAD` (refuses a dirty working tree by default),
 builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
+
+For an intentional personal development test, `--allow-dirty` is the explicit escape
+hatch. It is not release-candidate evidence; use an exact committed candidate for release validation.
+
+| Goal | Command |
+| --- | --- |
+| First provisioning | `npm run azure:provision-infra` |
+| Deploy this checkout | `npm run azure:deploy-from-local` |
+| Deploy an exact commit/ref | `npm run azure:deploy-from-commit -- <sha-or-ref>` |
+| Deploy a published version | `npm run azure:deploy-from-release -- vX.Y.Z` |
+| Verify without deployment | `npm run azure:verify` |
 
 To deploy an arbitrary committed branch, PR ref, or historical commit without
 switching the caller's checkout:

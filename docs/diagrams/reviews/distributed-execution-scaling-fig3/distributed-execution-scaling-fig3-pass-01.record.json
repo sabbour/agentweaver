@@ -1,0 +1,34 @@
+{
+  "diagram": "distributed-execution-scaling-fig3",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "distributed-execution-scaling-fig3-pass-01.drawio",
+  "png": "distributed-execution-scaling-fig3-pass-01.png",
+  "evidence": "k8s/base/worker-hpa.yaml:62-83; apps/Agentweaver.Api/Program.cs:521-528,1043-1086; apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:45-121",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "clients": "native:c4",
+    "web": "native:kubernetes",
+    "sql": "native:database",
+    "hpa": "native:kubernetes",
+    "worker": "native:kubernetes",
+    "pod": "native:kubernetes"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "95e2408cb49651578cadf96dd15482e61d26a85c9eb33f364714cd3afaac674e",
+    "png": "12ddbee6ae9d3c282762c19c7fa0a7d06fd330a0f86487ae3bc47335f68b41ac"
+  },
+  "png_dimensions": [
+    1565,
+    866
+  ],
+  "xml_edge_count": 5
+}

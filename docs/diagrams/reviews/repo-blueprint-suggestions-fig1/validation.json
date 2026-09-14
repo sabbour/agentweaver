@@ -1,0 +1,16 @@
+{
+  "diagram": "repo-blueprint-suggestions-fig1",
+  "manifest": "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/iteration-manifest.json",
+  "schema": "valid",
+  "repository_manifest_validator": "iteration manifest is valid",
+  "pitch_plus_passes": 5,
+  "actual_open_inspections_recorded": 10,
+  "one_uncompressed_A5_page_all_passes": true,
+  "bounds_and_5_unit_accents": "valid",
+  "native_symbols_and_card_hierarchy": "valid",
+  "exact_arrow_ids_source_target_label_evidence": 7,
+  "growth_ratio": 10.840724,
+  "final_source_sha256": "748928d3f08f584ec62937d48a5d4d27b00629344b54879d195b31e16c34b765",
+  "inspected_final_png_sha256": "0e7b254729ea3ef070c78585635ba27cb0f771859fc17de6d9fec5a8553ff17b",
+  "publication": "valid"
+}

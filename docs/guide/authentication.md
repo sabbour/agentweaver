@@ -53,9 +53,9 @@ A Platform Admin can choose one active model provider:
 The Platform Admin can add more providers during required setup.
 Only one provider is active at a time.
 
-The active platform provider applies to interactive and unattended work for all users and
-projects. A configured custom-key provider (BYOK) is therefore a complete platform provider,
-not an interactive-only fallback.
+An active platform custom-key provider (BYOK) applies to both personal sessions and
+project work, subject to the requested operation's eligibility. Platform-default Copilot
+supplies inheriting project/background work, not personal session chat.
 
 Unattended work never reuses a browser bearer token. Before schedule, event, or heartbeat
 execution, Agentweaver captures the selected durable provider authority in an activation and
@@ -115,6 +115,16 @@ selected provider configuration is still active.
 
 After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
 
+### Provider hierarchy
+
+| Work scope | Resolution order | Failure boundary |
+| --- | --- | --- |
+| Project orchestration and background work | Active project Copilot binding; otherwise platform BYOK, then platform-default Copilot | An unusable active project binding fails closed; it does not fall through |
+| Personal Assistant sessions | Platform BYOK, then personal BYOK, then personal Copilot | No platform-default Copilot or ambient browser credential fallback |
+
+Repository access is a separate capability. Provider readiness does not grant repository access
+or make an otherwise ineligible operation available.
+
 A project can use a project GitHub Copilot account. Otherwise, project work inherits the active
 platform GitHub Copilot account or custom-key provider. This project hierarchy applies to
 orchestration and background work.
@@ -169,8 +179,8 @@ When migrating a Copilot App client ID shared by older deployments, add the new
 exact URL first. Keep the old exact URL temporarily, inventory deployment
 versions and the shared client ID, upgrade everything to v0.23.1 or later, then
 wait 15 minutes after the last older deployment stops before removing the old
-URL. On deployed staging, verify all three entry points: project-scoped, MCP
-browser handoff into the project-scoped flow, and platform-default. Local
+URL. On deployed staging, verify project-scoped, platform-default, and personal-user
+completion, plus the MCP browser handoff into the project-scoped flow. Local
 end-to-end testing may be impossible when Entra redirects are deployment-only,
 so deployed staging is the end-to-end proof. See
 [Configuration](configuration.md#project-copilot-app-binding) for the full

@@ -1,0 +1,239 @@
+{
+  "completed": 13,
+  "blocked": 0,
+  "agents_launched": 0,
+  "commits_created": 0,
+  "pitch_artifacts": 13,
+  "post_pitch_passes": 53,
+  "inspected_artifact_sets": 66,
+  "final_arrow_traces": 79,
+  "final_page": {
+    "width": 827,
+    "height": 583,
+    "units_per_inch": 100,
+    "orientation": "A5-landscape",
+    "pages": 1
+  },
+  "renderer": {
+    "name": "draw.io Desktop",
+    "version": "31.4.5",
+    "source": "docs/diagrams/reviews/canonical-api-host/renderer/desktop/draw.io.exe",
+    "modified": false
+  },
+  "validation": {
+    "schema": "passed",
+    "repository_manifest_validator": "passed",
+    "exact_arrow_ids_and_endpoints": "passed",
+    "meaningful_growth": "passed",
+    "anti_padding": "passed",
+    "selected_drift": "passed"
+  },
+  "drift_command": "node scripts\\docs\\render-diagrams.mjs --check --spec 00-system-overview-fig1 --spec 00-system-overview-fig2 --spec 00-system-overview-fig5 --spec agent-definition-fig1 --spec agent-framework-fig1 --spec agent-framework-fig2 --spec agent-framework-fig3 --spec api-core-fig4 --spec api-core-fig6 --spec data-persistence-fig1 --spec canonical-testing-boundary --spec testing-strategy-fig1 --spec testing-strategy-fig4",
+  "inspection_scope": "Each pitch and post-pitch exported PNG was actually opened enlarged and as an A5-sized screen proof; no physical paper proof or live runtime test is claimed.",
+  "historical_count_method": "Pre-final defect counts summarize issue groups retrospectively from recorded inspection/correction handoffs; they are not pixel counts or counts of every affected glyph/segment.",
+  "remaining_parent_work": "Markdown provenance and plan status are explicitly outside this batch write authority.",
+  "authoring_notes": [
+    "Read the three pre-existing independent research outputs; no agents launched.",
+    "Initial testing-strategy-fig1 growth candidate was below 9x; preserved as a candidate, then replaced with useful visible prerequisite context before pass-one approval.",
+    "A validation-only minimum-height assumption failed on cropped coarse-pitch exports; corrected to require the full-detail height only for post-pitch rasters. All source pages remain true A5.",
+    "A guessed API-local RemoteAgentProxy path did not exist; used the verified RemoteWorkflowAgentFactory implementation as leaf-execution evidence instead. No runtime files changed.",
+    "Only owned renderer profile caches were removed. Sources, PNGs, screen proofs, reviews, local helpers, measured growth and legacy sources remain."
+  ],
+  "entries": [
+    {
+      "name": "00-system-overview-fig1",
+      "manifest": "docs/diagrams/reviews/00-system-overview-fig1/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 9.950487,
+      "final_arrows": 6,
+      "owned_paths": [
+        "docs/diagrams/src/00-system-overview-fig1.json",
+        "docs/diagrams/src/00-system-overview-fig1.drawio",
+        "docs/diagrams/drawio/generated/00-system-overview-fig1.drawio",
+        "docs/diagrams/00-system-overview-fig1.png",
+        "docs/diagrams/00-system-overview-fig1.hash.txt",
+        "docs/diagrams/reviews/00-system-overview-fig1/"
+      ]
+    },
+    {
+      "name": "00-system-overview-fig2",
+      "manifest": "docs/diagrams/reviews/00-system-overview-fig2/iteration-manifest.json",
+      "final_pass": 5,
+      "growth_ratio": 10.277496,
+      "final_arrows": 8,
+      "owned_paths": [
+        "docs/diagrams/src/00-system-overview-fig2.json",
+        "docs/diagrams/src/00-system-overview-fig2.drawio",
+        "docs/diagrams/drawio/generated/00-system-overview-fig2.drawio",
+        "docs/diagrams/00-system-overview-fig2.png",
+        "docs/diagrams/00-system-overview-fig2.hash.txt",
+        "docs/diagrams/reviews/00-system-overview-fig2/"
+      ]
+    },
+    {
+      "name": "00-system-overview-fig5",
+      "manifest": "docs/diagrams/reviews/00-system-overview-fig5/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.336159,
+      "final_arrows": 8,
+      "owned_paths": [
+        "docs/diagrams/src/00-system-overview-fig5.json",
+        "docs/diagrams/src/00-system-overview-fig5.drawio",
+        "docs/diagrams/drawio/generated/00-system-overview-fig5.drawio",
+        "docs/diagrams/00-system-overview-fig5.png",
+        "docs/diagrams/00-system-overview-fig5.hash.txt",
+        "docs/diagrams/reviews/00-system-overview-fig5/"
+      ]
+    },
+    {
+      "name": "agent-definition-fig1",
+      "manifest": "docs/diagrams/reviews/agent-definition-fig1/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.11782,
+      "final_arrows": 7,
+      "owned_paths": [
+        "docs/diagrams/src/agent-definition-fig1.json",
+        "docs/diagrams/src/agent-definition-fig1.drawio",
+        "docs/diagrams/drawio/generated/agent-definition-fig1.drawio",
+        "docs/diagrams/agent-definition-fig1.png",
+        "docs/diagrams/agent-definition-fig1.hash.txt",
+        "docs/diagrams/reviews/agent-definition-fig1/"
+      ]
+    },
+    {
+      "name": "agent-framework-fig1",
+      "manifest": "docs/diagrams/reviews/agent-framework-fig1/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.474083,
+      "final_arrows": 9,
+      "owned_paths": [
+        "docs/diagrams/src/agent-framework-fig1.json",
+        "docs/diagrams/src/agent-framework-fig1.drawio",
+        "docs/diagrams/drawio/generated/agent-framework-fig1.drawio",
+        "docs/diagrams/agent-framework-fig1.png",
+        "docs/diagrams/agent-framework-fig1.hash.txt",
+        "docs/diagrams/reviews/agent-framework-fig1/"
+      ]
+    },
+    {
+      "name": "agent-framework-fig2",
+      "manifest": "docs/diagrams/reviews/agent-framework-fig2/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.279344,
+      "final_arrows": 8,
+      "owned_paths": [
+        "docs/diagrams/src/agent-framework-fig2.json",
+        "docs/diagrams/src/agent-framework-fig2.drawio",
+        "docs/diagrams/drawio/generated/agent-framework-fig2.drawio",
+        "docs/diagrams/agent-framework-fig2.png",
+        "docs/diagrams/agent-framework-fig2.hash.txt",
+        "docs/diagrams/reviews/agent-framework-fig2/"
+      ]
+    },
+    {
+      "name": "agent-framework-fig3",
+      "manifest": "docs/diagrams/reviews/agent-framework-fig3/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.123316,
+      "final_arrows": 7,
+      "owned_paths": [
+        "docs/diagrams/src/agent-framework-fig3.json",
+        "docs/diagrams/src/agent-framework-fig3.drawio",
+        "docs/diagrams/drawio/generated/agent-framework-fig3.drawio",
+        "docs/diagrams/agent-framework-fig3.png",
+        "docs/diagrams/agent-framework-fig3.hash.txt",
+        "docs/diagrams/reviews/agent-framework-fig3/"
+      ]
+    },
+    {
+      "name": "api-core-fig4",
+      "manifest": "docs/diagrams/reviews/api-core-fig4/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.116064,
+      "final_arrows": 7,
+      "owned_paths": [
+        "docs/diagrams/src/api-core-fig4.json",
+        "docs/diagrams/src/api-core-fig4.drawio",
+        "docs/diagrams/drawio/generated/api-core-fig4.drawio",
+        "docs/diagrams/api-core-fig4.png",
+        "docs/diagrams/api-core-fig4.hash.txt",
+        "docs/diagrams/reviews/api-core-fig4/"
+      ]
+    },
+    {
+      "name": "api-core-fig6",
+      "manifest": "docs/diagrams/reviews/api-core-fig6/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.255141,
+      "final_arrows": 8,
+      "owned_paths": [
+        "docs/diagrams/src/api-core-fig6.json",
+        "docs/diagrams/src/api-core-fig6.drawio",
+        "docs/diagrams/drawio/generated/api-core-fig6.drawio",
+        "docs/diagrams/api-core-fig6.png",
+        "docs/diagrams/api-core-fig6.hash.txt",
+        "docs/diagrams/reviews/api-core-fig6/"
+      ]
+    },
+    {
+      "name": "data-persistence-fig1",
+      "manifest": "docs/diagrams/reviews/data-persistence-fig1/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 9.179466,
+      "final_arrows": 2,
+      "owned_paths": [
+        "docs/diagrams/src/data-persistence-fig1.json",
+        "docs/diagrams/src/data-persistence-fig1.drawio",
+        "docs/diagrams/drawio/generated/data-persistence-fig1.drawio",
+        "docs/diagrams/data-persistence-fig1.png",
+        "docs/diagrams/data-persistence-fig1.hash.txt",
+        "docs/diagrams/reviews/data-persistence-fig1/"
+      ]
+    },
+    {
+      "name": "canonical-testing-boundary",
+      "manifest": "docs/diagrams/reviews/canonical-testing-boundary/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 9.20259,
+      "final_arrows": 2,
+      "owned_paths": [
+        "docs/diagrams/src/canonical-testing-boundary.json",
+        "docs/diagrams/src/canonical-testing-boundary.drawio",
+        "docs/diagrams/drawio/generated/canonical-testing-boundary.drawio",
+        "docs/diagrams/canonical-testing-boundary.png",
+        "docs/diagrams/canonical-testing-boundary.hash.txt",
+        "docs/diagrams/reviews/canonical-testing-boundary/"
+      ]
+    },
+    {
+      "name": "testing-strategy-fig1",
+      "manifest": "docs/diagrams/reviews/testing-strategy-fig1/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 9.022812,
+      "final_arrows": 0,
+      "owned_paths": [
+        "docs/diagrams/src/testing-strategy-fig1.json",
+        "docs/diagrams/src/testing-strategy-fig1.drawio",
+        "docs/diagrams/drawio/generated/testing-strategy-fig1.drawio",
+        "docs/diagrams/testing-strategy-fig1.png",
+        "docs/diagrams/testing-strategy-fig1.hash.txt",
+        "docs/diagrams/reviews/testing-strategy-fig1/"
+      ]
+    },
+    {
+      "name": "testing-strategy-fig4",
+      "manifest": "docs/diagrams/reviews/testing-strategy-fig4/iteration-manifest.json",
+      "final_pass": 4,
+      "growth_ratio": 10.051443,
+      "final_arrows": 7,
+      "owned_paths": [
+        "docs/diagrams/src/testing-strategy-fig4.json",
+        "docs/diagrams/src/testing-strategy-fig4.drawio",
+        "docs/diagrams/drawio/generated/testing-strategy-fig4.drawio",
+        "docs/diagrams/testing-strategy-fig4.png",
+        "docs/diagrams/testing-strategy-fig4.hash.txt",
+        "docs/diagrams/reviews/testing-strategy-fig4/"
+      ]
+    }
+  ]
+}

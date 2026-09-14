@@ -1,0 +1,117 @@
+{
+  "diagram": "projects-fig2",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "projects-fig2-pitch.drawio",
+    "png": "projects-fig2-pitch.png",
+    "change_record": "projects-fig2-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "projects-fig2-pass-01.drawio",
+      "png": "projects-fig2-pass-01.png",
+      "change_record": "projects-fig2-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 2141,
+      "result_meaningful_xml": 23365,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.913125
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "projects-fig2-pass-02.drawio",
+      "png": "projects-fig2-pass-02.png",
+      "change_record": "projects-fig2-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "projects-fig2-pass-03.drawio",
+      "png": "projects-fig2-pass-03.png",
+      "change_record": "projects-fig2-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "projects-fig2-pass-04.drawio",
+      "png": "projects-fig2-pass-04.png",
+      "change_record": "projects-fig2-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "run-to-project",
+          "source": "run",
+          "target": "project",
+          "relationship": "belongs to",
+          "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:194-245",
+          "result": "clean"
+        },
+        {
+          "id": "project-to-checkout",
+          "source": "project",
+          "target": "checkout",
+          "relationship": "owns",
+          "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+          "result": "clean"
+        },
+        {
+          "id": "project-to-team",
+          "source": "project",
+          "target": "team",
+          "relationship": "configures",
+          "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+          "result": "clean"
+        },
+        {
+          "id": "provider-to-checkout",
+          "source": "provider",
+          "target": "checkout",
+          "relationship": "path",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+          "result": "clean"
+        },
+        {
+          "id": "run-to-worktree",
+          "source": "run",
+          "target": "worktree",
+          "relationship": "owns",
+          "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+          "result": "clean"
+        },
+        {
+          "id": "sandbox-to-worktree",
+          "source": "sandbox",
+          "target": "worktree",
+          "relationship": "executes in",
+          "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

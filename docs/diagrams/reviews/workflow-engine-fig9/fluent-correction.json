@@ -1,0 +1,292 @@
+{
+  "diagram": "workflow-engine-fig9",
+  "source_sha256": "1ed3219a1cf2246190db2a6a0f06c47b410a6195b7ebb0fdc6aa20b1d338422c",
+  "png_sha256": "c3cd71fd9ce26063a4cf01c1fd66a37ee0bdb1ef86825556415940367e123529",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Bind contracts, not just node names"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Typed executor, start and transition contracts can reject otherwise parseable YAML."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DEFINITION AND CLASSIFICATION"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "EXECUTOR AND MESSAGE CONTRACTS"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "START, EDGE AND TERMINAL VALIDATION"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Parsed definition"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Loader-valid graph data"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "not execution proof"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CLASSIFY"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Type/gate classifier"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Known node kinds"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "renamed IDs still work"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "ERROR"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Unsupported kind"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "No concrete runtime contract"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "fail closed"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "EXECUTORS"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Executor bindings"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Concrete executor instances"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "factory integrations"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "EDGES"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Transition adapters"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Typed predicates and messages"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "not arbitrary arrows"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "TERMINALS"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Terminal outputs"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Known result contracts"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "typed completion"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "VALIDATE"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Start + edge checks"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Dry-run bindability"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "verdict start may fail"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "READY"
+    },
+    {
+      "cell": "n7-title",
+      "text": "MAF graph"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Validated executable graph"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "start executor resolved"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "FAIL"
+    },
+    {
+      "cell": "n8-title",
+      "text": "WorkflowBindException"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Unsupported contract reported"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "no silent fallback graph"
+    },
+    {
+      "cell": "e0",
+      "text": "classify"
+    },
+    {
+      "cell": "e1",
+      "text": "unknown"
+    },
+    {
+      "cell": "e2",
+      "text": "known"
+    },
+    {
+      "cell": "e3",
+      "text": "wire"
+    },
+    {
+      "cell": "e4",
+      "text": "outputs"
+    },
+    {
+      "cell": "e5",
+      "text": "check"
+    },
+    {
+      "cell": "e6",
+      "text": "check"
+    },
+    {
+      "cell": "e7",
+      "text": "valid"
+    },
+    {
+      "cell": "e8",
+      "text": "invalid"
+    },
+    {
+      "cell": "e9",
+      "text": "raise"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/workflow-engine.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "classify",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "unknown",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "known",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "wire",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n5",
+      "label": "outputs",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n6",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n5",
+      "to": "n6",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n6",
+      "to": "n7",
+      "label": "valid",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n6",
+      "to": "n8",
+      "label": "invalid",
+      "result": "clean"
+    },
+    {
+      "id": "e9",
+      "from": "n2",
+      "to": "n8",
+      "label": "raise",
+      "result": "clean"
+    }
+  ]
+}

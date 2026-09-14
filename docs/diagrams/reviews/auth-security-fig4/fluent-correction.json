@@ -1,0 +1,293 @@
+{
+  "diagram": "auth-security-fig4",
+  "source_sha256": "b946c5755055cff8fb65306db6e6ba3ae4046eccd802dfc6775cde6f9f126e36",
+  "png_sha256": "3c1aaebee37c726cf54febb3be4b48332f46933ae6a133a09ab5607b6eda83e3",
+  "prior_model": "docs\\diagrams\\reviews\\auth-security-fig4\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "MCP trusts the broker, not GitHub"
+    },
+    {
+      "cell": "takeaway",
+      "text": "OAuth and assistant turns obtain Agentweaver broker tokens; MCP and API validate independently."
+    },
+    {
+      "cell": "group-title0",
+      "text": "BROKER ISSUANCE"
+    },
+    {
+      "cell": "group-title1",
+      "text": "VALIDATION AND RESOURCE ACCESS"
+    },
+    {
+      "cell": "n0-title",
+      "text": "External MCP client"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "OAuth 2.1 + PKCE S256"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "Discovery and authorization"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "Code exchange / token refresh"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "Entra user sign-in"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "CLIENT"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Authorization server"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Agentweaver-issued broker"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "Entra-backed user consent"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Sign scoped access token"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "Revocable refresh family"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "ISSUER"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Assistant API"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Separate internal issuance"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "5-minute broker + renewal"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "Not the browser bearer"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "Held pod gets refreshed"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "ASSISTANT"
+    },
+    {
+      "cell": "n3-title",
+      "text": "MCP validation"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "OpenIddict + strict checks"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "Key id + RS256 signature"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "Exact issuer / audience"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "subject • TTL • scope"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "VERIFY"
+    },
+    {
+      "cell": "n4-title",
+      "text": "API broker handler"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Revalidate forwarded token"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "PlatformOrMcp endpoints"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "AuthenticatedSelfOrMcp too"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "Same broker, not GitHub"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "VERIFY"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Resource authorization"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Persisted access checks"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Project roles still enforced"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "Revoked access fails closed"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "No implicit project grant"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "ACCESS"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 OAuth exchange"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 broker token"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 turn broker"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 forward broker"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 authorize"
+    },
+    {
+      "cell": "assurance",
+      "text": "Exact issuer + one resource audience + keyed RS256 + lifetime + subject + mcp:invoke. No raw GitHub bearer."
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "Exact MCP resource"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "One audience; mcp:invoke scope."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "OAuthServerConfiguration.cs"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Keyed signature"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "RS256 and nonempty key id required."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "McpBrokerAuthenticationHandler.cs"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Same broker forwarded"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "API revalidates and authorizes."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "AgentweaverApiClient.cs"
+    }
+  ],
+  "context_pages": [
+    "docs/mcp-oauth.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "OAuth exchange",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n3",
+      "label": "broker token",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "turn broker",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "forward broker",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "authorize",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "canonical-event-replay-tail",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-event-replay-tail.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-event-replay-tail.png",
+  "source_sha256": "1e7674317ef8cbcd507b727619311846bdfdb7552f62e4da591ce7822d118fde",
+  "png_sha256": "bcc8e1fc6217eba0eba4efc256516eabf4dcbc24aeb39ffeb758bb6898a76b97",
+  "dimensions": [
+    2091,
+    4193
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

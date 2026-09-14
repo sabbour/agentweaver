@@ -1,0 +1,2393 @@
+{
+  "version": 1,
+  "diagrams": [
+    {
+      "name": "00-system-overview-fig1",
+      "source_path": "docs/diagrams/src/00-system-overview-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/00-system-overview-fig1.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/diagrams/reviews/00-system-overview-fig1/00-system-overview-fig1-pass-01.md",
+        "docs/diagrams/reviews/00-system-overview-fig1/00-system-overview-fig1-pass-02.md",
+        "docs/diagrams/reviews/00-system-overview-fig1/00-system-overview-fig1-pass-03.md",
+        "docs/diagrams/reviews/00-system-overview-fig1/00-system-overview-fig1-pass-04.md",
+        "docs/diagrams/reviews/00-system-overview-fig1/00-system-overview-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "00-system-overview-fig2",
+      "source_path": "docs/diagrams/src/00-system-overview-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/00-system-overview-fig2.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pass-01.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pass-02.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pass-03.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pass-04.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pass-05.md",
+        "docs/diagrams/reviews/00-system-overview-fig2/00-system-overview-fig2-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "00-system-overview-fig5",
+      "source_path": "docs/diagrams/src/00-system-overview-fig5.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/00-system-overview-fig5.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/diagrams/reviews/00-system-overview-fig5/00-system-overview-fig5-pass-01.md",
+        "docs/diagrams/reviews/00-system-overview-fig5/00-system-overview-fig5-pass-02.md",
+        "docs/diagrams/reviews/00-system-overview-fig5/00-system-overview-fig5-pass-03.md",
+        "docs/diagrams/reviews/00-system-overview-fig5/00-system-overview-fig5-pass-04.md",
+        "docs/diagrams/reviews/00-system-overview-fig5/00-system-overview-fig5-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-definition-fig1",
+      "source_path": "docs/diagrams/src/agent-definition-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/agent-definition-fig1.png",
+      "references": [
+        "docs/deep-dive/agent-definition.md",
+        "docs/diagrams/reviews/agent-definition-fig1/agent-definition-fig1-pass-01.md",
+        "docs/diagrams/reviews/agent-definition-fig1/agent-definition-fig1-pass-02.md",
+        "docs/diagrams/reviews/agent-definition-fig1/agent-definition-fig1-pass-03.md",
+        "docs/diagrams/reviews/agent-definition-fig1/agent-definition-fig1-pass-04.md",
+        "docs/diagrams/reviews/agent-definition-fig1/agent-definition-fig1-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/agent-definition.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-framework-fig1",
+      "source_path": "docs/diagrams/src/agent-framework-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/agent-framework-fig1.png",
+      "references": [
+        "docs/deep-dive/agent-framework.md",
+        "docs/diagrams/reviews/agent-framework-fig1/agent-framework-fig1-pass-01.md",
+        "docs/diagrams/reviews/agent-framework-fig1/agent-framework-fig1-pass-02.md",
+        "docs/diagrams/reviews/agent-framework-fig1/agent-framework-fig1-pass-03.md",
+        "docs/diagrams/reviews/agent-framework-fig1/agent-framework-fig1-pass-04.md",
+        "docs/diagrams/reviews/agent-framework-fig1/agent-framework-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-framework-fig2",
+      "source_path": "docs/diagrams/src/agent-framework-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/agent-framework-fig2.png",
+      "references": [
+        "docs/deep-dive/agent-framework.md",
+        "docs/diagrams/reviews/agent-framework-fig2/agent-framework-fig2-pass-01.md",
+        "docs/diagrams/reviews/agent-framework-fig2/agent-framework-fig2-pass-02.md",
+        "docs/diagrams/reviews/agent-framework-fig2/agent-framework-fig2-pass-03.md",
+        "docs/diagrams/reviews/agent-framework-fig2/agent-framework-fig2-pass-04.md",
+        "docs/diagrams/reviews/agent-framework-fig2/agent-framework-fig2-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-framework-fig3",
+      "source_path": "docs/diagrams/src/agent-framework-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/agent-framework-fig3.png",
+      "references": [
+        "docs/deep-dive/agent-framework.md",
+        "docs/diagrams/reviews/agent-framework-fig3/agent-framework-fig3-pass-01.md",
+        "docs/diagrams/reviews/agent-framework-fig3/agent-framework-fig3-pass-02.md",
+        "docs/diagrams/reviews/agent-framework-fig3/agent-framework-fig3-pass-03.md",
+        "docs/diagrams/reviews/agent-framework-fig3/agent-framework-fig3-pass-04.md",
+        "docs/diagrams/reviews/agent-framework-fig3/agent-framework-fig3-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-runtime-fig2",
+      "source_path": "docs/diagrams/src/agent-runtime-fig2.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/agent-runtime-fig2.png",
+      "references": [
+        "docs/deep-dive/agent-runtime.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "agent-runtime-fig3",
+      "source_path": "docs/diagrams/src/agent-runtime-fig3.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/agent-runtime-fig3.png",
+      "references": [
+        "docs/deep-dive/agent-runtime.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "api-core-fig4",
+      "source_path": "docs/diagrams/src/api-core-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/api-core-fig4.png",
+      "references": [
+        "docs/deep-dive/api-core.md",
+        "docs/diagrams/reviews/api-core-fig4/api-core-fig4-pass-01.md",
+        "docs/diagrams/reviews/api-core-fig4/api-core-fig4-pass-02.md",
+        "docs/diagrams/reviews/api-core-fig4/api-core-fig4-pass-03.md",
+        "docs/diagrams/reviews/api-core-fig4/api-core-fig4-pass-04.md",
+        "docs/diagrams/reviews/api-core-fig4/api-core-fig4-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "api-core-fig6",
+      "source_path": "docs/diagrams/src/api-core-fig6.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/api-core-fig6.png",
+      "references": [
+        "docs/deep-dive/api-core.md",
+        "docs/diagrams/reviews/api-core-fig6/api-core-fig6-pass-01.md",
+        "docs/diagrams/reviews/api-core-fig6/api-core-fig6-pass-02.md",
+        "docs/diagrams/reviews/api-core-fig6/api-core-fig6-pass-03.md",
+        "docs/diagrams/reviews/api-core-fig6/api-core-fig6-pass-04.md",
+        "docs/diagrams/reviews/api-core-fig6/api-core-fig6-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "assistant-runtime-fig1",
+      "source_path": "docs/diagrams/src/assistant-runtime-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/assistant-runtime-fig1.png",
+      "references": [
+        "docs/deep-dive/assistant-runtime.md",
+        "docs/diagrams/reviews/assistant-runtime-fig1/native-pitch-remediation/assistant-runtime-fig1-pitch.md",
+        "docs/diagrams/reviews/assistant-runtime-fig1/promotion-status.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "auth-security-fig1",
+      "source_path": "docs/diagrams/src/auth-security-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/auth-security-fig1.png",
+      "references": [
+        "docs/design/auth-architecture-plan.md",
+        "docs/diagrams/reviews/auth-security-fig1/native-pitch-remediation/auth-security-fig1-pitch.md",
+        "docs/diagrams/reviews/auth-security-fig1/promotion-status.md"
+      ],
+      "referenced_areas": [
+        "design",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "auth-security-fig4",
+      "source_path": "docs/diagrams/src/auth-security-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/auth-security-fig4.png",
+      "references": [
+        "docs/diagrams/reviews/auth-security-fig4/native-pitch-remediation/auth-security-fig4-pitch.md",
+        "docs/diagrams/reviews/auth-security-fig4/promotion-status.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-a2a-execution",
+      "source_path": "docs/diagrams/src/canonical-a2a-execution.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-a2a-execution.png",
+      "references": [
+        "docs/experience/a2a-distributed-agents.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-agent-communication-a2a",
+      "source_path": "docs/diagrams/src/canonical-agent-communication-a2a.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/canonical-agent-communication-a2a.png",
+      "references": [
+        "docs/deep-dive/a2a-bridge.md",
+        "docs/deep-dive/agent-communication.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/a2a.md",
+        "docs/reference/agent-communication.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-agent-communication-handoff",
+      "source_path": "docs/diagrams/src/canonical-agent-communication-handoff.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-agent-communication-handoff.png",
+      "references": [
+        "docs/deep-dive/agent-communication.md",
+        "docs/diagrams/reviews/canonical-agent-communication-handoff/canonical-agent-communication-handoff-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/experience/agent-communication.md",
+        "docs/reference/agent-communication.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "experience",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-agent-communication-shared",
+      "source_path": "docs/diagrams/src/canonical-agent-communication-shared.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/canonical-agent-communication-shared.png",
+      "references": [
+        "docs/deep-dive/agent-communication.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/agent-communication.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-aks-components",
+      "source_path": "docs/diagrams/src/canonical-aks-components.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-aks-components.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/deep-dive/infra-deployment.md",
+        "docs/diagrams/reviews/canonical-aks-components/native-pitch-remediation/canonical-aks-components-pitch.md",
+        "docs/diagrams/reviews/canonical-aks-components/promotion-status.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-aks-network",
+      "source_path": "docs/diagrams/src/canonical-aks-network.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-aks-network.png",
+      "references": [
+        "docs/guide/architecture-aks.md"
+      ],
+      "referenced_areas": [
+        "guide"
+      ],
+      "owner_area": "guide",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-api-host",
+      "source_path": "docs/diagrams/src/canonical-api-host.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-api-host.png",
+      "references": [
+        "docs/deep-dive/api-core.md",
+        "docs/diagrams/reviews/canonical-api-host/canonical-api-host-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-board-lifecycle",
+      "source_path": "docs/diagrams/src/canonical-board-lifecycle.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-board-lifecycle.png",
+      "references": [
+        "docs/diagrams/reviews/canonical-board-lifecycle/canonical-board-lifecycle-pitch.md",
+        "docs/experience/runs-board-watch.md",
+        "docs/experience/workflows-backlog.md",
+        "docs/guide/board.md",
+        "docs/guide/example-scenarios.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience",
+        "guide"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-coordinator-architecture",
+      "source_path": "docs/diagrams/src/canonical-coordinator-architecture.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-coordinator-architecture.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/deep-dive/coordinator-internals.md",
+        "docs/deep-dive/frontend.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/diagrams/reviews/canonical-coordinator-architecture.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-coordinator-journey",
+      "source_path": "docs/diagrams/src/canonical-coordinator-journey.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-coordinator-journey.png",
+      "references": [
+        "docs/diagrams/reviews/canonical-coordinator-journey/canonical-coordinator-journey-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/experience/00-overview.md",
+        "docs/experience/coordinator-orchestration.md",
+        "docs/guide/index.md",
+        "docs/reference/api.md",
+        "docs/reference/coordinator.md",
+        "docs/reference/mcp.md",
+        "docs/reference/web.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience",
+        "guide",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-default-workflow",
+      "source_path": "docs/diagrams/src/canonical-default-workflow.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-default-workflow.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/deep-dive/workflow-engine.md",
+        "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-upgrade.md",
+        "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-02.md",
+        "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-03.md",
+        "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-04.md",
+        "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pitch.md",
+        "docs/diagrams/reviews/canonical-default-workflow/style-calibration/calibration-report.md",
+        "docs/guide/review.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "guide"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-durable-event-stream",
+      "source_path": "docs/diagrams/src/canonical-durable-event-stream.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-durable-event-stream.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/diagrams/reviews/canonical-durable-event-stream/canonical-durable-event-stream-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/diagrams/reviews/reference-scaling-data-layer-fig1/research-scaling.md",
+        "docs/reference/api.md",
+        "docs/reference/events.md",
+        "docs/reference/scaling-data-layer.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-durable-event-stream-sequence",
+      "source_path": "docs/diagrams/src/canonical-durable-event-stream-sequence.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-durable-event-stream-sequence.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/deep-dive/api-core.md",
+        "docs/diagrams/reviews/canonical-durable-event-stream-sequence/canonical-durable-event-stream-sequence-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-memory-context",
+      "source_path": "docs/diagrams/src/canonical-memory-context.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-memory-context.png",
+      "references": [
+        "docs/deep-dive/data-persistence.md",
+        "docs/deep-dive/memory-decisions.md",
+        "docs/diagrams/reviews/canonical-memory-context/native-pitch-remediation/canonical-memory-context-pitch.md",
+        "docs/diagrams/reviews/canonical-memory-context/promotion-status.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/memory.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-provider-admission",
+      "source_path": "docs/diagrams/src/canonical-provider-admission.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-provider-admission.png",
+      "references": [
+        "docs/deep-dive/api-core.md",
+        "docs/diagrams/reviews/canonical-provider-admission/native-pitch-remediation/canonical-provider-admission-pitch.md",
+        "docs/diagrams/reviews/canonical-provider-admission/promotion-status.md",
+        "docs/reference/api.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-sandbox-boundary",
+      "source_path": "docs/diagrams/src/canonical-sandbox-boundary.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-sandbox-boundary.png",
+      "references": [
+        "docs/deep-dive/00-system-overview.md",
+        "docs/deep-dive/sandbox.md",
+        "docs/deep-dive/sandboxed-execution.md",
+        "docs/diagrams/reviews/canonical-sandbox-boundary/native-pitch-remediation/canonical-sandbox-boundary-pitch.md",
+        "docs/diagrams/reviews/canonical-sandbox-boundary/promotion-status.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-sandbox-experience",
+      "source_path": "docs/diagrams/src/canonical-sandbox-experience.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-sandbox-experience.png",
+      "references": [
+        "docs/diagrams/reviews/canonical-sandbox-experience/native-pitch-remediation/canonical-sandbox-experience-pitch.md",
+        "docs/diagrams/reviews/canonical-sandbox-experience/promotion-status.md",
+        "docs/experience/sandbox-pod-execution.md",
+        "docs/guide/runs.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience",
+        "guide"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-sandbox-pod-evolution",
+      "source_path": "docs/diagrams/src/canonical-sandbox-pod-evolution.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/canonical-sandbox-pod-evolution.png",
+      "references": [
+        "docs/deep-dive/distributed-execution-scaling.md",
+        "docs/deep-dive/sandbox-pod-execution.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-testing-boundary",
+      "source_path": "docs/diagrams/src/canonical-testing-boundary.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-testing-boundary.png",
+      "references": [
+        "docs/deep-dive/testing-strategy.md",
+        "docs/diagrams/reviews/canonical-testing-boundary/canonical-testing-boundary-pass-01.md",
+        "docs/diagrams/reviews/canonical-testing-boundary/canonical-testing-boundary-pass-02.md",
+        "docs/diagrams/reviews/canonical-testing-boundary/canonical-testing-boundary-pass-03.md",
+        "docs/diagrams/reviews/canonical-testing-boundary/canonical-testing-boundary-pass-04.md",
+        "docs/diagrams/reviews/canonical-testing-boundary/canonical-testing-boundary-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-workflow-authoring",
+      "source_path": "docs/diagrams/src/canonical-workflow-authoring.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-workflow-authoring.png",
+      "references": [
+        "docs/diagrams/reviews/canonical-workflow-authoring/canonical-workflow-authoring-pitch.md",
+        "docs/experience/workflows-backlog.md",
+        "docs/guide/workflows.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience",
+        "guide"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-workflow-invocation",
+      "source_path": "docs/diagrams/src/canonical-workflow-invocation.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-workflow-invocation.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "canonical-workflow-selection",
+      "source_path": "docs/diagrams/src/canonical-workflow-selection.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/canonical-workflow-selection.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md",
+        "docs/deep-dive/workflow-selection.md",
+        "docs/diagrams/reviews/canonical-workflow-selection/canonical-workflow-selection-pass-01-upgrade.md",
+        "docs/diagrams/reviews/canonical-workflow-selection/canonical-workflow-selection-pass-02.md",
+        "docs/diagrams/reviews/canonical-workflow-selection/canonical-workflow-selection-pass-03.md",
+        "docs/diagrams/reviews/canonical-workflow-selection/canonical-workflow-selection-pass-04.md",
+        "docs/diagrams/reviews/canonical-workflow-selection/canonical-workflow-selection-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/reference/coordinator.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "coordinator-internals-fig2",
+      "source_path": "docs/diagrams/src/coordinator-internals-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/coordinator-internals-fig2.png",
+      "references": [
+        "docs/deep-dive/coordinator-internals.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "coordinator-internals-fig3",
+      "source_path": "docs/diagrams/src/coordinator-internals-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/coordinator-internals-fig3.png",
+      "references": [
+        "docs/deep-dive/coordinator-internals.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "coordinator-internals-fig4",
+      "source_path": "docs/diagrams/src/coordinator-internals-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/coordinator-internals-fig4.png",
+      "references": [
+        "docs/deep-dive/coordinator-internals.md",
+        "docs/deep-dive/review-merge.md",
+        "docs/diagrams/reviews/coordinator-internals-fig4/coordinator-internals-fig4-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "data-persistence-fig1",
+      "source_path": "docs/diagrams/src/data-persistence-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/data-persistence-fig1.png",
+      "references": [
+        "docs/deep-dive/data-persistence.md",
+        "docs/diagrams/reviews/data-persistence-fig1/data-persistence-fig1-pass-01.md",
+        "docs/diagrams/reviews/data-persistence-fig1/data-persistence-fig1-pass-02.md",
+        "docs/diagrams/reviews/data-persistence-fig1/data-persistence-fig1-pass-03.md",
+        "docs/diagrams/reviews/data-persistence-fig1/data-persistence-fig1-pass-04.md",
+        "docs/diagrams/reviews/data-persistence-fig1/data-persistence-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "distributed-execution-scaling-fig3",
+      "source_path": "docs/diagrams/src/distributed-execution-scaling-fig3.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/distributed-execution-scaling-fig3.png",
+      "references": [
+        "docs/deep-dive/distributed-execution-scaling.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "distributed-execution-scaling-fig4",
+      "source_path": "docs/diagrams/src/distributed-execution-scaling-fig4.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/distributed-execution-scaling-fig4.png",
+      "references": [
+        "docs/deep-dive/agent-runtime.md",
+        "docs/deep-dive/distributed-execution-scaling.md",
+        "docs/deep-dive/events-observability.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "distributed-execution-scaling-fig5",
+      "source_path": "docs/diagrams/src/distributed-execution-scaling-fig5.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/distributed-execution-scaling-fig5.png",
+      "references": [
+        "docs/deep-dive/distributed-execution-scaling.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "email-architecture",
+      "source_path": "docs/diagrams/src/email-architecture.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/email-architecture.png",
+      "references": [
+        "docs/diagrams/reviews/canonical-provider-admission/readme-visual-coverage.md",
+        "docs/diagrams/reviews/canonical-provider-admission/retained-concepts-evidence.md",
+        "docs/diagrams/reviews/canonical-provider-admission/shared-execution.md",
+        "docs/diagrams/reviews/email-architecture/email-architecture-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "email-components",
+      "source_path": "docs/diagrams/src/email-components.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/email-components.png",
+      "references": [
+        "docs/diagrams/reviews/email-components/email-components-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "email-coordinator-workflow",
+      "source_path": "docs/diagrams/src/email-coordinator-workflow.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/email-coordinator-workflow.png",
+      "references": [
+        "docs/diagrams/reviews/email-coordinator-workflow/email-coordinator-workflow-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-00-overview-fig1",
+      "source_path": "docs/diagrams/src/experience-00-overview-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-00-overview-fig1.png",
+      "references": [
+        "docs/experience/00-overview.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-a2a-distributed-agents-fig2",
+      "source_path": "docs/diagrams/src/experience-a2a-distributed-agents-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-a2a-distributed-agents-fig2.png",
+      "references": [
+        "docs/experience/a2a-distributed-agents.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-mcp-client-fig1",
+      "source_path": "docs/diagrams/src/experience-mcp-client-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-mcp-client-fig1.png",
+      "references": [
+        "docs/experience/00-overview.md",
+        "docs/experience/mcp-client.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-onboarding-auth-fig1",
+      "source_path": "docs/diagrams/src/experience-onboarding-auth-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-onboarding-auth-fig1.png",
+      "references": [
+        "docs/experience/onboarding-auth.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-onboarding-auth-fig2",
+      "source_path": "docs/diagrams/src/experience-onboarding-auth-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-onboarding-auth-fig2.png",
+      "references": [
+        "docs/experience/onboarding-auth.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-operations-fig1",
+      "source_path": "docs/diagrams/src/experience-operations-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-operations-fig1.png",
+      "references": [
+        "docs/experience/operations.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-review-workspace-merge-fig1",
+      "source_path": "docs/diagrams/src/experience-review-workspace-merge-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-review-workspace-merge-fig1.png",
+      "references": [
+        "docs/diagrams/reviews/experience-review-workspace-merge-fig1/research-orchestration.md",
+        "docs/experience/review-workspace-merge.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-review-workspace-merge-fig2",
+      "source_path": "docs/diagrams/src/experience-review-workspace-merge-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-review-workspace-merge-fig2.png",
+      "references": [
+        "docs/diagrams/reviews/experience-review-workspace-merge-fig1/research-orchestration.md",
+        "docs/experience/review-workspace-merge.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-sandbox-pod-execution-fig3",
+      "source_path": "docs/diagrams/src/experience-sandbox-pod-execution-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-sandbox-pod-execution-fig3.png",
+      "references": [
+        "docs/experience/sandbox-pod-execution.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-scaling-operations-fig1",
+      "source_path": "docs/diagrams/src/experience-scaling-operations-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-scaling-operations-fig1.png",
+      "references": [
+        "docs/experience/scaling-operations.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-scaling-operations-fig3",
+      "source_path": "docs/diagrams/src/experience-scaling-operations-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-scaling-operations-fig3.png",
+      "references": [
+        "docs/experience/scaling-operations.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-team-casting-memory-fig1",
+      "source_path": "docs/diagrams/src/experience-team-casting-memory-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-team-casting-memory-fig1.png",
+      "references": [
+        "docs/experience/team-casting-memory.md"
+      ],
+      "referenced_areas": [
+        "experience"
+      ],
+      "owner_area": "experience",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "experience-workflows-backlog-fig3",
+      "source_path": "docs/diagrams/src/experience-workflows-backlog-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/experience-workflows-backlog-fig3.png",
+      "references": [
+        "docs/diagrams/reviews/experience-review-workspace-merge-fig1/research-orchestration.md",
+        "docs/experience/operations.md",
+        "docs/experience/workflows-backlog.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "experience"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "frontend-fig1",
+      "source_path": "docs/diagrams/src/frontend-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/frontend-fig1.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/diagrams/reviews/frontend-fig1/frontend-fig1-pass-01.md",
+        "docs/diagrams/reviews/frontend-fig1/frontend-fig1-pass-02.md",
+        "docs/diagrams/reviews/frontend-fig1/frontend-fig1-pass-03.md",
+        "docs/diagrams/reviews/frontend-fig1/frontend-fig1-pass-04.md",
+        "docs/diagrams/reviews/frontend-fig1/frontend-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "frontend-fig2",
+      "source_path": "docs/diagrams/src/frontend-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/frontend-fig2.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/diagrams/reviews/frontend-fig2/frontend-fig2-pass-01.md",
+        "docs/diagrams/reviews/frontend-fig2/frontend-fig2-pass-02.md",
+        "docs/diagrams/reviews/frontend-fig2/frontend-fig2-pass-03.md",
+        "docs/diagrams/reviews/frontend-fig2/frontend-fig2-pass-04.md",
+        "docs/diagrams/reviews/frontend-fig2/frontend-fig2-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "frontend-fig3",
+      "source_path": "docs/diagrams/src/frontend-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/frontend-fig3.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/diagrams/reviews/frontend-fig3/frontend-fig3-pass-01.md",
+        "docs/diagrams/reviews/frontend-fig3/frontend-fig3-pass-02.md",
+        "docs/diagrams/reviews/frontend-fig3/frontend-fig3-pass-03.md",
+        "docs/diagrams/reviews/frontend-fig3/frontend-fig3-pass-04.md",
+        "docs/diagrams/reviews/frontend-fig3/frontend-fig3-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "frontend-fig6",
+      "source_path": "docs/diagrams/src/frontend-fig6.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/frontend-fig6.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/diagrams/reviews/frontend-fig6/frontend-fig6-pass-01.md",
+        "docs/diagrams/reviews/frontend-fig6/frontend-fig6-pass-02.md",
+        "docs/diagrams/reviews/frontend-fig6/frontend-fig6-pass-03.md",
+        "docs/diagrams/reviews/frontend-fig6/frontend-fig6-pass-04.md",
+        "docs/diagrams/reviews/frontend-fig6/frontend-fig6-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "frontend-fig7",
+      "source_path": "docs/diagrams/src/frontend-fig7.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/frontend-fig7.png",
+      "references": [
+        "docs/deep-dive/frontend.md",
+        "docs/diagrams/reviews/frontend-fig7/frontend-fig7-pass-01.md",
+        "docs/diagrams/reviews/frontend-fig7/frontend-fig7-pass-02.md",
+        "docs/diagrams/reviews/frontend-fig7/frontend-fig7-pass-03.md",
+        "docs/diagrams/reviews/frontend-fig7/frontend-fig7-pass-04.md",
+        "docs/diagrams/reviews/frontend-fig7/frontend-fig7-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "git-integration-fig1",
+      "source_path": "docs/diagrams/src/git-integration-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/git-integration-fig1.png",
+      "references": [
+        "docs/deep-dive/git-integration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "git-integration-fig2",
+      "source_path": "docs/diagrams/src/git-integration-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/git-integration-fig2.png",
+      "references": [
+        "docs/deep-dive/git-integration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "guide-architecture-aks-fig1",
+      "source_path": "docs/diagrams/src/guide-architecture-aks-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/guide-architecture-aks-fig1.png",
+      "references": [
+        "docs/guide/architecture-aks.md"
+      ],
+      "referenced_areas": [
+        "guide"
+      ],
+      "owner_area": "guide",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "guide-architecture-aks-fig5",
+      "source_path": "docs/diagrams/src/guide-architecture-aks-fig5.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/guide-architecture-aks-fig5.png",
+      "references": [
+        "docs/guide/architecture-aks.md"
+      ],
+      "referenced_areas": [
+        "guide"
+      ],
+      "owner_area": "guide",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "guide-example-scenarios-fig3",
+      "source_path": "docs/diagrams/src/guide-example-scenarios-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/guide-example-scenarios-fig3.png",
+      "references": [
+        "docs/guide/example-scenarios.md"
+      ],
+      "referenced_areas": [
+        "guide"
+      ],
+      "owner_area": "guide",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "infra-deployment-fig2",
+      "source_path": "docs/diagrams/src/infra-deployment-fig2.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/infra-deployment-fig2.png",
+      "references": [
+        "docs/deep-dive/infra-deployment.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "infra-deployment-fig3",
+      "source_path": "docs/diagrams/src/infra-deployment-fig3.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/infra-deployment-fig3.png",
+      "references": [
+        "docs/deep-dive/infra-deployment.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "infra-deployment-fig4",
+      "source_path": "docs/diagrams/src/infra-deployment-fig4.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/infra-deployment-fig4.png",
+      "references": [
+        "docs/deep-dive/infra-deployment.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "live-preview-provisioning-fig1",
+      "source_path": "docs/diagrams/src/live-preview-provisioning-fig1.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/live-preview-provisioning-fig1.png",
+      "references": [
+        "docs/deep-dive/live-preview-provisioning.md",
+        "docs/diagrams/reviews/reference-scaling-data-layer-fig1/research-scaling.md",
+        "docs/experience/live-preview-provisioning.md",
+        "docs/reference/live-preview-provisioning.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "experience",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "mcp-server-fig2",
+      "source_path": "docs/diagrams/src/mcp-server-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/mcp-server-fig2.png",
+      "references": [
+        "docs/deep-dive/mcp-server.md",
+        "docs/diagrams/reviews/mcp-server-fig2/mcp-server-fig2-pass-01.md",
+        "docs/diagrams/reviews/mcp-server-fig2/mcp-server-fig2-pass-02.md",
+        "docs/diagrams/reviews/mcp-server-fig2/mcp-server-fig2-pass-03.md",
+        "docs/diagrams/reviews/mcp-server-fig2/mcp-server-fig2-pass-04.md",
+        "docs/diagrams/reviews/mcp-server-fig2/mcp-server-fig2-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "memory-decisions-fig1",
+      "source_path": "docs/diagrams/src/memory-decisions-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/memory-decisions-fig1.png",
+      "references": [
+        "docs/deep-dive/memory-decisions.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "memory-decisions-fig2",
+      "source_path": "docs/diagrams/src/memory-decisions-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/memory-decisions-fig2.png",
+      "references": [
+        "docs/deep-dive/memory-decisions.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "memory-decisions-fig4",
+      "source_path": "docs/diagrams/src/memory-decisions-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/memory-decisions-fig4.png",
+      "references": [
+        "docs/deep-dive/memory-decisions.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "orchestration-fig10",
+      "source_path": "docs/diagrams/src/orchestration-fig10.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/orchestration-fig10.png",
+      "references": [
+        "docs/deep-dive/orchestration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "orchestration-fig2",
+      "source_path": "docs/diagrams/src/orchestration-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/orchestration-fig2.png",
+      "references": [
+        "docs/deep-dive/orchestration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "orchestration-fig3",
+      "source_path": "docs/diagrams/src/orchestration-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/orchestration-fig3.png",
+      "references": [
+        "docs/deep-dive/orchestration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "orchestration-fig8",
+      "source_path": "docs/diagrams/src/orchestration-fig8.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/orchestration-fig8.png",
+      "references": [
+        "docs/deep-dive/orchestration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "orchestration-fig9",
+      "source_path": "docs/diagrams/src/orchestration-fig9.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/orchestration-fig9.png",
+      "references": [
+        "docs/deep-dive/orchestration.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "project-generation-model-settings-fig1",
+      "source_path": "docs/diagrams/src/project-generation-model-settings-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/project-generation-model-settings-fig1.png",
+      "references": [
+        "docs/deep-dive/project-generation-model-settings.md",
+        "docs/diagrams/reviews/project-generation-model-settings-fig1/project-generation-model-settings-fig1-pass-01.md",
+        "docs/diagrams/reviews/project-generation-model-settings-fig1/project-generation-model-settings-fig1-pass-02.md",
+        "docs/diagrams/reviews/project-generation-model-settings-fig1/project-generation-model-settings-fig1-pass-03.md",
+        "docs/diagrams/reviews/project-generation-model-settings-fig1/project-generation-model-settings-fig1-pass-04.md",
+        "docs/diagrams/reviews/project-generation-model-settings-fig1/project-generation-model-settings-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "project-skills-fig1",
+      "source_path": "docs/diagrams/src/project-skills-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/project-skills-fig1.png",
+      "references": [
+        "docs/deep-dive/project-skills.md",
+        "docs/diagrams/reviews/project-skills-fig1/project-skills-fig1-pass-01.md",
+        "docs/diagrams/reviews/project-skills-fig1/project-skills-fig1-pass-02.md",
+        "docs/diagrams/reviews/project-skills-fig1/project-skills-fig1-pass-03.md",
+        "docs/diagrams/reviews/project-skills-fig1/project-skills-fig1-pass-04.md",
+        "docs/diagrams/reviews/project-skills-fig1/project-skills-fig1-pitch.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/project-skills.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "projects-fig1",
+      "source_path": "docs/diagrams/src/projects-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/projects-fig1.png",
+      "references": [
+        "docs/deep-dive/projects.md",
+        "docs/diagrams/reviews/projects-fig1/projects-fig1-pass-01.md",
+        "docs/diagrams/reviews/projects-fig1/projects-fig1-pass-02.md",
+        "docs/diagrams/reviews/projects-fig1/projects-fig1-pass-03.md",
+        "docs/diagrams/reviews/projects-fig1/projects-fig1-pass-04.md",
+        "docs/diagrams/reviews/projects-fig1/projects-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "projects-fig2",
+      "source_path": "docs/diagrams/src/projects-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/projects-fig2.png",
+      "references": [
+        "docs/deep-dive/projects.md",
+        "docs/diagrams/reviews/projects-fig2/projects-fig2-pass-01.md",
+        "docs/diagrams/reviews/projects-fig2/projects-fig2-pass-02.md",
+        "docs/diagrams/reviews/projects-fig2/projects-fig2-pass-03.md",
+        "docs/diagrams/reviews/projects-fig2/projects-fig2-pass-04.md",
+        "docs/diagrams/reviews/projects-fig2/projects-fig2-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "reference-a2a-fig1",
+      "source_path": "docs/diagrams/src/reference-a2a-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/reference-a2a-fig1.png",
+      "references": [
+        "docs/diagrams/reviews/reference-a2a-fig1/research-a2a.md",
+        "docs/reference/a2a.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "source_path": "docs/diagrams/src/reference-scaling-data-layer-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/reference-scaling-data-layer-fig1.png",
+      "references": [
+        "docs/diagrams/reviews/reference-scaling-data-layer-fig1/research-scaling.md",
+        "docs/reference/scaling-data-layer.md"
+      ],
+      "referenced_areas": [
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "repo-blueprint-suggestions-fig1",
+      "source_path": "docs/diagrams/src/repo-blueprint-suggestions-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/repo-blueprint-suggestions-fig1.png",
+      "references": [
+        "docs/deep-dive/repo-blueprint-suggestions.md",
+        "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/repo-blueprint-suggestions-fig1-pass-01.md",
+        "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/repo-blueprint-suggestions-fig1-pass-02.md",
+        "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/repo-blueprint-suggestions-fig1-pass-03.md",
+        "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/repo-blueprint-suggestions-fig1-pass-04.md",
+        "docs/diagrams/reviews/repo-blueprint-suggestions-fig1/repo-blueprint-suggestions-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "resilient-assembly-review-fig1",
+      "source_path": "docs/diagrams/src/resilient-assembly-review-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/resilient-assembly-review-fig1.png",
+      "references": [
+        "docs/deep-dive/resilient-assembly-review.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/reference/coordinator.md",
+        "docs/reference/events.md",
+        "docs/reference/resilient-assembly-review.md",
+        "docs/reference/unified-steering.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "review-merge-fig1",
+      "source_path": "docs/diagrams/src/review-merge-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/review-merge-fig1.png",
+      "references": [
+        "docs/deep-dive/review-merge.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "review-merge-fig4",
+      "source_path": "docs/diagrams/src/review-merge-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/review-merge-fig4.png",
+      "references": [
+        "docs/deep-dive/review-merge.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "review-merge-fig5",
+      "source_path": "docs/diagrams/src/review-merge-fig5.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/review-merge-fig5.png",
+      "references": [
+        "docs/deep-dive/orchestration.md",
+        "docs/deep-dive/review-merge.md",
+        "docs/diagrams/reviews/review-merge-fig5/review-merge-fig5-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-browser-preview-fig1",
+      "source_path": "docs/diagrams/src/sandbox-browser-preview-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/sandbox-browser-preview-fig1.png",
+      "references": [
+        "docs/deep-dive/sandbox-browser-preview.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/diagrams/reviews/reference-scaling-data-layer-fig1/research-scaling.md",
+        "docs/diagrams/reviews/sandbox-browser-preview-fig1/native-pitch-remediation/sandbox-browser-preview-fig1-pitch.md",
+        "docs/diagrams/reviews/sandbox-browser-preview-fig1/promotion-status.md",
+        "docs/experience/sandbox-browser-preview.md",
+        "docs/experience/sandbox-pod-execution.md",
+        "docs/reference/api.md",
+        "docs/reference/sandbox-browser-preview.md",
+        "docs/reference/sandbox-pods.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "experience",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-browser-preview-fig2",
+      "source_path": "docs/diagrams/src/sandbox-browser-preview-fig2.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-browser-preview-fig2.png",
+      "references": [
+        "docs/deep-dive/sandbox-browser-preview.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-fig2",
+      "source_path": "docs/diagrams/src/sandbox-fig2.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-fig2.png",
+      "references": [
+        "docs/deep-dive/sandbox-pod-execution.md",
+        "docs/deep-dive/sandbox.md",
+        "docs/deep-dive/sandboxed-execution.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-fig3",
+      "source_path": "docs/diagrams/src/sandbox-fig3.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-fig3.png",
+      "references": [
+        "docs/deep-dive/sandbox.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-pod-execution-fig4",
+      "source_path": "docs/diagrams/src/sandbox-pod-execution-fig4.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-pod-execution-fig4.png",
+      "references": [
+        "docs/deep-dive/sandbox-pod-execution.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-pod-execution-fig5",
+      "source_path": "docs/diagrams/src/sandbox-pod-execution-fig5.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-pod-execution-fig5.png",
+      "references": [
+        "docs/deep-dive/sandbox-pod-execution.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-pod-execution-fig6",
+      "source_path": "docs/diagrams/src/sandbox-pod-execution-fig6.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-pod-execution-fig6.png",
+      "references": [
+        "docs/deep-dive/a2a-bridge.md",
+        "docs/deep-dive/agent-token-delivery.md",
+        "docs/deep-dive/sandbox-pod-execution.md",
+        "docs/deep-dive/sandbox.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "sandbox-pod-execution-fig7",
+      "source_path": "docs/diagrams/src/sandbox-pod-execution-fig7.json",
+      "source_kind": "json",
+      "output_path": "docs/diagrams/sandbox-pod-execution-fig7.png",
+      "references": [
+        "docs/deep-dive/sandbox-pod-execution.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "team-casting-fig1",
+      "source_path": "docs/diagrams/src/team-casting-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/team-casting-fig1.png",
+      "references": [
+        "docs/deep-dive/team-casting.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "team-casting-fig2",
+      "source_path": "docs/diagrams/src/team-casting-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/team-casting-fig2.png",
+      "references": [
+        "docs/deep-dive/team-casting.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "team-casting-fig3",
+      "source_path": "docs/diagrams/src/team-casting-fig3.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/team-casting-fig3.png",
+      "references": [
+        "docs/deep-dive/team-casting.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "testing-strategy-fig1",
+      "source_path": "docs/diagrams/src/testing-strategy-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/testing-strategy-fig1.png",
+      "references": [
+        "docs/deep-dive/testing-strategy.md",
+        "docs/diagrams/reviews/testing-strategy-fig1/testing-strategy-fig1-pass-01.md",
+        "docs/diagrams/reviews/testing-strategy-fig1/testing-strategy-fig1-pass-02.md",
+        "docs/diagrams/reviews/testing-strategy-fig1/testing-strategy-fig1-pass-03.md",
+        "docs/diagrams/reviews/testing-strategy-fig1/testing-strategy-fig1-pass-04.md",
+        "docs/diagrams/reviews/testing-strategy-fig1/testing-strategy-fig1-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "testing-strategy-fig4",
+      "source_path": "docs/diagrams/src/testing-strategy-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/testing-strategy-fig4.png",
+      "references": [
+        "docs/deep-dive/testing-strategy.md",
+        "docs/diagrams/reviews/testing-strategy-fig4/testing-strategy-fig4-pass-01.md",
+        "docs/diagrams/reviews/testing-strategy-fig4/testing-strategy-fig4-pass-02.md",
+        "docs/diagrams/reviews/testing-strategy-fig4/testing-strategy-fig4-pass-03.md",
+        "docs/diagrams/reviews/testing-strategy-fig4/testing-strategy-fig4-pass-04.md",
+        "docs/diagrams/reviews/testing-strategy-fig4/testing-strategy-fig4-pitch.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "unified-steering-fig1",
+      "source_path": "docs/diagrams/src/unified-steering-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/unified-steering-fig1.png",
+      "references": [
+        "docs/deep-dive/unified-steering.md",
+        "docs/diagrams/reviews/reference-a2a-fig1/research-contracts.md",
+        "docs/reference/unified-steering.md"
+      ],
+      "referenced_areas": [
+        "deep-dive",
+        "diagrams",
+        "reference"
+      ],
+      "owner_area": "shared",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-agent-evaluation",
+      "source_path": "docs/diagrams/src/workflow-agent-evaluation.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-agent-evaluation.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-02.md",
+        "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-03.md",
+        "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pass-04.md",
+        "docs/diagrams/reviews/workflow-agent-evaluation/workflow-agent-evaluation-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-bug-fix",
+      "source_path": "docs/diagrams/src/workflow-bug-fix.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-bug-fix.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-bug-fix/workflow-bug-fix-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-bug-fix/workflow-bug-fix-pass-02.md",
+        "docs/diagrams/reviews/workflow-bug-fix/workflow-bug-fix-pass-03.md",
+        "docs/diagrams/reviews/workflow-bug-fix/workflow-bug-fix-pass-04.md",
+        "docs/diagrams/reviews/workflow-bug-fix/workflow-bug-fix-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-content-authoring",
+      "source_path": "docs/diagrams/src/workflow-content-authoring.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-content-authoring.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-content-authoring/workflow-content-authoring-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-content-authoring/workflow-content-authoring-pass-02.md",
+        "docs/diagrams/reviews/workflow-content-authoring/workflow-content-authoring-pass-03.md",
+        "docs/diagrams/reviews/workflow-content-authoring/workflow-content-authoring-pass-04.md",
+        "docs/diagrams/reviews/workflow-content-authoring/workflow-content-authoring-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig1",
+      "source_path": "docs/diagrams/src/workflow-engine-fig1.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig1.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig11",
+      "source_path": "docs/diagrams/src/workflow-engine-fig11.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig11.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig2",
+      "source_path": "docs/diagrams/src/workflow-engine-fig2.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig2.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig4",
+      "source_path": "docs/diagrams/src/workflow-engine-fig4.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig4.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig5",
+      "source_path": "docs/diagrams/src/workflow-engine-fig5.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig5.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-engine-fig9",
+      "source_path": "docs/diagrams/src/workflow-engine-fig9.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-engine-fig9.png",
+      "references": [
+        "docs/deep-dive/workflow-engine.md"
+      ],
+      "referenced_areas": [
+        "deep-dive"
+      ],
+      "owner_area": "deep-dive",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-incident-response",
+      "source_path": "docs/diagrams/src/workflow-incident-response.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-incident-response.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-incident-response/workflow-incident-response-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-incident-response/workflow-incident-response-pass-02.md",
+        "docs/diagrams/reviews/workflow-incident-response/workflow-incident-response-pass-03.md",
+        "docs/diagrams/reviews/workflow-incident-response/workflow-incident-response-pass-04.md",
+        "docs/diagrams/reviews/workflow-incident-response/workflow-incident-response-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-infra-ops",
+      "source_path": "docs/diagrams/src/workflow-infra-ops.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-infra-ops.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-infra-ops/workflow-infra-ops-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-infra-ops/workflow-infra-ops-pass-02.md",
+        "docs/diagrams/reviews/workflow-infra-ops/workflow-infra-ops-pass-03.md",
+        "docs/diagrams/reviews/workflow-infra-ops/workflow-infra-ops-pass-04.md",
+        "docs/diagrams/reviews/workflow-infra-ops/workflow-infra-ops-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-pm-discovery",
+      "source_path": "docs/diagrams/src/workflow-pm-discovery.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-pm-discovery.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-pm-discovery/workflow-pm-discovery-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-pm-discovery/workflow-pm-discovery-pass-02.md",
+        "docs/diagrams/reviews/workflow-pm-discovery/workflow-pm-discovery-pass-03.md",
+        "docs/diagrams/reviews/workflow-pm-discovery/workflow-pm-discovery-pass-04.md",
+        "docs/diagrams/reviews/workflow-pm-discovery/workflow-pm-discovery-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    },
+    {
+      "name": "workflow-software-delivery",
+      "source_path": "docs/diagrams/src/workflow-software-delivery.drawio",
+      "source_kind": "drawio",
+      "output_path": "docs/diagrams/workflow-software-delivery.png",
+      "references": [
+        "docs/diagrams/reviews/workflow-software-delivery/workflow-software-delivery-pass-01-upgrade.md",
+        "docs/diagrams/reviews/workflow-software-delivery/workflow-software-delivery-pass-02.md",
+        "docs/diagrams/reviews/workflow-software-delivery/workflow-software-delivery-pass-03.md",
+        "docs/diagrams/reviews/workflow-software-delivery/workflow-software-delivery-pass-04.md",
+        "docs/diagrams/reviews/workflow-software-delivery/workflow-software-delivery-pitch.md"
+      ],
+      "referenced_areas": [
+        "diagrams"
+      ],
+      "owner_area": "diagrams",
+      "disposition": "unreviewed",
+      "target": null,
+      "status": "queued",
+      "rationale": ""
+    }
+  ]
+}

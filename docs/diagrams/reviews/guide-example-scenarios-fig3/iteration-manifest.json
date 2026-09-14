@@ -1,0 +1,125 @@
+{
+  "diagram": "guide-example-scenarios-fig3",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "guide-example-scenarios-fig3-pitch.drawio",
+    "png": "guide-example-scenarios-fig3-pitch.png",
+    "change_record": "guide-example-scenarios-fig3-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "guide-example-scenarios-fig3-pass-01.drawio",
+      "png": "guide-example-scenarios-fig3-pass-01.png",
+      "change_record": "guide-example-scenarios-fig3-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 3,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 2352,
+      "result_meaningful_xml": 26392,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 11.221088
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "guide-example-scenarios-fig3-pass-02.drawio",
+      "png": "guide-example-scenarios-fig3-pass-02.png",
+      "change_record": "guide-example-scenarios-fig3-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "guide-example-scenarios-fig3-pass-03.drawio",
+      "png": "guide-example-scenarios-fig3-pass-03.png",
+      "change_record": "guide-example-scenarios-fig3-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 2
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "guide-example-scenarios-fig3-pass-04.drawio",
+      "png": "guide-example-scenarios-fig3-pass-04.png",
+      "change_record": "guide-example-scenarios-fig3-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "m1",
+          "source": "auth",
+          "target": "project",
+          "relationship": "Rightward platform authorization to project selection; repository capability remains separate.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "clean"
+        },
+        {
+          "id": "m2",
+          "source": "project",
+          "target": "team",
+          "relationship": "Rightward project preparation to confirmed team; team_cast proposal needs confirmation.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "clean"
+        },
+        {
+          "id": "m3",
+          "source": "manual",
+          "target": "observe",
+          "relationship": "Manual launch bottom down to Observe top at 50%; confirm label, separate head.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "clean"
+        },
+        {
+          "id": "m4",
+          "source": "direct",
+          "target": "observe",
+          "relationship": "Direct start bottom via y=371 to Observe top at 77%; exact x=211.1 produces downward head.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "corrected"
+        },
+        {
+          "id": "m5",
+          "source": "backlog",
+          "target": "observe",
+          "relationship": "Heartbeat reservation bottom via y=380 to Observe top at 92%; exact x=245.6, no rail junction.",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:183-245",
+          "result": "corrected"
+        },
+        {
+          "id": "m6",
+          "source": "observe",
+          "target": "files",
+          "relationship": "Rightward Observe to file inspection; list artifacts before run_get_file.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "clean"
+        },
+        {
+          "id": "m7",
+          "source": "files",
+          "target": "review",
+          "relationship": "Rightward inspected files to gated boolean review; does not guarantee success or expose request changes.",
+          "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-190; RunTools.cs:137-302,366-394; TeamTools.cs:12-79",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

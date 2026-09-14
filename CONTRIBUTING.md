@@ -30,9 +30,9 @@ npm run dev     # starts the API (http://localhost:5000) and Web UI (http://loca
 ```
 
 See the [Getting started guide](https://sabbour.me/agentweaver/guide/getting-started) for the
-full walkthrough, including configuring a GitHub OAuth App for local sign-in (the callback
-URL for local dev is `http://localhost:5000/auth/github/callback` — the API's own origin,
-no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
+full walkthrough, including Microsoft Entra configuration for local product sign-in.
+GitHub Repo App and Copilot App connections grant optional, purpose-bound capabilities;
+they are not Agentweaver sign-in providers.
 
 ## Repository layout
 
@@ -70,6 +70,10 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 3. **Add or update tests** for any behavior change (see Testing below).
 4. **Update docs** if you changed user-facing behavior, npm scripts, or configuration —
    `README.md` and `docs/guide/` are the two places most likely to need updates.
+   If documentation changes introduce, update, invalidate, consolidate, or remove an
+   architectural/process visual, consider and invoke the on-demand
+   [docs diagram audit skill](.github/skills/docs-diagram-audit/SKILL.md). Use
+   `docs-diagram-pitch` and `docs-diagram-iterate` for the resulting individual diagrams.
 5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
    on every pull request and push to `dev` or `main`, but running the affected suite
    locally first keeps the feedback loop short and avoids red PRs.
@@ -182,6 +186,7 @@ purposes:
 | `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
 | `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
+| `Documentation diagrams` | Generator tests and rendered-artifact stamp checks | Workflow validation | Diagram tooling/assets changed, as classified by `ci.yml` |
 | `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
 The repository policy requires the seven named .NET shard jobs plus the Node toolchain,
@@ -217,8 +222,9 @@ toolchain's single source of truth) through
 - push to `main` → `:sha-<short>` and `:main`
 - a published GitHub Release → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
   (`:latest` is skipped for prereleases)
-- manual `workflow_dispatch` on any ref (an arbitrary commit) → `:sha-<short>` only,
-  with an optional build-only dry run that skips the push
+- manual `workflow_dispatch` → `:sha-<short>` plus the selected ref's channel tag
+  for `dev`, `main`, or `release/vX.Y.Z`; other refs receive only `:sha-<short>`.
+  An optional build-only dry run skips the push
 
 Every build publishes the immutable `sha-<short>` tag, so any image is addressable by
 the exact commit it was built from — the same identifier model
@@ -427,6 +433,14 @@ up: it **hard-fails** a PR when a committed generated reference (e.g.
 `docs/reference/mcp-tools.md`) is stale, and posts a **non-blocking** reminder when code in
 doc-relevant paths (API endpoints, workflows, blueprints, MCP tools) changes without any
 `docs/**` update.
+
+When documentation changes introduce, update, invalidate, consolidate, or remove
+architectural/process visuals, the
+[`docs-diagram-audit`](.github/skills/docs-diagram-audit/SKILL.md) workflow is a required
+consideration and step. Run it for repository-wide or cross-page impact; record why a
+single-diagram `docs-diagram-pitch`/`docs-diagram-iterate` pass is sufficient when a full
+catalog audit is unnecessary. The audit treats repository implementation and current
+written docs as ground truth, while existing diagrams are legacy artifacts to assess.
 
 Do **not** hand-edit generated `CHANGELOG.md` release sections. Add or correct the source changeset instead; the matching GitHub Release notes project that same section (see [Releasing](RELEASING.md)). Finally, keep decision records and docs
 distinct: a `.squad/decisions/inbox/` entry captures *why* a choice was made (an internal

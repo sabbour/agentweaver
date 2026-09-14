@@ -48,7 +48,7 @@ GitHub `404`, rate-limit failures, network failures, or timeouts do not surface 
 
 | GitHub signal | How it is used |
 |---|---|
-| Repository metadata | `name`, `description`, `topics`, and `has_issues` feed both display signals and mapping text. |
+| Repository metadata | Name, description and topics contribute substring-mapping text; `has_issues` contributes display signal, not a keyword match. Rules run in order without an LLM. |
 | Languages | Top languages are displayed and any non-Markdown language marks the repo as code. |
 | Root contents | Up to eight root file names are displayed and included in mapping text. |
 
@@ -80,16 +80,15 @@ Fallback returns:
 
 The selected fallback blueprint is the first predefined catalog entry when available (`GitHubRepoBlueprintSuggestionService.cs:93`). The UI treats `fallback: true`, a missing recommendation, or a client error the same way: show a warning and offer **View all templates →**, which switches to the shared Templates tab (`apps/web/src/components/BlueprintPicker.tsx:323`, `:371`).
 
-## Related GitHub source endpoints
+## Related repository picker
 
-The suggestion route is unchanged, but the GitHub project picker that feeds it uses these existing endpoints:
+Suggestion input (`owner/repo` or supported URL) is heuristic input, not cloning/project-creation authority. The picker browses the caller's Repo App capability and submits a short-lived repository selection code:
 
-| Method & path | Returns | Notes |
+| Method | Route | Contract |
 |---|---|---|
-| `GET /api/github/accounts` | `GitHubAccountResponse[]` | Returns the authenticated user first with `type: "user"`, then organizations. The web UI renders user accounts as `@{login}` with a **You** badge. |
-| `GET /api/github/repos?account={login}` | `GitHubRepoResponse[]` | For the signed-in user's own login or omitted `account`, calls GitHub `/user/repos?affiliation=owner`; for org accounts, calls `/orgs/{org}/repos?type=all`. |
-
-Sources: `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, `:333`; `apps/web/src/api/client.ts:263`.
+| GET | `/api/github/repository-selections` | Safe installation/repository browse metadata from the live capability. |
+| POST | `/api/github/repository-selections` | Verify `repository_full_name`; mint caller-bound, expiring, single-use code. |
+| POST | `/api/projects` | Consume `repository_selection_code`; resolve clone metadata/credentials server-side. |
 
 ## See also
 
@@ -97,3 +96,5 @@ Sources: `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, 
 - [Repository blueprint suggestions — Experience](../experience/repo-blueprint-suggestions.md)
 - [Project generation model settings](./project-generation-model-settings.md)
 - [API reference](./api.md#blueprints)
+
+HTTP failures, service timeouts and unavailable repository metadata return the template fallback; caller-requested cancellation propagates.

@@ -1,0 +1,14 @@
+{
+  "name": "workflow-pm-discovery",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-pm-discovery.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-pm-discovery.png",
+  "source_sha256": "4b3ba534c7d5613e714b83f6e22f60dc1a341bd7090c10df856ed8e16e1fdac9",
+  "png_sha256": "2a5645c37718ab0a733fda293bc8463a457675dfda7e9ccffdddb79164e4c896",
+  "dimensions": [
+    2234,
+    3036
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

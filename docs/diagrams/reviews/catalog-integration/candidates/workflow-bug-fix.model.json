@@ -1,0 +1,852 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Bug Fix workflow",
+  "alt": "Bug Fix workflow: Triage, Fix, Verify, RAI Check, Build & Test, Human Review, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "triage",
+      "label": "Triage",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "fix",
+      "label": "Fix",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "verify",
+      "label": "Verify",
+      "subLabel": "qa-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "build-test",
+      "label": "Build & Test",
+      "subLabel": "qa-engineer · review",
+      "icon": "server",
+      "badge": {
+        "text": "Build & test",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "human-review",
+      "label": "Human Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "triage",
+      "to": "fix"
+    },
+    {
+      "from": "fix",
+      "to": "verify"
+    },
+    {
+      "from": "verify",
+      "to": "rai-check",
+      "label": "approved"
+    },
+    {
+      "from": "verify",
+      "to": "fix",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "verify",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "rai-check",
+      "to": "fix",
+      "label": "revise",
+      "loopback": true
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "build-test",
+      "label": "review"
+    },
+    {
+      "from": "build-test",
+      "to": "human-review",
+      "label": "approved"
+    },
+    {
+      "from": "build-test",
+      "to": "fix",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "build-test",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "human-review",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "human-review",
+      "to": "fix",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "human-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "triage",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 243.06976744186045
+        },
+        "data": {
+          "id": "triage",
+          "label": "Triage",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "fix",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 487.06976744186045
+        },
+        "data": {
+          "id": "fix",
+          "label": "Fix",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "verify",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 734.6756787719096
+        },
+        "data": {
+          "id": "verify",
+          "label": "Verify",
+          "subLabel": "qa-engineer · review",
+          "icon": "branch",
+          "badge": {
+            "text": "Peer review",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "rai-check",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 975.0697674418604
+        },
+        "data": {
+          "id": "rai-check",
+          "label": "RAI Check",
+          "subLabel": "review",
+          "icon": "branch",
+          "badge": {
+            "text": "RAI gate",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "build-test",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 1199.9545600685885
+        },
+        "data": {
+          "id": "build-test",
+          "label": "Build & Test",
+          "subLabel": "qa-engineer · review",
+          "icon": "server",
+          "badge": {
+            "text": "Build & test",
+            "tone": "teal"
+          }
+        }
+      },
+      {
+        "id": "human-review",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 1463.0697674418604
+        },
+        "data": {
+          "id": "human-review",
+          "label": "Human Review",
+          "subLabel": "review",
+          "icon": "branch",
+          "badge": {
+            "text": "Human gate",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "terminal-safety-failed",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 727.3540314012513
+        },
+        "data": {
+          "id": "terminal-safety-failed",
+          "label": "Safety Failed",
+          "icon": "window",
+          "badge": {
+            "text": "Stopped",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "terminal-declined",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 1241.7364341085272
+        },
+        "data": {
+          "id": "terminal-declined",
+          "label": "Declined",
+          "icon": "window",
+          "badge": {
+            "text": "Stopped",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "done",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 1707.0697674418604
+        },
+        "data": {
+          "id": "done",
+          "label": "Done",
+          "icon": "window",
+          "badge": {
+            "text": "Done",
+            "tone": "green"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "triage",
+        "target": "fix",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 347.06976744186045
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 487.06976744186045
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e1",
+        "source": "fix",
+        "target": "verify",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 591.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 734.6756787719096
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e2",
+        "source": "verify",
+        "target": "rai-check",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 838.6756787719096
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 975.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 906.872723106885
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "verify",
+        "target": "fix",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 526.4031007751938
+            },
+            {
+              "x": 452.5581395348837,
+              "y": 526.4031007751938
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 384.5581395348837,
+              "y": 656.5393897735516
+            },
+            "to": {
+              "x": 392.5581395348837,
+              "y": 656.5393897735516
+            }
+          },
+          "labelPos": {
+            "x": 468.5581395348837,
+            "y": 656.5393897735516
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "verify",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 995.3540314012513
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 995.3540314012513
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1281.0697674418604
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1281.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1082.5581395348836,
+            "y": 995.3540314012513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "rai-check",
+        "target": "fix",
+        "label": "revise",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 360.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 360.5581395348837,
+              "y": 551.7364341085271
+            },
+            {
+              "x": 452.5581395348837,
+              "y": 551.7364341085271
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 406.5581395348837,
+            "y": 1027.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "rai-check",
+        "target": "terminal-safety-failed",
+        "label": "safety-failed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1014.4031007751938
+            },
+            {
+              "x": 993.5681395348837,
+              "y": 1014.4031007751938
+            },
+            {
+              "x": 993.5681395348837,
+              "y": 846.0597674418605
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 846.0597674418605
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 779.3540314012513
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 779.3540314012513
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 944.5581395348837,
+            "y": 1014.4031007751938
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "rai-check",
+        "target": "done",
+        "label": "no-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1039.7364341085272
+            },
+            {
+              "x": 897.5681395348837,
+              "y": 1039.7364341085272
+            },
+            {
+              "x": 897.5681395348837,
+              "y": 1639.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1639.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1759.0697674418604
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1759.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1119.0631395348837,
+            "y": 1639.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "rai-check",
+        "target": "build-test",
+        "label": "review",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1079.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1199.9545600685885
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 1167.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "build-test",
+        "target": "human-review",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1303.9545600685885
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1463.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 1391.9545600685885
+          }
+        }
+      },
+      {
+        "id": "e10",
+        "source": "build-test",
+        "target": "fix",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1130.9445600685885
+            },
+            {
+              "x": 852.5581395348836,
+              "y": 1130.9445600685885
+            },
+            {
+              "x": 852.5581395348836,
+              "y": 526.4031007751938
+            },
+            {
+              "x": 792.5581395348837,
+              "y": 526.4031007751938
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 708.5581395348837,
+            "y": 1130.9445600685885
+          }
+        }
+      },
+      {
+        "id": "e11",
+        "source": "build-test",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1293.7364341085272
+            },
+            {
+              "x": 968.5581395348836,
+              "y": 1293.7364341085272
+            }
+          ],
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 954.1581395348836,
+              "y": 1293.7364341085272
+            },
+            "to": {
+              "x": 954.1581395348836,
+              "y": 1213.7364341085272
+            }
+          },
+          "labelPos": {
+            "x": 954.1581395348836,
+            "y": 1198.5364341085271
+          }
+        }
+      },
+      {
+        "id": "e12",
+        "source": "human-review",
+        "target": "done",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1567.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1675.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1675.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1707.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 880.5581395348836,
+            "y": 1675.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e13",
+        "source": "human-review",
+        "target": "fix",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1354.0797674418604
+            },
+            {
+              "x": 873.5681395348837,
+              "y": 1354.0797674418604
+            },
+            {
+              "x": 873.5681395348837,
+              "y": 551.7364341085271
+            },
+            {
+              "x": 792.5581395348837,
+              "y": 551.7364341085271
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 708.5581395348837,
+            "y": 1354.0797674418604
+          }
+        }
+      },
+      {
+        "id": "e14",
+        "source": "human-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1306.403100775194
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1306.403100775194
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1066.5581395348836,
+            "y": 1515.0697674418604
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1402.9302325581393,
+    "canvasHeight": 1956.0930232558142
+  }
+}

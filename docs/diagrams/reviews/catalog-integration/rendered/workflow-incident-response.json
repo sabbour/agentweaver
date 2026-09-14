@@ -1,0 +1,14 @@
+{
+  "name": "workflow-incident-response",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-incident-response.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-incident-response.png",
+  "source_sha256": "0dacbd67cbdd7e0dffc217409f01d302c2690aad3bda349893cc133b0c20d47f",
+  "png_sha256": "9cdf43b82324d027fb1c1be708b40f0fff7f77087f2d707c728cd36c53647e45",
+  "dimensions": [
+    2234,
+    3064
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

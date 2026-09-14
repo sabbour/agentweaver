@@ -1,0 +1,193 @@
+{
+  "name": "frontend-fig6",
+  "title": "Entra sign-in and browser session",
+  "takeaway": "The callback returns a one-time code; session exchange delivers the SPA bearer.",
+  "groups": [
+    "SIGN-IN · API + ENTRA",
+    "SESSION · PER-TAB BROWSER STATE"
+  ],
+  "nodes": [
+    {
+      "id": "begin",
+      "title": "Browser sign-in",
+      "subtitle": "Begin API Entra authorization",
+      "detail": "State binds the browser callback",
+      "meta": "AuthEndpoints.cs",
+      "badge": "AUTHORIZE",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "shape": "umlActor",
+      "box": {
+        "x": 36,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "exchange",
+      "title": "Session exchange",
+      "subtitle": "POST the one-time exchange code",
+      "detail": "Returns validated token + browser session",
+      "meta": "AuthEndpoints.cs:398-455",
+      "badge": "EXCHANGE",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "entra",
+      "title": "Microsoft Entra ID",
+      "subtitle": "Authenticate the user",
+      "detail": "Identity authority, not GitHub OAuth",
+      "meta": "AuthEndpoints.cs",
+      "badge": "IDENTITY",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "shape": "image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1",
+      "box": {
+        "x": 36,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "storage",
+      "title": "Per-tab sessionStorage",
+      "subtitle": "Store the SPA bearer",
+      "detail": "No durable localStorage token",
+      "meta": "config.ts:60-138",
+      "badge": "TAB",
+      "evidence": "apps/web/src/config.ts:60-138",
+      "shape": "cylinder3",
+      "box": {
+        "x": 467,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "callback",
+      "title": "API callback",
+      "subtitle": "Validate callback and state",
+      "detail": "Issue a one-time frontend exchange code",
+      "meta": "AuthEndpoints.cs:398-455",
+      "badge": "CALLBACK",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "peer",
+      "title": "Same-origin peer tab",
+      "subtitle": "BroadcastChannel request/response",
+      "detail": "Transient token transfer to a new tab",
+      "meta": "config.ts:207-240",
+      "badge": "PEER",
+      "evidence": "apps/web/src/config.ts:207-240",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "frontend",
+      "title": "Frontend callback",
+      "subtitle": "Receive exchange code",
+      "detail": "Do not treat the code as an access token",
+      "meta": "AuthEndpoints.cs:398-455",
+      "badge": "ONE-TIME",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "requests",
+      "title": "Authenticated requests",
+      "subtitle": "REST and fetch-based SSE",
+      "detail": "Bearer token; API authorizes resources",
+      "meta": "api/sse.ts:239-337",
+      "badge": "BEARER",
+      "evidence": "apps/web/src/api/sse.ts:239-337",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "begin-to-entra",
+      "source": "begin",
+      "target": "entra",
+      "label": "sign in",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455"
+    },
+    {
+      "id": "entra-to-callback",
+      "source": "entra",
+      "target": "callback",
+      "label": "callback",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455"
+    },
+    {
+      "id": "callback-to-frontend",
+      "source": "callback",
+      "target": "frontend",
+      "label": "code",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455"
+    },
+    {
+      "id": "frontend-to-exchange",
+      "source": "frontend",
+      "target": "exchange",
+      "label": "POST code",
+      "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+      "route": "outer"
+    },
+    {
+      "id": "exchange-to-storage",
+      "source": "exchange",
+      "target": "storage",
+      "label": "session",
+      "evidence": "apps/web/src/config.ts:60-138"
+    },
+    {
+      "id": "storage-to-peer",
+      "source": "storage",
+      "target": "peer",
+      "label": "transfer",
+      "evidence": "apps/web/src/config.ts:207-240"
+    },
+    {
+      "id": "storage-to-requests",
+      "source": "storage",
+      "target": "requests",
+      "label": "bearer",
+      "evidence": "apps/web/src/api/sse.ts:239-337",
+      "route": "outer"
+    }
+  ],
+  "scope": "Only a one-time exchange code crosses the callback URL; the session token stays out of URLs."
+}

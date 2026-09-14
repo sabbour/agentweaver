@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "infra-deployment-fig4.json",
+    "sha256": "aeab6cbe2b58a91c2c1ffdd86cb2c8497e007d0e4b5ad0db528517fcb52c404a"
+  },
+  "drawio": {
+    "file": "infra-deployment-fig4.drawio",
+    "sha256": "dd0bd6fd71e34cbe678ead123d8e3a32921b8b3ecd3a03a19611a11f25c8bc1b"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "infra-deployment-fig4.png",
+    "sha256": "b748c84bbdd580046a53ec9f8436fb02730f26fcb47389c1521b4e9eb8155ff5"
+  }
+}

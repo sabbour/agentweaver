@@ -1,0 +1,133 @@
+{
+  "diagram": "api-core-fig6",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "api-core-fig6-pitch.drawio",
+    "png": "api-core-fig6-pitch.png",
+    "change_record": "api-core-fig6-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "api-core-fig6-pass-01.drawio",
+      "png": "api-core-fig6-pass-01.png",
+      "change_record": "api-core-fig6-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 2,
+      "baseline_meaningful_xml": 2383,
+      "result_meaningful_xml": 24438,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.255141
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "api-core-fig6-pass-02.drawio",
+      "png": "api-core-fig6-pass-02.png",
+      "change_record": "api-core-fig6-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "api-core-fig6-pass-03.drawio",
+      "png": "api-core-fig6-pass-03.png",
+      "change_record": "api-core-fig6-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "api-core-fig6-pass-04.drawio",
+      "png": "api-core-fig6-pass-04.png",
+      "change_record": "api-core-fig6-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "request-to-service",
+          "source": "request",
+          "target": "service",
+          "relationship": "collect",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsEndpoints.cs:52",
+          "result": "clean"
+        },
+        {
+          "id": "service-to-storage",
+          "source": "service",
+          "target": "storage",
+          "relationship": "check",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:97-103",
+          "result": "clean"
+        },
+        {
+          "id": "service-to-builtins",
+          "source": "service",
+          "target": "builtins",
+          "relationship": "check",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:97-103",
+          "result": "clean"
+        },
+        {
+          "id": "service-to-heartbeat",
+          "source": "service",
+          "target": "heartbeat",
+          "relationship": "check",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:95-103",
+          "result": "clean"
+        },
+        {
+          "id": "service-to-github",
+          "source": "service",
+          "target": "github",
+          "relationship": "check",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:95-103",
+          "result": "clean"
+        },
+        {
+          "id": "service-to-counts",
+          "source": "service",
+          "target": "counts",
+          "relationship": "read counts",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:105-112",
+          "result": "clean"
+        },
+        {
+          "id": "github-to-dto",
+          "source": "github",
+          "target": "dto",
+          "relationship": "check results",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:116-134",
+          "result": "clean"
+        },
+        {
+          "id": "counts-to-dto",
+          "source": "counts",
+          "target": "dto",
+          "relationship": "summary",
+          "evidence": "apps/Agentweaver.Api/Diagnostics/DiagnosticsService.cs:105-134",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

@@ -1,0 +1,344 @@
+{
+  "owner": "deep-dive-execution",
+  "research_model": "gpt-6-astra",
+  "research_agents": 3,
+  "diagrams": [
+    {
+      "name": "agent-runtime-fig2",
+      "title": "Tool permission is not API authorization",
+      "takeaway": "Native shell is denied; controlled commands, URL approval and API scope are separate gates.",
+      "evidence": "packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:548-571,1854-2033; packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:31-37; apps/Agentweaver.Api/Security/RunAuthorship.cs:66-88",
+      "nodes": [
+        ["request","Capability request","Model intent, not permission","Classify native / custom / API","flowchart"],
+        ["native","Native shell","Always rejected","No approval bypass","flowchart"],
+        ["denied","Denied result","Explicit error to caller","tool.error / HTTP rejection","flowchart"],
+        ["command","Controlled command","ShellEnabled + real or direct","Policy + directory + approval","flowchart"],
+        ["execute","Selected executor","Only permitted commands","Return redacted command result","flowchart"],
+        ["url","URL permission","Existing policy or human wait","Grant / deny / expiry","flowchart"],
+        ["api","API tool","Runtime permission first","Authenticated HTTP callback","custom"],
+        ["scope","API authorization","Run + project + agent scope","Allow operation or reject","flowchart"],
+        ["result","Operation result","Return to requesting agent","No universal approval gate","flowchart"]
+      ],
+      "edges": [["request","native","shell"],["native","denied","reject"],["command","execute","allow"],["api","scope","check"],["scope","result","return"]],
+      "notes": ["Native file requests have their own permission/governance checks.","Shell approval can return a retry instruction; URL approval may wait.","The three rows are separate capability paths, not sequential execution."]
+    },
+    {
+      "name":"agent-runtime-fig3","title":"A completed turn still needs a durable result",
+      "takeaway":"Remote writable results are validated and applied before ordinary worker commit bookkeeping.",
+      "evidence":"packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:183-245; apps/Agentweaver.Api/Git/WorktreeManager.cs:512-672; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:326-368",
+      "nodes":[
+        ["admit","Reserve run","Validate identity and task","Durable admission","custom"],
+        ["context","Prepare context","Workspace + charter + skills","Children: decisions-only memory","custom"],
+        ["workflow","Workflow","Graph remains in host","Local agent or remote leaf","custom"],
+        ["turn","Execute leaf","Provider and controlled tools","Logical, not one physical host","flowchart"],
+        ["envelope","Prepared writeback","Required for LocalWritable","Missing/invalid means failure","custom"],
+        ["apply","Validate and apply","Run / base / tree / branch","Fast-forward authoritative tree","flowchart"],
+        ["local","Local/shared result","No remote envelope required","Worker-side post-processing","flowchart"],
+        ["commit","Commit and diff","After validated application","Ordinary bookkeeping remains","flowchart"],
+        ["watch","Watch and persist","Normalize terminal outcome","Durable events and status","custom"]
+      ],
+      "edges":[["admit","context","prepare"],["context","workflow","start"],["workflow","turn","invoke"],["turn","envelope","remote"],["envelope","apply","verify"],["turn","local","local"],["local","commit","record"],["apply","commit","apply"],["commit","watch","persist"]],
+      "notes":["Rows separate admission, remote writeback and final bookkeeping.","Local provider serialization does not prove replacement-pod session restoration."]
+    },
+    {
+      "name":"canonical-agent-communication-shared","title":"Three channels, three different jobs",
+      "takeaway":"Team context, coordinator handoff and A2A execution transport must not be conflated.",
+      "evidence":"apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:38-198; apps/Agentweaver.Api/Runs/RunOrchestrator.cs:1041-1081; packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344",
+      "nodes":[
+        ["state","Project state API","Decisions and eligible memory","Pending writes are not authority","custom"],
+        ["compile","Host compilation","Approved scope/architecture","Children: no full memory stack","flowchart"],
+        ["context","Prepared child context","Charter + skills composed too","Injection failure is logged","custom"],
+        ["coordinator","Coordinator","Owns subtask structure","No peer-chat protocol","custom"],
+        ["child","Child run","Bounded assigned outcome","Results return upward","custom"],
+        ["handoff","Assemble-ready result","Parent integrates fragments","Not independent child merge","custom"],
+        ["proxy","Worker proxy","One leaf execution request","Setup data + task text","custom"],
+        ["host","AgentHost pod","Provider session and tools","No prompt-compilation DB read","kubernetes"],
+        ["events","Returned stream","Output + structured RunEvents","Caller owns persistence","custom"]
+      ],
+      "edges":[["state","compile","select"],["compile","context","inject"],["coordinator","child","dispatch"],["child","handoff","report"],["proxy","host","A2A"],["host","events","stream"]],
+      "notes":["Rows: shared context / coordinator handoff / execution transport.","Agents can submit inbox proposals or record pending memory through the API."]
+    },
+    {
+      "name":"canonical-agent-communication-a2a","title":"A2A remotes a leaf turn, not the graph",
+      "takeaway":"Setup and task cross to AgentHost; assistant output and structured events return.",
+      "evidence":"packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:202-265; tests/Agentweaver.Tests/AgentHost/A2ATurnBridgeAgentTests.cs:341-366",
+      "nodes":[
+        ["graph","Workflow graph","Host owns gates/checkpoints","Five factory-created leaf types","custom"],
+        ["proxy","RemoteAgentProxy","Build setup DataContent","Task TextContent in same message","custom"],
+        ["bridge","AgentHost bridge","message:stream over HTTP+JSON","Apply per-turn context","kubernetes"],
+        ["writer","Caller event pipeline","Decoded structured events","Durable state outside pod","custom"],
+        ["decode","Proxy stream decoder","Output + RunEventDataPart","Check definitive turn end","flowchart"],
+        ["runtime","Leaf runtime","Execute provider/tool loop","Stream updates and events","flowchart"]
+      ],
+      "edges":[["graph","proxy","invoke"],["proxy","bridge","send"],["bridge","runtime","run"],["runtime","decode","stream"],["decode","writer","append"]],
+      "notes":["Claim/configure is a separate lifecycle, completed before this exchange.","EOF alone is not successful completion; structured failures remain failures."]
+    },
+    {
+      "name":"canonical-sandbox-pod-evolution","title":"Move heavy leaf state, keep orchestration",
+      "takeaway":"Remoting compute and migrating the database are independent changes.",
+      "evidence":"apps/Agentweaver.Api/Sandbox/RemoteWorkflowAgentFactory.cs:9-65; apps/Agentweaver.Api/Program.cs:1043-1074; docs/deep-dive/sandbox-pod-execution.md",
+      "nodes":[
+        ["oldgraph","Before: worker graph","Workflow and gates","Same host as live leaf state","custom"],
+        ["oldsdk","Before: live SDK","Provider session in worker","Heavy per-run footprint","flowchart"],
+        ["oldexec","Command sandbox","Individual shell commands","Separate executor seam","flowchart"],
+        ["graph","Now: worker graph","Workflow and checkpoints","Keeps orchestration ownership","custom"],
+        ["proxy","Remote leaf proxy","Claim/configure then A2A","No database migration implied","custom"],
+        ["pod","Per-run AgentHost","Live SDK + controlled tools","Kata pod with executor sidecar","kubernetes"]
+      ],
+      "edges":[["oldgraph","oldsdk","invoke"],["oldsdk","oldexec","command"],["graph","proxy","invoke"],["proxy","pod","A2A"]],
+      "notes":["Top: earlier host-local leaf. Bottom: pod-per-run execution.","P1 can retain one SQLite writer; multiple writers require suitable shared storage.","Graph-level gates stay host-side; pod-local tool approval has a return path."]
+    },
+    {
+      "name":"distributed-execution-scaling-fig3","title":"Logical roles and the shipped autoscaler",
+      "takeaway":"Separate public traffic and orchestration responsibility without claiming hard role isolation.",
+      "evidence":"k8s/base/worker-hpa.yaml:62-83; apps/Agentweaver.Api/Program.cs:521-528,1043-1086; apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:45-121",
+      "nodes":[
+        ["clients","Clients","HTTP and SSE","Reconnect with event cursor","c4"],
+        ["web","Web/API deployment","Public REST/auth/event surface","Background pickup independent","kubernetes"],
+        ["sql","PostgreSQL","Shared state and event cursors","Both roles can write","database"],
+        ["hpa","Worker HPA","CPU 70% + memory 80%","Shipped range: 2-3 replicas","kubernetes"],
+        ["worker","Worker deployment","Owns in-process graphs","Run leases / checkpoints / events","kubernetes"],
+        ["pod","AgentHost pods","Heavy per-run leaf execution","A2A output returns to host","kubernetes"]
+      ],
+      "edges":[["clients","web","HTTP"],["web","sql","state"],["worker","sql","persist"],["hpa","worker","scale"],["worker","pod","A2A"]],
+      "notes":["App:Role does not alone disable CoordinatorHeartbeatService pickup.","Backlog-driven KEDA is a proposed alternative, not the active HPA.","SQL run leases and Kubernetes SandboxClaims are different mechanisms."]
+    },
+    {
+      "name":"distributed-execution-scaling-fig4","title":"Durable allocation, then cursor replay",
+      "takeaway":"Cross-replica delivery polls shared rows; local notifications are not a distributed bus.",
+      "evidence":"apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:183-234; apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:145-169,224-288,409-419; tests/Agentweaver.Tests/PostgresIntegration/RunEventStreamPostgresTests.cs:14-75",
+      "nodes":[
+        ["entry","RecordNext","Request sequence allocation","Append with Sequence = 0","custom"],
+        ["ef","EF append","ReadCommitted + advisory lock","Serialize allocation per run","flowchart"],
+        ["sql","RunEvents","MAX+1 / insert / commit","Return assigned sequence","database"],
+        ["local","Local history","Updated after durable ack","Notify only local waiters","custom"],
+        ["webA","Web replica A","Read Sequence > lastSeen","250 ms delay only when empty","kubernetes"],
+        ["browser","Browser watcher","SSE sequence IDs","Remember last event cursor","c4"],
+        ["cursor","Reconnect cursor","Last-Event-ID","Not tied to original web pod","flowchart"],
+        ["webB","Web replica B","Ordered replay and live tail","Read same shared RunEvents","kubernetes"],
+        ["resume","Resumed watcher","Receive rows after cursor","No PostgreSQL NOTIFY required","c4"]
+      ],
+      "edges":[["entry","ef","append"],["ef","sql","commit"],["ef","local","ack"],["webA","sql","poll"],["webA","browser","SSE"],["cursor","webB","resume"],["webB","sql","poll"],["webB","resume","SSE"]],
+      "notes":["Rows: write-through / live delivery / reconnect on another replica.","Explicit historic sequence: identical content is idempotent; conflicts fail.","SQL commits before local history update; polling reads the shared table."]
+    },
+    {
+      "name":"distributed-execution-scaling-fig5","title":"One lease winner, bounded ownership",
+      "takeaway":"Conditional acquisition and fencing guard lease operations and terminal ownership checks.",
+      "evidence":"apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:25-93; apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:84-159,593-610; tests/Agentweaver.Tests/PostgresIntegration/PostgresStoreTests.cs:124-187",
+      "nodes":[
+        ["a","Worker A claims","Conditional update","Unowned or expired row only","kubernetes"],
+        ["row","Run row","Owner + expiry + heartbeat","Increment fencing token / attempt","database"],
+        ["b","Worker B contends","Zero affected rows","No second winner for that claim","kubernetes"],
+        ["renew","A renews","Match owner and token t","5 min TTL / half-TTL renewal","flowchart"],
+        ["expiry","A stops renewing","Crash or loss of ownership","Expired lease becomes claimable","flowchart"],
+        ["takeover","B takes over","Successful conditional update","Token increases to t+1","kubernetes"]
+      ],
+      "edges":[["a","row","CAS"],["b","row","CAS"],["renew","expiry","expires"],["expiry","takeover","claim"]],
+      "notes":["Stale renew/release fail; terminal paths recheck active ownership.","Failed renewal logs a warning; it does not itself cancel all execution.","Do not infer exactly-once execution or fencing of every application write."]
+    },
+    {
+      "name":"infra-deployment-fig2","title":"Identity authorizes; CSI delivers secrets",
+      "takeaway":"API and worker consume vault secrets; AgentHost receives brokered configuration.",
+      "evidence":"scripts/azure/steps/15-setup-identity.mjs:245-438; k8s/base/secret-provider-class.yaml:16-61; apps/Agentweaver.Api/Program.cs:231-250; k8s/base/mcp-deployment.yaml:45-83",
+      "nodes":[
+        ["sa","API / worker accounts","Distinct federation subjects","Kubernetes ServiceAccounts","kubernetes"],
+        ["identity","Managed identity","OIDC federated credentials","Secrets User + Secrets Officer","azure"],
+        ["vault","Azure Key Vault","Secret storage and authorization","No static Azure credential","azure"],
+        ["csi","Secrets Store CSI","Static SecretProviderClass","Mounted files + synced Secret","kubernetes"],
+        ["apps","API / worker","Startup exports API key","Also runtime SecretClient calls","kubernetes"],
+        ["runtime","Application secret store","Workload identity authentication","Not file-only consumers","database"],
+        ["mcp","MCP","No secret mounts","Annotation is not federation proof","kubernetes"],
+        ["configure","Run configuration","Purpose-bound brokered payload","Provider / repo / turn / preview","custom"],
+        ["host","AgentHost","Separate identity, no vault roles","No direct vault or CSI token fetch","kubernetes"]
+      ],
+      "edges":[["sa","identity","federate"],["identity","vault","authorize"],["vault","csi","secrets"],["csi","apps","mount"],["apps","runtime","use"],["runtime","vault","read/write"],["configure","host","deliver"]],
+      "notes":["Top row is authorization, not a secret-data flow.","Key Vault supplies CSI and the application SecretClient path.","MCP and AgentHost are explicitly not CSI secret consumers."]
+    },
+    {
+      "name":"infra-deployment-fig3","title":"Build or reuse, then converge deployment",
+      "takeaway":"Four image identities converge before ordered prerequisites and workload rollout.",
+      "evidence":"scripts/azure/image-spec.mjs:80-141; scripts/azure/steps/20-build-push-images.mjs:352-381; scripts/azure/steps/30-deploy.mjs:52-113,427-561",
+      "nodes":[
+        ["resolve","Desired images","API / frontend / MCP / AgentHost","Worker reuses API image","flowchart"],
+        ["images","Build or retag","Changed: build + push","Reusable: az acr import","azure"],
+        ["render","Concrete manifests","Host / registry / identity / tags","AgentHost tag can override","flowchart"],
+        ["platform","Namespace + domain","Platform prerequisites","Before dependent resources","kubernetes"],
+        ["prereq","Identity and storage","SA / CSI / RBAC / quota / PVC","Then network policy","kubernetes"],
+        ["routes","Services and routing","Runtime config / Gateway / routes","No invented backup-job stage","kubernetes"],
+        ["pool","AgentHost pool","Template then warm pool","Only when CRDs are available","kubernetes"],
+        ["deploy","Workload rollout","API / frontend / MCP / worker","Worker HPA and PDB","kubernetes"],
+        ["verify","Verify externally","Rollout then protocol checks","Ready pods are not full proof","flowchart"]
+      ],
+      "edges":[["resolve","images","resolve"],["images","render","render"],["render","platform","apply"],["platform","prereq","apply"],["prereq","routes","apply"],["routes","pool","CRDs"],["pool","deploy","apply"],["deploy","verify","check"]],
+      "notes":["Rows are successive deployment phases, not independent pipelines.","Retag/import is implemented; it is not a future optimization.","Desired tags may differ through the explicit AgentHost override."]
+    },
+    {
+      "name":"infra-deployment-fig4","title":"Specific routes before frontend fallback",
+      "takeaway":"Gateway TLS termination and HTTPRoute selection keep public backends explicit.",
+      "evidence":"k8s/base/httproute-api.yaml:25-63; k8s/base/mcp-httproute.yaml:14-46; k8s/base/httproute-frontend.yaml:27-34; k8s/base/worker-deployment.yaml:111-117",
+      "nodes":[
+        ["client","Public client","Browser / API / MCP","One HTTPS entry point","c4"],
+        ["gateway","Gateway listener","Terminate TLS","Gateway API routing","network"],
+        ["match","HTTPRoute match","Prefix and exact rules","Not every /oauth path","flowchart"],
+        ["api","API backend","/api /auth /openapi prefixes","Exact OAuth + AS/OIDC discovery","kubernetes"],
+        ["mcp","MCP backend","/mcp + protected discovery","/mcp/health rewrites /healthz","kubernetes"],
+        ["frontend","Frontend fallback","/ catches remaining traffic","Service :80 -> pod :8080","kubernetes"]
+      ],
+      "edges":[["client","gateway","HTTPS"],["gateway","match","select"],["match","api","API"],["match","mcp","MCP"],["match","frontend","fallback"]],
+      "notes":["API and MCP Services use :8080; worker has no public route.","Backend cards list mutually selected destinations, not a serial pipeline.","Exact OAuth endpoints and discovery variants remain listed in the page."]
+    },
+    {
+      "name":"live-preview-provisioning-fig1","title":"Preview ready means validated publication",
+      "takeaway":"Platform-owned orchestration still has explicit skip, denial, expiry and failure outcomes.",
+      "evidence":"apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:95-324; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:272-328; tests/Agentweaver.Tests/Preview/PreviewStepTests.cs:194-277,567-597",
+      "nodes":[
+        ["verdict","Build/Test verdict","Approved or request-changes","Declined: no preview stage","custom"],
+        ["resolve","Command resolution","Heuristic then bounded model","Unavailable infra: skipped","flowchart"],
+        ["start","AgentHost runner","Map effective workspace","Start authenticated process","kubernetes"],
+        ["observe","App + forwarder health","Observe actual app port","Bind reachable public port","network"],
+        ["approval","Preview approval","Grant / deny / expire","Policy auto-approval is explicit","flowchart"],
+        ["publish","Approved publication","Active run + process recheck","Create Service and HTTPRoute","kubernetes"],
+        ["private","No publication","Deny: stop; expire: private retry","Never emit ready on rejection","flowchart"],
+        ["validate","Generated HTTPS URL","Bounded DNS/readiness checks","Failure: rollback publication","network"],
+        ["ready","preview_ready","Exact URL validated","Return to authored gate handling","custom"]
+      ],
+      "edges":[["verdict","resolve","prepare"],["resolve","start","start"],["start","observe","observe"],["observe","approval","request"],["approval","publish","grant"],["approval","private","reject"],["publish","validate","probe"],["validate","ready","healthy"]],
+      "notes":["Denial/expiry branch stays private; unresolved commands fail explicitly.","Rows summarize stages; the page retains detailed failure and retry rules.","Resource creation alone is not readiness; API does not probe pod preview ports."]
+    },
+    {
+      "name":"sandbox-browser-preview-fig2","title":"Only approved requests reach publication",
+      "takeaway":"Run access, operator approval and HTTPS readiness are different gates.",
+      "evidence":"apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:86-196; apps/Agentweaver.AgentHost/PreviewRunner.cs:184-199; tests/Agentweaver.Tests/Sandbox/StartPreviewToolTests.cs:70-93",
+      "nodes":[
+        ["tool","Run-bound preview tool","port + optional session_id","PreviewPublishTool provider","custom"],
+        ["endpoint","API preview endpoint","Validate run and target port","Contributor / internal service","flowchart"],
+        ["gate","AgentPreviewGate","Explicit auto or human approval","No authority from tool closure","custom"],
+        ["denied","Denied / expired","403 / 408 respectively","No StartPreview invocation","flowchart"],
+        ["approved","Approved only","Recheck active run","Process health if session supplied","flowchart"],
+        ["publication","Shared start path","Gateway publication or local mode","Failure never yields ready URL","network"]
+      ],
+      "edges":[["tool","endpoint","POST"],["endpoint","gate","request"],["gate","denied","reject"],["gate","approved","grant"],["approved","publication","start"]],
+      "notes":["Denial and expiry terminate before publication; expiry supports fresh approval.","Gateway URL only after HTTPS validation; local fallback is API-host loopback.","Process session_id is distinct from the Gateway capability token."]
+    },
+    {
+      "name":"sandbox-fig2","title":"Choose Kubernetes before local probing",
+      "takeaway":"The API router owns cluster selection; the local factory can fall back to direct.",
+      "evidence":"apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:89-109,162-172; packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:20-71; packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:28-34",
+      "nodes":[
+        ["router","API executor router","Backend override / cluster detect","Explicit local bypasses cluster","flowchart"],
+        ["cluster","Kubernetes selected","Initialize claim executor","Failure throws; no local fallback","kubernetes"],
+        ["claim","Claim backend","Bound pod command contract","Not the in-pod PodExec client","custom"],
+        ["factory","Local factory","Only when router selects local","Probe host-supported backends","flowchart"],
+        ["windows","Windows ladder","processcontainer -> WSL","wsl-bwrap real; unshare not real","flowchart"],
+        ["linux","Linux ladder","bubblewrap -> LXC","Host tools must be available","flowchart"],
+        ["fallback","No usable isolation","Automatic local fallback","Also explicit direct option","flowchart"],
+        ["direct","Direct passthrough","IsRealIsolation = false","Trusted/disposable host only","flowchart"],
+        ["shell","Command registration","ShellEnabled AND real or direct","wsl-unshare: no controlled shell","flowchart"]
+      ],
+      "edges":[["router","cluster","select"],["cluster","claim","ready"],["router","factory","local"],["factory","windows","Windows"],["factory","linux","Linux"],["windows","fallback","unavailable"],["linux","fallback","unavailable"],["fallback","direct","warn"],["direct","shell","gate"]],
+      "notes":["The local platform ladders are alternatives, not a Windows-to-Linux chain.","Kubernetes failure never silently descends into the local ladder.","Runtime emits sandbox.selected; factory choice is not an isolation guarantee."]
+    },
+    {
+      "name":"sandbox-fig3","title":"Retained utility-command claim lifecycle",
+      "takeaway":"This API path is not the AgentHost model-controlled command loop.",
+      "evidence":"apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:287-361; k8s/base/sandbox-template-agenthost.yaml:104-122,252-280",
+      "nodes":[
+        ["command","Utility command","Workspace and bounded timeout","Optional Agentweaver run ID","flowchart"],
+        ["executor","Kubernetes executor","Create or reuse claim","Stable name for run-scoped work","custom"],
+        ["controller","Sandbox controller","Bind warm-pool pod","Ready condition + sandbox name","kubernetes"],
+        ["result","Command result","stdout / stderr / exit status","Timeout and output flags","flowchart"],
+        ["exec","Kubernetes pod exec","Execute retained API command","No generic sleep pool implied","flowchart"],
+        ["pod","Bound pod","Current template is AgentHost","Not a separate generic deployment","kubernetes"],
+        ["adhoc","New ad-hoc claim","Delete in command finally","No run-scoped retention needed","custom"],
+        ["retained","Run-scoped claim","Keep for cleanup / TTL","Not deleted after every command","custom"],
+        ["preview","Production preview lookup","Uses cluster claim/route state","Not replica-local registry","kubernetes"]
+      ],
+      "edges":[["command","executor","submit"],["executor","controller","claim"],["controller","pod","bind"],["pod","exec","exec"],["exec","result","return"]],
+      "notes":["Cleanup cards distinguish newly created ad-hoc and run-scoped claims.","AgentHost controlled tools instead use authenticated pod-private PodExec.","SQL run ownership leases are separate from this Kubernetes claim lifecycle."]
+    },
+    {
+      "name":"sandbox-pod-execution-fig4","title":"Local checkout, explicit authoritative writeback",
+      "takeaway":"A temporary Git ref is prepared in-pod and validated before the worker fast-forwards.",
+      "evidence":"apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:98-148,285-378,524-550; apps/Agentweaver.Api/Git/WorktreeManager.cs:521-672; tests/Agentweaver.Tests/AgentHost/PodLocalWorkspaceManagerTests.cs:224-256",
+      "nodes":[
+        ["source","Source coordinates","Shared repository + ref","Expected base commit and tree","database"],
+        ["fetch","Materialize checkout","Initialize + shallow fetch","Verify both commit and tree","flowchart"],
+        ["local","Ephemeral checkout","Detached immutable base","HOME/XDG outside checkout","flowchart"],
+        ["readonly","LocalReadOnly","Build / test can write locally","Publication is refused","flowchart"],
+        ["writable","LocalWritable","Implementation edits","Alternate-index final tree","flowchart"],
+        ["prepare","Prepare publication","Flatten nested repo content","No gitlinks; restore metadata","flowchart"],
+        ["unchanged","Equal result tree","No-change descriptor","No temporary ref push","flowchart"],
+        ["ref","Changed result tree","Single-parent commit","Push unique temporary ref","database"],
+        ["apply","Worker validation","Run / ref / base / tree / clean","Fast-forward authoritative branch","flowchart"]
+      ],
+      "edges":[["source","fetch","fetch"],["fetch","local","verify"],["writable","prepare","stage"],["ref","apply","validate"]],
+      "notes":["LocalReadOnly limits publication, not ephemeral build/test writes.","Equal-tree and changed-tree outcomes are alternatives.","Source origin is the shared repository; writeback mints no second GitHub token."]
+    },
+    {
+      "name":"sandbox-pod-execution-fig5","title":"Provisioning progress is not turn readiness",
+      "takeaway":"Bound claims, standby health and configured leaf readiness are separate milestones.",
+      "evidence":"apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:183-189,635-737,1448-1482; docs/deep-dive/sandbox-pod-execution.md",
+      "nodes":[
+        ["dispatch","Coordinator dispatch","Child launch begins","Admission owned by Kubernetes","custom"],
+        ["claim","Child executor","Create/adopt claim","Poll until controller binding","custom"],
+        ["pending","Provisioning progress","provisioning_pending about 20s","Child stream shows legitimate wait","custom"],
+        ["observer","Coordinator observer","Recognize provisioning wait","Not a completed agent turn","custom"],
+        ["bound","Claim bound","Ready condition + pod name","Resolve actual pod IP","kubernetes"],
+        ["ready","Configure leaf","Standby listener then SetupAsync","Only then start A2A turn","kubernetes"]
+      ],
+      "edges":[["dispatch","claim","launch"],["claim","pending","waiting"],["pending","observer","progress"],["claim","bound","bound"],["bound","ready","setup"]],
+      "notes":["Provisioning events distinguish capacity wait from a silent execution stall.","Claim Ready is controller binding, not configured AgentHost readiness.","The configure diagram owns the credential and endpoint-registration sequence."]
+    },
+    {
+      "name":"sandbox-pod-execution-fig6","title":"Bind, reach standby, configure once",
+      "takeaway":"Liveness precedes configuration; production delivers run credentials out of pod specs.",
+      "evidence":"apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:633-737; apps/Agentweaver.AgentHost/Program.cs:188-202,259-290,386-411; apps/Agentweaver.AgentHost/AgentHostStartupService.cs:166-241",
+      "nodes":[
+        ["prepare","Prepare launch","Resolve provider and run context","Mint fresh turn token","custom"],
+        ["claim","Claim warm pod","Create/adopt; omit spec.env","Wait Ready + bound pod name","kubernetes"],
+        ["map","Resolve and register","Pod mapping / token registry","Resolve actual pod IP","flowchart"],
+        ["health","GET /healthz","HTTP 200 standby","Listener liveness, not turn ready","network"],
+        ["configure","POST /configure","Identity / workspace / approvals","Copilot capability OR BYOK","flowchart"],
+        ["setup","AgentHost setup","One-time configuration","Effective workspace + HOME","kubernetes"],
+        ["guards","Configuration guards","Second configure: 409","Other routes: 503 before ready","flowchart"],
+        ["register","Register effective endpoint","Return effective working directory","Shared/local/private fallback","custom"],
+        ["turn","First A2A turn","Production sends turn bearer","Equality guard when nonempty","custom"]
+      ],
+      "edges":[["prepare","claim","launch"],["claim","map","bound"],["map","health","poll"],["health","configure","reachable"],["configure","setup","setup"],["setup","register","ready"],["register","turn","invoke"]],
+      "notes":["Top, middle and bottom rows are successive launch stages.","Repository / preview / broker credentials have separate purposes.","Optional schema fields do not imply unconditional endpoint enforcement."]
+    },
+    {
+      "name":"sandbox-pod-execution-fig7","title":"Return the decision to the owning gate",
+      "takeaway":"Only an Unknown durable-gate result takes the authenticated pod fallback.",
+      "evidence":"apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1956-2084; apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:74-108; apps/Agentweaver.AgentHost/Program.cs:804-815,962-987",
+      "nodes":[
+        ["operator","Operator decision","Coordinator or child run ID","Authorize request and owner","c4"],
+        ["api","API approval endpoint","Resolve owning child","Try durable gate first","flowchart"],
+        ["durable","Durable gate","Known terminal: return result","Unknown: pod-per-run fallback","database"],
+        ["response","Public response","Return mapped result","200 / 404 / 409 / 503","flowchart"],
+        ["client","Approval HTTP client","Resolve pod origin + credential","Authenticated control callback","network"],
+        ["pod","AgentHost local gate","Resolve pending tool request","Return resolution to API","kubernetes"]
+      ],
+      "edges":[["operator","api","grant"],["api","durable","try"],["durable","client","unknown"],["client","pod","forward"],["pod","client","result"],["client","response","return"],["response","operator","respond"]],
+      "notes":["The fallback uses ApprovalHttpClient; arrows summarize request and return.","Configured control auth accepts turn or preview credential; dev can omit both.","Errors and provisional-grant rollback/finalize stay in the consumer prose."]
+    },
+    {
+      "name":"canonical-pod-process-boundaries","title":"Two PID namespaces, a narrower child mount view",
+      "takeaway":"Kata isolates the pod; the executor container separates model processes from AgentHost.",
+      "evidence":"k8s/base/sandbox-template-agenthost.yaml:58-61,151-162,269-292,341-399; packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs:212-242; packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs:609-655,892-931; tests/Agentweaver.Tests/KataBwrapExecutorTests.cs:29-47,110-164",
+      "nodes":[
+        ["host","AgentHost container","PID namespace A","Provider / A2A / control state","kubernetes"],
+        ["ipc","Pod-private IPC","Authenticated UDS + token","Memory-backed emptyDir","kubernetes"],
+        ["executor","Executor container","PID namespace B","No Kubernetes or AAD identity","kubernetes"],
+        ["register","Platform registration","Exact workspace and HOME","Reject unregistered paths","custom"],
+        ["mount","Child mount view","Workspace / HOME / scratch / tmp","Exact Git metadata read-only","flowchart"],
+        ["child","Model-controlled child","Runtime-provided executor procfs","No nested bwrap PID namespace","flowchart"],
+        ["network","Kata pod / VM","Shared pod network","VM separates pod from host node","cloud"],
+        ["absent","Absent from child view","PVC root / siblings / IPC token","AgentHost PID tree unavailable","flowchart"],
+        ["system","System runtime roots","Optional run-private overlays","Not universally read-only /usr","flowchart"]
+      ],
+      "edges":[["host","ipc","request"],["ipc","executor","dispatch"],["register","mount","allowlist"],["mount","child","spawn"],["executor","child","execute"]],
+      "notes":["All cards are inside one Kata pod; containers have distinct PID namespaces.","The child view is a mount boundary, not a third container/PID namespace.","Startup rejects same-PID-namespace execution; no model access to IPC secrets."]
+    }
+  ]
+}

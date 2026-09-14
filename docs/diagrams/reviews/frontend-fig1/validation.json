@@ -1,0 +1,16 @@
+{
+  "diagram": "frontend-fig1",
+  "manifest": "docs/diagrams/reviews/frontend-fig1/iteration-manifest.json",
+  "schema": "valid",
+  "repository_manifest_validator": "iteration manifest is valid",
+  "pitch_plus_passes": 5,
+  "actual_open_inspections_recorded": 10,
+  "one_uncompressed_A5_page_all_passes": true,
+  "bounds_and_5_unit_accents": "valid",
+  "native_symbols_and_card_hierarchy": "valid",
+  "exact_arrow_ids_source_target_label_evidence": 7,
+  "growth_ratio": 10.889862,
+  "final_source_sha256": "34c4275406024ace2c145ef51c2a8e5532af5fee232adb46d1c041e8da45b156",
+  "inspected_final_png_sha256": "5c55d63b4c13abae5b6388036e1ac3f37c5ffd09742402fe8bdb38ad0d027de1",
+  "publication": "valid"
+}

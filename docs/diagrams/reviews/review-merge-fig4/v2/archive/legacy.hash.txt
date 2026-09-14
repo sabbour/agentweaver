@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "review-merge-fig4.json",
+    "sha256": "76dcb21f4bcb4ed540b9e2e26639be06bb0a25415408fcbd9eae1fd6f1caf15a"
+  },
+  "drawio": {
+    "file": "review-merge-fig4.drawio",
+    "sha256": "7c56214f82993f28ff98bc5241e44202e54ae574e4d67105b91a6159d8ecf50a"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "review-merge-fig4.png",
+    "sha256": "8da2a711aad4db2d4fa4130e2018670066c45c610d1c175a7256a54830716f06"
+  }
+}

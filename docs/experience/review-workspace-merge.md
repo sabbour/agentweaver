@@ -10,18 +10,27 @@ A run is not a hidden edit to the project checkout. Agentweaver creates a run br
 
 The review surface is intentionally local-first. Agentweaver can complete review and merge without a remote, so blank projects and local-only repositories have the same experience as cloned projects. Pushing run branches and opening remote pull requests are out of scope; remote PRs can be useful outside Agentweaver, but they are not the authoritative review surface.
 
-The most important product contract is: **approval binds to content, not to a mutable branch name**. The reviewed tree hash identifies the candidate filesystem. Merge checks that the candidate branch still matches that tree hash before advancing the originating branch.
+The most important product contract is: **approval binds to candidate content, not just a mutable branch name**. Merge checks that the candidate branch still matches the reviewed tree hash. This does **not** promise that the final destination tree equals the candidate tree: a three-way merge can preserve newer originating-branch content, and centrally consolidated Squad state has special merge handling.
 
 ![The mental model: Agent works in run worktree, Candidate commit + tree hash, Diff against originating branch, Human Review, Reviewer decision, Verify reviewed tree hash, Local git merge, Merged, Reviewer feedback, Agent revises same run worktree, Declined, Merge failed or returns to review](../diagrams/experience-review-workspace-merge-fig1.png)
 
-<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Diagram source: ../diagrams/src/experience-review-workspace-merge-fig1.drawio.
+     Published PNG path is stable; edit the draw.io source, not the raster. -->
+
+| Review-loop step | Web surface | MCP tool or limit |
+|---|---|---|
+| Check whether review is ready | Orchestration / selected-task timeline | `run_status`, `run_watch` |
+| List candidate changes | **Changes** | `run_show_artifacts` |
+| Inspect one changed file | File viewer **Diff** | `run_get_file` |
+| Approve the candidate | **Commit and Merge** | `run_review` with `approved: true` |
+| Ask for a revision | **Change** → feedback → **Send** | No feedback argument in `run_review`; use the web review action |
+| Decline | **Decline** | `run_review` with `approved: false` |
+
+MCP is an authenticated client, not an independent reviewer identity or a bypass of the review gate. Its review tool is binary; it must not be presented as supporting the web feedback-bearing **Change** action.
 
 ## Human Review in the web UI
 
-When a run reaches **Human Review**, its status becomes `awaiting_review` and the run detail page opens the left file rail. The center of the page remains the run timeline, so the reviewer can read the agent messages and tool history while inspecting files. The left rail is the action surface: it contains the file tabs and the review controls.
+When a normal run reaches **Human Review**, its status is `awaiting_review`; collective orchestration review also has a persisted work-plan `in_review` gate. Open the orchestration and its artifact or selected-task **Agent session** panel to inspect changes alongside the timeline. Standalone Workflow and Execution pages are retired.
 
 The reviewer sees:
 
@@ -32,13 +41,13 @@ The reviewer sees:
 - processing spinners and inline errors when a review, request-changes, or merge action is in flight;
 - result badges after an action is accepted, such as `merged`, `declined`, or `changes_requested`.
 
-The file rail automatically expands when the run enters review. That matters for the experience: the user does not have to discover a separate page or remote PR. The candidate work, timeline, and decision buttons are together.
+The review gate makes the candidate artifacts and review actions available in the orchestration context; a remote PR is not required.
 
 ### Approve: Commit and Merge
 
 **Commit and Merge** is the primary approval action in the web UI. It means: "I accept this candidate tree and authorize Agentweaver to merge it to the originating branch." Approval does not ask the agent to make more edits. It moves the run from review toward guarded local merge.
 
-After the reviewer clicks **Commit and Merge**, Agentweaver starts the merge path. The UI shows a pending state, then updates the run as merge events arrive. If the merge succeeds, the originating branch contains exactly the reviewed changes and the run reaches a merged terminal state. If the repository cannot accept the merge safely, the run reports the problem instead of silently changing the reviewed content.
+After **Commit and Merge**, the UI shows a pending state and updates as merge events arrive. Success integrates the approved candidate with the originating branch and reaches a merged state. A changed candidate hash or genuine merge conflict fails rather than letting an agent invent a conflict resolution. Destination-branch changes can still be part of the final merged tree.
 
 Approval is a content decision. The merge executor still verifies the candidate tree hash, serializes repository updates, and checks that the run branch and originating branch are in a safe state. A reviewer approves the diff; Agentweaver proves the repository can accept it.
 
@@ -58,11 +67,11 @@ Use **Decline** when the work is not worth revising in place, when the task is o
 
 ### Reviewer lockout at the UX level
 
-Reviewer lockout means the producer path and the approval path are separate. The agent that produced the revision cannot approve or merge its own output; it can only produce, revise, and wait at the review gate. A human reviewer action is required to leave **Human Review** through approval or rejection.
+Producing a candidate and accepting a review decision are separate operations. The API authorizes the caller and consumes a pending review decision; a producer completing its task is not itself approval. Do not read this as proof of universal independent-human identity enforcement: an authorized MCP client can submit `run_review`. Collective assembly's rejected-author rotation is a different mechanism, described in [resilient assembly review](./resilient-assembly-review.md).
 
 Agentweaver records the reviewer identity on review and merge-related transitions when it is known. The pending review request is consumed at most once, so a double click, replayed request, or competing client does not create two decisions. If one decision moves the run out of `awaiting_review`, later attempts see conflict-style behavior instead of racing the merge.
 
-This is not a remote pull-request ownership model. The product lockout is between the agent-produced candidate and the human review decision inside Agentweaver. Remote PR authorship and branch protection are outside this review surface.
+This is not a remote pull-request ownership model. Remote PR authorship and branch protection are outside this review surface.
 
 ## MCP review tools
 
@@ -83,17 +92,11 @@ The MCP tool is intentionally simple: it maps to approve or reject. The web **Ch
 
 ## Artifact and diff experience
 
-The Artifact Browser is the reviewer's file-focused lens on a run. It appears as the left rail in the run layout and as a combined browser/diff component in contexts that render both panes together. It has two tabs: **Changes** and **Files**.
+The Artifact Browser is the reviewer's file-focused lens on a run, reused in orchestration artifacts and selected-task inspection. Its two views are **Changes** and **Files**.
 
 ### Changes tab
 
 The **Changes** tab is the default review tab. It shows **Branch Changes** with total added and removed line counts, then a flat changed-file list. Each changed file row shows:
-
-![Review Changes tab showing branch changes and the changed-file list](/screenshots/review-changes-tab.png)
-
-> 📸 **Screenshot — `review-changes-tab.png`**
-> *Shows:* the **Changes** tab as the default review tab, with the **Branch Changes** header (total added/removed lines), a changed-file list where each row has a filename, `+12` / `-3` counts, and an `A` / `M` / `D` status badge with a status-colored icon.
-> *Path:* open a run awaiting review → **Changes** tab on the run's artifact view.
 
 - the file name;
 - added and removed line counts, such as `+12` and `-3`;
@@ -113,12 +116,6 @@ Clicking a file in **Files** opens the same file viewer modal, but unchanged fil
 ### File viewer modal
 
 The modal is the focused reading surface. It opens at a large viewport size, has a **Close** button, and preserves the distinction between changed and unchanged files.
-
-![File viewer modal showing a diff with Diff, Preview, and Source toggles](/screenshots/review-file-viewer.png)
-
-> 📸 **Screenshot — `review-file-viewer.png`**
-> *Shows:* the file viewer modal (titled **Execution {shortId}**) opened from a changed-file row, defaulting to the **Diff** view, with **Preview** available for Markdown and **Source** for unchanged files, plus the close icon (`aria-label="Close"`) and footer **Close** button.
-> *Path:* in the **Changes** or **Files** tab → click a file row.
 
 Changed files show:
 
@@ -176,12 +173,7 @@ A typical MCP review loop is:
 3. `run_get_file` for each file that needs detailed inspection.
 4. `run_review` with `approved: true` to approve or `approved: false` to reject.
 
-![`run_get_file`: MCP reviewer, Agentweaver MCP, Agentweaver API, Local git repository](../diagrams/experience-review-workspace-merge-fig3.png)
-
-<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Use the [reviewer loop and adjacent MCP mapping](#the-mental-model) above for this sequence. Artifact inspection does not grant approval, and a binary rejection is not a request-changes message.
 
 ## Workspace experience in the web UI
 
@@ -189,11 +181,7 @@ The **Workspace** page is a project-scoped, read-only file browser. It is not th
 
 The page header says **Workspace** and the subtitle explains the scope: **Browse the project repository and active run worktrees, read-only.** The breadcrumb leads from **Projects** to the project and then to **Workspace**. The toolbar shows the current branch with a branch icon and a **Branch or worktree** dropdown.
 
-![Workspace page with file tree, read-only viewer, and branch dropdown](/screenshots/workspace-browser.png)
-
-> 📸 **Screenshot — `workspace-browser.png`**
-> *Shows:* the **Workspace** page titled "Workspace" / "Browse the project repository and active run worktrees, read-only.", the toolbar with the **Current branch** label (`aria-label="Current branch"`) and the **Branch or worktree** dropdown (`aria-label="Branch or worktree"`), the left file tree, the right read-only viewer, and the **Import to backlog** button shown when a Markdown file is selected.
-> *Path:* open a project → click **Workspace** in the left rail → `/projects/:projectId/workspace`.
+Open a project → **Workspace** (`/projects/:projectId/workspace`) to choose a ref, browse its tree, and read a file. The branch selector changes the read target; it neither checks out a branch for editing nor approves a merge.
 
 The dropdown contains the base project ref and any browsable run worktrees or coordinator assembly refs. Non-base refs can show a run-status badge, such as running, dispatched, completed, merged, failed, merge_failed, blocked, or parked. Selecting a different ref reloads the file tree and clears the open file.
 
@@ -240,10 +228,8 @@ The path is relative to the workspace and should use forward slashes, such as `s
 
 ![`get_project_workspace_file`: Workspace page or MCP client, list_project_workspace_refs, Choose base branch or run worktree, list_project_workspace, Select file, get_project_workspace_file, Read-only source / preview](../diagrams/experience-review-workspace-merge-fig2.png)
 
-<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Diagram source: ../diagrams/src/experience-review-workspace-merge-fig2.drawio.
+     Published PNG path is stable; edit the draw.io source, not the raster. -->
 
 ## Merge experience
 
@@ -257,7 +243,7 @@ The trade-off is plain: remote PRs are not the authoritative review surface in A
 
 Before it advances the originating branch, Agentweaver checks the repository state. The merge path verifies that the run branch exists, the originating branch exists, and the run branch tree still equals the approved tree hash. It serializes repository updates so two approvals for the same repository do not race each other.
 
-If the target branch can be fast-forwarded, Agentweaver can advance it directly. If a merge commit is needed, Agentweaver performs a local git merge. If the base workspace has uncommitted changes and the originating branch is checked out, Agentweaver reconciles them onto the merge result with a hard reset whenever that is provably lossless (every dirty file's current content already matches what the merge produces); otherwise it blocks the merge rather than risk leaving the checked-out working directory out of sync with the branch ref it just advanced. When the originating branch is NOT checked out, Agentweaver uses a ref-only merge path that advances the branch ref without touching any files — safe in that case because nothing reads the working tree relative to that ref.
+If the target can fast-forward, Agentweaver advances it directly; otherwise it computes a three-way merge. When the originating branch is checked out, eligible dirty tracked modifications can first be auto-committed. The merge then checks for active git operations, conflicted indexes, and unsafe collisions, and reconciles the working tree only when it can preserve content safely. When the originating branch is not checked out, a ref-only path updates that branch without changing the current checkout. Three-way merges preserve the originating side's centrally consolidated Squad bookkeeping where special handling applies (`WorktreeManager.cs:1968`, `:2045`).
 
 ### Merge success
 
@@ -267,7 +253,7 @@ The reviewer does not need a remote to complete this. A local blank project can 
 
 ### Merge conflicts and merge failed
 
-If the originating branch has diverged and the candidate no longer applies cleanly, Agentweaver does not invent a resolution. The run becomes `merge_failed`, conflict information is stored where available, and the worktree is preserved for inspection. This is a safety feature: the reviewer approved a specific tree, not an unreviewed conflict resolution.
+If the originating branch has diverged and the candidate cannot be merged safely, the run becomes `merge_failed` with conflict information where available. The merge coordinator preserves the worktree on its conflict path, but terminal workflow cleanup can subsequently remove it; do not depend on an ephemeral worktree surviving every failure. Inspect recorded artifacts and diagnostics first. The reviewer approved a candidate, not an agent-authored conflict resolution.
 
 A merge can also fail if the approved tree hash no longer matches the run branch. That protects against manual mutation of the worktree or branch after review. Approval is tied to the tree hash, so a changed candidate must go through review again.
 
@@ -288,7 +274,7 @@ When the revised run returns to **Human Review**, the reviewer should treat it a
 5. Click **Change** again if more targeted feedback is needed.
 6. Click **Decline** if the run should stop.
 
-There is no fixed number of review loops in the UI experience. The server enforces its configured revision cap, and the UI reports an error if the cap is reached.
+Normal run revisions use the server's `Runs:MaxRevisions` cap (default **10**); reaching it produces a conflict response. Collective coordinator assembly is different: human request-changes rounds are **uncapped** and reset the bounded autonomous steering budget. Each round still needs a new review of the revised candidate.
 
 ## How to choose the right surface
 
@@ -298,7 +284,7 @@ Use the Workspace page for read-only context across the project repository or ac
 
 | User goal | Web surface | MCP tool |
 |---|---|---|
-| See whether a run is waiting for review | Run detail / timeline | `run_status`, `run_watch` |
+| See whether a run is waiting for review | Orchestration / Agent session timeline | `run_status`, `run_watch` |
 | List changed files for a run | **Changes** tab | `run_show_artifacts` |
 | Inspect one changed file | File viewer modal **Diff** | `run_get_file` |
 | Browse the full run worktree | **Files** tab | `list_project_workspace` for a run ref, or run workspace-backed APIs |
@@ -329,7 +315,7 @@ After **Change** → **Send**, the run goes back into progress and later returns
 
 ### Merge conflicts
 
-A merge conflict turns approval into `merge_failed` rather than silently editing the result. The worktree is preserved for inspection. A reviewer or operator can inspect the conflict, decide how to proceed, and submit a new run or resolve outside the automated merge path.
+A merge conflict turns approval into `merge_failed`. Inspect the recorded conflict and any retained artifacts before choosing recovery; worktree retention depends on the execution and cleanup path.
 
 ### Tree hash mismatch
 
@@ -337,5 +323,116 @@ If the candidate branch changes after review, merge refuses it. The approved con
 
 ## Summary
 
-The REVIEW, WORKSPACE, and MERGE experiences are one local-first flow. Runs create candidate worktrees; reviewers inspect artifacts and diffs; workspace browsing provides read-only context; approval merges the reviewed tree locally; request changes loops the run back through revision; rejection stops it. MCP exposes the same core inspection and binary approve/reject decisions for terminal clients, while the web UI provides the richer feedback loop for re-review.
+The REVIEW, WORKSPACE, and MERGE experiences are one local-first flow. Runs create candidate worktrees; reviewers inspect artifacts; workspace browsing provides read-only context; approval authorizes guarded integration of the candidate; request changes starts revision; rejection stops it. MCP provides inspection and binary approve/reject decisions, while the web UI provides feedback-bearing re-review. The former Changes, file-viewer, and Workspace screenshot embeds were placeholders and are omitted until genuine captures are available.
 
+<!-- diagram-context:experience-review-workspace-merge-fig1:start -->
+<details id="diagram-context-experience-review-workspace-merge-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Inspect, decide, then integrate</td></tr>
+<tr><td>takeaway</td><td>Approval identifies a candidate; guarded local merge can also include target-side changes.</td></tr>
+<tr><td>group-title-0</td><td>CANDIDATE AND REVIEW</td></tr>
+<tr><td>group-title-1</td><td>SERVER-AUTHORITATIVE OUTCOMES</td></tr>
+<tr><td>Run candidate</td><td>Run candidate</td></tr>
+<tr><td>Run candidate</td><td>Worktree + recorded hash</td></tr>
+<tr><td>Run candidate</td><td>files / changes / timeline</td></tr>
+<tr><td>Run candidate</td><td>Inspect the actual candidate before submitting a decision.</td></tr>
+<tr><td>Review decision</td><td>Review decision</td></tr>
+<tr><td>Review decision</td><td>Authorized run reviewer</td></tr>
+<tr><td>Review decision</td><td>approve / change / decline</td></tr>
+<tr><td>Review decision</td><td>MCP run_review is binary; web supports feedback.</td></tr>
+<tr><td>Guarded merge</td><td>Guarded merge</td></tr>
+<tr><td>Guarded merge</td><td>Lock, CAS, hash check</td></tr>
+<tr><td>Guarded merge</td><td>approved candidate identity</td></tr>
+<tr><td>Guarded merge</td><td>Changed candidate fails checks; conflicts are visible.</td></tr>
+<tr><td>Revised candidate</td><td>Revised candidate</td></tr>
+<tr><td>Revised candidate</td><td>Feedback drives revision</td></tr>
+<tr><td>Revised candidate</td><td>normal cap / collective rules</td></tr>
+<tr><td>Revised candidate</td><td>A new candidate needs review; no automatic approval.</td></tr>
+<tr><td>Declined / blocked</td><td>Declined / blocked</td></tr>
+<tr><td>Declined / blocked</td><td>No successful integration</td></tr>
+<tr><td>Declined / blocked</td><td>explicit outcome or reason</td></tr>
+<tr><td>Declined / blocked</td><td>Decline, busy repository and merge conflict are distinct.</td></tr>
+<tr><td>Merged history</td><td>Merged history</td></tr>
+<tr><td>Merged history</td><td>Local destination updated</td></tr>
+<tr><td>Merged history</td><td>three-way / ref-only merge</td></tr>
+<tr><td>Merged history</td><td>Final tree may include newer target and special Squad state.</td></tr>
+<tr><td>e0</td><td>inspect</td></tr>
+<tr><td>e1</td><td>approve</td></tr>
+<tr><td>e2</td><td>decline</td></tr>
+<tr><td>e3</td><td>changes</td></tr>
+<tr><td>e4</td><td>blocked</td></tr>
+<tr><td>e5</td><td>guards pass</td></tr>
+<tr><td>e6</td><td>re-review</td></tr>
+<tr><td>note</td><td>Request changes produces the revised-candidate lane. Conflicts/busy/hash mismatch never imply merged.</td></tr>
+<tr><td>n0</td><td>Inspect the actual candidate
+before submitting a decision.</td></tr>
+<tr><td>n1</td><td>MCP run_review is binary;
+web supports feedback.</td></tr>
+<tr><td>n2</td><td>Changed candidate fails checks;
+conflicts are visible.</td></tr>
+<tr><td>n3</td><td>A new candidate needs review;
+no automatic approval.</td></tr>
+<tr><td>n4</td><td>Decline, busy repository and
+merge conflict are distinct.</td></tr>
+<tr><td>n5</td><td>Final tree may include newer
+target and special Squad state.</td></tr>
+<tr><td>groups</td><td>CANDIDATE AND REVIEW; SERVER-AUTHORITATIVE OUTCOMES</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-review-workspace-merge-fig1:end -->
+
+<!-- diagram-context:experience-review-workspace-merge-fig2:start -->
+<details id="diagram-context-experience-review-workspace-merge-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Browse a ref without changing it</td></tr>
+<tr><td>takeaway</td><td>Select an allowed ref, inspect its tree, and read content through read-only operations.</td></tr>
+<tr><td>group-title-0</td><td>CHOOSE THE REFERENCE</td></tr>
+<tr><td>group-title-1</td><td>READ THE CONTENT</td></tr>
+<tr><td>Workspace reader</td><td>Workspace reader</td></tr>
+<tr><td>Workspace reader</td><td>Web page or MCP client</td></tr>
+<tr><td>Workspace reader</td><td>authorized project access</td></tr>
+<tr><td>Workspace reader</td><td>Browsing does not check out, edit, approve or merge.</td></tr>
+<tr><td>Available refs</td><td>Available refs</td></tr>
+<tr><td>Available refs</td><td>Base, run, assembly</td></tr>
+<tr><td>Available refs</td><td>list_project_workspace_refs</td></tr>
+<tr><td>Available refs</td><td>Only available allowed refs; default is the base branch.</td></tr>
+<tr><td>Selected ref</td><td>Selected ref</td></tr>
+<tr><td>Selected ref</td><td>Explicit browsing context</td></tr>
+<tr><td>Selected ref</td><td>GET only</td></tr>
+<tr><td>Selected ref</td><td>Changing ref clears the previous file selection.</td></tr>
+<tr><td>Read-only content</td><td>Read-only content</td></tr>
+<tr><td>Read-only content</td><td>Source / Markdown preview</td></tr>
+<tr><td>Read-only content</td><td>binary / large / missing</td></tr>
+<tr><td>Read-only content</td><td>Render supported content; surface truthful limitations.</td></tr>
+<tr><td>Selected path</td><td>Selected path</td></tr>
+<tr><td>Selected path</td><td>Relative file name</td></tr>
+<tr><td>Selected path</td><td>get_project_workspace_file</td></tr>
+<tr><td>Selected path</td><td>Pass both path and ref; invalid paths are rejected.</td></tr>
+<tr><td>File tree</td><td>File tree</td></tr>
+<tr><td>File tree</td><td>Paths at the selected ref</td></tr>
+<tr><td>File tree</td><td>list_project_workspace</td></tr>
+<tr><td>File tree</td><td>Choose a listed file; no working-tree mutation.</td></tr>
+<tr><td>e0</td><td>list refs</td></tr>
+<tr><td>e1</td><td>choose</td></tr>
+<tr><td>e2</td><td>list tree</td></tr>
+<tr><td>e3</td><td>select</td></tr>
+<tr><td>e4</td><td>read</td></tr>
+<tr><td>note</td><td>Unknown refs/files can return 404; invalid paths return 400. Ref browsing is not content approval.</td></tr>
+<tr><td>n0</td><td>Browsing does not check out,
+edit, approve or merge.</td></tr>
+<tr><td>n1</td><td>Only available allowed refs;
+default is the base branch.</td></tr>
+<tr><td>n2</td><td>Changing ref clears the
+previous file selection.</td></tr>
+<tr><td>n3</td><td>Render supported content;
+surface truthful limitations.</td></tr>
+<tr><td>n4</td><td>Pass both path and ref;
+invalid paths are rejected.</td></tr>
+<tr><td>n5</td><td>Choose a listed file;
+no working-tree mutation.</td></tr>
+<tr><td>groups</td><td>CHOOSE THE REFERENCE; READ THE CONTENT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-review-workspace-merge-fig2:end -->

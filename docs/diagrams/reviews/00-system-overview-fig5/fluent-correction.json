@@ -1,0 +1,286 @@
+{
+  "diagram": "00-system-overview-fig5",
+  "source_sha256": "1fce23f1254f1204f42a209a616364271abacbd9ff876f9679ecb20548128a5d",
+  "png_sha256": "bb53f2694e7cdb32676ecbf9288af7187af5bde529d7ed689859a065e28617ae",
+  "prior_model": "docs\\diagrams\\reviews\\00-system-overview-fig5\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Memory · promotion before reuse"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Only eligible, approved context returns to prompts; exported files are mirrors, not policy."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "CAPTURE / PROMOTION"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "COMMITTED STATE / USE"
+    },
+    {
+      "cell": "agent-title",
+      "text": "Agent observation"
+    },
+    {
+      "cell": "agent-subtitle",
+      "text": "Submit pending decision"
+    },
+    {
+      "cell": "agent-detail",
+      "text": "Attach project, agent and run provenance"
+    },
+    {
+      "cell": "agent-metadata",
+      "text": "DecisionsEndpoints:125–143"
+    },
+    {
+      "cell": "agent-badge",
+      "text": "CAPTURE"
+    },
+    {
+      "cell": "inbox-title",
+      "text": "Decision inbox"
+    },
+    {
+      "cell": "inbox-subtitle",
+      "text": "Unapproved observation"
+    },
+    {
+      "cell": "inbox-detail",
+      "text": "No automatic authority from submission"
+    },
+    {
+      "cell": "inbox-metadata",
+      "text": "DecisionsEndpoints:125–143"
+    },
+    {
+      "cell": "inbox-badge",
+      "text": "PENDING"
+    },
+    {
+      "cell": "scribe-title",
+      "text": "Post-run Scribe"
+    },
+    {
+      "cell": "scribe-subtitle",
+      "text": "Select eligible run entries"
+    },
+    {
+      "cell": "scribe-detail",
+      "text": "Same project + agent + run + time window"
+    },
+    {
+      "cell": "scribe-metadata",
+      "text": "PostRunScribeService:25–150"
+    },
+    {
+      "cell": "scribe-badge",
+      "text": "FILTER"
+    },
+    {
+      "cell": "approved-title",
+      "text": "Approved active state"
+    },
+    {
+      "cell": "approved-subtitle",
+      "text": "Low-risk learning / pattern / update"
+    },
+    {
+      "cell": "approved-detail",
+      "text": "Auto-promotion; architecture / scope stay pending"
+    },
+    {
+      "cell": "approved-metadata",
+      "text": "PostRunScribeService:25–150"
+    },
+    {
+      "cell": "approved-badge",
+      "text": "PROMOTE"
+    },
+    {
+      "cell": "session-title",
+      "text": "Current open session"
+    },
+    {
+      "cell": "session-subtitle",
+      "text": "Append the run summary"
+    },
+    {
+      "cell": "session-detail",
+      "text": "Session continuity, not blanket policy adoption"
+    },
+    {
+      "cell": "session-metadata",
+      "text": "PostRunScribeService:25–150"
+    },
+    {
+      "cell": "session-badge",
+      "text": "SESSION"
+    },
+    {
+      "cell": "compiler-title",
+      "text": "Context compiler"
+    },
+    {
+      "cell": "compiler-subtitle",
+      "text": "Trust filters + memory budgets"
+    },
+    {
+      "cell": "compiler-detail",
+      "text": "Approved architecture/scope + eligible memories"
+    },
+    {
+      "cell": "compiler-metadata",
+      "text": "MemoryContextCompiler:55–160"
+    },
+    {
+      "cell": "compiler-badge",
+      "text": "SELECT"
+    },
+    {
+      "cell": "mirrors-title",
+      "text": "Workspace mirrors"
+    },
+    {
+      "cell": "mirrors-subtitle",
+      "text": "Exporter refreshes committed memory"
+    },
+    {
+      "cell": "mirrors-detail",
+      "text": "One-way export; not an automatic trust input"
+    },
+    {
+      "cell": "mirrors-metadata",
+      "text": "PostRunScribeService:25–150"
+    },
+    {
+      "cell": "mirrors-badge",
+      "text": "MIRROR"
+    },
+    {
+      "cell": "prompt-title",
+      "text": "Subsequent prompt"
+    },
+    {
+      "cell": "prompt-subtitle",
+      "text": "Include selected context"
+    },
+    {
+      "cell": "prompt-detail",
+      "text": "Child prompts use the decisions-only variant"
+    },
+    {
+      "cell": "prompt-metadata",
+      "text": "MemoryContextCompiler:55–160"
+    },
+    {
+      "cell": "prompt-badge",
+      "text": "CONTEXT"
+    },
+    {
+      "cell": "agent-to-inbox",
+      "text": "submit"
+    },
+    {
+      "cell": "inbox-to-scribe",
+      "text": "eligible"
+    },
+    {
+      "cell": "scribe-to-approved",
+      "text": "low-risk only"
+    },
+    {
+      "cell": "scribe-to-session",
+      "text": "append"
+    },
+    {
+      "cell": "approved-to-compiler",
+      "text": "approved"
+    },
+    {
+      "cell": "session-to-compiler",
+      "text": "session"
+    },
+    {
+      "cell": "session-to-mirrors",
+      "text": "export"
+    },
+    {
+      "cell": "compiler-to-prompt",
+      "text": "compile"
+    },
+    {
+      "cell": "scope",
+      "text": "Architecture and scope proposals require coordinator review. An observation alone is never trusted policy."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/00-system-overview.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "agent",
+      "to": "inbox",
+      "label": "submit",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "inbox",
+      "to": "scribe",
+      "label": "eligible entries",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "scribe",
+      "to": "approved",
+      "label": "low-risk only",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "scribe",
+      "to": "session",
+      "label": "append summary",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "approved",
+      "to": "compiler",
+      "label": "approved state",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "session",
+      "to": "compiler",
+      "label": "current session",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "session",
+      "to": "mirrors",
+      "label": "export committed",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "compiler",
+      "to": "prompt",
+      "label": "compile",
+      "result": "clean"
+    }
+  ]
+}

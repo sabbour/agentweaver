@@ -1,0 +1,26 @@
+[
+  {
+    "id": "message1",
+    "source": "human",
+    "target": "coord",
+    "relationship": "1  submit goal; draft and persist OutcomeSpec",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+    "result": "clean"
+  },
+  {
+    "id": "message2",
+    "source": "coord",
+    "target": "human",
+    "relationship": "2  request confirmation / revision",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+    "result": "clean"
+  },
+  {
+    "id": "message3",
+    "source": "human",
+    "target": "coord",
+    "relationship": "3  confirm; persist WorkPlan DAG",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+    "result": "clean"
+  }
+]

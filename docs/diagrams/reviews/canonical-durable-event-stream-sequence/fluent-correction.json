@@ -1,0 +1,75 @@
+{
+  "diagram": "canonical-durable-event-stream-sequence",
+  "source_sha256": "7d31061041eebdc28ae374215a09cf1ed164dac8766dbf8d8b9c2a408138520a",
+  "png_sha256": "ad85a5980e8590e333b194bb00499b28d7b0f144d5f061887751ba7858048cd1",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-durable-event-stream-sequence\\fluent-pitch-remediation\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [],
+  "context_pages": [
+    "docs/deep-dive/00-system-overview.md",
+    "docs/deep-dive/api-core.md",
+    "docs/run-event-stream.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "producer",
+      "to": "stream",
+      "label": "1  append(runId, event)",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "stream",
+      "to": "store",
+      "label": "2  lock run · allocate MAX + 1 · save",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "store",
+      "to": "stream",
+      "label": "3  commit succeeds",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "stream",
+      "to": "producer",
+      "label": "4  acknowledge assigned sequence",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "client",
+      "to": "sse",
+      "label": "5  reconnect with last delivered cursor",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "sse",
+      "to": "store",
+      "label": "6  query Sequence > cursor",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "store",
+      "to": "sse",
+      "label": "7  return ordered durable batch",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "sse",
+      "to": "client",
+      "label": "8  emit id + event + data; advance cursor",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,278 @@
+{
+  "diagram": "guide-architecture-aks-fig5",
+  "source_sha256": "2374fa9922141f35c6020e522ecff80c16b995f0def6b864b4476b4b9afd776e",
+  "png_sha256": "a6ca58015426f1113857e576499b6c61cab954e463594803579d61b24b6b9bbe",
+  "prior_model": "docs\\diagrams\\reviews\\guide-architecture-aks-fig5\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Credentials: authority stays in the control plane"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Separate Azure identities; separate Copilot, repository, turn and MCP capabilities."
+    },
+    {
+      "cell": "s-control-title",
+      "text": "TRUSTED CONTROL PLANE"
+    },
+    {
+      "cell": "s-host-title",
+      "text": "ISOLATED AGENTHOST"
+    },
+    {
+      "cell": "s-delivery-title",
+      "text": "DISTINCT DELIVERY CHANNELS"
+    },
+    {
+      "cell": "sa-badge",
+      "text": "FEDERATE"
+    },
+    {
+      "cell": "sa-title",
+      "text": "API + Worker SAs"
+    },
+    {
+      "cell": "sa-sub",
+      "text": "Separate Kubernetes RBAC"
+    },
+    {
+      "cell": "sa-meta",
+      "text": "AKS OIDC federation"
+    },
+    {
+      "cell": "mi-badge",
+      "text": "PRIVILEGED"
+    },
+    {
+      "cell": "mi-title",
+      "text": "API managed identity"
+    },
+    {
+      "cell": "mi-sub",
+      "text": "Secrets User + Secrets Officer"
+    },
+    {
+      "cell": "mi-meta",
+      "text": "agentweaver-api-identity"
+    },
+    {
+      "cell": "vault-badge",
+      "text": "VAULT"
+    },
+    {
+      "cell": "vault-title",
+      "text": "Azure Key Vault"
+    },
+    {
+      "cell": "vault-sub",
+      "text": "Credential and app-secret authority"
+    },
+    {
+      "cell": "vault-meta",
+      "text": "Runtime and CSI consumers"
+    },
+    {
+      "cell": "broker-badge",
+      "text": "RUN BOUND"
+    },
+    {
+      "cell": "broker-title",
+      "text": "Capability broker"
+    },
+    {
+      "cell": "broker-sub",
+      "text": "Fence run + purpose before/after read"
+    },
+    {
+      "cell": "broker-meta",
+      "text": "No ambient user-token lookup"
+    },
+    {
+      "cell": "hmi-badge",
+      "text": "NO VAULT"
+    },
+    {
+      "cell": "hmi-title",
+      "text": "AgentHost identity"
+    },
+    {
+      "cell": "hmi-sub",
+      "text": "Separate ServiceAccount federation"
+    },
+    {
+      "cell": "hmi-meta",
+      "text": "No Key Vault role assignments"
+    },
+    {
+      "cell": "configured-badge",
+      "text": "IN MEMORY"
+    },
+    {
+      "cell": "configured-title",
+      "text": "AgentHost runtime"
+    },
+    {
+      "cell": "configured-sub",
+      "text": "One-time /configure delivery"
+    },
+    {
+      "cell": "configured-meta",
+      "text": "Copilot or BYOK; repo separate"
+    },
+    {
+      "cell": "csi-badge",
+      "text": "API / WORKER"
+    },
+    {
+      "cell": "csi-title",
+      "text": "CSI app secrets"
+    },
+    {
+      "cell": "csi-sub",
+      "text": "SecretProviderClass configuration"
+    },
+    {
+      "cell": "csi-meta",
+      "text": "Files + synced secretKeyRef"
+    },
+    {
+      "cell": "oauth-badge",
+      "text": "API ONLY"
+    },
+    {
+      "cell": "oauth-title",
+      "text": "OAuth certificates"
+    },
+    {
+      "cell": "oauth-sub",
+      "text": "API runtime SecretClient"
+    },
+    {
+      "cell": "oauth-meta",
+      "text": "Usable active / previous versions"
+    },
+    {
+      "cell": "mcp-badge",
+      "text": "NO MOUNTS"
+    },
+    {
+      "cell": "mcp-title",
+      "text": "MCP resource server"
+    },
+    {
+      "cell": "mcp-sub",
+      "text": "Agentweaver broker JWT only"
+    },
+    {
+      "cell": "mcp-meta",
+      "text": "Exact /mcp + mcp:invoke"
+    },
+    {
+      "cell": "s1",
+      "text": "federate"
+    },
+    {
+      "cell": "s2",
+      "text": "authorize"
+    },
+    {
+      "cell": "s3",
+      "text": "credential"
+    },
+    {
+      "cell": "s4",
+      "text": "configure"
+    },
+    {
+      "cell": "s5",
+      "text": "pod identity"
+    },
+    {
+      "cell": "s6",
+      "text": "app secrets"
+    },
+    {
+      "cell": "s7",
+      "text": "cert versions"
+    },
+    {
+      "cell": "s8",
+      "text": "Assistant JWT"
+    },
+    {
+      "cell": "s-separation-heading",
+      "text": "NO AGENTHOST → VAULT EDGE"
+    },
+    {
+      "cell": "s-separation-body",
+      "text": "Network reachability is not authorization. Repository, A2A and MCP tokens are not Copilot credentials."
+    }
+  ],
+  "context_pages": [
+    "docs/guide/architecture-aks.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "sa",
+      "to": "mi",
+      "label": "federate",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "mi",
+      "to": "vault",
+      "label": "authorize",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "vault",
+      "to": "broker",
+      "label": "redeem",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "broker",
+      "to": "configured",
+      "label": "configure",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "hmi",
+      "to": "configured",
+      "label": "pod identity",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "vault",
+      "to": "csi",
+      "label": "app secrets",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "vault",
+      "to": "oauth",
+      "label": "cert versions",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "configured",
+      "to": "mcp",
+      "label": "Assistant JWT",
+      "result": "clean"
+    }
+  ]
+}

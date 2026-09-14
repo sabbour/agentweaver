@@ -1,0 +1,246 @@
+{
+  "diagram": "experience-00-overview-fig1",
+  "source_sha256": "1326c9afbea844231b8b8a187c6e609629b08b88f1fce7e6eea28e7f254fec1e",
+  "png_sha256": "704b4449fd3720f067264f882063c99c340b8fe85a7555d82a5c156303663b43",
+  "prior_model": "docs\\diagrams\\reviews\\experience-00-overview-fig1\\experience-content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Two front doors, one product"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Web and MCP share authorization and authoritative state; events flow back to clients."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "PEOPLE AND CLIENTS"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "AUTHORITATIVE BACKEND"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INTENT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Human operator"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Inspect and decide"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "browser or assistant"
+    },
+    {
+      "cell": "n0-detail",
+      "text": "Choose the interface, not a different product."
+    },
+    {
+      "cell": "n1-badge",
+      "text": "BROWSER"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Web UI"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Project and run views"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "REST + stream request"
+    },
+    {
+      "cell": "n1-detail",
+      "text": "Opens the watch request; receives API event payloads."
+    },
+    {
+      "cell": "n2-badge",
+      "text": "ASSISTANT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "MCP client"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Assistant tool caller"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "tool result + progress"
+    },
+    {
+      "cell": "n2-detail",
+      "text": "Makes explicit tool calls; surfaces decisions to people."
+    },
+    {
+      "cell": "n3-badge",
+      "text": "SHARED"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Product state"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Projects, teams, runs"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "knowledge + workspaces"
+    },
+    {
+      "cell": "n3-detail",
+      "text": "API-authorized reads and mutations; no MCP bypass."
+    },
+    {
+      "cell": "n4-badge",
+      "text": "API"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Agentweaver API"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Authorization boundary"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "run snapshots + events"
+    },
+    {
+      "cell": "n4-detail",
+      "text": "Owns resource checks and access to product state."
+    },
+    {
+      "cell": "n5-badge",
+      "text": "MCP"
+    },
+    {
+      "cell": "n5-title",
+      "text": "MCP server"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Authenticated adapter"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "validated broker bearer"
+    },
+    {
+      "cell": "n5-detail",
+      "text": "Forwards the exact caller token to the API."
+    },
+    {
+      "cell": "e0",
+      "text": "inspect"
+    },
+    {
+      "cell": "e1",
+      "text": "requests"
+    },
+    {
+      "cell": "e2",
+      "text": "SSE events"
+    },
+    {
+      "cell": "e3",
+      "text": "tool call"
+    },
+    {
+      "cell": "e4",
+      "text": "result"
+    },
+    {
+      "cell": "e5",
+      "text": "forward"
+    },
+    {
+      "cell": "e6",
+      "text": "API result"
+    },
+    {
+      "cell": "e7",
+      "text": "access"
+    },
+    {
+      "cell": "note",
+      "text": "Browser opens the connection; API sends event payloads. MCP results return through MCP."
+    }
+  ],
+  "context_pages": [
+    "docs/experience/00-overview.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "inspect",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n4",
+      "label": "requests",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n4",
+      "to": "n1",
+      "label": "SSE events",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n5",
+      "label": "tool call",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n5",
+      "to": "n2",
+      "label": "result",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n5",
+      "to": "n4",
+      "label": "forward",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n4",
+      "to": "n5",
+      "label": "API result",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n4",
+      "to": "n3",
+      "label": "access",
+      "result": "clean"
+    }
+  ]
+}

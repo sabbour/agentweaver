@@ -1,0 +1,238 @@
+{
+  "diagram": "reference-scaling-data-layer-fig1",
+  "source_sha256": "b3ade4d3c90edc5c9bedc37c121b8ebfa03123670b4117e2b8ccb2086b41564a",
+  "png_sha256": "a63746d46b33b790d23cdc4fe30d5176cf8f4a2a7d20b4864ba3247b1bdccb50",
+  "prior_model": "docs\\diagrams\\src\\reference-scaling-data-layer-fig1.drawio",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Scale durable state, isolate execution"
+    },
+    {
+      "cell": "subtitle",
+      "text": "Checked-in AKS topology, not a live-cluster observation or a future migration proposal."
+    },
+    {
+      "cell": "platform-title",
+      "text": "PLATFORM REPLICAS"
+    },
+    {
+      "cell": "platform-subtitle",
+      "text": "Same application image / RollingUpdate"
+    },
+    {
+      "cell": "sandbox-title",
+      "text": "PER-RUN KATA POD"
+    },
+    {
+      "cell": "sandbox-subtitle",
+      "text": "AgentHost control + model-execution sidecar"
+    },
+    {
+      "cell": "api-title",
+      "text": "API"
+    },
+    {
+      "cell": "api-subtitle",
+      "text": "HTTP / auth / SSE Sandbox + preview control"
+    },
+    {
+      "cell": "api-meta",
+      "text": "agentweaver-api"
+    },
+    {
+      "cell": "api-badge",
+      "text": "2 REPLICAS"
+    },
+    {
+      "cell": "worker-title",
+      "text": "Worker"
+    },
+    {
+      "cell": "worker-subtitle",
+      "text": "Runs / orchestration Validate + apply writeback"
+    },
+    {
+      "cell": "worker-meta",
+      "text": "agentweaver-worker"
+    },
+    {
+      "cell": "worker-badge",
+      "text": "HPA 2-3"
+    },
+    {
+      "cell": "agenthost-title",
+      "text": "AgentHost"
+    },
+    {
+      "cell": "agenthost-subtitle",
+      "text": "One-time configure; A2A turns Returns prepared-writeback receipt"
+    },
+    {
+      "cell": "agenthost-meta",
+      "text": "listener :8088"
+    },
+    {
+      "cell": "agenthost-badge",
+      "text": "RUN-BOUND"
+    },
+    {
+      "cell": "local-title",
+      "text": "Pod-local checkout"
+    },
+    {
+      "cell": "local-subtitle",
+      "text": "Verified source commit + tree Model tools edit detached checkout"
+    },
+    {
+      "cell": "local-meta",
+      "text": "/local-workspace"
+    },
+    {
+      "cell": "local-badge",
+      "text": "DISK-BACKED emptyDir"
+    },
+    {
+      "cell": "postgres-title",
+      "text": "PostgreSQL"
+    },
+    {
+      "cell": "postgres-subtitle",
+      "text": "State / memory / events Checkpoints + leases"
+    },
+    {
+      "cell": "postgres-badge",
+      "text": "AZURE FLEXIBLE SERVER"
+    },
+    {
+      "cell": "files-title",
+      "text": "Azure Files"
+    },
+    {
+      "cell": "files-subtitle",
+      "text": "Shared repo + authoritative child worktrees"
+    },
+    {
+      "cell": "files-badge",
+      "text": "RWX /workspace"
+    },
+    {
+      "cell": "hpa-detail",
+      "text": "HPA: CPU 70%, memory 80% Worker PDB: minAvailable 1"
+    },
+    {
+      "cell": "lease-detail",
+      "text": "Run lease: 5 min; renew halfway. Plan ownership: CAS + heartbeat."
+    },
+    {
+      "cell": "storage-label",
+      "text": "SHARED PERSISTENCE"
+    },
+    {
+      "cell": "database-boundary",
+      "text": "No sandbox DB connection."
+    },
+    {
+      "cell": "writeback-title",
+      "text": "VERIFIED PUBLICATION"
+    },
+    {
+      "cell": "writeback-detail",
+      "text": "Temporary ref goes to the shared repo, not GitHub. Worker verifies receipt, then applies --ff-only. An unchanged tree produces a no-change receipt."
+    },
+    {
+      "cell": "footer",
+      "text": "SQLite RWO PVC is retained but unmounted. HPA is active; queue-depth KEDA remains guidance. Shared RWX storage is persistence, not a per-run isolation boundary."
+    },
+    {
+      "cell": "database-access",
+      "text": "state / leases"
+    },
+    {
+      "cell": "workspace-access",
+      "text": "workspace"
+    },
+    {
+      "cell": "a2a-control",
+      "text": "A2A"
+    },
+    {
+      "cell": "local-execution",
+      "text": "execute"
+    },
+    {
+      "cell": "source-fetch",
+      "text": "fetch"
+    },
+    {
+      "cell": "temp-ref",
+      "text": "temp ref"
+    }
+  ],
+  "context_pages": [
+    "docs/reference/scaling-data-layer.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "api",
+      "to": "postgres",
+      "label": "state / leases",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "api",
+      "to": "files",
+      "label": "workspace",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "worker",
+      "to": "postgres",
+      "label": "state / leases",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "worker",
+      "to": "files",
+      "label": "workspace",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "worker",
+      "to": "agenthost",
+      "label": "A2A",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "agenthost",
+      "to": "local",
+      "label": "execute",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "files",
+      "to": "local",
+      "label": "fetch",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "local",
+      "to": "files",
+      "label": "temp ref",
+      "result": "clean"
+    }
+  ]
+}

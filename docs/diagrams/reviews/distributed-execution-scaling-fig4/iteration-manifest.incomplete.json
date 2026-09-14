@@ -1,0 +1,28 @@
+{
+  "diagram": "distributed-execution-scaling-fig4",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "distributed-execution-scaling-fig4-pitch.drawio",
+    "png": "distributed-execution-scaling-fig4-pitch.png",
+    "change_record": "distributed-execution-scaling-fig4-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "distributed-execution-scaling-fig4-pass-01.drawio",
+      "png": "distributed-execution-scaling-fig4-pass-01.png",
+      "change_record": "distributed-execution-scaling-fig4-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "all_arrows_traced": false,
+      "baseline_meaningful_xml": 6643,
+      "result_meaningful_xml": 26913,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 4.051332
+    }
+  ],
+  "final_pass": null
+}

@@ -1,0 +1,125 @@
+{
+  "diagram": "frontend-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "frontend-fig1-pitch.drawio",
+    "png": "frontend-fig1-pitch.png",
+    "change_record": "frontend-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "frontend-fig1-pass-01.drawio",
+      "png": "frontend-fig1-pass-01.png",
+      "change_record": "frontend-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2170,
+      "result_meaningful_xml": 23631,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.889862
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "frontend-fig1-pass-02.drawio",
+      "png": "frontend-fig1-pass-02.png",
+      "change_record": "frontend-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "frontend-fig1-pass-03.drawio",
+      "png": "frontend-fig1-pass-03.png",
+      "change_record": "frontend-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "frontend-fig1-pass-04.drawio",
+      "png": "frontend-fig1-pass-04.png",
+      "change_record": "frontend-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "auth-to-shell",
+          "source": "auth",
+          "target": "shell",
+          "relationship": "enter",
+          "evidence": "apps/web/src/App.tsx:399-403",
+          "result": "clean"
+        },
+        {
+          "id": "shell-to-pages",
+          "source": "shell",
+          "target": "pages",
+          "relationship": "contains",
+          "evidence": "apps/web/src/App.tsx:80-127",
+          "result": "clean"
+        },
+        {
+          "id": "pages-to-client",
+          "source": "pages",
+          "target": "client",
+          "relationship": "request",
+          "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+          "result": "clean"
+        },
+        {
+          "id": "client-to-api",
+          "source": "client",
+          "target": "api",
+          "relationship": "HTTP",
+          "evidence": "apps/web/src/config.ts:13-36",
+          "result": "clean"
+        },
+        {
+          "id": "api-to-live",
+          "source": "api",
+          "target": "live",
+          "relationship": "history + SSE",
+          "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-151",
+          "result": "clean"
+        },
+        {
+          "id": "live-to-projection",
+          "source": "live",
+          "target": "projection",
+          "relationship": "events",
+          "evidence": "apps/web/src/timeline/mergeRunEvents.ts:23-79",
+          "result": "clean"
+        },
+        {
+          "id": "projection-to-controls",
+          "source": "projection",
+          "target": "controls",
+          "relationship": "render",
+          "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

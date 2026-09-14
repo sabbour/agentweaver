@@ -1,0 +1,281 @@
+{
+  "diagram": "orchestration-fig9",
+  "source_sha256": "6486ea84b6f243d4c1b31ad72e44afe8de833b83ce124865cefae8a27ff6ca76",
+  "png_sha256": "5244706d35577a2a59dee050f35981c663fcf93ea646a1838e2bd34171e435d4",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Execution and observation cooperate"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The watcher projects runtime events into durable state; it is not the executing graph."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "START AND BIND"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "RUNTIME AND SUPERVISION"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "DURABLE PROJECTIONS"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "START"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Run orchestrator"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Starts factory + watcher"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "supervised lifetime"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "SOURCE"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Effective definition"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Resolve concrete workflow"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "no policy composer"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "BIND"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Factory + binder"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Build executable graph"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "typed bindings"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "EXECUTE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Checkpointed stream"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "MAF executes the graph"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "provider-aware store"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "OBSERVE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Watch loop"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Consumes runtime updates"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "not graph execution"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "PENDING"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Review request"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Persist pending decision"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "durable pause context"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "PROJECT"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Typed terminal"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Classify completed output"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "not inferred from text"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Durable run state"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Persist status projection"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "watcher owns updates"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "EVENTS"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Workflow-step events"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Expose execution progress"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "client observation"
+    },
+    {
+      "cell": "e0",
+      "text": "start"
+    },
+    {
+      "cell": "e1",
+      "text": "resolve"
+    },
+    {
+      "cell": "e2",
+      "text": "execute"
+    },
+    {
+      "cell": "e3",
+      "text": "supervise"
+    },
+    {
+      "cell": "e4",
+      "text": "stream"
+    },
+    {
+      "cell": "e5",
+      "text": "request"
+    },
+    {
+      "cell": "e6",
+      "text": "terminal"
+    },
+    {
+      "cell": "e7",
+      "text": "persist"
+    },
+    {
+      "cell": "e8",
+      "text": "publish"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/orchestration.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n2",
+      "label": "start",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "resolve",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "execute",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n0",
+      "to": "n4",
+      "label": "supervise",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n4",
+      "label": "stream",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n5",
+      "label": "request",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n4",
+      "to": "n6",
+      "label": "terminal",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n6",
+      "to": "n7",
+      "label": "persist",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n4",
+      "to": "n8",
+      "label": "publish",
+      "result": "clean"
+    }
+  ]
+}

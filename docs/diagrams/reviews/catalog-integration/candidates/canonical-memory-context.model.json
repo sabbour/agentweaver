@@ -1,0 +1,486 @@
+{
+  "title": "Context is selected data, not instructions",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Active decisions",
+      "subLabel": "Project-wide boundaries",
+      "meta": "Child prompts: decisions only",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "DECISIONS",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n1",
+      "label": "Core + learnings",
+      "subLabel": "Agent-scoped candidates",
+      "meta": "Approved cross-team allowed",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "MEMORIES",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n2",
+      "label": "Open session",
+      "subLabel": "Latest active session",
+      "meta": "Latest StartedAt wins",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "SESSION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n3",
+      "label": "Joint rank + budget",
+      "subLabel": "One combined memory list",
+      "meta": "Approximation: 4 chars/token",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "SELECT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n4",
+      "label": "Context compiler",
+      "subLabel": "Assemble scoped sections",
+      "meta": "Empty inputs → null",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "COMPILE",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n5",
+      "label": "Untrusted JSON",
+      "subLabel": "Historical data, not authority",
+      "meta": "untrusted-context.v1",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "OUTPUT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "combine / sort",
+      "loopback": false
+    },
+    {
+      "from": "n0",
+      "to": "n4",
+      "label": "approved",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "latest open",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "selected",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "serialize",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "boundary0",
+      "label": "SCOPED INPUTS"
+    },
+    {
+      "id": "boundary1",
+      "label": "SELECTION AND SERIALIZATION"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n0",
+          "label": "Active decisions",
+          "subLabel": "Project-wide boundaries",
+          "meta": "Child prompts: decisions only",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "DECISIONS",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 567.9142857142857,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n1",
+          "label": "Core + learnings",
+          "subLabel": "Agent-scoped candidates",
+          "meta": "Approved cross-team allowed",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "MEMORIES",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1075.1142857142859,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n2",
+          "label": "Open session",
+          "subLabel": "Latest active session",
+          "meta": "Latest StartedAt wins",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "SESSION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n3",
+          "label": "Joint rank + budget",
+          "subLabel": "One combined memory list",
+          "meta": "Approximation: 4 chars/token",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "SELECT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 567.9142857142857,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n4",
+          "label": "Context compiler",
+          "subLabel": "Assemble scoped sections",
+          "meta": "Empty inputs → null",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "COMPILE",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1075.1142857142859,
+          "y": 506.2321428571429
+        },
+        "data": {
+          "id": "n5",
+          "label": "Untrusted JSON",
+          "subLabel": "Historical data, not authority",
+          "meta": "untrusted-context.v1",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "OUTPUT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "group-boundary0",
+        "type": "band",
+        "position": {
+          "x": 28.714285714285694,
+          "y": 173.91071428571428
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 192
+        },
+        "data": {
+          "label": "SCOPED INPUTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 48.714285714285694,
+          "y": 189.91071428571428
+        },
+        "data": {
+          "label": "SCOPED INPUTS",
+          "width": 1378.4
+        }
+      },
+      {
+        "id": "group-boundary1",
+        "type": "band",
+        "position": {
+          "x": 28.714285714285694,
+          "y": 442.2321428571429
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 220
+        },
+        "data": {
+          "label": "SELECTION AND SERIALIZATION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 48.714285714285694,
+          "y": 458.2321428571429
+        },
+        "data": {
+          "label": "SELECTION AND SERIALIZATION",
+          "width": 1378.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n1",
+        "target": "n3",
+        "label": "combine / sort",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 788.9142857142857,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 788.9142857142857,
+              "y": 409.82142857142856
+            },
+            {
+              "x": 482.3784078516903,
+              "y": 409.82142857142856
+            },
+            {
+              "x": 482.3784078516903,
+              "y": 551.4321428571429
+            },
+            {
+              "x": 400.71428571428567,
+              "y": 551.4321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 635.6463467829881,
+            "y": 409.82142857142856
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n0",
+        "target": "n4",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 179.71428571428567,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 179.7142857142857,
+              "y": 428.0357142857143
+            },
+            {
+              "x": 686.9142857142857,
+              "y": 428.0357142857143
+            },
+            {
+              "x": 686.9142857142857,
+              "y": 520.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 433.3142857142857,
+            "y": 428.0357142857143
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n4",
+        "label": "latest open",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1296.1142857142859,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 1296.1142857142859,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 788.9142857142857,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 788.9142857142857,
+              "y": 520.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1042.5142857142857,
+            "y": 437.1428571428571
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "selected",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 567.9142857142857,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 484.3142857142857,
+            "y": 572.2321428571429
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "serialize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 907.9142857142857,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 1075.1142857142859,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 991.5142857142857,
+            "y": 572.2321428571429
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1474.3107142857143,
+    "canvasHeight": 884.9107142857142
+  }
+}

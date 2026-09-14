@@ -1,0 +1,340 @@
+{
+  "diagram": "canonical-aks-network",
+  "source_sha256": "f03c52e805e6a46f921ec83b885783c99c744b2c223b51bfdb5f38caa8063071",
+  "png_sha256": "f12dfeb738f8138fcc7b4f175e47975f85c3030c88387e29a4e2528397a38089",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-aks-network\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "AKS network: two ingress planes"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Routes select Services; additive policies bound AgentHost access, not a vault credential path."
+    },
+    {
+      "cell": "n-app-title",
+      "text": "APPLICATION ORIGIN • EXACT MATCHES / LONGER PREFIXES BEAT /"
+    },
+    {
+      "cell": "n-preview-title",
+      "text": "PREVIEW ORIGIN • API MANAGES RESOURCES, NOT BROWSER TRAFFIC"
+    },
+    {
+      "cell": "n-egress-title",
+      "text": "EFFECTIVE AGENTHOST POLICY UNION"
+    },
+    {
+      "cell": "client-badge",
+      "text": "HTTPS"
+    },
+    {
+      "cell": "client-title",
+      "text": "Client"
+    },
+    {
+      "cell": "client-sub",
+      "text": "Browser / MCP"
+    },
+    {
+      "cell": "client-meta",
+      "text": "Public app origin"
+    },
+    {
+      "cell": "gateway-badge",
+      "text": "CRD"
+    },
+    {
+      "cell": "gateway-title",
+      "text": "App Gateway"
+    },
+    {
+      "cell": "gateway-sub",
+      "text": "agentweaver-gateway"
+    },
+    {
+      "cell": "gateway-meta",
+      "text": "TLS :443"
+    },
+    {
+      "cell": "routes-badge",
+      "text": "ROUTE"
+    },
+    {
+      "cell": "routes-title",
+      "text": "HTTPRoutes"
+    },
+    {
+      "cell": "routes-sub",
+      "text": "API / MCP / /"
+    },
+    {
+      "cell": "routes-meta",
+      "text": "Exact OAuth routes below"
+    },
+    {
+      "cell": "services-badge",
+      "text": "CLUSTER IP"
+    },
+    {
+      "cell": "services-title",
+      "text": "Services"
+    },
+    {
+      "cell": "services-sub",
+      "text": "API/MCP :8080"
+    },
+    {
+      "cell": "services-meta",
+      "text": "Frontend :80"
+    },
+    {
+      "cell": "pods-badge",
+      "text": "WORKLOAD"
+    },
+    {
+      "cell": "pods-title",
+      "text": "App pods"
+    },
+    {
+      "cell": "pods-sub",
+      "text": "API / MCP / web"
+    },
+    {
+      "cell": "pods-meta",
+      "text": "All target :8080"
+    },
+    {
+      "cell": "browser-badge",
+      "text": "HTTPS"
+    },
+    {
+      "cell": "browser-title",
+      "text": "Browser"
+    },
+    {
+      "cell": "browser-sub",
+      "text": "{token}-preview"
+    },
+    {
+      "cell": "browser-meta",
+      "text": "Separate hostname"
+    },
+    {
+      "cell": "pgateway-badge",
+      "text": "CRD"
+    },
+    {
+      "cell": "pgateway-title",
+      "text": "Preview GW"
+    },
+    {
+      "cell": "pgateway-sub",
+      "text": "preview-gateway"
+    },
+    {
+      "cell": "pgateway-meta",
+      "text": "TLS :443"
+    },
+    {
+      "cell": "proute-badge",
+      "text": "DYNAMIC"
+    },
+    {
+      "cell": "proute-title",
+      "text": "HTTPRoute"
+    },
+    {
+      "cell": "proute-sub",
+      "text": "preview-{token}"
+    },
+    {
+      "cell": "proute-meta",
+      "text": "Host rewrite: localhost"
+    },
+    {
+      "cell": "pservice-badge",
+      "text": "DYNAMIC"
+    },
+    {
+      "cell": "pservice-title",
+      "text": "Service"
+    },
+    {
+      "cell": "pservice-sub",
+      "text": "preview-{token}:80"
+    },
+    {
+      "cell": "pservice-meta",
+      "text": "Run-label selector"
+    },
+    {
+      "cell": "agenthost-badge",
+      "text": "KATA POD"
+    },
+    {
+      "cell": "agenthost-title",
+      "text": "AgentHost"
+    },
+    {
+      "cell": "agenthost-sub",
+      "text": "Preview target port"
+    },
+    {
+      "cell": "agenthost-meta",
+      "text": "Gateway: 3000–9000"
+    },
+    {
+      "cell": "internal-badge",
+      "text": "EAST–WEST"
+    },
+    {
+      "cell": "internal-title",
+      "text": "API / MCP"
+    },
+    {
+      "cell": "internal-sub",
+      "text": "Selector-based TCP 8080"
+    },
+    {
+      "cell": "internal-meta",
+      "text": "DNS: UDP/TCP 53 separately"
+    },
+    {
+      "cell": "public-badge",
+      "text": "WORLD"
+    },
+    {
+      "cell": "public-title",
+      "text": "Public HTTPS"
+    },
+    {
+      "cell": "public-sub",
+      "text": "TCP 443, IPv4 + IPv6"
+    },
+    {
+      "cell": "public-meta",
+      "text": "Private/link-local exclusions"
+    },
+    {
+      "cell": "bounds-badge",
+      "text": "CAUTION"
+    },
+    {
+      "cell": "bounds-title",
+      "text": "Additive allows"
+    },
+    {
+      "cell": "bounds-sub",
+      "text": "API/Worker → A2A :8088"
+    },
+    {
+      "cell": "bounds-meta",
+      "text": "Preview range includes 8088"
+    },
+    {
+      "cell": "n-internal",
+      "text": "TCP 8080"
+    },
+    {
+      "cell": "n-public",
+      "text": "TCP 443"
+    },
+    {
+      "cell": "n-routes-heading",
+      "text": "APP ROUTES"
+    },
+    {
+      "cell": "n-routes-body",
+      "text": "API: /api, /auth, /openapi + exact OAuth/discovery. MCP: /mcp + resource metadata; /mcp/health → /healthz."
+    },
+    {
+      "cell": "n-exclusions-heading",
+      "text": "EGRESS EXCLUSIONS"
+    },
+    {
+      "cell": "n-exclusions-body",
+      "text": "10/8, 172.16/12, 192.168/16, 169.254/16; fc00::/7, fe80::/10. Not FQDN-only; no vault authority implied."
+    }
+  ],
+  "context_pages": [
+    "docs/guide/architecture-aks.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "client",
+      "to": "gateway",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "gateway",
+      "to": "routes",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "routes",
+      "to": "services",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "services",
+      "to": "pods",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "browser",
+      "to": "pgateway",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "pgateway",
+      "to": "proute",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "proute",
+      "to": "pservice",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "pservice",
+      "to": "agenthost",
+      "label": "",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "agenthost",
+      "to": "internal",
+      "label": "TCP 8080",
+      "result": "clean"
+    },
+    {
+      "id": "e9",
+      "from": "agenthost",
+      "to": "public",
+      "label": "TCP 443",
+      "result": "clean"
+    }
+  ]
+}

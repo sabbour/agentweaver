@@ -1,0 +1,141 @@
+{
+  "diagram": "agent-framework-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "agent-framework-fig1-pitch.drawio",
+    "png": "agent-framework-fig1-pitch.png",
+    "change_record": "agent-framework-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "agent-framework-fig1-pass-01.drawio",
+      "png": "agent-framework-fig1-pass-01.png",
+      "change_record": "agent-framework-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 3,
+      "baseline_meaningful_xml": 2373,
+      "result_meaningful_xml": 24855,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.474083
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig1-pass-02.drawio",
+      "png": "agent-framework-fig1-pass-02.png",
+      "change_record": "agent-framework-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig1-pass-03.drawio",
+      "png": "agent-framework-fig1-pass-03.png",
+      "change_record": "agent-framework-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig1-pass-04.drawio",
+      "png": "agent-framework-fig1-pass-04.png",
+      "change_record": "agent-framework-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "output-to-adapter",
+          "source": "output",
+          "target": "adapter",
+          "relationship": "turn output",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "adapter-to-state",
+          "source": "adapter",
+          "target": "state",
+          "relationship": "save output",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "adapter-to-port",
+          "source": "adapter",
+          "target": "port",
+          "relationship": "request",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "port-to-decision",
+          "source": "port",
+          "target": "decision",
+          "relationship": "matching response",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "state-to-mergeadapter",
+          "source": "state",
+          "target": "mergeadapter",
+          "relationship": "read saved output",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "decision-to-mergeadapter",
+          "source": "decision",
+          "target": "mergeadapter",
+          "relationship": "approved",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "mergeadapter-to-merge",
+          "source": "mergeadapter",
+          "target": "merge",
+          "relationship": "MergeInput",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:409-440",
+          "result": "clean"
+        },
+        {
+          "id": "merge-to-blocked",
+          "source": "merge",
+          "target": "blocked",
+          "relationship": "blocked output",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:532-545",
+          "result": "clean"
+        },
+        {
+          "id": "blocked-to-port",
+          "source": "blocked",
+          "target": "port",
+          "relationship": "same review port",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:532-545",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

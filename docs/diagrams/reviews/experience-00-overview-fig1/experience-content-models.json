@@ -1,0 +1,1583 @@
+{
+  "experience-00-overview-fig1": {
+    "title": "Two front doors, one product",
+    "takeaway": "Web and MCP share authorization and authoritative state; events flow back to clients.",
+    "groups": [
+      "PEOPLE AND CLIENTS",
+      "AUTHORITATIVE BACKEND"
+    ],
+    "nodes": [
+      {
+        "title": "Human operator",
+        "subtitle": "Inspect and decide",
+        "metadata": "browser or assistant",
+        "badge": "INTENT",
+        "detail": "Choose the interface,\nnot a different product.",
+        "symbol": "person",
+        "tone": 0
+      },
+      {
+        "title": "Web UI",
+        "subtitle": "Project and run views",
+        "metadata": "REST + stream request",
+        "badge": "BROWSER",
+        "detail": "Opens the watch request;\nreceives API event payloads.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "MCP client",
+        "subtitle": "Assistant tool caller",
+        "metadata": "tool result + progress",
+        "badge": "ASSISTANT",
+        "detail": "Makes explicit tool calls;\nsurfaces decisions to people.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Product state",
+        "subtitle": "Projects, teams, runs",
+        "metadata": "knowledge + workspaces",
+        "badge": "SHARED",
+        "detail": "API-authorized reads and\nmutations; no MCP bypass.",
+        "symbol": "product",
+        "tone": 2
+      },
+      {
+        "title": "Agentweaver API",
+        "subtitle": "Authorization boundary",
+        "metadata": "run snapshots + events",
+        "badge": "API",
+        "detail": "Owns resource checks and\naccess to product state.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "MCP server",
+        "subtitle": "Authenticated adapter",
+        "metadata": "validated broker bearer",
+        "badge": "MCP",
+        "detail": "Forwards the exact caller\ntoken to the API.",
+        "symbol": "process",
+        "tone": 0
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "inspect",
+        "evidence": "apps/web/src/App.tsx:103-125",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 4,
+        "label": "requests",
+        "evidence": "apps/web/src/api/sse.ts:237-246",
+        "route": "down-left",
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 1,
+        "label": "SSE events",
+        "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:481-514",
+        "route": "up-right",
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "tool call",
+        "evidence": "apps/Agentweaver.Mcp/Program.cs:85-98",
+        "route": "down-left",
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 2,
+        "label": "result",
+        "evidence": "apps/Agentweaver.Mcp/Tools/RunTools.cs:229-265",
+        "route": "up-right",
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "forward",
+        "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359-382",
+        "route": "left-top",
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 5,
+        "label": "API result",
+        "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:376-382",
+        "route": "right-bottom",
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "access",
+        "evidence": "apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:158-162",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Browser opens the connection; API sends event payloads. MCP results return through MCP.",
+    "research": "experience-00-overview-fig1/research-identity.md",
+    "pitch": [
+      "Client interfaces",
+      "Authorized product state",
+      "operate"
+    ]
+  },
+  "experience-mcp-client-fig1": {
+    "title": "Assistant-driven work",
+    "takeaway": "Choose one intake path, inspect the result, and preserve explicit human decisions.",
+    "groups": [
+      "PREPARE AND CHOOSE",
+      "OPERATE AND REVIEW"
+    ],
+    "nodes": [
+      {
+        "title": "Human + assistant",
+        "subtitle": "Agree on the work",
+        "metadata": "MCP calls -> API",
+        "badge": "INTENT",
+        "detail": "The assistant explains actions;\na person supplies judgment.",
+        "symbol": "person",
+        "tone": 0
+      },
+      {
+        "title": "Project and team",
+        "subtitle": "Inspect or create",
+        "metadata": "propose -> confirm cast",
+        "badge": "PREPARE",
+        "detail": "Named roles and charters\nbelong to the project.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Choose intake",
+        "subtitle": "Queue OR start now",
+        "metadata": "do not start twice",
+        "badge": "CHOICE",
+        "detail": "Ready pickup is an alternative\nto an immediate start.",
+        "symbol": "decision",
+        "tone": 3
+      },
+      {
+        "title": "Human review",
+        "subtitle": "Read before deciding",
+        "metadata": "run_review: boolean",
+        "badge": "JUDGMENT",
+        "detail": "MCP approve/decline is binary.\nFeedback uses other surfaces.",
+        "symbol": "decision",
+        "tone": 3
+      },
+      {
+        "title": "State and artifacts",
+        "subtitle": "Watch, list, read",
+        "metadata": "API -> MCP -> client",
+        "badge": "EVIDENCE",
+        "detail": "Progress and results return\nthrough the MCP adapter.",
+        "symbol": "document",
+        "tone": 1
+      },
+      {
+        "title": "Coordinator",
+        "subtitle": "Runs and child work",
+        "metadata": "status / children / watch",
+        "badge": "EXECUTE",
+        "detail": "Queued: claim then unattended.\nDirect: no outcome gate.",
+        "symbol": "product",
+        "tone": 0
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "prepare",
+        "evidence": "apps/Agentweaver.Api/Casting/CastingService.cs:899-927",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "choose",
+        "evidence": "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14-34",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "start once",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:186-249",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "observe",
+        "evidence": "apps/Agentweaver.Mcp/Tools/RunTools.cs:229-265",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "inspect",
+        "evidence": "apps/Agentweaver.Mcp/Tools/RunTools.cs:276-284",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Define Outcome is the third start variant: draft, obtain authorized confirmation, then dispatch.",
+    "research": "experience-00-overview-fig1/research-identity.md",
+    "pitch": [
+      "Assistant intent",
+      "Reviewed work",
+      "operate through MCP"
+    ]
+  },
+  "experience-onboarding-auth-fig1": {
+    "title": "Browser sign-in and readiness",
+    "takeaway": "Entra establishes identity; AI readiness and optional GitHub capabilities remain separate.",
+    "groups": [
+      "BROWSER SIGN-IN",
+      "SESSION AND SETUP"
+    ],
+    "nodes": [
+      {
+        "title": "Browser",
+        "subtitle": "Start Entra sign-in",
+        "metadata": "/auth/entra/authorize",
+        "badge": "START",
+        "detail": "The API binds this request\nto expiring browser state.",
+        "symbol": "person",
+        "tone": 0
+      },
+      {
+        "title": "Auth API",
+        "subtitle": "Save state and PKCE",
+        "metadata": "verifier + nonce",
+        "badge": "SERVER",
+        "detail": "The verifier stays server-side.\nRedirect carries a challenge.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Microsoft Entra",
+        "subtitle": "Authenticate identity",
+        "metadata": "code + state callback",
+        "badge": "IDENTITY",
+        "detail": "Not GitHub login;\nnot repository authorization.",
+        "symbol": "entra",
+        "tone": 0
+      },
+      {
+        "title": "Ready app shell",
+        "subtitle": "Continue when ready",
+        "metadata": "platform access + AI",
+        "badge": "READY",
+        "detail": "GitHub Repo App access is\noptional for GitHub work.",
+        "symbol": "process",
+        "tone": 2
+      },
+      {
+        "title": "Browser session",
+        "subtitle": "One-time code exchange",
+        "metadata": "session credential",
+        "badge": "SESSION",
+        "detail": "Frontend exchanges a code;\nno raw token in callback URL.",
+        "symbol": "database",
+        "tone": 1
+      },
+      {
+        "title": "Callback checks",
+        "subtitle": "Consume state once",
+        "metadata": "redeem code + verifier",
+        "badge": "VALIDATE",
+        "detail": "Validate Entra response and\nbound browser callback.",
+        "symbol": "process",
+        "tone": 3
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "authorize",
+        "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:290",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "redirect",
+        "evidence": "apps/Agentweaver.Api/Auth/EntraOAuthRedirectService.cs:250-260",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "callback",
+        "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:327-365",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "exchange",
+        "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:416-452",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "setup check",
+        "evidence": "apps/web/src/App.tsx:278-293",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Session identity does not grant repository access, provider readiness, or project membership.",
+    "research": "experience-00-overview-fig1/research-identity.md",
+    "pitch": [
+      "Entra browser sign-in",
+      "Authorized session",
+      "establish identity"
+    ]
+  },
+  "experience-onboarding-auth-fig2": {
+    "title": "MCP uses broker credentials",
+    "takeaway": "An Entra-backed consent flow issues the exact-resource credential accepted by MCP.",
+    "groups": [
+      "DISCOVERY AND HUMAN CONSENT",
+      "TOKEN AND RESOURCE ENFORCEMENT"
+    ],
+    "nodes": [
+      {
+        "title": "MCP client",
+        "subtitle": "Discover resource/issuer",
+        "metadata": "401 challenge + metadata",
+        "badge": "DISCOVER",
+        "detail": "Use the advertised resource\nand authorization server.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Browser consent",
+        "subtitle": "Entra-backed session",
+        "metadata": "/oauth/authorize + PKCE",
+        "badge": "AUTHORIZE",
+        "detail": "Show client and requested\naccess; Allow or Deny.",
+        "symbol": "person",
+        "tone": 3
+      },
+      {
+        "title": "OpenIddict",
+        "subtitle": "Bind grant and code",
+        "metadata": "client / redirect / resource",
+        "badge": "ISSUER",
+        "detail": "Existing consent may skip a\nprompt; denial is not success.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Authorized API",
+        "subtitle": "Enforce resource access",
+        "metadata": "project role / membership",
+        "badge": "API",
+        "detail": "MCP forwards the validated\nbearer; API checks again.",
+        "symbol": "process",
+        "tone": 2
+      },
+      {
+        "title": "MCP boundary",
+        "subtitle": "Validate broker token",
+        "metadata": "issuer + RS256 + lifetime",
+        "badge": "RESOURCE",
+        "detail": "Exact single audience,\nsubject and mcp:invoke.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Token exchange",
+        "subtitle": "Code + verifier",
+        "metadata": "/oauth/token",
+        "badge": "BROKER",
+        "detail": "Returns Agentweaver token;\nnot raw Entra or GitHub.",
+        "symbol": "document",
+        "tone": 1
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "open",
+        "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:87-138",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "allow",
+        "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:148-188",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "code grant",
+        "evidence": "apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs:31-76",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "tool bearer",
+        "evidence": "apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:40-87",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "forward",
+        "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359-382",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Invalid/missing token: 401. Missing scope: 403. No API-key or raw Entra/GitHub fallback.",
+    "research": "experience-00-overview-fig1/research-identity.md",
+    "pitch": [
+      "Entra-backed consent",
+      "MCP broker access",
+      "issue scoped credential"
+    ]
+  },
+  "experience-team-casting-memory-fig1": {
+    "title": "Named teams, governed memory",
+    "takeaway": "Only eligible database records feed future context; exports are inspectable mirrors.",
+    "groups": [
+      "TEAM AND KNOWLEDGE GOVERNANCE",
+      "AUTHORITATIVE CONTEXT"
+    ],
+    "nodes": [
+      {
+        "title": "Cast proposal",
+        "subtitle": "Roles, names, charters",
+        "metadata": "new / augment / recast",
+        "badge": "PROPOSE",
+        "detail": "Inspect the proposal;\nconfirm the intended change.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Named team",
+        "subtitle": "Persist roster and work",
+        "metadata": "charters + team history",
+        "badge": "CONFIRM",
+        "detail": "Agents accumulate records;\nrecords are not auto-policy.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Review knowledge",
+        "subtitle": "Memory and decision inbox",
+        "metadata": "approve / reject / retain",
+        "badge": "GOVERN",
+        "detail": "Authorized promotion;\nrejection remains auditable.",
+        "symbol": "decision",
+        "tone": 3
+      },
+      {
+        "title": "Future context",
+        "subtitle": "Untrusted structured data",
+        "metadata": "children: narrower scope",
+        "badge": "COMPILE",
+        "detail": "Cross-agent memory requires\napproved high-value learning.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Eligibility",
+        "subtitle": "Filter and budget",
+        "metadata": "exclude legacy records",
+        "badge": "SELECT",
+        "detail": "Active approved boundaries;\ncross-team learning/pattern.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Knowledge DB",
+        "subtitle": "Authoritative records",
+        "metadata": "memory + decisions",
+        "badge": "STORE",
+        "detail": "Exported files are mirrors,\nnot the compiler authority.",
+        "symbol": "database",
+        "tone": 2
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "confirm",
+        "evidence": "apps/Agentweaver.Api/Casting/CastingService.cs:899-999",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "record",
+        "evidence": "apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:150-167",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "persist",
+        "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:211-219",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "select",
+        "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:57-105",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "compile",
+        "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:159-226",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "A cross-team tag alone is insufficient. Approved + high importance + learning/pattern are required.",
+    "research": "experience-00-overview-fig1/research-identity.md",
+    "pitch": [
+      "Confirmed named team",
+      "Eligible knowledge context",
+      "learn with governance"
+    ]
+  },
+  "canonical-a2a-execution": {
+    "title": "Remote leaves, worker-owned graph",
+    "takeaway": "A2A moves leaf turns into sandbox pods, not orchestration or durable state ownership.",
+    "groups": [
+      "WORKER CONTROL PLANE",
+      "LEAF EXECUTION AND DURABILITY"
+    ],
+    "nodes": [
+      {
+        "title": "Workflow graph",
+        "subtitle": "Orchestration and gates",
+        "metadata": "RequestPort / checkpoints",
+        "badge": "WORKER",
+        "detail": "Graph progression and human\ngates stay worker-side.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "RemoteAgentProxy",
+        "subtitle": "Leaf-turn adapter",
+        "metadata": "message:stream",
+        "badge": "A2A",
+        "detail": "Configure run context;\nforward the leaf invocation.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Event recorder",
+        "subtitle": "Decode returned events",
+        "metadata": "ordered sequence numbers",
+        "badge": "WORKER",
+        "detail": "Records pod event data parts;\nno direct pod-to-UI stream.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Sandbox pod",
+        "subtitle": "AgentHost + executor",
+        "metadata": "leaf agent execution",
+        "badge": "POD",
+        "detail": "No database/checkpoint-store\naccess from AgentHost.",
+        "symbol": "pod",
+        "tone": 0
+      },
+      {
+        "title": "Durable state",
+        "subtitle": "Checkpoints and events",
+        "metadata": "shared run state",
+        "badge": "STORE",
+        "detail": "Worker persists progress;\nAPI reads event cursors.",
+        "symbol": "database",
+        "tone": 2
+      },
+      {
+        "title": "Web timeline",
+        "subtitle": "API stream consumer",
+        "metadata": "snapshot + SSE",
+        "badge": "BROWSER",
+        "detail": "Shows persisted run events;\nnot transport-level replay.",
+        "symbol": "process",
+        "tone": 1
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "invoke leaf",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:36-63",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 3,
+        "label": "A2A call",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:38-53",
+        "route": "middle-left",
+        "revision": false
+      },
+      {
+        "source": 3,
+        "target": 2,
+        "label": "RunEvents",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:58-63",
+        "route": "middle-right",
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 4,
+        "label": "record",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:68-87",
+        "route": "diagonal",
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 5,
+        "label": "API / SSE",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:144-167",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Worker checkpoints and review gates remain authoritative. TLS settings depend on deployment overlay.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Worker graph and gates",
+      "Remote leaf execution",
+      "A2A turn"
+    ]
+  },
+  "experience-a2a-distributed-agents-fig2": {
+    "title": "Remote turns: pause is not failure",
+    "takeaway": "Claim/configure, observe terminal evidence, and make recovery an explicit policy decision.",
+    "groups": [
+      "ACQUIRE AND EXECUTE",
+      "DISTINCT OUTCOMES"
+    ],
+    "nodes": [
+      {
+        "title": "Claim a sandbox",
+        "subtitle": "Controller/Kubernetes bind",
+        "metadata": "pod-per-run deployment",
+        "badge": "CLAIM",
+        "detail": "Acquire a run-bound pod;\nnot a pod for each token.",
+        "symbol": "pod",
+        "tone": 0
+      },
+      {
+        "title": "Configure + stream",
+        "subtitle": "Inject run context",
+        "metadata": "A2A message:stream",
+        "badge": "TURN",
+        "detail": "Leaf output returns through\nthe worker event recorder.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Terminal evidence",
+        "subtitle": "agent.turn.end",
+        "metadata": "successful completion",
+        "badge": "COMPLETE",
+        "detail": "A clean EOF without the\nterminal marker is not success.",
+        "symbol": "process",
+        "tone": 2
+      },
+      {
+        "title": "Checkpoint wait",
+        "subtitle": "Human / external gate",
+        "metadata": "release is conditional",
+        "badge": "PAUSE",
+        "detail": "Active previews or assembly\nmay retain pod resources.",
+        "symbol": "database",
+        "tone": 1
+      },
+      {
+        "title": "Visible failure",
+        "subtitle": "Incomplete / transport",
+        "metadata": "retryable when classified",
+        "badge": "FAILED",
+        "detail": "Prior deltas can be preserved;\nno seamless replay promise.",
+        "symbol": "process",
+        "tone": 3
+      },
+      {
+        "title": "Recovery decision",
+        "subtitle": "Inspect state and budget",
+        "metadata": "redispatch when chosen",
+        "badge": "POLICY",
+        "detail": "Fresh dispatch is deliberate;\nside effects may need review.",
+        "symbol": "decision",
+        "tone": 3
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "configure",
+        "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:663-691",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "turn end",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:408-456",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 4,
+        "label": "failure",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:408-456",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 5,
+        "label": "evaluate",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:685-743",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 3,
+        "target": 0,
+        "label": "resume",
+        "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:394-408",
+        "route": "up-left",
+        "revision": true
+      }
+    ],
+    "note": "The checkpoint lane is a separate workflow wait, not an automatic recovery path for a failed turn.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Remote leaf turn",
+      "Explicit outcome and recovery",
+      "observe"
+    ]
+  },
+  "experience-operations-fig1": {
+    "title": "Choose the right operations surface",
+    "takeaway": "Inspection and configuration have different scopes; MCP parity is intentionally partial.",
+    "groups": [
+      "INSPECT CURRENT STATE",
+      "CONFIGURE WITH THE RIGHT AUTHORITY"
+    ],
+    "nodes": [
+      {
+        "title": "Diagnostics",
+        "subtitle": "Health and checks",
+        "metadata": "diagnostics_get",
+        "badge": "HEALTH",
+        "detail": "Inspect explicit failures and\nunknown timed-out checks.",
+        "symbol": "process",
+        "tone": 2
+      },
+      {
+        "title": "Heartbeat + Flow",
+        "subtitle": "Pickup and orchestration",
+        "metadata": "heartbeat_status",
+        "badge": "WORK",
+        "detail": "Automation reports pickup;\nFlow shows ongoing work.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Cluster + traces",
+        "subtitle": "Capacity and observability",
+        "metadata": "REST-backed UI views",
+        "badge": "INSPECT",
+        "detail": "No dedicated Cluster or\nObservability MCP tools.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Account settings",
+        "subtitle": "Authentication / AI access",
+        "metadata": "GitHub / MCP clients",
+        "badge": "PERSONAL",
+        "detail": "Not a repository-path\nsandbox-policy editor.",
+        "symbol": "person",
+        "tone": 4
+      },
+      {
+        "title": "Platform settings",
+        "subtitle": "Model provider controls",
+        "metadata": "platform administrator",
+        "badge": "PLATFORM",
+        "detail": "Global provider configuration\nrequires admin authority.",
+        "symbol": "process",
+        "tone": 3
+      },
+      {
+        "title": "Project settings",
+        "subtitle": "Repository / sandbox",
+        "metadata": "project-scoped policy",
+        "badge": "PROJECT",
+        "detail": "Preview approval and lifetime;\nMCP setter is narrower.",
+        "symbol": "product",
+        "tone": 0
+      }
+    ],
+    "edges": [],
+    "note": "All surfaces use authorized API operations. sandbox_policy_set changes repository shell_enabled only.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Inspect system state",
+      "Configure scoped policy",
+      "separate responsibilities"
+    ]
+  },
+  "experience-sandbox-pod-execution-fig3": {
+    "title": "A durable run can outlive its pod",
+    "takeaway": "A review wait may release compute; preview and assembly retention are explicit exceptions.",
+    "groups": [
+      "ACTIVE WORK AND WAIT",
+      "RESUME OR RETAIN"
+    ],
+    "nodes": [
+      {
+        "title": "Active leaf",
+        "subtitle": "AgentHost returns output",
+        "metadata": "pod -> worker -> timeline",
+        "badge": "ACTIVE",
+        "detail": "Worker records events and\nowns workflow progression.",
+        "symbol": "pod",
+        "tone": 0
+      },
+      {
+        "title": "Worker gate",
+        "subtitle": "Human decision requested",
+        "metadata": "checkpoint-backed wait",
+        "badge": "WAIT",
+        "detail": "Persist resumable state;\npause watchdog accounting.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Release decision",
+        "subtitle": "Policy and lifecycle checks",
+        "metadata": "pod-per-run + enabled",
+        "badge": "CONDITIONAL",
+        "detail": "Release requires support and\nno active retention exception.",
+        "symbol": "decision",
+        "tone": 3
+      },
+      {
+        "title": "Resumed work",
+        "subtitle": "Continue from saved state",
+        "metadata": "events through worker",
+        "badge": "RESUME",
+        "detail": "A released pod may be replaced;\nits name can change.",
+        "symbol": "pod",
+        "tone": 2
+      },
+      {
+        "title": "Durable checkpoint",
+        "subtitle": "Session and workspace",
+        "metadata": "authorized decision",
+        "badge": "PERSIST",
+        "detail": "Load resumable state;\nclaim/configure if released.",
+        "symbol": "database",
+        "tone": 1
+      },
+      {
+        "title": "Release or retain",
+        "subtitle": "Claim deletion / keep pod",
+        "metadata": "preview / assembly exception",
+        "badge": "LIFECYCLE",
+        "detail": "Active preview defers deletion;\nrelease failures are logged.",
+        "symbol": "process",
+        "tone": 3
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "reach gate",
+        "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:394-408",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "evaluate",
+        "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:518-536",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "apply",
+        "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:956-984",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 4,
+        "label": "checkpoint",
+        "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:394-408",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "resume",
+        "evidence": "apps/Agentweaver.Api/Runs/WorkflowRestartService.cs:118-140",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Human waiting does not imply zero retained compute. This is not arbitrary failed-turn rehydration.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Worker-owned run",
+      "Conditional pod lifetime",
+      "checkpoint / resume"
+    ]
+  },
+  "experience-scaling-operations-fig1": {
+    "title": "Scale roles, keep state shared",
+    "takeaway": "Web serves requests; workers execute; Postgres coordinates durable state; pods run leaves.",
+    "groups": [
+      "CONTROL-PLANE ROLES",
+      "SHARED STATE AND LEAF COMPUTE"
+    ],
+    "nodes": [
+      {
+        "title": "Browser",
+        "subtitle": "REST and watch client",
+        "metadata": "request / SSE response",
+        "badge": "CLIENT",
+        "detail": "Connects to web replicas;\nnot a worker-local queue.",
+        "symbol": "person",
+        "tone": 0
+      },
+      {
+        "title": "Web tier",
+        "subtitle": "Requests and event reads",
+        "metadata": "base: 2 replicas",
+        "badge": "WEB",
+        "detail": "Uses shared durable state;\nreads event cursors.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Worker tier",
+        "subtitle": "Execution and ownership",
+        "metadata": "HPA: 2-3 replicas",
+        "badge": "WORKER",
+        "detail": "CPU 70% / memory 80%;\nleases and workflow state.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Current boundary",
+        "subtitle": "Configuration, not a probe",
+        "metadata": "KEDA / web HPA: examples",
+        "badge": "SCOPE",
+        "detail": "Checked-in scaling settings\nare not live cluster evidence.",
+        "symbol": "document",
+        "tone": 4
+      },
+      {
+        "title": "Postgres",
+        "subtitle": "Shared durable state",
+        "metadata": "events / leases / checkpoints",
+        "badge": "DATABASE",
+        "detail": "Event relay polls the table;\nnot LISTEN/NOTIFY.",
+        "symbol": "database",
+        "tone": 2
+      },
+      {
+        "title": "Sandbox pods",
+        "subtitle": "Remote AgentHost leaves",
+        "metadata": "run context + A2A",
+        "badge": "COMPUTE",
+        "detail": "Return events to the worker;\nno direct pod DB access.",
+        "symbol": "pod",
+        "tone": 0
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "requests",
+        "evidence": "apps/web/src/api/sse.ts:237-246",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 4,
+        "label": "state / events",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:144-167",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 4,
+        "label": "persist",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:25-95",
+        "route": "diagonal",
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "execute",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:38-63",
+        "route": "down-left",
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 2,
+        "label": "results",
+        "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:58-63",
+        "route": "up-right",
+        "revision": false
+      }
+    ],
+    "note": "Worker HPA is active; KEDA and web HPA blocks are commented proposals. Kubernetes owns scheduling.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Web and worker roles",
+      "Shared durable state",
+      "coordinate"
+    ]
+  },
+  "experience-scaling-operations-fig3": {
+    "title": "Lease transfer is not turn replay",
+    "takeaway": "An expired owner can be replaced; continuation depends on the persisted run state.",
+    "groups": [
+      "LEASE OWNERSHIP",
+      "STATE-DEPENDENT RECOVERY"
+    ],
+    "nodes": [
+      {
+        "title": "Worker A",
+        "subtitle": "Guarded lease claim",
+        "metadata": "owner A + token n",
+        "badge": "OWNER",
+        "detail": "Renewals must match both\nowner and fencing token.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Lease expires",
+        "subtitle": "Renewals cease",
+        "metadata": "free / expired eligibility",
+        "badge": "EXPIRY",
+        "detail": "Failure is not a message;\nexpiry permits a later claim.",
+        "symbol": "database",
+        "tone": 3
+      },
+      {
+        "title": "Worker B",
+        "subtitle": "Win eligible next claim",
+        "metadata": "owner B + token n+1",
+        "badge": "NEW OWNER",
+        "detail": "Old-token terminal ownership\nchecks reject stale results.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Visible failure",
+        "subtitle": "Stranded child / root",
+        "metadata": "retryable child vs root",
+        "badge": "FAILURE",
+        "detail": "Child may be redispatched;\nno automatic mid-turn replay.",
+        "symbol": "process",
+        "tone": 3
+      },
+      {
+        "title": "Inspect run state",
+        "subtitle": "Checkpoint or work plan",
+        "metadata": "recovery prerequisites",
+        "badge": "DECIDE",
+        "detail": "AwaitingReview, coordinator,\nand stranded turns differ.",
+        "symbol": "decision",
+        "tone": 1
+      },
+      {
+        "title": "Durable recovery",
+        "subtitle": "Eligible saved state",
+        "metadata": "checkpoint / coordinator plan",
+        "badge": "CONTINUE",
+        "detail": "Recover only supported state;\nmissing checkpoints surface.",
+        "symbol": "database",
+        "tone": 2
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "renewals stop",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:54-95",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "next claim",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:25-51",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 4,
+        "label": "inspect",
+        "evidence": "apps/Agentweaver.Api/Runs/WorkflowRestartService.cs:57-140",
+        "route": "diagonal",
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "stranded turn",
+        "evidence": "apps/Agentweaver.Api/Runs/WorkflowRestartService.cs:57-90",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 5,
+        "label": "recoverable",
+        "evidence": "apps/Agentweaver.Api/Runs/WorkflowRestartService.cs:118-140",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Fencing protects guarded ownership operations, not every external tool side effect.",
+    "research": "canonical-a2a-execution/research-execution.md",
+    "pitch": [
+      "Expired lease",
+      "Eligible new owner",
+      "guarded claim"
+    ]
+  },
+  "experience-review-workspace-merge-fig1": {
+    "title": "Inspect, decide, then integrate",
+    "takeaway": "Approval identifies a candidate; guarded local merge can also include target-side changes.",
+    "groups": [
+      "CANDIDATE AND REVIEW",
+      "SERVER-AUTHORITATIVE OUTCOMES"
+    ],
+    "nodes": [
+      {
+        "title": "Run candidate",
+        "subtitle": "Worktree + recorded hash",
+        "metadata": "files / changes / timeline",
+        "badge": "CANDIDATE",
+        "detail": "Inspect the actual candidate\nbefore submitting a decision.",
+        "symbol": "document",
+        "tone": 0
+      },
+      {
+        "title": "Review decision",
+        "subtitle": "Authorized run reviewer",
+        "metadata": "approve / change / decline",
+        "badge": "REVIEW",
+        "detail": "MCP run_review is binary;\nweb supports feedback.",
+        "symbol": "decision",
+        "tone": 3
+      },
+      {
+        "title": "Guarded merge",
+        "subtitle": "Lock, CAS, hash check",
+        "metadata": "approved candidate identity",
+        "badge": "SERVER",
+        "detail": "Changed candidate fails checks;\nconflicts are visible.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "Revised candidate",
+        "subtitle": "Feedback drives revision",
+        "metadata": "normal cap / collective rules",
+        "badge": "CHANGE",
+        "detail": "A new candidate needs review;\nno automatic approval.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Declined / blocked",
+        "subtitle": "No successful integration",
+        "metadata": "explicit outcome or reason",
+        "badge": "ATTENTION",
+        "detail": "Decline, busy repository and\nmerge conflict are distinct.",
+        "symbol": "process",
+        "tone": 3
+      },
+      {
+        "title": "Merged history",
+        "subtitle": "Local destination updated",
+        "metadata": "three-way / ref-only merge",
+        "badge": "MERGED",
+        "detail": "Final tree may include newer\ntarget and special Squad state.",
+        "symbol": "database",
+        "tone": 2
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "inspect",
+        "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:372-386",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "approve",
+        "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:925-968",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 4,
+        "label": "decline",
+        "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:978-980",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 3,
+        "label": "changes",
+        "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1367-1437",
+        "route": "middle-left",
+        "revision": true
+      },
+      {
+        "source": 2,
+        "target": 4,
+        "label": "blocked",
+        "evidence": "apps/Agentweaver.Api/Runs/MergeCoordinator.cs:139-160",
+        "route": "middle-right",
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "guards pass",
+        "evidence": "apps/Agentweaver.Api/Git/WorktreeManager.cs:1902-2059",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 3,
+        "target": 0,
+        "label": "re-review",
+        "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1367-1437",
+        "route": "up-left",
+        "revision": true
+      }
+    ],
+    "note": "Request changes produces the revised-candidate lane. Conflicts/busy/hash mismatch never imply merged.",
+    "research": "experience-review-workspace-merge-fig1/research-orchestration.md",
+    "pitch": [
+      "Inspected candidate",
+      "Guarded integration",
+      "authorized review"
+    ]
+  },
+  "experience-review-workspace-merge-fig2": {
+    "title": "Browse a ref without changing it",
+    "takeaway": "Select an allowed ref, inspect its tree, and read content through read-only operations.",
+    "groups": [
+      "CHOOSE THE REFERENCE",
+      "READ THE CONTENT"
+    ],
+    "nodes": [
+      {
+        "title": "Workspace reader",
+        "subtitle": "Web page or MCP client",
+        "metadata": "authorized project access",
+        "badge": "READER",
+        "detail": "Browsing does not check out,\nedit, approve or merge.",
+        "symbol": "person",
+        "tone": 0
+      },
+      {
+        "title": "Available refs",
+        "subtitle": "Base, run, assembly",
+        "metadata": "list_project_workspace_refs",
+        "badge": "REFS",
+        "detail": "Only available allowed refs;\ndefault is the base branch.",
+        "symbol": "document",
+        "tone": 1
+      },
+      {
+        "title": "Selected ref",
+        "subtitle": "Explicit browsing context",
+        "metadata": "GET only",
+        "badge": "SELECT",
+        "detail": "Changing ref clears the\nprevious file selection.",
+        "symbol": "process",
+        "tone": 0
+      },
+      {
+        "title": "Read-only content",
+        "subtitle": "Source / Markdown preview",
+        "metadata": "binary / large / missing",
+        "badge": "CONTENT",
+        "detail": "Render supported content;\nsurface truthful limitations.",
+        "symbol": "document",
+        "tone": 2
+      },
+      {
+        "title": "Selected path",
+        "subtitle": "Relative file name",
+        "metadata": "get_project_workspace_file",
+        "badge": "FILE",
+        "detail": "Pass both path and ref;\ninvalid paths are rejected.",
+        "symbol": "process",
+        "tone": 1
+      },
+      {
+        "title": "File tree",
+        "subtitle": "Paths at the selected ref",
+        "metadata": "list_project_workspace",
+        "badge": "TREE",
+        "detail": "Choose a listed file;\nno working-tree mutation.",
+        "symbol": "document",
+        "tone": 0
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "list refs",
+        "evidence": "apps/Agentweaver.Mcp/Tools/WorkspaceTools.cs:13-24",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "choose",
+        "evidence": "apps/web/src/pages/WorkspacePage.tsx:277-282",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "list tree",
+        "evidence": "apps/Agentweaver.Mcp/Tools/WorkspaceTools.cs:29-42",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 5,
+        "target": 4,
+        "label": "select",
+        "evidence": "apps/web/src/pages/WorkspacePage.tsx:297",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 4,
+        "target": 3,
+        "label": "read",
+        "evidence": "apps/Agentweaver.Mcp/Tools/WorkspaceTools.cs:48-63",
+        "route": null,
+        "revision": false
+      }
+    ],
+    "note": "Unknown refs/files can return 404; invalid paths return 400. Ref browsing is not content approval.",
+    "research": "experience-review-workspace-merge-fig1/research-orchestration.md",
+    "pitch": [
+      "Allowed project ref",
+      "Read-only file content",
+      "browse"
+    ]
+  },
+  "experience-workflows-backlog-fig3": {
+    "title": "One won claim, one reserved run",
+    "takeaway": "Ready pickup commits claim and reservation before activation; other outcomes do not launch.",
+    "groups": [
+      "SELECTION AND ATOMIC RESERVATION",
+      "POST-CLAIM OUTCOMES"
+    ],
+    "nodes": [
+      {
+        "title": "Ranked Ready tasks",
+        "subtitle": "Heartbeat candidates",
+        "metadata": "eligible project + workspace",
+        "badge": "READY",
+        "detail": "Top-N limits candidates per\ntick, not total concurrency.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Atomic transaction",
+        "subtitle": "Claim + run + policy",
+        "metadata": "task-scoped reservation",
+        "badge": "STORE",
+        "detail": "Commit all together;\nno orphan losing run.",
+        "symbol": "database",
+        "tone": 1
+      },
+      {
+        "title": "Activate winner",
+        "subtitle": "Use reserved run ID",
+        "metadata": "post-commit activation",
+        "badge": "WON",
+        "detail": "Schedule unattended confirm\nattributed to CapturedBy.",
+        "symbol": "product",
+        "tone": 0
+      },
+      {
+        "title": "Lost / unavailable",
+        "subtitle": "No launch by this pickup",
+        "metadata": "rollback / preserve rank",
+        "badge": "NO START",
+        "detail": "A winner may own a lost claim;\nunavailable leaves Ready.",
+        "symbol": "process",
+        "tone": 4
+      },
+      {
+        "title": "Claimed failed run",
+        "subtitle": "Visible failure reason",
+        "metadata": "preflight / activation failure",
+        "badge": "FAILED",
+        "detail": "Do not silently requeue.\nTerminalization may log failure.",
+        "symbol": "process",
+        "tone": 3
+      },
+      {
+        "title": "Coordinator work",
+        "subtitle": "Unattended execution",
+        "metadata": "claim-time policy snapshot",
+        "badge": "RUNNING",
+        "detail": "No second manual start for\nthe same captured goal.",
+        "symbol": "product",
+        "tone": 2
+      }
+    ],
+    "edges": [
+      {
+        "source": 0,
+        "target": 1,
+        "label": "attempt",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:101-121",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 2,
+        "label": "won",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:231-249",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 1,
+        "target": 3,
+        "label": "not won",
+        "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/EfBacklogTaskStore.cs:382-417",
+        "route": "diagonal",
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 5,
+        "label": "activate",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:240-249",
+        "route": null,
+        "revision": false
+      },
+      {
+        "source": 2,
+        "target": 4,
+        "label": "failure",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:251-268",
+        "route": "middle-right",
+        "revision": false
+      }
+    ],
+    "note": "A won preflight-failure reservation also stays Claimed/Failed. Claim-once is not tool-execution-once.",
+    "research": "experience-review-workspace-merge-fig1/research-orchestration.md",
+    "pitch": [
+      "Eligible Ready task",
+      "Reserved coordinator run",
+      "atomic claim"
+    ]
+  }
+}

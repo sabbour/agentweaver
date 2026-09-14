@@ -1,0 +1,394 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Agentweaver" agent="Agentweaver draw.io generator" version="31.4.5" type="device" compressed="false">
+  <diagram id="canonical-workflow-authoring" name="Workflow authoring — generation is not persistence">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="583" pageHeight="827" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Workflow authoring" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=22.3232;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="25.9573" y="14.0699" width="534.7195" height="29.7032" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="Generate a draft. Review it. Save deliberately." style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.0169;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="25.9573" y="45.3365" width="534.7195" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-boundary" value="1  GENERATE + REVIEW  /  No workflow file is saved" style="rounded=1;arcSize=3;fillColor=#f8f4f1;strokeColor=#e2ddd9;strokeWidth=0.5191;align=left;verticalAlign=top;spacingTop=6.7489;spacingLeft=10.3829;fontFamily=Segoe UI;fontSize=11.9403;fontStyle=1;fontColor=#3f3935;" vertex="1" parent="1">
+          <mxGeometry x="20.7658" y="71.3919" width="541.4684" height="430.436" as="geometry" />
+        </mxCell>
+        <mxCell id="persistence-boundary" value="2  EXPLICIT SAVE  /  Project workspace + registry" style="rounded=1;arcSize=3;fillColor=#e7e1dc;strokeColor=#e2ddd9;strokeWidth=0.5191;align=left;verticalAlign=top;spacingTop=6.7489;spacingLeft=10.3829;fontFamily=Segoe UI;fontSize=11.9403;fontStyle=1;fontColor=#3f3935;" vertex="1" parent="1">
+          <mxGeometry x="20.7658" y="509.1235" width="541.4684" height="302.2432" as="geometry" />
+        </mxCell>
+        <mxCell id="request" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="101.6163" width="285.5298" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="request-accent" value="" style="rounded=1;arcSize=100;fillColor=#635c57;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="101.6163" width="5" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="request-icon" value="" style="shape=process;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="110.9962" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="request-title" value="Authorize request" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="108.9118" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="request-subtitle" value="Project ownership + AI execution plan" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="131.3195" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="request-meta" value="POST …/workflows/generate" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="147.995" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="request-badge" value="GATED" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#e7e1dc;strokeColor=none;fontColor=#635c57;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="158.9382" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="request-detail" value="Description required" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="158.4171" width="211.8112" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="context" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="101.6163" width="173.9136" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="context-accent" value="" style="rounded=1;arcSize=100;fillColor=#635c57;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="101.6163" width="5" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="context-icon" value="" style="shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="110.9962" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="context-title" value="Prompt context" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="108.9118" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="context-subtitle" value="Roles, schema, examples" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="131.3195" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="context-meta" value="Project model override" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="147.995" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="context-badge" value="INPUT" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#e7e1dc;strokeColor=none;fontColor=#635c57;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="158.9382" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="context-detail" value="Catalog fallback" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="158.4171" width="100.195" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="generator" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="205.8381" width="285.5298" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="205.8381" width="5" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-icon" value="" style="shape=component;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="215.218" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-title" value="Generate candidate" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="213.1336" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-subtitle" value="CopilotWorkflowGenerator" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="235.5413" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-meta" value="Model returns YAML, not a saved file" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="252.2168" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-badge" value="AI DRAFT" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="263.7257" y="263.1601" width="49.8379" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="generator-detail" value="Create or edit" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="262.6389" width="208.6963" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="validation" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="310.0599" width="285.5298" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="310.0599" width="5" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-icon" value="" style="shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="319.4398" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-title" value="Validate candidate" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="317.3554" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-subtitle" value="WorkflowDefinitionLoader + binder dry-run" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="339.7631" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-meta" value="Structure AND runtime bindability" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="356.4386" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-badge" value="CHECK" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#a6e9ed;strokeColor=none;fontColor=#00666d;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="377.804" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="validation-detail" value="Strip fences; ensure id" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="377.2829" width="211.8112" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="repair" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="310.0599" width="173.9136" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="310.0599" width="5" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-icon" value="" style="shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="319.4398" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-title" value="One correction" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="317.3554" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-subtitle" value="Failed YAML + error" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="339.7631" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-meta" value="Re-run same checks" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="356.4386" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-badge" value="ONCE" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#f9e2ae;strokeColor=none;fontColor=#835b00;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="377.804" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="repair-detail" value="No third attempt" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="377.2829" width="100.195" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="424.7038" width="173.9136" height="67.7442" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="424.7038" width="5" height="67.7442" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-icon" value="" style="shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="434.0838" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-title" value="Explicit error" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="431.9994" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-subtitle" value="Second invalid result" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="454.4071" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-meta" value="400 · not persisted" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="471.0825" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="generation-error-badge" value="STOP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#f9e2ae;strokeColor=none;fontColor=#835b00;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="474.2092" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="review" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="424.7038" width="285.5298" height="67.7442" as="geometry" />
+        </mxCell>
+        <mxCell id="review-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="424.7038" width="5" height="67.7442" as="geometry" />
+        </mxCell>
+        <mxCell id="review-icon" value="" style="shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="434.0838" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="review-title" value="Review &amp; edit draft" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="431.9994" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="review-subtitle" value="Human edits YAML or the visual graph" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="454.4071" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="review-meta" value="Valid draft stays unsaved" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="471.0825" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="review-badge" value="HUMAN" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="474.2092" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="541.9534" width="285.5298" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="541.9534" width="5" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-icon" value="" style="shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="551.3333" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-title" value="Save: validate again" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="549.2489" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-subtitle" value="Parse + structure + route id + binder" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="571.6566" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-meta" value="PUT …/workflows/{workflowId}" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="588.3321" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-badge" value="SAVE" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#a6e9ed;strokeColor=none;fontColor=#00666d;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="609.6975" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="save-validation-detail" value="Ownership required" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="609.1764" width="211.8112" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="541.9534" width="173.9136" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="541.9534" width="5" height="85.983" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-icon" value="" style="shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="551.3333" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-title" value="Reject save" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="549.2489" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-subtitle" value="Parse / id / bind error" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="571.6566" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-meta" value="400 or 422 · no write" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="588.3321" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-badge" value="STOP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#f9e2ae;strokeColor=none;fontColor=#835b00;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="609.6975" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="save-error-detail" value="Fix the draft" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="609.1764" width="100.195" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="write" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="646.1752" width="285.5298" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="write-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="646.1752" width="5" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="write-icon" value="" style="shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="655.5551" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="write-title" value="Write project YAML" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="653.4707" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="write-subtitle" value="Resolve the path inside the workspace" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="675.8784" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="write-meta" value=".agentweaver/workflows/{id}.yaml" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="692.5539" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="write-badge" value="FILE" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#a6e9ed;strokeColor=none;fontColor=#00666d;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="703.4972" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="write-detail" value="Contained-path guard" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="702.9761" width="211.8112" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="646.1752" width="173.9136" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="646.1752" width="5" height="75.5608" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-icon" value="" style="shape=mxgraph.flowchart.terminator;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="655.5551" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-title" value="Write can fail" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="653.4707" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-subtitle" value="Path guard or file I/O" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="675.8784" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-meta" value="400 / 500 · stop here" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="692.5539" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-badge" value="STOP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#f9e2ae;strokeColor=none;fontColor=#835b00;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="703.4972" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="write-error-detail" value="No success response" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10.3829;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="702.9761" width="100.195" height="14.5911" as="geometry" />
+        </mxCell>
+        <mxCell id="registry" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="739.9748" width="285.5298" height="65.1386" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="36.3402" y="739.9748" width="5" height="65.1386" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-icon" value="" style="shape=component;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="45.6848" y="749.3548" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-title" value="Sync → definition" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70.6037" y="747.2703" width="242.9599" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-subtitle" value="Extend allowed set if needed; reload" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="769.678" width="265.8023" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-meta" value="Return saved detail on success" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="46.7231" y="786.3535" width="264.764" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="registry-badge" value="200" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="266.8406" y="786.8746" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error" value="" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=0.5191;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="739.9748" width="173.9136" height="65.1386" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="381.5717" y="739.9748" width="5" height="65.1386" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-icon" value="" style="shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=0.7787;" vertex="1" parent="1">
+          <mxGeometry x="390.9163" y="749.3548" width="17.6509" height="19.8021" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-title" value="Reload failure" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14.5361;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="415.8353" y="747.2703" width="131.3437" height="19.281" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-subtitle" value="Written, not available" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11.9403;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="769.678" width="154.1861" height="16.1544" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-meta" value="422 / 500 · file may exist" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=10.902;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="391.9546" y="786.3535" width="153.1478" height="14.0699" as="geometry" />
+        </mxCell>
+        <mxCell id="reload-error-badge" value="ERROR" style="rounded=1;arcSize=100;whiteSpace=wrap;html=1;fillColor=#f9e2ae;strokeColor=none;fontColor=#835b00;fontFamily=Segoe UI;fontSize=9.3446;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500.4559" y="786.8746" width="46.7231" height="13.5488" as="geometry" />
+        </mxCell>
+        <mxCell id="e01" value="permitted" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="request" target="generator">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="36.3402" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e02" value="grounds prompt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0;exitY=0.5;entryX=1;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="context" target="generator">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="355.6144" y="139.6572" />
+              <mxPoint x="355.6144" y="243.3579" />
+            </Array>
+            <mxPoint x="0" y="5.2111" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e03" value="candidate YAML" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="generator" target="validation">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="46.7231" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e04" value="valid; unsaved" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="validation" target="review">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="41.5316" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e05" value="first invalid" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.3;entryX=0;entryY=0.3;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="validation" target="repair">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e06" value="one repair" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#d39300;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.5;entryX=1;entryY=0.24;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;dashed=1;dashPattern=8 6;" edge="1" parent="1" source="repair" target="generator">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="571.0597" y="352.7908" />
+              <mxPoint x="571.0597" y="190.2048" />
+              <mxPoint x="337.4443" y="190.2048" />
+              <mxPoint x="337.4443" y="224.0769" />
+            </Array>
+            <mxPoint x="0" y="7.8166" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e07" value="invalid again" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.8;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="validation" target="generation-error">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="345.2315" y="378.8463" />
+              <mxPoint x="345.2315" y="458.5759" />
+            </Array>
+            <mxPoint x="15.5744" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e08" value="explicit Save" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="review" target="save-validation">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="44.1273" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e09" value="invalid" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="save-validation" target="save-error">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="checks pass" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="save-validation" target="write">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="41.5316" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="failure" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="write" target="write-error">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="write succeeded" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="write" target="registry">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="49.3188" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="failure" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=none;strokeColor=#746d68;strokeWidth=1.0383;fontFamily=Segoe UI;fontSize=10.902;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;jumpStyle=arc;jumpSize=4.1532;" edge="1" parent="1" source="registry" target="reload-error">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

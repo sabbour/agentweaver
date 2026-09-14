@@ -1,0 +1,156 @@
+{
+  "takeaway": "Triage and mitigate; the human gate controls the postmortem path.",
+  "source_model": {
+    "title": "Incident Response workflow",
+    "nodes": [
+      {
+        "id": "triage",
+        "type": "prompt",
+        "label": "Triage",
+        "role": "agent",
+        "kind": "live",
+        "prompt": "Triage the incident - establish impact, scope, and likely cause, and decide the mitigation approach. Report your triage findings by calling report_outcome; the outcome is captured in the run record. Do NOT write a triage or incident report file into the workspace. Only create or edit files that are actual deliverables (e.g. mitigation code or config changes).",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:13",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "mitigate",
+        "type": "prompt",
+        "label": "Mitigate",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:20",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "verify",
+        "type": "prompt",
+        "label": "Verify",
+        "role": "review",
+        "kind": "live",
+        "prompt": "Verify the mitigation and summarize whether the incident response is ready for human review. Report your verdict and findings by calling report_outcome; they are captured in the run record and shown in the UI. Do NOT write a verification or status report file into the workspace.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:26",
+        "detail": "Agent task",
+        "metadata": "review"
+      },
+      {
+        "id": "review-gate",
+        "type": "check",
+        "label": "Review Gate",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "human-review",
+        "branches": [
+          "approved",
+          "request-changes",
+          "declined"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:33",
+        "detail": "Verdict routing",
+        "metadata": "human-review"
+      },
+      {
+        "id": "postmortem",
+        "type": "prompt",
+        "label": "Postmortem",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:44",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "terminal-declined",
+        "type": "terminal",
+        "label": "Declined",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:50",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "done",
+        "type": "terminal",
+        "label": "Done",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:56",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      }
+    ],
+    "edges": [
+      {
+        "source": "triage",
+        "target": "mitigate",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:63\u201364"
+      },
+      {
+        "source": "mitigate",
+        "target": "verify",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:66\u201367"
+      },
+      {
+        "source": "verify",
+        "target": "review-gate",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:70\u201371"
+      },
+      {
+        "source": "review-gate",
+        "target": "postmortem",
+        "label": "approved",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:74\u201376"
+      },
+      {
+        "source": "review-gate",
+        "target": "mitigate",
+        "label": "request-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:78\u201380"
+      },
+      {
+        "source": "review-gate",
+        "target": "terminal-declined",
+        "label": "declined",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:82\u201384"
+      },
+      {
+        "source": "postmortem",
+        "target": "done",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/incident_response.yaml:86\u201387"
+      }
+    ],
+    "main": [
+      "triage",
+      "mitigate",
+      "verify",
+      "review-gate",
+      "postmortem"
+    ],
+    "note": "Authored graph \u2022 all YAML branches retained",
+    "footer": "Solid: advance / outcome    Dashed marigold: revision / return"
+  },
+  "research_threads": [
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-01.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-02.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-03.md"
+  ],
+  "research_reuse": "Three separately completed Astra results supplied by parent; no new or nested agents.",
+  "authority": "Current YAML/code, current docs/guide/workflows.md, CatalogWorkflowBindingTests; stale comments and legacy labels excluded.",
+  "pitch_model": "Two populated native-flowchart responsibility cards; not the full execution graph. Pass 1 expands every authoritative node and edge.",
+  "native_symbols": "Native diagrams.net process, rhombus, document and ellipse, wrapped in Fluent card hierarchy.",
+  "asset_rights": "diagrams.net native shapes, Apache-2.0; repository-owned Fluent chrome; no external images.",
+  "visual_authority": [
+    "docs/diagrams/drawio/fluent-template.drawio",
+    "docs/diagrams/drawio/fluent-library.xml",
+    "docs/diagrams/drawio/design-system.json",
+    "apps/web/src/components/WorkflowGraphPanel.tsx",
+    "docs/diagrams/reviews/canonical-workflow-authoring/a5-final (read-only inspiration)"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 2396,
+  "result_meaningful_xml": 21994,
+  "baseline_visible_structures": 9,
+  "result_visible_structures": 81,
+  "growth_ratio": 9.179466,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\data-persistence-fig1\\data-persistence-fig1-pitch.drawio",
+  "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\data-persistence-fig1\\data-persistence-fig1-pass-01.drawio"
+}

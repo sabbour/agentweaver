@@ -1,0 +1,13 @@
+{
+  "diagram": "data-persistence-fig1",
+  "schema": "valid",
+  "repository_validator": "valid",
+  "final_pass": 4,
+  "artifact_sets_verified": 5,
+  "exact_final_arrows": 2,
+  "a5_uncompressed_native": true,
+  "growth_ratio": 9.179466,
+  "anti_padding": "passed",
+  "inspected_png_sha256": "ee96c4a1fb40a4a5b444528c240444194379c69172ed21e1095c4b57c0758c44",
+  "promoted_bytes_match": true
+}

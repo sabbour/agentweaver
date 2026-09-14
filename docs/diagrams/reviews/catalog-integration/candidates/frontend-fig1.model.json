@@ -1,0 +1,594 @@
+{
+  "title": "Frontend: intent and projection",
+  "nodes": [
+    {
+      "id": "auth",
+      "label": "AuthGate",
+      "subLabel": "Validated SPA session",
+      "meta": "App.tsx",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "SESSION",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "controls",
+      "label": "Rendered controls",
+      "subLabel": "Status, timeline and graph",
+      "meta": "CoordinatorRunPage.tsx",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "PRESENT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "shell",
+      "label": "AppShell",
+      "subLabel": "TopBar · LeftNav · project switcher",
+      "meta": "AppShell.tsx:134-182",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "CONTEXT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "projection",
+      "label": "Client projection",
+      "subLabel": "Reducers combine backend facts",
+      "meta": "CoordinatorRunPage.tsx",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "DERIVE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "pages",
+      "label": "Route pages",
+      "subLabel": "Board · run · workspace",
+      "meta": "App.tsx:80-127",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "ROUTES",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "live",
+      "label": "Seed + live events",
+      "subLabel": "Independent REST and SSE inputs",
+      "meta": "useSeededRunStream.ts",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "MERGE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "client",
+      "label": "API client",
+      "subLabel": "Typed requests and error handling",
+      "meta": "config.ts:13-36",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "REQUEST",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "api",
+      "label": "Agentweaver API",
+      "subLabel": "Projects · runs · graph · events",
+      "meta": "CoordinatorRunPage.tsx",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "AUTHORITY",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "auth",
+      "to": "shell",
+      "label": "enter",
+      "loopback": false
+    },
+    {
+      "from": "shell",
+      "to": "pages",
+      "label": "contains",
+      "loopback": false
+    },
+    {
+      "from": "pages",
+      "to": "client",
+      "label": "request",
+      "loopback": false
+    },
+    {
+      "from": "client",
+      "to": "api",
+      "label": "HTTP",
+      "loopback": false
+    },
+    {
+      "from": "api",
+      "to": "live",
+      "label": "history + SSE",
+      "loopback": false
+    },
+    {
+      "from": "live",
+      "to": "projection",
+      "label": "events",
+      "loopback": false
+    },
+    {
+      "from": "projection",
+      "to": "controls",
+      "label": "render",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "BROWSER · OPERATOR INTENT"
+    },
+    {
+      "id": "1",
+      "label": "BACKEND FACTS · UI PROJECTION"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "auth",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 99.11111111111111
+        },
+        "data": {
+          "id": "auth",
+          "label": "AuthGate",
+          "subLabel": "Validated SPA session",
+          "meta": "App.tsx",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "SESSION",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "controls",
+        "type": "card",
+        "position": {
+          "x": 536.1777777777777,
+          "y": 99.11111111111111
+        },
+        "data": {
+          "id": "controls",
+          "label": "Rendered controls",
+          "subLabel": "Status, timeline and graph",
+          "meta": "CoordinatorRunPage.tsx",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "PRESENT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "shell",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "shell",
+          "label": "AppShell",
+          "subLabel": "TopBar · LeftNav · project switcher",
+          "meta": "AppShell.tsx:134-182",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "CONTEXT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "projection",
+        "type": "card",
+        "position": {
+          "x": 536.1777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "projection",
+          "label": "Client projection",
+          "subLabel": "Reducers combine backend facts",
+          "meta": "CoordinatorRunPage.tsx",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "DERIVE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "pages",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 587.1111111111111
+        },
+        "data": {
+          "id": "pages",
+          "label": "Route pages",
+          "subLabel": "Board · run · workspace",
+          "meta": "App.tsx:80-127",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "ROUTES",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "live",
+        "type": "card",
+        "position": {
+          "x": 536.1777777777777,
+          "y": 573.1111111111111
+        },
+        "data": {
+          "id": "live",
+          "label": "Seed + live events",
+          "subLabel": "Independent REST and SSE inputs",
+          "meta": "useSeededRunStream.ts",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "MERGE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "client",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 817.1111111111111
+        },
+        "data": {
+          "id": "client",
+          "label": "API client",
+          "subLabel": "Typed requests and error handling",
+          "meta": "config.ts:13-36",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "REQUEST",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 536.1777777777777,
+          "y": 817.1111111111111
+        },
+        "data": {
+          "id": "api",
+          "label": "Agentweaver API",
+          "subLabel": "Projects · runs · graph · events",
+          "meta": "CoordinatorRunPage.tsx",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "AUTHORITY",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 5.7777777777777715,
+          "y": 29.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "BROWSER · OPERATOR INTENT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 25.77777777777777,
+          "y": 45.111111111111114
+        },
+        "data": {
+          "label": "BROWSER · OPERATOR INTENT",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 504.1777777777777,
+          "y": 29.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "BACKEND FACTS · UI PROJECTION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 524.1777777777777,
+          "y": 45.111111111111114
+        },
+        "data": {
+          "label": "BACKEND FACTS · UI PROJECTION",
+          "width": 364
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "auth",
+        "target": "shell",
+        "label": "enter",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 203.11111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 329.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 266.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "shell",
+        "target": "pages",
+        "label": "contains",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 461.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 587.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 524.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "pages",
+        "target": "client",
+        "label": "request",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 691.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 817.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 754.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "client",
+        "target": "api",
+        "label": "HTTP",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 883.1111111111111
+            },
+            {
+              "x": 536.1777777777777,
+              "y": 883.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 456.97777777777776,
+            "y": 883.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "api",
+        "target": "live",
+        "label": "history + SSE",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 706.1777777777777,
+              "y": 817.1111111111111
+            },
+            {
+              "x": 706.1777777777777,
+              "y": 705.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 706.1777777777777,
+            "y": 761.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "live",
+        "target": "projection",
+        "label": "events",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 706.1777777777777,
+              "y": 573.1111111111111
+            },
+            {
+              "x": 706.1777777777777,
+              "y": 461.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 706.1777777777777,
+            "y": 517.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "projection",
+        "target": "controls",
+        "label": "render",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 706.1777777777777,
+              "y": 329.1111111111111
+            },
+            {
+              "x": 706.1777777777777,
+              "y": 203.11111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 706.1777777777777,
+            "y": 266.1111111111111
+          }
+        }
+      }
+    ],
+    "canvasWidth": 913.9555555555554,
+    "canvasHeight": 997.4938271604938
+  }
+}

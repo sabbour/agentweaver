@@ -1,0 +1,49 @@
+{
+  "added": [
+    "docs/diagrams/src/canonical-default-workflow.drawio"
+  ],
+  "modified": [
+    "docs/diagrams/canonical-default-workflow.png",
+    "docs/diagrams/canonical-default-workflow.hash.txt"
+  ],
+  "removed": [
+    "docs/diagrams/src/canonical-default-workflow.json",
+    "docs/diagrams/drawio/generated/canonical-default-workflow.drawio"
+  ],
+  "reviews": [
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-upgrade-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-upgrade.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-upgrade.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01-upgrade.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-01.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-02-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-02.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-02.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-02.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-03-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-03.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-03.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-03.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-04-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-04.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-04.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pass-04.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pitch-print.png",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pitch.drawio",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pitch.md",
+    "docs/diagrams/reviews/canonical-default-workflow/canonical-default-workflow-pitch.png",
+    "docs/diagrams/reviews/canonical-default-workflow/evidence.json",
+    "docs/diagrams/reviews/canonical-default-workflow/growth.json",
+    "docs/diagrams/reviews/canonical-default-workflow/iteration-manifest.json",
+    "docs/diagrams/reviews/canonical-default-workflow/legacy-graph.json",
+    "docs/diagrams/reviews/canonical-default-workflow/ownership.json",
+    "docs/diagrams/reviews/canonical-default-workflow/publication-check.txt",
+    "docs/diagrams/reviews/canonical-default-workflow/research-assurance.md",
+    "docs/diagrams/reviews/canonical-default-workflow/research-components.md",
+    "docs/diagrams/reviews/canonical-default-workflow/research-flows.md",
+    "docs/diagrams/reviews/canonical-default-workflow/validation.json"
+  ]
+}

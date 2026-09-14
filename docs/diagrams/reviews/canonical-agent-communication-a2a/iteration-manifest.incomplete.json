@@ -1,0 +1,28 @@
+{
+  "diagram": "canonical-agent-communication-a2a",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-agent-communication-a2a-pitch.drawio",
+    "png": "canonical-agent-communication-a2a-pitch.png",
+    "change_record": "canonical-agent-communication-a2a-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-agent-communication-a2a-pass-01.drawio",
+      "png": "canonical-agent-communication-a2a-pass-01.png",
+      "change_record": "canonical-agent-communication-a2a-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "all_arrows_traced": false,
+      "baseline_meaningful_xml": 5421,
+      "result_meaningful_xml": 18152,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 3.34846
+    }
+  ],
+  "final_pass": null
+}

@@ -1,0 +1,14 @@
+{
+  "name": "mcp-server-fig2",
+  "family": "deep-dive-core",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\mcp-server-fig2.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\mcp-server-fig2.png",
+  "source_sha256": "db8dd190ec9fee1ed192d0da01f079fad8b8c3cae79e66322746011359cc77b1",
+  "png_sha256": "1d8cae74566e6cee48588ad84245baa0e4531bc69771909d90a15ce1f29e6403",
+  "dimensions": [
+    2127,
+    2159
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

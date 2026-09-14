@@ -1,0 +1,117 @@
+{
+  "diagram": "sandbox-browser-preview-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "sandbox-browser-preview-fig1-pitch.drawio",
+    "png": "sandbox-browser-preview-fig1-pitch.png",
+    "change_record": "sandbox-browser-preview-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "sandbox-browser-preview-fig1-pass-01.drawio",
+      "png": "sandbox-browser-preview-fig1-pass-01.png",
+      "change_record": "sandbox-browser-preview-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 1,
+      "overlap_defects": 0,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 2361,
+      "result_meaningful_xml": 22565,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 9.55739093604405
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "sandbox-browser-preview-fig1-pass-02.drawio",
+      "png": "sandbox-browser-preview-fig1-pass-02.png",
+      "change_record": "sandbox-browser-preview-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "sandbox-browser-preview-fig1-pass-03.drawio",
+      "png": "sandbox-browser-preview-fig1-pass-03.png",
+      "change_record": "sandbox-browser-preview-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "sandbox-browser-preview-fig1-pass-04.drawio",
+      "png": "sandbox-browser-preview-fig1-pass-04.png",
+      "change_record": "sandbox-browser-preview-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "after create",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:192-305; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:308-380",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "ready URL",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:308-380; docs/deep-dive/sandbox-browser-preview.md:64-68",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "HTTPS probe",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:308-380; k8s/base/gateway-preview.yaml; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:253-284",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n3",
+          "relationship": "HTTPS",
+          "evidence": "docs/deep-dive/sandbox-browser-preview.md:64-68; k8s/base/gateway-preview.yaml; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:253-284",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "route",
+          "evidence": "k8s/base/gateway-preview.yaml; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:253-284; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:223-250; k8s/base/networkpolicy-sandbox.yaml",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "public port",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:223-250; k8s/base/networkpolicy-sandbox.yaml; apps/Agentweaver.AgentHost/TcpPortForwarder.cs; docs/deep-dive/sandbox-browser-preview.md:71-98",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

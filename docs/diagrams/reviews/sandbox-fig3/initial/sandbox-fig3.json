@@ -1,0 +1,217 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Kubernetes sandbox lifecycle: claims over pods",
+  "alt": "Kubernetes sandbox lifecycle: claims over pods: Agent run, Agentweaver API, SandboxClaim, Sandbox controller, Warm pool, Sandbox pod, Pod registry",
+  "participants": [
+    {
+      "id": "Agent",
+      "label": "Agent run",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Claim",
+      "label": "SandboxClaim",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Controller",
+      "label": "Sandbox controller",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pool",
+      "label": "Warm pool",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Registry",
+      "label": "Pod registry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Agent",
+      "to": "API",
+      "label": "run_command(command, workdir, timeout)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "choose claim name from run ID or random ID",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "clamp command timeout below claim TTL",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "verify workdir is under /workspace",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Claim",
+      "label": "create SandboxClaim(warmPoolRef, lifecycle)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Claim",
+      "to": "Controller",
+      "label": "request sandbox instance",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Controller",
+      "to": "Pool",
+      "label": "assign warm sandbox",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pool",
+      "to": "Pod",
+      "label": "bound pod is ready",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Controller",
+      "to": "Claim",
+      "label": "Ready condition = True, status.sandbox.name",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Claim",
+      "label": "poll until Ready condition True",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Registry",
+      "label": "remember pod name for run previews",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Pod",
+      "label": "exec /bin/sh -c command",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pod",
+      "to": "API",
+      "label": "stdout/stderr/status streams",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "cap + redact output, parse exit code",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "ad-hoc command",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "API",
+              "to": "Claim",
+              "label": "delete claim immediately",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "run-scoped command",
+          "steps": [
+            {
+              "type": "message",
+              "from": "API",
+              "to": "Claim",
+              "label": "retain until run cleanup or TTL",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

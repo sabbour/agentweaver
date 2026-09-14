@@ -1,0 +1,178 @@
+{
+  "diagram": "distributed-execution-scaling-fig5",
+  "source_sha256": "8c0154203a3434a798c97d1f189ab14422a3bb2ff72c76bf12d946bf47604910",
+  "png_sha256": "e4b988e956119e708cce238ab86c86bc17d2365fe1e8a65f5640e8a0db8f11a0",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "One lease winner, bounded ownership"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Conditional acquisition and fencing guard lease operations and terminal ownership checks."
+    },
+    {
+      "cell": "a-title",
+      "text": "Worker A claims"
+    },
+    {
+      "cell": "a-subtitle",
+      "text": "Conditional update"
+    },
+    {
+      "cell": "a-metadata",
+      "text": "Unowned or expired row only"
+    },
+    {
+      "cell": "a-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "row-title",
+      "text": "Run row"
+    },
+    {
+      "cell": "row-subtitle",
+      "text": "Owner + expiry + heartbeat"
+    },
+    {
+      "cell": "row-metadata",
+      "text": "Increment fencing token / attempt"
+    },
+    {
+      "cell": "row-badge",
+      "text": "DATA"
+    },
+    {
+      "cell": "b-title",
+      "text": "Worker B contends"
+    },
+    {
+      "cell": "b-subtitle",
+      "text": "Zero affected rows"
+    },
+    {
+      "cell": "b-metadata",
+      "text": "No second winner for that claim"
+    },
+    {
+      "cell": "b-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "renew-title",
+      "text": "A renews"
+    },
+    {
+      "cell": "renew-subtitle",
+      "text": "Match owner and token t"
+    },
+    {
+      "cell": "renew-metadata",
+      "text": "5 min TTL / half-TTL renewal"
+    },
+    {
+      "cell": "renew-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "expiry-title",
+      "text": "A stops renewing"
+    },
+    {
+      "cell": "expiry-subtitle",
+      "text": "Crash or loss of ownership"
+    },
+    {
+      "cell": "expiry-metadata",
+      "text": "Expired lease becomes claimable"
+    },
+    {
+      "cell": "expiry-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "takeover-title",
+      "text": "B takes over"
+    },
+    {
+      "cell": "takeover-subtitle",
+      "text": "Successful conditional update"
+    },
+    {
+      "cell": "takeover-metadata",
+      "text": "Token increases to t+1"
+    },
+    {
+      "cell": "takeover-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "CAS"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "CAS"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "expires"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "claim"
+    },
+    {
+      "cell": "note-0",
+      "text": "Stale renew/release fail; terminal paths recheck active ownership."
+    },
+    {
+      "cell": "note-1",
+      "text": "Failed renewal logs a warning; it does not itself cancel all execution."
+    },
+    {
+      "cell": "note-2",
+      "text": "Do not infer exactly-once execution or fencing of every application write."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/distributed-execution-scaling.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "a",
+      "to": "row",
+      "label": "CAS",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "b",
+      "to": "row",
+      "label": "CAS",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "renew",
+      "to": "expiry",
+      "label": "expires",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "expiry",
+      "to": "takeover",
+      "label": "claim",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "diagram": "memory-decisions-fig4",
+  "phase": "pass-01",
+  "png_sha256": "0fa6a16b86d44cf88057e77390c97cb0ac5bd3a4424748274432b4036b287bdb",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

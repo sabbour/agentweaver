@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "experience-workflows-backlog-fig3.drawio",
+    "sha256": "f6c891050c33a12b5a234ea52217f75bab3f888d1fe74dabdb5c51cc9cec3ff9"
+  },
+  "drawio": {
+    "file": "experience-workflows-backlog-fig3.drawio",
+    "sha256": "f9ecae6586b7227b16160a2df591d55ebba181a7d9fda5dc6916963d0c4ccab0"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "experience-workflows-backlog-fig3.png",
+    "sha256": "58b3021f7e5094a8f4f6a1bd0262e792a254486abc978b5049e0ce2b4d4df935"
+  }
+}

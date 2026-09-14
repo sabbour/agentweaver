@@ -1,0 +1,1922 @@
+{
+  "canonical-default-workflow": {
+    "name": "canonical-default-workflow",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-default-workflow.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-default-workflow.png",
+    "source_sha256": "d6d7d778727f271f65492ee3d3d4cae1e1b6e81c5b8bc142efe5986f9f45cdd8",
+    "png_sha256": "912c560da2ca98276685342e25e0135193a1ec6c1e057ded495476976849b1ee",
+    "dimensions": [
+      2190,
+      2514
+    ],
+    "renderer": "31.4.5",
+    "inspection": "individual",
+    "notes": "Opened refreshed full PNGs; checked approved Fluent card and icon tokens, named boundaries, typography and all directed connections. Traced 12 default, 6 authentication, 5 durable-event and 5 admission connectors. Confirmed distinct endpoints and real crossing bridges; preserve detailed constraints outside the compact canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "auth-security-fig1": {
+    "name": "auth-security-fig1",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\auth-security-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\auth-security-fig1.png",
+    "source_sha256": "63ba7f0bc58be5ed90cec17764fb88bc298acc2363b338aa7eee2b69901348f8",
+    "png_sha256": "b841bbecbed204a988c1afee1bf0ad067978fcc7e3ed377fc330f8f9827dc476",
+    "dimensions": [
+      3010,
+      1289
+    ],
+    "renderer": "31.4.5",
+    "inspection": "individual",
+    "notes": "Reopened current PNGs after narrowing caption geometry to actual text. All six authentication and five admission connectors were traced; no caption collisions, wrong endpoints or false junctions. Prior semantics, compact Fluent cards and complete context remain unchanged.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-durable-event-stream": {
+    "name": "canonical-durable-event-stream",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-durable-event-stream.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-durable-event-stream.png",
+    "source_sha256": "9a4f8c2336c68fbf1b63f8797e4990ec66e05e7f5d56ef92328af3b399b3fa86",
+    "png_sha256": "ce554489731e4c456632694525a4333c02759394fc6c02a1198d532a2b6b1945",
+    "dimensions": [
+      3145,
+      1425
+    ],
+    "renderer": "31.4.5",
+    "inspection": "individual",
+    "notes": "Opened refreshed full PNGs; checked approved Fluent card and icon tokens, named boundaries, typography and all directed connections. Traced 12 default, 6 authentication, 5 durable-event and 5 admission connectors. Confirmed distinct endpoints and real crossing bridges; preserve detailed constraints outside the compact canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-provider-admission": {
+    "name": "canonical-provider-admission",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-provider-admission.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-provider-admission.png",
+    "source_sha256": "23b6d73a8531199659a7160fd1d1af77e6d0985e7affb98027e7b0ed9c49438c",
+    "png_sha256": "ae7482058e330419687bf186132b35ef5b10176219718415a482acb92dc6cdca",
+    "dimensions": [
+      3186,
+      1289
+    ],
+    "renderer": "31.4.5",
+    "inspection": "individual",
+    "notes": "Reopened current PNGs after narrowing caption geometry to actual text. All six authentication and five admission connectors were traced; no caption collisions, wrong endpoints or false junctions. Prior semantics, compact Fluent cards and complete context remain unchanged.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "00-system-overview-fig1": {
+    "name": "00-system-overview-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\00-system-overview-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\00-system-overview-fig1.png",
+    "source_sha256": "d8e2236d04f249574dc0f62a4719d2244bae6a31270c67fa3795522bf21c7413",
+    "png_sha256": "92f3edd2de7d55449b79a1d2de85e888a92d60363415d2ade1f5ee59b1e6b78a",
+    "dimensions": [
+      2065,
+      2119
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "00-system-overview-fig2": {
+    "name": "00-system-overview-fig2",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\00-system-overview-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\00-system-overview-fig2.png",
+    "source_sha256": "04b442bbae8f707fe4c0a94394668e48191b9caf7939579a744d4163529713a3",
+    "png_sha256": "3ee4cede5c507b35ea8ca632bda290b5dd32dad91035d7ba5ce69fa3c77af01e",
+    "dimensions": [
+      2014,
+      2148
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "00-system-overview-fig5": {
+    "name": "00-system-overview-fig5",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\00-system-overview-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\00-system-overview-fig5.png",
+    "source_sha256": "1fce23f1254f1204f42a209a616364271abacbd9ff876f9679ecb20548128a5d",
+    "png_sha256": "bb53f2694e7cdb32676ecbf9288af7187af5bde529d7ed689859a065e28617ae",
+    "dimensions": [
+      2100,
+      2120
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-definition-fig1": {
+    "name": "agent-definition-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-definition-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-definition-fig1.png",
+    "source_sha256": "46740e8de1f9f7d6048f0647585fc7176fd9d32602146e9d779b1282f9e0bd97",
+    "png_sha256": "2831b11bdc53ffcc8508dcb5f14f4e0d5b01391bf2882c1ee46878ff13fbac31",
+    "dimensions": [
+      2202,
+      2146
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-framework-fig1": {
+    "name": "agent-framework-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-framework-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-framework-fig1.png",
+    "source_sha256": "89233de4a8d12ee76d58e741faa2018a1cfddc3b8ad1f20a043b0ab4bea2ebda",
+    "png_sha256": "785daba59bc1fd8c417fe6a0d9cbba5958b57587a6c45c870b94b147fd609031",
+    "dimensions": [
+      2118,
+      2119
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-framework-fig2": {
+    "name": "agent-framework-fig2",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-framework-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-framework-fig2.png",
+    "source_sha256": "15e99277836b771e3140e74f1d6342217c76b4e7ef92397a1947f16872fb62d0",
+    "png_sha256": "57cbf8b81c000d3097970b36a44d835437161576def4113d64e2dd0ba7a4d0d5",
+    "dimensions": [
+      2190,
+      2146
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-framework-fig3": {
+    "name": "agent-framework-fig3",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-framework-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-framework-fig3.png",
+    "source_sha256": "d420a5a50330884f7eb8d1f3cc0e398a750bf152d582a1ca9e5e1ec7defef9a9",
+    "png_sha256": "923d80921f971ce23209e7409897a2a62d1882e57ed700696de051ce5d725589",
+    "dimensions": [
+      2290,
+      2123
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "api-core-fig4": {
+    "name": "api-core-fig4",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\api-core-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\api-core-fig4.png",
+    "source_sha256": "bb77b45859b4d0d0b9a43caa6f90d837d331e48ab12bb1f34cf5c6e8bc6fbf62",
+    "png_sha256": "202f594b2dc356548593b598aebfe0309523259e3bf6e74c4d237870e82dba84",
+    "dimensions": [
+      2118,
+      2119
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "api-core-fig6": {
+    "name": "api-core-fig6",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\api-core-fig6.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\api-core-fig6.png",
+    "source_sha256": "7cabe687d3edb8a6493bb497351d43411d95fb6d0b7f5cc3cb72575313051f48",
+    "png_sha256": "8c8bbeb087f7340a934386f9df17f79cdf976244c26ee03cf65cc9569fb98f1b",
+    "dimensions": [
+      2059,
+      2119
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "assistant-runtime-fig1": {
+    "name": "assistant-runtime-fig1",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\assistant-runtime-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\assistant-runtime-fig1.png",
+    "source_sha256": "643c518051c20e4aba7f3d33392533c6889aba1d7841aec68ba1fbfef298746f",
+    "png_sha256": "abb80756cd3e5a511db2d3a33070d625bfd202c1031e1b9de76674232bb9f039",
+    "dimensions": [
+      3185,
+      1193
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "auth-security-fig4": {
+    "name": "auth-security-fig4",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\auth-security-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\auth-security-fig4.png",
+    "source_sha256": "b946c5755055cff8fb65306db6e6ba3ae4046eccd802dfc6775cde6f9f126e36",
+    "png_sha256": "3c1aaebee37c726cf54febb3be4b48332f46933ae6a133a09ab5607b6eda83e3",
+    "dimensions": [
+      3079,
+      1193
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-a2a-execution": {
+    "name": "canonical-a2a-execution",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-a2a-execution.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-a2a-execution.png",
+    "source_sha256": "23482928061d0f60f79ccabb6ae75338852c47f92de9496b084f7f18d27cf6cd",
+    "png_sha256": "daeeb464025a7bbbe5a6cede0c6877d06bb756f36a707b5f745c74fc9846dcf0",
+    "dimensions": [
+      2974,
+      1380
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-agent-communication-handoff": {
+    "name": "canonical-agent-communication-handoff",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-agent-communication-handoff.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-agent-communication-handoff.png",
+    "source_sha256": "429b663427497ed6827c470f166c4e14f69a6228cdfe2d5d87b176a7fb05b80f",
+    "png_sha256": "bd40ddddf17b3cf838522acd42f7a3d330214f90a1dc5e1a6bd8434905ff194c",
+    "dimensions": [
+      3010,
+      1330
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-aks-components": {
+    "name": "canonical-aks-components",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-aks-components.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-aks-components.png",
+    "source_sha256": "53860bd3891008b71addf332d7d8801edbf22afc5bef98d540e29964cd9b828d",
+    "png_sha256": "cc37c6cdebebfc2f21b7e8ba19b1fc7f3c6be97dd5ebb6e3082b51ce30cb3926",
+    "dimensions": [
+      3150,
+      1192
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-aks-network": {
+    "name": "canonical-aks-network",
+    "family": "guide",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-aks-network.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-aks-network.png",
+    "source_sha256": "f03c52e805e6a46f921ec83b885783c99c744b2c223b51bfdb5f38caa8063071",
+    "png_sha256": "f12dfeb738f8138fcc7b4f175e47975f85c3030c88387e29a4e2528397a38089",
+    "dimensions": [
+      6503,
+      1661
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-api-host": {
+    "name": "canonical-api-host",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-api-host.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-api-host.png",
+    "source_sha256": "0fd5c909daeb09f4047ca79d32361fdd68df91f60a83a07c11a19f84aa32d1bc",
+    "png_sha256": "ada7c0e316347b2c19db1a4b9c3939dda5eb52d2c150712afbadd346c4bf648d",
+    "dimensions": [
+      2134,
+      1942
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-board-lifecycle": {
+    "name": "canonical-board-lifecycle",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-board-lifecycle.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-board-lifecycle.png",
+    "source_sha256": "5bbd12415820bfbf02a89d2a790d9299e796f36e4d7dc4a346e13c1846b60373",
+    "png_sha256": "b4122dfe241d01563c29e0f72088831d97b5d57d7f1ab80381930e894afde22a",
+    "dimensions": [
+      3058,
+      1263
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-coordinator-journey": {
+    "name": "canonical-coordinator-journey",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-coordinator-journey.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-coordinator-journey.png",
+    "source_sha256": "54885522093644672ecaea19d9c0ebb75ad8ceca7a309b20f308baea8d0d6154",
+    "png_sha256": "484a2d47869a23703ecc238768d0c53be09465806a736255705584b7f76e6703",
+    "dimensions": [
+      3197,
+      1236
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-durable-event-stream-sequence": {
+    "name": "canonical-durable-event-stream-sequence",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-durable-event-stream-sequence.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-durable-event-stream-sequence.png",
+    "source_sha256": "7d31061041eebdc28ae374215a09cf1ed164dac8766dbf8d8b9c2a408138520a",
+    "png_sha256": "ad85a5980e8590e333b194bb00499b28d7b0f144d5f061887751ba7858048cd1",
+    "dimensions": [
+      4114,
+      2067
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-memory-context": {
+    "name": "canonical-memory-context",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-memory-context.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-memory-context.png",
+    "source_sha256": "5a05d006747bf6b65ab2286d6778597b3a589f8586b9bdea0a129a9a536da151",
+    "png_sha256": "dfac6edfee9fe2457e07525636e9828960219b3a8d0151dc5d6a886fee9afda1",
+    "dimensions": [
+      3079,
+      1221
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-sandbox-boundary": {
+    "name": "canonical-sandbox-boundary",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-sandbox-boundary.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-sandbox-boundary.png",
+    "source_sha256": "601693b77189ca8696b00d24d0da44c67a316b45483715dd30c891216343a80a",
+    "png_sha256": "f26653ad1110f020c851ee6e0a6ed4b35a05eaceb1613dc92ea312f5e1e570ad",
+    "dimensions": [
+      3185,
+      1193
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-sandbox-experience": {
+    "name": "canonical-sandbox-experience",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-sandbox-experience.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-sandbox-experience.png",
+    "source_sha256": "f62bcc008d56f3b66dc0408a7b60e4373f107fa8d9f5866f35cfd483352c45b5",
+    "png_sha256": "722e8c556c68fcfa58e85980007d4da7bed88327a183d765644fa3a519322eb6",
+    "dimensions": [
+      3220,
+      1221
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-testing-boundary": {
+    "name": "canonical-testing-boundary",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-testing-boundary.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-testing-boundary.png",
+    "source_sha256": "58e6ed63ab05e97cc10f4404c5e85a4ade05d4f7224e90cb2bff0a2cd50729b5",
+    "png_sha256": "87f997e67a68fbd457c1d77cd0f35fa3be1a75ba8fbe052ba07a07ced69db318",
+    "dimensions": [
+      2014,
+      2112
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-workflow-authoring": {
+    "name": "canonical-workflow-authoring",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-workflow-authoring.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-workflow-authoring.png",
+    "source_sha256": "7a52533b88e3b93fc4cc7efee540a962595398fdb8199bb8007bf9ca2372ed31",
+    "png_sha256": "75a004a84444bfb00b8a7e5d39910067cfb6888f6f12fb6d7d3e59f66ebfb1e0",
+    "dimensions": [
+      2084,
+      3622
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-workflow-invocation": {
+    "name": "canonical-workflow-invocation",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-workflow-invocation.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-workflow-invocation.png",
+    "source_sha256": "1972484484dd9981bdb866afb04a53cb114467cf1bf475bc5ccc444568be8868",
+    "png_sha256": "28b239fd934f975aa8b499b073b46db208dea95094557986bf96165975bb0741",
+    "dimensions": [
+      2953,
+      1632
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-workflow-selection": {
+    "name": "canonical-workflow-selection",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-workflow-selection.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-workflow-selection.png",
+    "source_sha256": "880a163472aaa07d9a0aa2df87085cf8d2bf020bf97d84188524ad966adcbbd3",
+    "png_sha256": "550f8f7045542f71f4a707fdb5bc3c64a4cc330efe5ff3a184a0ea1716c2c163",
+    "dimensions": [
+      2210,
+      3393
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "coordinator-internals-fig2": {
+    "name": "coordinator-internals-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\coordinator-internals-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\coordinator-internals-fig2.png",
+    "source_sha256": "c6f58cfc4563b6afe307f33912d1df62af2c8e2469117f20f01bbf0853aec061",
+    "png_sha256": "3961d9af5a6c08b566d1a029d7fbfe8bc2ac3d10724925537d76f18a1c2623a0",
+    "dimensions": [
+      2881,
+      1603
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "coordinator-internals-fig3": {
+    "name": "coordinator-internals-fig3",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\coordinator-internals-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\coordinator-internals-fig3.png",
+    "source_sha256": "c1e9ee745866c6b46cd8bf49240fedcb751f28b619d5cfe693fd3bed74934c31",
+    "png_sha256": "bbee14415906b6094b5278cedc6751edd4cddf0186d70e9823088ad943fb152b",
+    "dimensions": [
+      2868,
+      1657
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "coordinator-internals-fig4": {
+    "name": "coordinator-internals-fig4",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\coordinator-internals-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\coordinator-internals-fig4.png",
+    "source_sha256": "35284aa745302b6daaf925615c6543d3fd314a2dbb40d87bb68beb06374128e0",
+    "png_sha256": "706e8c1fef33de050143a224331a4f908af85d985cb0081d568fa5b60ad6decd",
+    "dimensions": [
+      3160,
+      1607
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "data-persistence-fig1": {
+    "name": "data-persistence-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\data-persistence-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\data-persistence-fig1.png",
+    "source_sha256": "0fe3f067bddf0ac6dc04812f466ffead81c552e6a3b658d0c074a740cff1b1af",
+    "png_sha256": "4df2482fc03e5a2b32c4ea6c6635d5a530f3cd78c18fd8ecd5b609f7eb625a67",
+    "dimensions": [
+      1959,
+      2100
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "email-architecture": {
+    "name": "email-architecture",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\email-architecture.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\email-architecture.png",
+    "source_sha256": "7ab1207fe5f1c053354a672b2db7bd53297f136d1450ddb5275f44a61e73f1a4",
+    "png_sha256": "f37da1c824cad178fde1dce6107a10ca4f6ba1522f6b9f9cdaf18c197da57c48",
+    "dimensions": [
+      3242,
+      1248
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "email-components": {
+    "name": "email-components",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\email-components.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\email-components.png",
+    "source_sha256": "290abeb9bee643382972d542fc92cc88c7ccb99fb236e8fa3460fb5089a7e544",
+    "png_sha256": "546ab4e46a5485b6ae83d8cf64dfbfe250ebf50e8ff0c9506e8e2cc7ccf2082c",
+    "dimensions": [
+      2940,
+      1236
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "email-coordinator-workflow": {
+    "name": "email-coordinator-workflow",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\email-coordinator-workflow.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\email-coordinator-workflow.png",
+    "source_sha256": "a5a8087cba563afb2598c99ad35d353f3fef0675730d6e10bf1d0e392bce98d7",
+    "png_sha256": "41ec4d899f85b7f41cbb6284ab43d74cb483790eec0f35f442eb60a479dc791e",
+    "dimensions": [
+      4114,
+      2211
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-00-overview-fig1": {
+    "name": "experience-00-overview-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-00-overview-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-00-overview-fig1.png",
+    "source_sha256": "1326c9afbea844231b8b8a187c6e609629b08b88f1fce7e6eea28e7f254fec1e",
+    "png_sha256": "704b4449fd3720f067264f882063c99c340b8fe85a7555d82a5c156303663b43",
+    "dimensions": [
+      2938,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-a2a-distributed-agents-fig2": {
+    "name": "experience-a2a-distributed-agents-fig2",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-a2a-distributed-agents-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-a2a-distributed-agents-fig2.png",
+    "source_sha256": "45130cf046db8e7dfad805ff6d2d01fb6c1b367727d7989791d254b1f1763e47",
+    "png_sha256": "52011583be59b533069bdb9d1d2fa464235102b670a7c681aaa3f79662e0a735",
+    "dimensions": [
+      2924,
+      1380
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-mcp-client-fig1": {
+    "name": "experience-mcp-client-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-mcp-client-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-mcp-client-fig1.png",
+    "source_sha256": "6cc857919d5e9e0dff991d7607c42028bea307a11a8b282fed906ef808c87566",
+    "png_sha256": "1a25cd8ba30688aa630320deb00bcec5b1d7f1a51894fa136f353d1b32545e21",
+    "dimensions": [
+      2938,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-onboarding-auth-fig1": {
+    "name": "experience-onboarding-auth-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-onboarding-auth-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-onboarding-auth-fig1.png",
+    "source_sha256": "de001874144391f56a47617b70ef650dc60df76bf0858a2c980dece1b85c7680",
+    "png_sha256": "2552cbd5a1755c3f6f3e625d272ffbb55b33bfc81ab4b90925cbadf9f6c233af",
+    "dimensions": [
+      2974,
+      1380
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-onboarding-auth-fig2": {
+    "name": "experience-onboarding-auth-fig2",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-onboarding-auth-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-onboarding-auth-fig2.png",
+    "source_sha256": "23846e283286b6752c450d2b0b32430f76d0122ff21f926d43d47773cc4eda60",
+    "png_sha256": "1073c65166170f1e58a928efff663c9ae52fe911b56c123a004174489ce9eff1",
+    "dimensions": [
+      2974,
+      1380
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-operations-fig1": {
+    "name": "experience-operations-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-operations-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-operations-fig1.png",
+    "source_sha256": "3c7590b1acd0130a0ebf2d59f715d19cf5e4d4a6128389aaef1d0ba526d796ae",
+    "png_sha256": "808faff3c642e70be33da4c90dc66133ea0ba0fc545fa84d725a7b50371f205e",
+    "dimensions": [
+      2788,
+      1380
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-review-workspace-merge-fig1": {
+    "name": "experience-review-workspace-merge-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-review-workspace-merge-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-review-workspace-merge-fig1.png",
+    "source_sha256": "67115cc9250850de0546bfb3cebbbebeeb392f872ae050e77a3303a545e5b427",
+    "png_sha256": "81c74066870800dd7c481653d915075d1df514641ef2bb3efc81f65b554bb6f2",
+    "dimensions": [
+      2994,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-review-workspace-merge-fig2": {
+    "name": "experience-review-workspace-merge-fig2",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-review-workspace-merge-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-review-workspace-merge-fig2.png",
+    "source_sha256": "71336f095103acd5bd669293da7a9ea8f5cac653d8ee2b6cb95a140de709fcc0",
+    "png_sha256": "7166d98d0c36e9ccfd6c761bfb2a9cf51eb1a9c7b9b9b635127d9f7d730eaf91",
+    "dimensions": [
+      2903,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-sandbox-pod-execution-fig3": {
+    "name": "experience-sandbox-pod-execution-fig3",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-sandbox-pod-execution-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-sandbox-pod-execution-fig3.png",
+    "source_sha256": "fbf32cdf001278c45eae284c731826e6deb856688330cd249fa5d8a6dda9059d",
+    "png_sha256": "83ee030a77e19c732b43117c7c1b83e266c4f2445498023917208f03d8c342d7",
+    "dimensions": [
+      2938,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-scaling-operations-fig1": {
+    "name": "experience-scaling-operations-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-scaling-operations-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-scaling-operations-fig1.png",
+    "source_sha256": "0b93dc717d9d7772e19755790619c7277a8f78a492c16f036903810f40fdf1eb",
+    "png_sha256": "7c0056f62f8b0880f473d203f9aa91383e3b850b6b83fbd9ffe8b1e063e7a351",
+    "dimensions": [
+      3079,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-scaling-operations-fig3": {
+    "name": "experience-scaling-operations-fig3",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-scaling-operations-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-scaling-operations-fig3.png",
+    "source_sha256": "049a51a61e2f8f69fe327a6dbaf53bc398b5b6dc112405d074f0f432ae2102d5",
+    "png_sha256": "1d4b8243e261026ed0101fa13849c92ee12296c7266d5cf4f6bbacd84aef0f84",
+    "dimensions": [
+      3044,
+      1379
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-team-casting-memory-fig1": {
+    "name": "experience-team-casting-memory-fig1",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-team-casting-memory-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-team-casting-memory-fig1.png",
+    "source_sha256": "cabc9eab6d49e1f5ed8e5f34bb2d0a63a4eac3309082f139be2adf766734b4c9",
+    "png_sha256": "68f29de503f0619e2e3de4a88e64aec41a10d00c91920c98e5f4b7be69e786d7",
+    "dimensions": [
+      2833,
+      1392
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "experience-workflows-backlog-fig3": {
+    "name": "experience-workflows-backlog-fig3",
+    "family": "experience",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\experience-workflows-backlog-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\experience-workflows-backlog-fig3.png",
+    "source_sha256": "b2d605e6569d3c08ae449002c95273dda39b9db48eecbd008603279876d7d1f5",
+    "png_sha256": "940361e0f5067a5d0f08e865e8a56c1e882b36e62f0d1afdb5d8e27188642176",
+    "dimensions": [
+      2868,
+      1391
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "frontend-fig1": {
+    "name": "frontend-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\frontend-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\frontend-fig1.png",
+    "source_sha256": "0147a7e8615a120444c7cafffc8b35425ccc35fa71145cfa0c011c93526197b1",
+    "png_sha256": "84ab0e9b4c804f84adbed00f333c61e39ba4e4e0fc48a05361086026e674a7e0",
+    "dimensions": [
+      2047,
+      2131
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "frontend-fig2": {
+    "name": "frontend-fig2",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\frontend-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\frontend-fig2.png",
+    "source_sha256": "256dd8b8c0c524f6a5881234d13c932024425630420098ad9cbf541e491c3a67",
+    "png_sha256": "11f1ce6d32e17c316c8cf167334a293e2d7ca46d23c415f64a19831f5071ef0e",
+    "dimensions": [
+      1959,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "frontend-fig3": {
+    "name": "frontend-fig3",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\frontend-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\frontend-fig3.png",
+    "source_sha256": "ec81bd721febb3924c0a829ffdc104a107393d624dc4f9b6a2fbfcaa27dda56c",
+    "png_sha256": "0c40432aa93eb6ed9468c6862969ef21322617a69d6cb5063f75d259fd3a4152",
+    "dimensions": [
+      2030,
+      2160
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "frontend-fig6": {
+    "name": "frontend-fig6",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\frontend-fig6.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\frontend-fig6.png",
+    "source_sha256": "6e868b55f0fb1f46fe8d629bcd5256df3a049c05af5f967ee3cba82ae567df95",
+    "png_sha256": "57e6f03c508184fabba529523c3e0846bff4579a870524764197ac7eb2eaee6c",
+    "dimensions": [
+      2021,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "frontend-fig7": {
+    "name": "frontend-fig7",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\frontend-fig7.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\frontend-fig7.png",
+    "source_sha256": "841b8dd299216a42cd7dd52bda66492cfb22e050958b119deec004d97890e61b",
+    "png_sha256": "6c912b5a230a72d1eff57b8cfe379714f14f81cc792cdce57205c0d9247a575b",
+    "dimensions": [
+      2057,
+      2131
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "git-integration-fig1": {
+    "name": "git-integration-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\git-integration-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\git-integration-fig1.png",
+    "source_sha256": "4ca04eb13990eb8a2a30c296c6005fb53bb0c5383b8039a2de5b1a4b8c7a9a22",
+    "png_sha256": "79b77982bc1e89acfb0243d3d13e62fc148c712e9b1847ed7aa8fbf79abeb16b",
+    "dimensions": [
+      2868,
+      1604
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "git-integration-fig2": {
+    "name": "git-integration-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\git-integration-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\git-integration-fig2.png",
+    "source_sha256": "816e651a5dcb2dab0f6801fc3c4716603aa456c7712ac56557889a30a69fdd47",
+    "png_sha256": "5043ea2847fce093ba7c5e1599a072448c2a245c6990b154f19eddb6630fd184",
+    "dimensions": [
+      2939,
+      1652
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "guide-architecture-aks-fig1": {
+    "name": "guide-architecture-aks-fig1",
+    "family": "guide",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\guide-architecture-aks-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\guide-architecture-aks-fig1.png",
+    "source_sha256": "5b9b08d4bbfa8685a638531e6cefb685f4ea2c39600f8bfe527ddbc119b8923b",
+    "png_sha256": "fa4bf32a1439ae7fa847dfb1663a08a3a13ca4685cbd13c9ab8f13c087542855",
+    "dimensions": [
+      3220,
+      1669
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "guide-architecture-aks-fig5": {
+    "name": "guide-architecture-aks-fig5",
+    "family": "guide",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\guide-architecture-aks-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\guide-architecture-aks-fig5.png",
+    "source_sha256": "2374fa9922141f35c6020e522ecff80c16b995f0def6b864b4476b4b9afd776e",
+    "png_sha256": "a6ca58015426f1113857e576499b6c61cab954e463594803579d61b24b6b9bbe",
+    "dimensions": [
+      3044,
+      1693
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "guide-example-scenarios-fig3": {
+    "name": "guide-example-scenarios-fig3",
+    "family": "guide",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\guide-example-scenarios-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\guide-example-scenarios-fig3.png",
+    "source_sha256": "1495517e48e53c2d604e868404ac605b4106ad3565a508f46df5d6cc4e65b21a",
+    "png_sha256": "69325da81b0756b0899a92882dc0f426b6d398debea07ef3248090ca46acab5b",
+    "dimensions": [
+      3009,
+      1693
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "mcp-server-fig2": {
+    "name": "mcp-server-fig2",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\mcp-server-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\mcp-server-fig2.png",
+    "source_sha256": "db8dd190ec9fee1ed192d0da01f079fad8b8c3cae79e66322746011359cc77b1",
+    "png_sha256": "1d8cae74566e6cee48588ad84245baa0e4531bc69771909d90a15ce1f29e6403",
+    "dimensions": [
+      2127,
+      2159
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "memory-decisions-fig1": {
+    "name": "memory-decisions-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\memory-decisions-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\memory-decisions-fig1.png",
+    "source_sha256": "f53fa43d36166842b9491480021121894c8c7ce0f888e56be7f1430f593bcb36",
+    "png_sha256": "c93ba436f131085e5bb18be2631df50aa2a83d1ca05c274e1d18285abf51f768",
+    "dimensions": [
+      2903,
+      1699
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "memory-decisions-fig2": {
+    "name": "memory-decisions-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\memory-decisions-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\memory-decisions-fig2.png",
+    "source_sha256": "3194ac6e1dba9b6d51a9ed24dd48b1692c4b450cdefea9e3b1c6248024d1ff52",
+    "png_sha256": "e8cbc5bfffae9003eb20effda8dc23ab8ffbca97b61518c26b6d36759a086969",
+    "dimensions": [
+      2903,
+      1675
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "memory-decisions-fig4": {
+    "name": "memory-decisions-fig4",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\memory-decisions-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\memory-decisions-fig4.png",
+    "source_sha256": "3a972519e4bcb0301ac21b75d549498c0cd34a40b362f3cc0ca7a154155df7a4",
+    "png_sha256": "52652a7bd1259b73e76c3b992e39228a6be8272ad79936a822d7b322fa4ea2d4",
+    "dimensions": [
+      2932,
+      1632
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "orchestration-fig10": {
+    "name": "orchestration-fig10",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig10.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig10.png",
+    "source_sha256": "d19011f468ac5abfcb8d81b40e4a20c6439dc90f93ab886b7df50bf5081524df",
+    "png_sha256": "485198cfc3160e1a5b5c06f2ec29bf50d03f9d155c5e05d06d581c264ad1186c",
+    "dimensions": [
+      2903,
+      1603
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "orchestration-fig2": {
+    "name": "orchestration-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig2.png",
+    "source_sha256": "396f5f9baf3e95732ec7a2872414e99b0031a2c80bef40ed36269f86f90dfe6a",
+    "png_sha256": "6efca1a7f3991530caad4b272f880906ee0fb1f9c14a0517c035bed879c59da6",
+    "dimensions": [
+      2868,
+      1632
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "orchestration-fig3": {
+    "name": "orchestration-fig3",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig3.png",
+    "source_sha256": "0691fc5ecddbb76febea95a8ffb572a22ebb61cca6bb571637279d95b69b48c2",
+    "png_sha256": "f92955a187e618ace1d4c54c95ae7801b8b57d06d8691284fb80f0db83523c75",
+    "dimensions": [
+      2903,
+      1603
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "orchestration-fig8": {
+    "name": "orchestration-fig8",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig8.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig8.png",
+    "source_sha256": "e0ed3e851ce006a144a29a4f96851a2042477cfbe50948effad468b0034b427d",
+    "png_sha256": "38f9d367937b0b99b90ccdd429a17669ecb360376178f620fbaaeed309299fee",
+    "dimensions": [
+      2903,
+      1603
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "orchestration-fig9": {
+    "name": "orchestration-fig9",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\orchestration-fig9.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\orchestration-fig9.png",
+    "source_sha256": "6486ea84b6f243d4c1b31ad72e44afe8de833b83ce124865cefae8a27ff6ca76",
+    "png_sha256": "5244706d35577a2a59dee050f35981c663fcf93ea646a1838e2bd34171e435d4",
+    "dimensions": [
+      2903,
+      1603
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "project-generation-model-settings-fig1": {
+    "name": "project-generation-model-settings-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\project-generation-model-settings-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\project-generation-model-settings-fig1.png",
+    "source_sha256": "3fa800a64ecd550cf774fde7c1d4cfea5c48a9692b51843e13a75182e316b29d",
+    "png_sha256": "2918428d9eda3dc9a1284804cf1b79ccf9060f92d9dc943722f08b165aff8985",
+    "dimensions": [
+      2014,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "project-skills-fig1": {
+    "name": "project-skills-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\project-skills-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\project-skills-fig1.png",
+    "source_sha256": "88e76d128b5d635452d2928f52aeb95a1947ad8ae8cd03880f17cf464664196f",
+    "png_sha256": "8c0198458ae35672f819fac23731cd5ce7cab874a404a9c897ede237d5be3376",
+    "dimensions": [
+      2101,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "projects-fig1": {
+    "name": "projects-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\projects-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\projects-fig1.png",
+    "source_sha256": "34327b8baeeebe3d5fe0701a90f4bb526f17e0599312fee2a7c40188fb2b3c11",
+    "png_sha256": "a41c7e5910f16637ec10fd4ee82bdc458efe860a4b3c3d4cde3a2d755671ee6f",
+    "dimensions": [
+      2082,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "projects-fig2": {
+    "name": "projects-fig2",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\projects-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\projects-fig2.png",
+    "source_sha256": "b9ee5bad7ed0403a721a90585ec2857614f98074798319091e2e56de5e6c6f40",
+    "png_sha256": "2c1b0b2b9deed2ff4ef28f67380b7790e2c5e7572d56075ddfc02a732bb9530e",
+    "dimensions": [
+      2014,
+      2132
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "reference-a2a-fig1": {
+    "name": "reference-a2a-fig1",
+    "family": "reference",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\reference-a2a-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\reference-a2a-fig1.png",
+    "source_sha256": "b67bd32516fa67227c2c854a3b18ae757e0f66ac7ae3ef6ecec68ecd2086515c",
+    "png_sha256": "5c43e5dec8ed22ebe33436153d8d2747e7445e9bbb708c11234e13dad7aad2f9",
+    "dimensions": [
+      3023,
+      2066
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "reference-scaling-data-layer-fig1": {
+    "name": "reference-scaling-data-layer-fig1",
+    "family": "reference",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\reference-scaling-data-layer-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\reference-scaling-data-layer-fig1.png",
+    "source_sha256": "b3ade4d3c90edc5c9bedc37c121b8ebfa03123670b4117e2b8ccb2086b41564a",
+    "png_sha256": "a63746d46b33b790d23cdc4fe30d5176cf8f4a2a7d20b4864ba3247b1bdccb50",
+    "dimensions": [
+      3324,
+      1648
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "repo-blueprint-suggestions-fig1": {
+    "name": "repo-blueprint-suggestions-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\repo-blueprint-suggestions-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\repo-blueprint-suggestions-fig1.png",
+    "source_sha256": "b0ff48e17c6db30373097a17cd61142c187d6ba252899fac38b91a9c5b09eb0f",
+    "png_sha256": "d27cfff592e45d3225445b79384e4ad92d8f7c45183f26634f7036980288d51f",
+    "dimensions": [
+      2039,
+      2131
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "resilient-assembly-review-fig1": {
+    "name": "resilient-assembly-review-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\resilient-assembly-review-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\resilient-assembly-review-fig1.png",
+    "source_sha256": "11f0d49c5714c946b1ce2d528e80d6adae61665deb3a7860d58040c4430d0147",
+    "png_sha256": "a092a045812922555560d17d30b767d5b7a500bfba099b55d779dcafa82c28ad",
+    "dimensions": [
+      3037,
+      1656
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "review-merge-fig1": {
+    "name": "review-merge-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\review-merge-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\review-merge-fig1.png",
+    "source_sha256": "6732a1939eb22c15a3c8ec749ee2e6427177b1f3693ca78401492d0c92839197",
+    "png_sha256": "f14abcfcccdd95abd129e0c81a228b479f8c7f6114481f313df0827a6a2da71d",
+    "dimensions": [
+      2868,
+      1713
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "review-merge-fig4": {
+    "name": "review-merge-fig4",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\review-merge-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\review-merge-fig4.png",
+    "source_sha256": "079771a79720306bb3ebc99f9aac10c07e44dee24003ff41f5905f0799b6fa25",
+    "png_sha256": "5d3385f4330bf49ea3ffe7a6c78f32b36c71cf99a56a0ff2649e8dc5bcc3b223",
+    "dimensions": [
+      2868,
+      1685
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "review-merge-fig5": {
+    "name": "review-merge-fig5",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\review-merge-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\review-merge-fig5.png",
+    "source_sha256": "e44069709832d878788d45efd3af94d9e5da3610199090fb010604bc2151484f",
+    "png_sha256": "73239bf664507aab7adba47a73ce31b80e9b01fb010301ba3c991b7eaace79a4",
+    "dimensions": [
+      2868,
+      1604
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-browser-preview-fig1": {
+    "name": "sandbox-browser-preview-fig1",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-browser-preview-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-browser-preview-fig1.png",
+    "source_sha256": "a5384c06f9beafa6df3914ac27e61705673276cbb60793ccb12ae1cd032f8ae7",
+    "png_sha256": "0163479e91a694d5c61bcd26ea715356ca200c02f34f98e29428584a32c466a1",
+    "dimensions": [
+      3009,
+      1193
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "team-casting-fig1": {
+    "name": "team-casting-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\team-casting-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\team-casting-fig1.png",
+    "source_sha256": "af251d9714422034becac6b9bb57a34ba4cb7b75a87ae6a676532aec1e44eade",
+    "png_sha256": "2c3aa5f7e4db90a9f42b5960c2c062216ee9cdadc87598c05e04c2d93ca24385",
+    "dimensions": [
+      2868,
+      1694
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "team-casting-fig2": {
+    "name": "team-casting-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\team-casting-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\team-casting-fig2.png",
+    "source_sha256": "e2727917f691bda9f0bb69080601769ebfc12340b7a91815845a3ece49825cb6",
+    "png_sha256": "a3251625f25311d0792d08db7bc05ec42e46ec919939d37a4de7597f4726057c",
+    "dimensions": [
+      2903,
+      1714
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "team-casting-fig3": {
+    "name": "team-casting-fig3",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\team-casting-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\team-casting-fig3.png",
+    "source_sha256": "7544ca841437de384bcd28f309e14d75ab1289aad48daa3804dd6a68462faad1",
+    "png_sha256": "f0eeb946e1c22951dde11faa4aca16c433afb574ee73c586396ab8f594a6a3ed",
+    "dimensions": [
+      2974,
+      1736
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "testing-strategy-fig1": {
+    "name": "testing-strategy-fig1",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\testing-strategy-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\testing-strategy-fig1.png",
+    "source_sha256": "04e7a3d3bcaa6eb6793927491897278453eee000597a5320188d14535e7b5aed",
+    "png_sha256": "c3ede2c3522de1ddb690f480b9091ecb64db85cec8c475f7c36824f4f3b6232d",
+    "dimensions": [
+      1890,
+      2147
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "testing-strategy-fig4": {
+    "name": "testing-strategy-fig4",
+    "family": "deep-dive-core",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\testing-strategy-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\testing-strategy-fig4.png",
+    "source_sha256": "7c2ab53a1cf775e06efba9b5563f03b302a900b8999cf40f0ed45bccc52ea71a",
+    "png_sha256": "98467e523655466f01a5d6a2c0967d3059eb899fb406f36b2cc756b25ac65967",
+    "dimensions": [
+      1977,
+      2147
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "unified-steering-fig1": {
+    "name": "unified-steering-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\unified-steering-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\unified-steering-fig1.png",
+    "source_sha256": "0a7b83777dcd0b523fbf48b4e559ab5e37406416efc3bfbf08d6d261d2fa7f44",
+    "png_sha256": "d09057ec4d0cda9bc45e12813c856b757d608a56333332b88a7aa9e43e1fc8ad",
+    "dimensions": [
+      2903,
+      1615
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-agent-evaluation": {
+    "name": "workflow-agent-evaluation",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-agent-evaluation.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-agent-evaluation.png",
+    "source_sha256": "6b0c9b8f57cc1379ee4129f59153aa2cf2864d174f1a3cccad4d9f7d7f6b2c29",
+    "png_sha256": "964e8cc0d28b4ad21f78115ba1e29ab8f32a9499b32bb85a140974e778c5ee9e",
+    "dimensions": [
+      2122,
+      3154
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-bug-fix": {
+    "name": "workflow-bug-fix",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-bug-fix.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-bug-fix.png",
+    "source_sha256": "bc427776d692dc2ae51a79ae01d42b5ee970e10c73ec4d988d09a383ecbe41f3",
+    "png_sha256": "8709c152099df6817bea7bc47f689f95d0e4e5ac07a877740754b52015e7ef84",
+    "dimensions": [
+      2204,
+      3378
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-content-authoring": {
+    "name": "workflow-content-authoring",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-content-authoring.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-content-authoring.png",
+    "source_sha256": "79b64be454a4fa5305cc241ca7646caf729619f09330eee685cdb19e890bdcc9",
+    "png_sha256": "171727cbfba0f4b7ad98bafcaea28468616ff0f8931bcbb81c6b6b1b879a4b8f",
+    "dimensions": [
+      2337,
+      3378
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig1": {
+    "name": "workflow-engine-fig1",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig1.png",
+    "source_sha256": "1a4f0a486ad0e38610c9225a3b3d74ce45aaa03ee02027179d82582bec784d22",
+    "png_sha256": "9ade4d91fd6415c15e1fa739ce4012214cd85c61b52312568bf2130de85d7e59",
+    "dimensions": [
+      2939,
+      1735
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig11": {
+    "name": "workflow-engine-fig11",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig11.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig11.png",
+    "source_sha256": "752f16cb97354825ec08c5be4b13237a7d470a19ab8a77016dbc94b9f0f629aa",
+    "png_sha256": "f79eb455952e21429ff4680908d7844523b3686ec406e3d1f78c08bef5a7e777",
+    "dimensions": [
+      2833,
+      1684
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig2": {
+    "name": "workflow-engine-fig2",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig2.png",
+    "source_sha256": "66354a84b902fc348734ea1c14a506ed8d0efc2d30ed7b3d924aae052bdeb288",
+    "png_sha256": "b95410d1252580a4d7abcf6f91f46419cabe6429120167706602cc41adfa489e",
+    "dimensions": [
+      2916,
+      1659
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig4": {
+    "name": "workflow-engine-fig4",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig4.png",
+    "source_sha256": "08303aeffbfb14e83c61479cb0323ecef6c86e20d370ffe8e2c817d2fd733499",
+    "png_sha256": "7bd4230ce0360c3d043b24b72d6ba24ecdd1dc717699c6d625060bcfc15f0819",
+    "dimensions": [
+      2870,
+      1656
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig5": {
+    "name": "workflow-engine-fig5",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig5.png",
+    "source_sha256": "bd775a16dbcbf6e48cb2c21c19bf276eaa12d02ff67c396ef2e2e4b314c93884",
+    "png_sha256": "edef88f7e970be9d5523e43ef0fa76deaa2572287a357b9bd07a9344573220d3",
+    "dimensions": [
+      2951,
+      1604
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-engine-fig9": {
+    "name": "workflow-engine-fig9",
+    "family": "deep-dive-orchestration",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig9.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig9.png",
+    "source_sha256": "1ed3219a1cf2246190db2a6a0f06c47b410a6195b7ebb0fdc6aa20b1d338422c",
+    "png_sha256": "c3cd71fd9ce26063a4cf01c1fd66a37ee0bdb1ef86825556415940367e123529",
+    "dimensions": [
+      2932,
+      1663
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-incident-response": {
+    "name": "workflow-incident-response",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-incident-response.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-incident-response.png",
+    "source_sha256": "0dacbd67cbdd7e0dffc217409f01d302c2690aad3bda349893cc133b0c20d47f",
+    "png_sha256": "9cdf43b82324d027fb1c1be708b40f0fff7f77087f2d707c728cd36c53647e45",
+    "dimensions": [
+      2234,
+      3064
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-infra-ops": {
+    "name": "workflow-infra-ops",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-infra-ops.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-infra-ops.png",
+    "source_sha256": "71db030733eedb7d0de35a7139664504f1b2a99739839d319b89cb95c752d331",
+    "png_sha256": "1c40298f7be3f0dca6ece80e7a5b28603a755ae07e2a3755fdd72dec7924feed",
+    "dimensions": [
+      2277,
+      3378
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-pm-discovery": {
+    "name": "workflow-pm-discovery",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-pm-discovery.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-pm-discovery.png",
+    "source_sha256": "4b3ba534c7d5613e714b83f6e22f60dc1a341bd7090c10df856ed8e16e1fdac9",
+    "png_sha256": "2a5645c37718ab0a733fda293bc8463a457675dfda7e9ccffdddb79164e4c896",
+    "dimensions": [
+      2234,
+      3036
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "workflow-software-delivery": {
+    "name": "workflow-software-delivery",
+    "family": "shared",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-software-delivery.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-software-delivery.png",
+    "source_sha256": "a8a6217e86509a236e7f84e665244b0160bb1103af23840a9de5c5414dcf1df9",
+    "png_sha256": "8499b71b73c22dd72308766f659d5f41def30b8b367658701c950a4ff91aeaa4",
+    "dimensions": [
+      2351,
+      4366
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-runtime-fig2": {
+    "name": "agent-runtime-fig2",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-runtime-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-runtime-fig2.png",
+    "source_sha256": "36c17cbcdf8d91ef0ff64dd967415f541548922f058a4b38889dd8a4c4ccce1b",
+    "png_sha256": "fd90852946c6aac75e2221f942a6699871472f6e7bd3d35886be5078ff9bf34d",
+    "dimensions": [
+      2670,
+      1428
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "agent-runtime-fig3": {
+    "name": "agent-runtime-fig3",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\agent-runtime-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\agent-runtime-fig3.png",
+    "source_sha256": "23619f198a0516f75a87745fa27dbe3af573fbfcb222861fecf2411181242fe5",
+    "png_sha256": "9c7fa0184546da57fc54a5e144ef6efe032229897ab7213e9ce12c30e91841b7",
+    "dimensions": [
+      2705,
+      1427
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-agent-communication-a2a": {
+    "name": "canonical-agent-communication-a2a",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-agent-communication-a2a.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-agent-communication-a2a.png",
+    "source_sha256": "b6c52efa10b84c98fdd3f9bf86194cac66876e1eaf132b4c48e0690540496f07",
+    "png_sha256": "1bca7780297032ce3d46eddaa5fef8f425654c22dec3714eb0db4f25534891d8",
+    "dimensions": [
+      2670,
+      968
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-agent-communication-shared": {
+    "name": "canonical-agent-communication-shared",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-agent-communication-shared.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-agent-communication-shared.png",
+    "source_sha256": "f55fc6f5652108bc8a69d1266d09cf462b0da1179c77a42eec68939a56870358",
+    "png_sha256": "1828d1e2c852d447583474ceb38d5c5625db9ab32862f33d36e1681ffff84dc7",
+    "dimensions": [
+      2740,
+      1483
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-sandbox-pod-evolution": {
+    "name": "canonical-sandbox-pod-evolution",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-sandbox-pod-evolution.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-sandbox-pod-evolution.png",
+    "source_sha256": "1c66264b0f2bcbd0d8371129604b37ae9296de9a97e4544bc5eed134914938a1",
+    "png_sha256": "c7a606f69b7b80afcc00da0ef119ac536d231538503f67c4172ed75661c22f02",
+    "dimensions": [
+      2705,
+      939
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "distributed-execution-scaling-fig3": {
+    "name": "distributed-execution-scaling-fig3",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\distributed-execution-scaling-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\distributed-execution-scaling-fig3.png",
+    "source_sha256": "373a730c22ca74bb750d41b887c5a895dcd854a7a6d02c66f95d4849d73abae6",
+    "png_sha256": "339fafe228387b32b63636456070b54163c1c4e8847e3d9551df12ed6824f276",
+    "dimensions": [
+      2769,
+      967
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "distributed-execution-scaling-fig4": {
+    "name": "distributed-execution-scaling-fig4",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\distributed-execution-scaling-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\distributed-execution-scaling-fig4.png",
+    "source_sha256": "7f51557e7a60d4c172da9570316ff1471b743937a40b29abb2b381d020f41cd0",
+    "png_sha256": "7cbe10695089710f12a51e02c7205b1708e15f6e04e887e577d3524c4afe4470",
+    "dimensions": [
+      2806,
+      1456
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "distributed-execution-scaling-fig5": {
+    "name": "distributed-execution-scaling-fig5",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\distributed-execution-scaling-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\distributed-execution-scaling-fig5.png",
+    "source_sha256": "8c0154203a3434a798c97d1f189ab14422a3bb2ff72c76bf12d946bf47604910",
+    "png_sha256": "e4b988e956119e708cce238ab86c86bc17d2365fe1e8a65f5640e8a0db8f11a0",
+    "dimensions": [
+      2705,
+      967
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "infra-deployment-fig2": {
+    "name": "infra-deployment-fig2",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\infra-deployment-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\infra-deployment-fig2.png",
+    "source_sha256": "bb62cd65183e16f5e62a91cc9299aec3bb810153a1a7ebc247273a10818d23f0",
+    "png_sha256": "991960378375b6bb1ec6cc5f629aaaa49dcd865adcf69121a3483177649032b4",
+    "dimensions": [
+      2982,
+      1483
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "infra-deployment-fig3": {
+    "name": "infra-deployment-fig3",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\infra-deployment-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\infra-deployment-fig3.png",
+    "source_sha256": "006e5657191f97c99f56b75b5df82265106f6fa544a929a8c1fe5e6b17380241",
+    "png_sha256": "0a5fd4036899b80175223282746c936534a6807ac0a78ddf8f7a92ea7153a2a6",
+    "dimensions": [
+      2705,
+      1483
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "infra-deployment-fig4": {
+    "name": "infra-deployment-fig4",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\infra-deployment-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\infra-deployment-fig4.png",
+    "source_sha256": "07d5189e3e40650e5fd7ce9416b4d498718f104b7639c20f7aa60ef634f7bca7",
+    "png_sha256": "fcb58be136f4afaac361186e0c9e057d0b7dca1f7b3a716fa420bd9f3f97d4cc",
+    "dimensions": [
+      2740,
+      939
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "live-preview-provisioning-fig1": {
+    "name": "live-preview-provisioning-fig1",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\live-preview-provisioning-fig1.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\live-preview-provisioning-fig1.png",
+    "source_sha256": "41fcd2a84df4451f283a1e007527cd52712036156c799300888b8370f2ce6511",
+    "png_sha256": "6bfd9ab7db3a9ce2d0aba4ac94f9f7d537ec614382d17b877b1cb863231bf173",
+    "dimensions": [
+      2705,
+      1455
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-browser-preview-fig2": {
+    "name": "sandbox-browser-preview-fig2",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-browser-preview-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-browser-preview-fig2.png",
+    "source_sha256": "85b511b34f1d6007484e07f16953fc527bc0ce8f80638bf7c057d5746c6a70dc",
+    "png_sha256": "d8d9c4e2e3eb565d9bd92e6026645cf6cce66ad22920688b02f1c234c6b403e2",
+    "dimensions": [
+      2705,
+      995
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-fig2": {
+    "name": "sandbox-fig2",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-fig2.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-fig2.png",
+    "source_sha256": "7f07aa5ffff1e5a1a0ebf7990f68815411e1494e370254de871ef8c4b9ef0170",
+    "png_sha256": "9ce1f7407cf6f0769f0bd14f3e4af8b115701d488d034fb01378f71b918c98d1",
+    "dimensions": [
+      2846,
+      1484
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-fig3": {
+    "name": "sandbox-fig3",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-fig3.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-fig3.png",
+    "source_sha256": "d4dc263d0ee961a28a05a733e8b985202770229d2bdaf2ab425e5dd04ba3a034",
+    "png_sha256": "6ec0648fc846d69435b4f3ee51c4ca31899eae32d824851edb0ade8219784e92",
+    "dimensions": [
+      2670,
+      1456
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-pod-execution-fig4": {
+    "name": "sandbox-pod-execution-fig4",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-pod-execution-fig4.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-pod-execution-fig4.png",
+    "source_sha256": "ddd6bed6aa75831e4eff2ac7f48073af4703271e98f6ac06cca856bdbc7c333f",
+    "png_sha256": "cd2aeb7bd52dc1ae9e8dcbcfc37f6f6ae8a4041f7f4fd7ef1397c820ef212464",
+    "dimensions": [
+      2740,
+      1455
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-pod-execution-fig5": {
+    "name": "sandbox-pod-execution-fig5",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-pod-execution-fig5.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-pod-execution-fig5.png",
+    "source_sha256": "cef717ee1b95c668c924f1550530082e7638c188fcc8d73210855576e0cdffe0",
+    "png_sha256": "236b11e895894e837f4fad4d5e89edb56d9c9b050b9746ef31a84767d726dd84",
+    "dimensions": [
+      2740,
+      995
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-pod-execution-fig6": {
+    "name": "sandbox-pod-execution-fig6",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-pod-execution-fig6.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-pod-execution-fig6.png",
+    "source_sha256": "c950bf619140d6042ffb5fb041f3751f0261e446c0a57cb1366538dea3a61a60",
+    "png_sha256": "0480b263eb5181d9c66e7a49e66641926dfe6be3e29782c5dbddf780bb4f4794",
+    "dimensions": [
+      2775,
+      1456
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "sandbox-pod-execution-fig7": {
+    "name": "sandbox-pod-execution-fig7",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\sandbox-pod-execution-fig7.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\sandbox-pod-execution-fig7.png",
+    "source_sha256": "bdaedcdf19e16adff8f91db0420ab5c43edac2bd2e11366e2a531ffee7e751c4",
+    "png_sha256": "b66e000ba40cff2b4c96cbd74a92c7d22a1a0d17442288be513b71b2e219b803",
+    "dimensions": [
+      2851,
+      996
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  },
+  "canonical-pod-process-boundaries": {
+    "name": "canonical-pod-process-boundaries",
+    "family": "deep-dive-execution",
+    "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-pod-process-boundaries.drawio",
+    "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-pod-process-boundaries.png",
+    "source_sha256": "db9b5433e6afb6f87933e46941aa6f87539afa44d6114024c41e022b685c64de",
+    "png_sha256": "e4dd4759f9dec662a8ced3417d307089be6d05943b415a8c32d28dc867808ff2",
+    "dimensions": [
+      2775,
+      1456
+    ],
+    "renderer": "31.4.5",
+    "inspection": "contact-sheet",
+    "notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+    "reviewer": "GPT-6 Astra, sole authorized agent"
+  }
+}

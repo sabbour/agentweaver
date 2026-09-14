@@ -1,0 +1,149 @@
+{
+  "diagram": "canonical-aks-network",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-aks-network-pitch.drawio",
+    "png": "canonical-aks-network-pitch.png",
+    "change_record": "canonical-aks-network-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-aks-network-pass-01.drawio",
+      "png": "canonical-aks-network-pass-01.png",
+      "change_record": "canonical-aks-network-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 2,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2344,
+      "result_meaningful_xml": 33003,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 14.079778
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-network-pass-02.drawio",
+      "png": "canonical-aks-network-pass-02.png",
+      "change_record": "canonical-aks-network-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-network-pass-03.drawio",
+      "png": "canonical-aks-network-pass-03.png",
+      "change_record": "canonical-aks-network-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-network-pass-04.drawio",
+      "png": "canonical-aks-network-pass-04.png",
+      "change_record": "canonical-aks-network-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "n-client",
+          "source": "client",
+          "target": "gateway",
+          "relationship": "Rightward application client to TLS Gateway; no preview sharing implied.",
+          "evidence": "k8s/base/gateway.yaml:9-39; httproute-api.yaml:19-63; mcp-httproute.yaml:14-46; httproute-frontend.yaml:22-34; api-service.yaml:9-17; mcp-service.yaml:9-17; frontend-service.yaml:9-17",
+          "result": "clean"
+        },
+        {
+          "id": "n-gateway",
+          "source": "gateway",
+          "target": "routes",
+          "relationship": "Rightward app Gateway to HTTPRoutes; resource chain, not a process invocation.",
+          "evidence": "k8s/base/gateway.yaml:9-39; httproute-api.yaml:19-63; mcp-httproute.yaml:14-46; httproute-frontend.yaml:22-34; api-service.yaml:9-17; mcp-service.yaml:9-17; frontend-service.yaml:9-17",
+          "result": "clean"
+        },
+        {
+          "id": "n-routes",
+          "source": "routes",
+          "target": "services",
+          "relationship": "Rightward route selection to Services; exact API/OAuth/MCP details stay in prose.",
+          "evidence": "k8s/base/gateway.yaml:9-39; httproute-api.yaml:19-63; mcp-httproute.yaml:14-46; httproute-frontend.yaml:22-34; api-service.yaml:9-17; mcp-service.yaml:9-17; frontend-service.yaml:9-17",
+          "result": "clean"
+        },
+        {
+          "id": "n-services",
+          "source": "services",
+          "target": "pods",
+          "relationship": "Rightward Services to app pods; frontend 80 and API/MCP 8080 all target 8080.",
+          "evidence": "k8s/base/gateway.yaml:9-39; httproute-api.yaml:19-63; mcp-httproute.yaml:14-46; httproute-frontend.yaml:22-34; api-service.yaml:9-17; mcp-service.yaml:9-17; frontend-service.yaml:9-17",
+          "result": "clean"
+        },
+        {
+          "id": "n-browser",
+          "source": "browser",
+          "target": "pgateway",
+          "relationship": "Rightward preview browser to separate preview Gateway.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:213-276,1116-1167; k8s/base/gateway-preview.yaml:12-54",
+          "result": "clean"
+        },
+        {
+          "id": "n-pgateway",
+          "source": "pgateway",
+          "target": "proute",
+          "relationship": "Rightward preview Gateway to dynamic HTTPRoute.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:213-276,1116-1167; k8s/base/gateway-preview.yaml:12-54",
+          "result": "clean"
+        },
+        {
+          "id": "n-proute",
+          "source": "proute",
+          "target": "pservice",
+          "relationship": "Rightward preview route to dynamic Service, with localhost rewrite annotation.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:213-276,1116-1167; k8s/base/gateway-preview.yaml:12-54",
+          "result": "clean"
+        },
+        {
+          "id": "n-pservice",
+          "source": "pservice",
+          "target": "agenthost",
+          "relationship": "Rightward preview Service to AgentHost target; no API proxy arrow.",
+          "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:213-276,1116-1167; k8s/base/gateway-preview.yaml:12-54",
+          "result": "clean"
+        },
+        {
+          "id": "n-internal",
+          "source": "agenthost",
+          "target": "internal",
+          "relationship": "AgentHost bottom along y=362 to API/MCP top; downward head, TCP 8080 label on rail.",
+          "evidence": "k8s/base/networkpolicy-sandbox.yaml:43-137; networkpolicy-agenthost-egress.yaml:46-107; networkpolicy-agenthost.yaml:28-73; networkpolicy-mcp.yaml:60-79",
+          "result": "clean"
+        },
+        {
+          "id": "n-public",
+          "source": "agenthost",
+          "target": "public",
+          "relationship": "AgentHost right around y=374 to public HTTPS top; downward head, TCP 443 label, title clear.",
+          "evidence": "k8s/base/networkpolicy-sandbox.yaml:43-137; networkpolicy-agenthost-egress.yaml:46-107; networkpolicy-agenthost.yaml:28-73; networkpolicy-mcp.yaml:60-79",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

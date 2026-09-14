@@ -1,0 +1,16 @@
+{
+  "diagram": "project-generation-model-settings-fig1",
+  "manifest": "docs/diagrams/reviews/project-generation-model-settings-fig1/iteration-manifest.json",
+  "schema": "valid",
+  "repository_manifest_validator": "iteration manifest is valid",
+  "pitch_plus_passes": 5,
+  "actual_open_inspections_recorded": 10,
+  "one_uncompressed_A5_page_all_passes": true,
+  "bounds_and_5_unit_accents": "valid",
+  "native_symbols_and_card_hierarchy": "valid",
+  "exact_arrow_ids_source_target_label_evidence": 6,
+  "growth_ratio": 10.780734,
+  "final_source_sha256": "1e75cfb39aab43c3474c6d49d742458920ecbd209e92a3e67a3319b6853b2007",
+  "inspected_final_png_sha256": "a5fb895e92d9323d01fd56e421ce53ee0e1b9c5fb046d27b4d2201a5f931a78d",
+  "publication": "valid"
+}

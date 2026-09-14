@@ -1,0 +1,50 @@
+[
+  {
+    "id": "e1",
+    "source": "goal",
+    "target": "spec",
+    "relationship": "draft",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "e2",
+    "source": "spec",
+    "target": "plan",
+    "relationship": "confirm",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "e3",
+    "source": "plan",
+    "target": "a",
+    "relationship": "dispatch A",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "e4",
+    "source": "plan",
+    "target": "b",
+    "relationship": "dispatch B",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "e5",
+    "source": "a",
+    "target": "assembly",
+    "relationship": "result A",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "e6",
+    "source": "b",
+    "target": "assembly",
+    "relationship": "result B",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  }
+]

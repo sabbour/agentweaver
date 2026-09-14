@@ -1,0 +1,342 @@
+{
+  "name": "guide-architecture-aks-fig1",
+  "title": "AgentHost: bind once, serve ready",
+  "takeaway": "HTTP reachability is not setup readiness; claim lifetime can span Assistant turns.",
+  "pitch": [
+    "Control plane claims a warm pod",
+    "Configured AgentHost serves turns"
+  ],
+  "nodes": [
+    {
+      "id": "claim",
+      "title": "Claim warm pod",
+      "subtitle": "Persist claim; wait for binding",
+      "meta": "Shared pool: 2 warm pods",
+      "badge": "CLAIM",
+      "icon": "product",
+      "x": 34,
+      "y": 87,
+      "w": 230,
+      "h": 96,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303"
+    },
+    {
+      "id": "reachable",
+      "title": "Probe listener",
+      "subtitle": "/healthz success: reachable",
+      "meta": "200 can mean standby",
+      "badge": "HEALTH",
+      "icon": "process",
+      "x": 298,
+      "y": 87,
+      "w": 230,
+      "h": 96,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303; apps/Agentweaver.Api/Sandbox/AgentHostReadinessProbe.cs:64-79"
+    },
+    {
+      "id": "configure",
+      "title": "Configure once",
+      "subtitle": "Run, purpose and capabilities",
+      "meta": "POST /configure",
+      "badge": "ONE SHOT",
+      "icon": "process",
+      "x": 562,
+      "y": 87,
+      "w": 230,
+      "h": 96,
+      "tone": "marigold",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245"
+    },
+    {
+      "id": "workspace",
+      "title": "Select workspace",
+      "subtitle": "Shared or verified local checkout",
+      "meta": "LocalReadOnly: no write-back",
+      "badge": "PURPOSE",
+      "icon": "store",
+      "x": 562,
+      "y": 248,
+      "w": 230,
+      "h": 96,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:98-137,220-237; apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245"
+    },
+    {
+      "id": "setup",
+      "title": "Finish setup",
+      "subtitle": "Assistant skips project checkout",
+      "meta": "Accepted binding stays consumed",
+      "badge": "SETUP",
+      "icon": "process",
+      "x": 298,
+      "y": 248,
+      "w": 230,
+      "h": 96,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245"
+    },
+    {
+      "id": "ready",
+      "title": "Ready for A2A",
+      "subtitle": "Setup finished before response",
+      "meta": "IsReady gates traffic",
+      "badge": "READY",
+      "icon": "pod",
+      "x": 34,
+      "y": 248,
+      "w": 230,
+      "h": 96,
+      "tone": "green",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245"
+    },
+    {
+      "id": "turn",
+      "title": "Stream a turn",
+      "subtitle": "Run-bound bearer authentication",
+      "meta": "message:stream",
+      "badge": "SERVING",
+      "icon": "product",
+      "x": 34,
+      "y": 410,
+      "w": 230,
+      "h": 96,
+      "tone": "green",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245"
+    },
+    {
+      "id": "retain",
+      "title": "Retain Assistant",
+      "subtitle": "Successful turn keeps its pod",
+      "meta": "Renew MCP token, not configure",
+      "badge": "REUSE",
+      "icon": "pod",
+      "x": 298,
+      "y": 410,
+      "w": 230,
+      "h": 96,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Api/Assistant/RemoteOperatorAssistantAgent.cs:101-110,185-208; apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303"
+    },
+    {
+      "id": "release",
+      "title": "Release claim",
+      "subtitle": "Unregister and revoke capabilities",
+      "meta": "Active preview defers cleanup",
+      "badge": "CLEANUP",
+      "icon": "process",
+      "x": 562,
+      "y": 410,
+      "w": 230,
+      "h": 96,
+      "tone": "neutral",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303"
+    }
+  ],
+  "edges": [
+    {
+      "id": "l1",
+      "source": "claim",
+      "target": "reachable",
+      "label": "bound",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l2",
+      "source": "reachable",
+      "target": "configure",
+      "label": "reachable",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l3",
+      "source": "configure",
+      "target": "workspace",
+      "label": "accepted",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l4",
+      "source": "workspace",
+      "target": "setup",
+      "label": "prepare",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l5",
+      "source": "setup",
+      "target": "ready",
+      "label": "complete",
+      "evidence": "apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l6",
+      "source": "ready",
+      "target": "turn",
+      "label": "dispatch",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303; apps/Agentweaver.AgentHost/Program.cs:258-350,377-407; AgentHostRuntimeState.cs:160-173; AgentHostStartupService.cs:124-245",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l7",
+      "source": "turn",
+      "target": "retain",
+      "label": "success",
+      "evidence": "apps/Agentweaver.Api/Assistant/RemoteOperatorAssistantAgent.cs:185-208",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "l8",
+      "source": "retain",
+      "target": "turn",
+      "label": "next turn",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+      "points": [
+        [
+          413,
+          520
+        ],
+        [
+          148,
+          520
+        ]
+      ],
+      "returnFlow": true,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.5;entryY=1;"
+    },
+    {
+      "id": "l9",
+      "source": "turn",
+      "target": "release",
+      "label": "run ends / failure",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+      "points": [
+        [
+          148,
+          548
+        ],
+        [
+          677,
+          548
+        ]
+      ],
+      "returnFlow": false,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.5;entryY=1;"
+    }
+  ],
+  "groups": [
+    {
+      "id": "l-launch",
+      "title": "01  CONTROL-PLANE LAUNCH",
+      "x": 20,
+      "y": 58,
+      "w": 787,
+      "h": 143
+    },
+    {
+      "id": "l-setup",
+      "title": "02  PURPOSE-BOUND SETUP",
+      "x": 20,
+      "y": 219,
+      "w": 787,
+      "h": 143
+    },
+    {
+      "id": "l-turns",
+      "title": "03  TURN AND CLAIM LIFETIME",
+      "x": 20,
+      "y": 380,
+      "w": 787,
+      "h": 147
+    }
+  ],
+  "notes": [
+    {
+      "id": "l-409",
+      "title": "CONFIGURATION BOUNDARY",
+      "text": "Later valid configure attempts return 409, even after accepted setup fails.",
+      "x": 28,
+      "y": 559,
+      "w": 770,
+      "h": 20
+    }
+  ],
+  "symbols": {
+    "pod": [
+      "shape=mxgraph.kubernetes.icon;prIcon=pod;",
+      "native:kubernetes"
+    ],
+    "service": [
+      "shape=mxgraph.kubernetes.icon;prIcon=svc;",
+      "native:kubernetes"
+    ],
+    "gateway": [
+      "shape=mxgraph.kubernetes.icon;prIcon=crd;",
+      "native:kubernetes"
+    ],
+    "account": [
+      "shape=mxgraph.kubernetes.icon;prIcon=sa;",
+      "native:kubernetes"
+    ],
+    "process": [
+      "shape=process;",
+      "native:flowchart"
+    ],
+    "decision": [
+      "shape=rhombus;",
+      "native:flowchart"
+    ],
+    "person": [
+      "shape=umlActor;",
+      "native:uml"
+    ],
+    "cloud": [
+      "shape=cloud;",
+      "native:cloud"
+    ],
+    "vault": [
+      "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "identity": [
+      "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "store": [
+      "shape=cylinder3;size=10;",
+      "native:database"
+    ],
+    "product": [
+      "shape=hexagon;",
+      "custom:agentweaver"
+    ]
+  },
+  "orientation": "A5-landscape",
+  "page_units": "100 draw.io units per inch; 827 x 583 approximates 210 x 148 mm",
+  "research_agents": [
+    "guide-runtime-evidence",
+    "guide-network-evidence",
+    "guide-workflow-evidence"
+  ],
+  "model": "gpt-6-astra"
+}

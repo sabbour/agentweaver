@@ -1,0 +1,109 @@
+{
+  "diagram": "reference-a2a-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "reference-a2a-fig1-pitch.drawio",
+    "png": "reference-a2a-fig1-pitch.png",
+    "change_record": "reference-a2a-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "reference-a2a-fig1-pass-01.drawio",
+      "png": "reference-a2a-fig1-pass-01.png",
+      "change_record": "reference-a2a-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 1686,
+      "result_meaningful_xml": 20854,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 12.368921
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "reference-a2a-fig1-pass-02.drawio",
+      "png": "reference-a2a-fig1-pass-02.png",
+      "change_record": "reference-a2a-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "reference-a2a-fig1-pass-03.drawio",
+      "png": "reference-a2a-fig1-pass-03.png",
+      "change_record": "reference-a2a-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "reference-a2a-fig1-pass-04.drawio",
+      "png": "reference-a2a-fig1-pass-04.png",
+      "change_record": "reference-a2a-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "configure-call",
+          "source": "api",
+          "target": "configure",
+          "relationship": "health / configure",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:635-707",
+          "result": "clean"
+        },
+        {
+          "id": "turn-stream",
+          "source": "worker",
+          "target": "turn",
+          "relationship": "turn / ordered stream",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:174-204,307-329",
+          "result": "clean"
+        },
+        {
+          "id": "checkpoint-write",
+          "source": "worker",
+          "target": "checkpoint",
+          "relationship": "Worker owns checkpoint manager",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181-188",
+          "result": "clean"
+        },
+        {
+          "id": "checkpoint-store",
+          "source": "checkpoint",
+          "target": "database",
+          "relationship": "save / resume",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181-188",
+          "result": "clean"
+        },
+        {
+          "id": "bridge-call",
+          "source": "turn",
+          "target": "bridge",
+          "relationship": "Authorized turn reaches bridge and purpose router",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:145-178,386-401",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

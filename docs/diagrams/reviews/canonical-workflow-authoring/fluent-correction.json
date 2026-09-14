@@ -1,0 +1,423 @@
+{
+  "diagram": "canonical-workflow-authoring",
+  "source_sha256": "7a52533b88e3b93fc4cc7efee540a962595398fdb8199bb8007bf9ca2372ed31",
+  "png_sha256": "75a004a84444bfb00b8a7e5d39910067cfb6888f6f12fb6d7d3e59f66ebfb1e0",
+  "prior_model": "docs\\diagrams\\src\\canonical-workflow-authoring.drawio",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Workflow authoring"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Generate a draft. Review it. Save deliberately."
+    },
+    {
+      "cell": "generation-boundary",
+      "text": "1 GENERATE + REVIEW / No workflow file is saved"
+    },
+    {
+      "cell": "persistence-boundary",
+      "text": "2 EXPLICIT SAVE / Project workspace + registry"
+    },
+    {
+      "cell": "request-title",
+      "text": "Authorize request"
+    },
+    {
+      "cell": "request-subtitle",
+      "text": "Project ownership + AI execution plan"
+    },
+    {
+      "cell": "request-meta",
+      "text": "POST …/workflows/generate"
+    },
+    {
+      "cell": "request-badge",
+      "text": "GATED"
+    },
+    {
+      "cell": "request-detail",
+      "text": "Description required"
+    },
+    {
+      "cell": "context-title",
+      "text": "Prompt context"
+    },
+    {
+      "cell": "context-subtitle",
+      "text": "Roles, schema, examples"
+    },
+    {
+      "cell": "context-meta",
+      "text": "Project model override"
+    },
+    {
+      "cell": "context-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "context-detail",
+      "text": "Catalog fallback"
+    },
+    {
+      "cell": "generator-title",
+      "text": "Generate candidate"
+    },
+    {
+      "cell": "generator-subtitle",
+      "text": "CopilotWorkflowGenerator"
+    },
+    {
+      "cell": "generator-meta",
+      "text": "Model returns YAML, not a saved file"
+    },
+    {
+      "cell": "generator-badge",
+      "text": "AI DRAFT"
+    },
+    {
+      "cell": "generator-detail",
+      "text": "Create or edit"
+    },
+    {
+      "cell": "validation-title",
+      "text": "Validate candidate"
+    },
+    {
+      "cell": "validation-subtitle",
+      "text": "WorkflowDefinitionLoader + binder dry-run"
+    },
+    {
+      "cell": "validation-meta",
+      "text": "Structure AND runtime bindability"
+    },
+    {
+      "cell": "validation-badge",
+      "text": "CHECK"
+    },
+    {
+      "cell": "validation-detail",
+      "text": "Strip fences; ensure id"
+    },
+    {
+      "cell": "repair-title",
+      "text": "One correction"
+    },
+    {
+      "cell": "repair-subtitle",
+      "text": "Failed YAML + error"
+    },
+    {
+      "cell": "repair-meta",
+      "text": "Re-run same checks"
+    },
+    {
+      "cell": "repair-badge",
+      "text": "ONCE"
+    },
+    {
+      "cell": "repair-detail",
+      "text": "No third attempt"
+    },
+    {
+      "cell": "generation-error-title",
+      "text": "Explicit error"
+    },
+    {
+      "cell": "generation-error-subtitle",
+      "text": "Second invalid result"
+    },
+    {
+      "cell": "generation-error-meta",
+      "text": "400 · not persisted"
+    },
+    {
+      "cell": "generation-error-badge",
+      "text": "STOP"
+    },
+    {
+      "cell": "review-title",
+      "text": "Review & edit draft"
+    },
+    {
+      "cell": "review-subtitle",
+      "text": "Human edits YAML or the visual graph"
+    },
+    {
+      "cell": "review-meta",
+      "text": "Valid draft stays unsaved"
+    },
+    {
+      "cell": "review-badge",
+      "text": "HUMAN"
+    },
+    {
+      "cell": "save-validation-title",
+      "text": "Save: validate again"
+    },
+    {
+      "cell": "save-validation-subtitle",
+      "text": "Parse + structure + route id + binder"
+    },
+    {
+      "cell": "save-validation-meta",
+      "text": "PUT …/workflows/{workflowId}"
+    },
+    {
+      "cell": "save-validation-badge",
+      "text": "SAVE"
+    },
+    {
+      "cell": "save-validation-detail",
+      "text": "Ownership required"
+    },
+    {
+      "cell": "save-error-title",
+      "text": "Reject save"
+    },
+    {
+      "cell": "save-error-subtitle",
+      "text": "Parse / id / bind error"
+    },
+    {
+      "cell": "save-error-meta",
+      "text": "400 or 422 · no write"
+    },
+    {
+      "cell": "save-error-badge",
+      "text": "STOP"
+    },
+    {
+      "cell": "save-error-detail",
+      "text": "Fix the draft"
+    },
+    {
+      "cell": "write-title",
+      "text": "Write project YAML"
+    },
+    {
+      "cell": "write-subtitle",
+      "text": "Resolve the path inside the workspace"
+    },
+    {
+      "cell": "write-meta",
+      "text": ".agentweaver/workflows/{id}.yaml"
+    },
+    {
+      "cell": "write-badge",
+      "text": "FILE"
+    },
+    {
+      "cell": "write-detail",
+      "text": "Contained-path guard"
+    },
+    {
+      "cell": "write-error-title",
+      "text": "Write can fail"
+    },
+    {
+      "cell": "write-error-subtitle",
+      "text": "Path guard or file I/O"
+    },
+    {
+      "cell": "write-error-meta",
+      "text": "400 / 500 · stop here"
+    },
+    {
+      "cell": "write-error-badge",
+      "text": "STOP"
+    },
+    {
+      "cell": "write-error-detail",
+      "text": "No success response"
+    },
+    {
+      "cell": "registry-title",
+      "text": "Sync → definition"
+    },
+    {
+      "cell": "registry-subtitle",
+      "text": "Extend allowed set if needed; reload"
+    },
+    {
+      "cell": "registry-meta",
+      "text": "Return saved detail on success"
+    },
+    {
+      "cell": "registry-badge",
+      "text": "200"
+    },
+    {
+      "cell": "reload-error-title",
+      "text": "Reload failure"
+    },
+    {
+      "cell": "reload-error-subtitle",
+      "text": "Written, not available"
+    },
+    {
+      "cell": "reload-error-meta",
+      "text": "422 / 500 · file may exist"
+    },
+    {
+      "cell": "reload-error-badge",
+      "text": "ERROR"
+    },
+    {
+      "cell": "e01",
+      "text": "permitted"
+    },
+    {
+      "cell": "e02",
+      "text": "grounds prompt"
+    },
+    {
+      "cell": "e03",
+      "text": "candidate YAML"
+    },
+    {
+      "cell": "e04",
+      "text": "valid; unsaved"
+    },
+    {
+      "cell": "e05",
+      "text": "first invalid"
+    },
+    {
+      "cell": "e06",
+      "text": "one repair"
+    },
+    {
+      "cell": "e07",
+      "text": "invalid again"
+    },
+    {
+      "cell": "e08",
+      "text": "explicit Save"
+    },
+    {
+      "cell": "e09",
+      "text": "invalid"
+    },
+    {
+      "cell": "e10",
+      "text": "checks pass"
+    },
+    {
+      "cell": "e11",
+      "text": "failure"
+    },
+    {
+      "cell": "e12",
+      "text": "write succeeded"
+    },
+    {
+      "cell": "e13",
+      "text": "failure"
+    }
+  ],
+  "context_pages": [
+    "docs/experience/workflows-backlog.md",
+    "docs/guide/workflows.md",
+    "docs/workflow-generation.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "request",
+      "to": "generator",
+      "label": "permitted",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "context",
+      "to": "generator",
+      "label": "grounds prompt",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "generator",
+      "to": "validation",
+      "label": "candidate YAML",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "validation",
+      "to": "review",
+      "label": "valid; unsaved",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "validation",
+      "to": "repair",
+      "label": "first invalid",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "repair",
+      "to": "generator",
+      "label": "one repair",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "validation",
+      "to": "generation-error",
+      "label": "invalid again",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "review",
+      "to": "save-validation",
+      "label": "explicit Save",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "save-validation",
+      "to": "save-error",
+      "label": "invalid",
+      "result": "clean"
+    },
+    {
+      "id": "e9",
+      "from": "save-validation",
+      "to": "write",
+      "label": "checks pass",
+      "result": "clean"
+    },
+    {
+      "id": "e10",
+      "from": "write",
+      "to": "write-error",
+      "label": "failure",
+      "result": "clean"
+    },
+    {
+      "id": "e11",
+      "from": "write",
+      "to": "registry",
+      "label": "write succeeded",
+      "result": "clean"
+    },
+    {
+      "id": "e12",
+      "from": "registry",
+      "to": "reload-error",
+      "label": "failure",
+      "result": "clean"
+    }
+  ]
+}

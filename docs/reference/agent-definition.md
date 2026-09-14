@@ -1,5 +1,7 @@
 # Agent definition — Reference
 
+See [Source-generated tool map and embedded/downloadable agent definitions](../diagrams/agent-definition-fig1.png) for the shared visual model.
+
 Terse reference for **agent definition generation & per-project materialization**: how the GitHub Copilot
 agent file `.github/agents/agentweaver.agent.md` is generated from the MCP tool source, embedded into the
 API, and written into every new project.
@@ -10,7 +12,7 @@ the materialized file on disk.
 
 ## Generated files
 
-One generator, `scripts/gen-docs.mjs`, produces three targets from the single source of truth
+One generator, `scripts/gen-docs.mjs`, produces five targets from the single source of truth
 `apps/Agentweaver.Mcp/Tools/*.cs` (the `[McpServerTool]` / `[Description]` attributes):
 
 | Target | What is generated | Source of truth |
@@ -18,6 +20,8 @@ One generator, `scripts/gen-docs.mjs`, produces three targets from the single so
 | `docs/reference/mcp-tools.md` | The full MCP tool index (every tool + one-line description). | `apps/Agentweaver.Mcp/Tools/*.cs` |
 | `.github/agents/agentweaver.agent.md` | **Only** the Tool map block between the markers (see below). All other prose is hand-written and preserved. | Same — Tool map only |
 | `apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md` | A **byte-identical copy** of the agent file above, embedded into the API. | The agent file above |
+| `docs/public/agents/agentweaver.agent.md` | Byte-identical anonymous docs download. | Generated agent definition |
+| `apps/Agentweaver.Web/wwwroot/agents/agentweaver.agent.md` | Byte-identical same-origin deployment download. | Generated agent definition |
 
 ### The marker block
 
@@ -29,7 +33,7 @@ Inside `.github/agents/agentweaver.agent.md`, the generated region is delimited 
 <!-- END GENERATED:tool-map -->
 ```
 
-The generator replaces only the bytes between these markers (`applyToolMapBlock`, `gen-docs.mjs:192`) and
+The generator replaces only the bytes between these markers (`applyToolMapBlock` in `scripts/gen-docs.mjs`) and
 reads the rest of the file back as the template, so frontmatter, mental model, operating principles, and
 playbooks stay verbatim. Editing the file outside the markers is safe; editing inside them is overwritten on
 the next regenerate.
@@ -37,7 +41,7 @@ the next regenerate.
 ## Regenerate
 
 ```bash
-node scripts/gen-docs.mjs          # rewrite all three generated targets
+node scripts/gen-docs.mjs          # rewrite all five generated targets
 node scripts/gen-docs.mjs --check  # exit 1 if any committed target is stale (CI)
 ```
 
@@ -47,7 +51,7 @@ MCP tool, then commit the changed files.
 ## CI gate
 
 The `docs-drift` workflow runs the generator in `--check` mode on every pull request. `--check` re-derives
-all three targets and compares them to what is committed; a stale file prints `DRIFT: ...` and the job exits
+all five targets and compares them to what is committed; a stale file prints `DRIFT: ...` and the job exits
 non-zero (`.github/workflows/docs-drift.yml:37`). This makes a drifted agent file a hard build failure rather
 than a silent inconsistency.
 
@@ -55,11 +59,13 @@ than a silent inconsistency.
 OK: docs/reference/mcp-tools.md is in sync.
 OK: .github/agents/agentweaver.agent.md is in sync.
 OK: apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md is in sync.
+OK: docs/public/agents/agentweaver.agent.md is in sync.
+OK: apps/Agentweaver.Web/wwwroot/agents/agentweaver.agent.md is in sync.
 ```
 
 ## Materialization behavior
 
-On project creation, `ProjectService.TryMaterializeAgentDefinition` (`ProjectService.cs:485`) writes the
+On project creation, `ProjectService.TryMaterializeAgentDefinition` writes the
 embedded template into the new project. It is called from both `CreateBlankAsync` (`ProjectService.cs:90`)
 and `CreateFromGitHubAsync` (`ProjectService.cs:183`).
 
@@ -99,3 +105,47 @@ agent ("Agentweaver Driver") for that project with no further setup.
 - [Agent definition — User Guide](../experience/agent-definition.md) — the file from a user's perspective.
 - [MCP tool index](./mcp-tools.md) — the generated list of all `agentweaver-*` tools.
 - [MCP server reference](./mcp.md) — per-tool parameter reference.
+
+<!-- diagram-context:agent-definition-fig1:start -->
+<details id="diagram-context-agent-definition-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Agent definition · five generated targets</td></tr>
+<tr><td>takeaway</td><td>One tool map is regenerated; handwritten prose stays intact and all five outputs are checked.</td></tr>
+<tr><td>group-0-title</td><td>GENERATOR INPUTS</td></tr>
+<tr><td>group-1-title</td><td>OUTPUTS + MATERIALIZATION</td></tr>
+<tr><td>MCP tool sources</td><td>MCP tool sources</td></tr>
+<tr><td>MCP tool sources</td><td>Parse and group tool declarations</td></tr>
+<tr><td>MCP tool sources</td><td>Handwritten agent template supplies prose</td></tr>
+<tr><td>MCP tool sources</td><td>gen-docs.mjs:243–273</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>scripts/gen-docs.mjs</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>Replace only the tool-map block</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>--check compares expected bytes for all five</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>gen-docs.mjs:266–300</td></tr>
+<tr><td>Tool reference</td><td>Tool reference</td></tr>
+<tr><td>Tool reference</td><td>docs/reference/mcp-tools.md</td></tr>
+<tr><td>Tool reference</td><td>Generated public tool index</td></tr>
+<tr><td>Tool reference</td><td>gen-docs.mjs:266–273</td></tr>
+<tr><td>Repository agent</td><td>Repository agent</td></tr>
+<tr><td>Repository agent</td><td>.github/agents/agentweaver.agent.md</td></tr>
+<tr><td>Repository agent</td><td>Handwritten text + generated map</td></tr>
+<tr><td>Embedded API template</td><td>Embedded API template</td></tr>
+<tr><td>Embedded API template</td><td>Projects/Templates/agentweaver.agent.md</td></tr>
+<tr><td>Embedded API template</td><td>Embedded resource for project initialization</td></tr>
+<tr><td>Documentation download</td><td>Documentation download</td></tr>
+<tr><td>Documentation download</td><td>docs/public/agents/agentweaver.agent.md</td></tr>
+<tr><td>Documentation download</td><td>Published agent-definition download</td></tr>
+<tr><td>Web-host download</td><td>Web-host download</td></tr>
+<tr><td>Web-host download</td><td>wwwroot/agents/agentweaver.agent.md</td></tr>
+<tr><td>Web-host download</td><td>Deployed static copy; anonymous consumer</td></tr>
+<tr><td>New project agent file</td><td>New project agent file</td></tr>
+<tr><td>New project agent file</td><td>AgentDefinitionTemplate</td></tr>
+<tr><td>New project agent file</td><td>Best effort; detected existing files are preserved</td></tr>
+<tr><td>New project agent file</td><td>AgentDefinitionTemplate:33–75</td></tr>
+<tr><td>MCP tool sources</td><td>compose</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>write</td></tr>
+<tr><td>scope</td><td>Five outputs are siblings, not a copy chain. Only the embedded API copy materializes new project files.</td></tr>
+<tr><td>groups</td><td>GENERATOR INPUTS; OUTPUTS + MATERIALIZATION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:agent-definition-fig1:end -->

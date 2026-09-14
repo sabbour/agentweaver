@@ -1,0 +1,282 @@
+{
+  "diagram": "review-merge-fig5",
+  "source_sha256": "e44069709832d878788d45efd3af94d9e5da3610199090fb010604bc2151484f",
+  "png_sha256": "73239bf664507aab7adba47a73ce31b80e9b01fb010301ba3c991b7eaace79a4",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Review API decision paths"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Authorize first. Deliver through the right path. Lock before any merge CAS."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "ADMISSION AND REPLAY"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "DELIVERY ALTERNATIVES"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "CONTINUATION AND MERGE"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "ACTOR"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Caller + access"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Project contributor check"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "legacy: pending owner"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CHECK"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Reviewable state?"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Inspect status + pending"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "awaiting_review"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "EXIT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Replay or conflict"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Matching terminal: reuse"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "otherwise: 409"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "LOCAL"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Live pending"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Changes / decline use CAS"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "approve: no merge CAS"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "DURABLE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Deferred pending"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Persist the decision first"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "then status transition"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "FALLBACK"
+    },
+    {
+      "cell": "n5-title",
+      "text": "No live / no pending"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Validate direct approval"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "changes: 409"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "RESUME"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Consume + deliver"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Send workflow response"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "live continuation"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "LOCK"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Repository lock"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Only on reaching merge"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "lock before CAS"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "MERGE"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Merge CAS + Git"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Guard reviewed tree input"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "release lock on exit"
+    },
+    {
+      "cell": "e0",
+      "text": "check"
+    },
+    {
+      "cell": "e1",
+      "text": "replay"
+    },
+    {
+      "cell": "e2",
+      "text": "live"
+    },
+    {
+      "cell": "e3",
+      "text": "deferred"
+    },
+    {
+      "cell": "e4",
+      "text": "direct"
+    },
+    {
+      "cell": "e5",
+      "text": "deliver"
+    },
+    {
+      "cell": "e6",
+      "text": "on merge"
+    },
+    {
+      "cell": "e7",
+      "text": "approve"
+    },
+    {
+      "cell": "e8",
+      "text": "locked"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/orchestration.md",
+    "docs/deep-dive/review-merge.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "replay",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "live",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n1",
+      "to": "n4",
+      "label": "deferred",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n1",
+      "to": "n5",
+      "label": "direct",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n3",
+      "to": "n6",
+      "label": "deliver",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n6",
+      "to": "n7",
+      "label": "on merge",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n5",
+      "to": "n7",
+      "label": "approve",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n7",
+      "to": "n8",
+      "label": "locked",
+      "result": "clean"
+    }
+  ]
+}

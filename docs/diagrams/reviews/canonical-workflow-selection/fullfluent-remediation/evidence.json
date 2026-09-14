@@ -1,0 +1,221 @@
+{
+  "takeaway": "Explicit choices precede trigger-agnostic, bounded automatic selection.",
+  "source_model": {
+    "title": "Workflow selection",
+    "nodes": [
+      {
+        "id": "available",
+        "label": "Load candidates",
+        "type": "process",
+        "role": "selection",
+        "detail": "Project default ordered first",
+        "metadata": "registry.Available",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:281\u2013296"
+      },
+      {
+        "id": "explicit",
+        "label": "Explicit override?",
+        "type": "check",
+        "role": "selection",
+        "detail": "Dialog value, else backlog pin",
+        "metadata": "must be available",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:299\u2013329"
+      },
+      {
+        "id": "conversation",
+        "label": "Conversational choice?",
+        "type": "check",
+        "role": "selection",
+        "detail": "Revision feedback: use {id}",
+        "metadata": "must be available",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:333\u2013349"
+      },
+      {
+        "id": "count",
+        "label": "Candidate count",
+        "type": "check",
+        "role": "selection",
+        "detail": "Only automatic selection",
+        "metadata": "0 / 1 / multiple",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:359\u2013375"
+      },
+      {
+        "id": "model",
+        "label": "Ask selection model",
+        "type": "prompt",
+        "role": "selection",
+        "detail": "Goal + roles + process fit",
+        "metadata": "maximum 2 attempts",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:378\u2013387"
+      },
+      {
+        "id": "validate",
+        "label": "Usable candidate?",
+        "type": "check",
+        "role": "selection",
+        "detail": "Parse / normalize / prose match",
+        "metadata": "reject unknown choices",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:378\u2013387; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "id": "selected",
+        "label": "Selected workflow",
+        "type": "terminal",
+        "role": "selection",
+        "detail": "Emit selection + rationale",
+        "metadata": "workflow_selected",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:387\u2013389"
+      },
+      {
+        "id": "explicit-result",
+        "label": "Explicit choice",
+        "type": "terminal",
+        "role": "selection",
+        "detail": "Emit selection",
+        "metadata": "not auto-selected",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:311\u2013321"
+      },
+      {
+        "id": "silent",
+        "label": "Silent choice",
+        "type": "terminal",
+        "role": "selection",
+        "detail": "One: candidate",
+        "metadata": "Zero: project default",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:362\u2013374"
+      },
+      {
+        "id": "fallback",
+        "label": "Model fallback",
+        "type": "terminal",
+        "role": "selection",
+        "detail": "default / standard",
+        "metadata": "then non-code-review",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:378\u2013387; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "id": "outer",
+        "label": "Outer fallback",
+        "type": "terminal",
+        "role": "selection",
+        "detail": "Project default",
+        "metadata": "when catch permits",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:391\u2013405"
+      }
+    ],
+    "edges": [
+      {
+        "source": "available",
+        "target": "explicit",
+        "label": "",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "explicit",
+        "target": "explicit-result",
+        "label": "available",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "explicit",
+        "target": "conversation",
+        "label": "absent / invalid",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "conversation",
+        "target": "explicit-result",
+        "label": "available",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "conversation",
+        "target": "count",
+        "label": "absent / invalid",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "count",
+        "target": "silent",
+        "label": "0 or 1",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "count",
+        "target": "model",
+        "label": "2+",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "model",
+        "target": "validate",
+        "label": "response",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "model",
+        "target": "fallback",
+        "label": "exception",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "validate",
+        "target": "selected",
+        "label": "accepted",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "validate",
+        "target": "model",
+        "label": "retry once",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "validate",
+        "target": "fallback",
+        "label": "2 unusable",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "fallback",
+        "target": "selected",
+        "label": "emit choice",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      },
+      {
+        "source": "available",
+        "target": "outer",
+        "label": "outer catch",
+        "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215"
+      }
+    ],
+    "main": [
+      "available",
+      "explicit",
+      "conversation",
+      "count",
+      "model",
+      "validate",
+      "selected"
+    ],
+    "note": "Trigger-agnostic \u2022 explicit choices precede singleton",
+    "footer": "Post-decomposition Build & Test compatibility is a separate check (executor:407\u2013494)."
+  },
+  "research_threads": [
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-01.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-02.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-03.md"
+  ],
+  "research_reuse": "Three separately completed Astra results supplied by parent; no new or nested agents.",
+  "authority": "Current YAML/code, current docs/guide/workflows.md, CatalogWorkflowBindingTests; stale comments and legacy labels excluded.",
+  "pitch_model": "Two populated native-flowchart responsibility cards; not the full execution graph. Pass 1 expands every authoritative node and edge.",
+  "native_symbols": "Native diagrams.net process, rhombus, document and ellipse, wrapped in Fluent card hierarchy.",
+  "asset_rights": "diagrams.net native shapes, Apache-2.0; repository-owned Fluent chrome; no external images.",
+  "visual_authority": [
+    "docs/diagrams/drawio/fluent-template.drawio",
+    "docs/diagrams/drawio/fluent-library.xml",
+    "docs/diagrams/drawio/design-system.json",
+    "apps/web/src/components/WorkflowGraphPanel.tsx",
+    "docs/diagrams/reviews/canonical-workflow-authoring/a5-final (read-only inspiration)"
+  ]
+}

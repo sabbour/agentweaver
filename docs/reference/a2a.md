@@ -1,9 +1,11 @@
 # A2A Transport — Reference
 
-::: warning Preview dependency on the hot path
-The A2A transport is built on the `Microsoft.Agents.AI.A2A` and `Microsoft.Agents.AI.Hosting.A2A(.AspNetCore)` package line. **Every published version of that line is `-preview`** (for example `1.9.0-preview.260603.1` through `1.11.1-preview.260625.1`), whereas the workflow runtime it pairs with reached stable `1.9.0`. A2A sits on the agent-execution hot path as the **sole** wire transport, so this preview status is a first-class operational fact, not a footnote.
+See [A2A remotes one leaf turn, not team coordination](../diagrams/canonical-agent-communication-a2a.png) for the shared visual model.
 
-**Mitigations (all required):** pin one exact known-good build by **version + hash**; gate the whole path behind `Sandbox:AgentExecutionMode`; and treat the **`in-api` mode as the rollback path** — not a second wire protocol. Advance the pin only after validating against the next A2A release, tracking the line to GA.
+::: warning Preview dependency on the hot path
+The checked-in A2A dependencies remain preview packages on the remote-turn path. The client `Microsoft.Agents.AI.A2A` is pinned to `1.19.0-preview.260822.1`; host packages `Microsoft.Agents.AI.Hosting.A2A` and `.AspNetCore` use `1.11.1-preview.260625.1`. Workflow and Copilot integration packages use stable `1.19.0`. These are repository pins, not a statement about every upstream release.
+
+**Mitigations (all required):** pin the exact validated client/host combination by **version + hash**; gate the whole path behind `Sandbox:AgentExecutionMode`; and treat the **`in-api` mode as the rollback path** — not a second wire protocol. Advance the pin only after validating against the next A2A release, tracking the line to GA.
 :::
 
 This reference catalogues the A2A surface Agentweaver uses, the message-mode semantics, the agent card, and the H1–H7 security model. For the design reasoning behind these choices, read the [A2A bridge deep dive](../deep-dive/a2a-bridge.md). For the pod lifecycle, see [Sandbox pods reference](./sandbox-pods.md) and [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md).
@@ -22,7 +24,7 @@ The worker never drops to the raw `A2A` client. It consumes the remote endpoint 
 
 ### Pinning
 
-Pin a single A2A build aligned with Agentweaver's existing `Microsoft.Agents.AI.*` line (for example the `…-preview.260603.1` stamp shared with the GitHub Copilot agent package), recorded by **exact version and content hash**. Do not float the version. Upgrading the pin is a deliberate, validated step gated by soak on the execution-mode flag.
+Keep declared package versions and committed lock-file content hashes together. Client and host currently have different version stamps; validate the complete client/host combination before changing either side.
 
 ## 2. Endpoints
 
@@ -30,23 +32,23 @@ Pin a single A2A build aligned with Agentweaver's existing `Microsoft.Agents.AI.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `…/v1/message:stream` | `POST` | Streaming agent turn over SSE. The only data-plane endpoint. **Requires `Authorization: Bearer {runtime turn token}`.** |
-| `…/v1/card` | `GET` | The agent card — capability + security-scheme discovery. **Authz-gated, not anonymous.** |
+| `…/v1/message:stream` | `POST` | Streaming agent turn over SSE. The only data-plane endpoint. **Requires `Authorization: Bearer <turn-token>`.** |
+| `…/v1/card` | `GET` | The agent card — capability + security-scheme discovery. A non-empty `CardBearerToken` enables its separate bearer gate. |
 
-So at the default path the live routes are `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card`. The hosted agent is **not** `CopilotAIAgent` directly: it is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` registered under the MAF name `agentweaver-pod`) wrapping the pod's singleton `CopilotAIAgent`. The A2A server is configured with `AgentRunMode.DisallowBackground` (turns are synchronous streams, never detached tasks). A startup readiness gate returns `503` for every route except `/healthz` and `/configure` until `AgentHostStartupService` has finished the pod's run-scoped `CopilotAIAgent.SetupAsync`. Warm-pool pods start in standby and run setup only after `/configure`.
+So at the default path the live routes are `POST /a2a/agent/v1/message:stream` and `GET /a2a/agent/v1/card`. The hosted agent is **not** `CopilotAIAgent` directly: it is `A2ATurnBridgeAgent` (a `DelegatingAIAgent` registered under the MAF name `agentweaver-pod`) wrapping the pod's singleton `CopilotAIAgent` through a purpose-routing runner. Workflow purposes use the Copilot runner; Operator Assistant uses its MCP chat runner. Provider configuration selects a run-bound Copilot capability or BYOK. The A2A server is configured with `AgentRunMode.DisallowBackground` (turns are synchronous streams, never detached tasks). A startup readiness gate returns `503` for every route except `/healthz` and `/configure` until `AgentHostStartupService` has finished the pod's run-scoped `CopilotAIAgent.SetupAsync`. Warm-pool pods start in standby and run setup only after `/configure`.
 
-`message:stream` is not protected by NetworkPolicy alone. `KubernetesSandboxExecutor` generates a 256-bit random turn token for each run, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` reads the token and sets `Authorization: Bearer {per-run token}` on all turn calls. Because each pod has its own configured token, a token stolen from one run cannot be reused against another run's AgentHost. `/configure` itself is not bearer-protected because it delivers the token; scoped NetworkPolicy is the guard.
+`message:stream` is not protected by NetworkPolicy alone. `KubernetesSandboxExecutor` generates a 256-bit random turn token for each run, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` reads the token and sets `Authorization: Bearer <turn-token>` on all turn calls. Because each pod has its own configured token, a token stolen from one run cannot be reused against another run's AgentHost. `/configure` itself is not bearer-protected because it delivers the token; scoped NetworkPolicy is the guard.
 
 Messages are keyed by `messageId` and `contextId` (the worker uses the run id as `contextId`). The server maintains a per-`contextId` conversation history, which Agentweaver treats as **ephemeral** (see §4). The surface is intentionally bounded: a fixed streaming endpoint plus a discovery endpoint, narrower than any ad-hoc executor surface.
 
 ## 3. The agent card (`/v1/card`)
 
-The agent card advertises the agent's capabilities (streaming, push notifications) and its security schemes (bearer / OAuth2). In Agentweaver it is:
+Card discovery and turn execution use distinct configured application-layer gates.
 
-- **Authz-gated.** `GET /v1/card` requires authorization; there is **no anonymous discovery** of the in-pod agent. The gate is a middleware that rejects any request to `…/v1/card` whose `Authorization` header does not match `Bearer {AgentHostOptions.CardBearerToken}` (an empty token disables the gate for dev/test only).
+- The card endpoint is `GET {A2APath}/v1/card`. A non-empty `AgentHost:CardBearerToken` requires a matching bearer token; an empty value disables that gate. The options default is empty. `AgentHost:Security:GateCardEndpoint` is not the value the middleware checks. Turn submission instead checks the runtime `TurnBearerToken` delivered through configure. Neither bearer is a TLS identity, and the reviewed implementation does not establish OAuth2 discovery or SPIFFE identity.
 - **Minimized.** The card exposes only what the worker needs to bind the transport — no broad capability advertising, no surplus metadata.
 
-The card's bearer/OAuth2 scheme is an **app-layer** auth model. It is useful but, on its own, it does **not** satisfy the transport security requirement (see H1). Agent-card bearer/OAuth2 and the per-run `message:stream` bearer must be wrapped by transport-layer identity (mTLS/SPIFFE) and scoped ingress.
+Bearer authorization and TLS identity are independent controls. The deployment matrix in H1 distinguishes plain base configuration from production-overlay mTLS; neither establishes a SPIFFE integration.
 
 ## 4. Message-mode semantics
 
@@ -62,7 +64,9 @@ Agentweaver uses A2A in **message/stream mode only**.
 
 ### What crosses the wire
 
-1. The **turn input** — the first A2A `message:stream` message carries an `AgentSetupParams` `DataPart` (media type `application/x-agentweaver-agent-setup+json`) followed by the task `TextPart`. The pod's bridge reads only the per-turn `IsRevision` flag from it; the run-scoped setup already ran after `/configure`.
+1. The bridge reads revision state and applies per-turn system-prompt context, project/agent identity, API address, and API credential before execution. Prompt context is layered over the pod's startup environment and includes the worker-assembled charter, memory, and assigned skills. One-time run provisioning still occurs through `/configure`.
+
+Streaming returns assistant text and in-band `RunEvent` DataParts (`application/x-agentweaver-run-event+json`). Writable pod-local turns can also return a `PreparedWriteback` descriptor, captured separately from events.
 2. The agent's **streaming output** — assistant text deltas, accumulated on the worker into the turn result.
 3. The **`RunEvent` side-channel**, encoded as A2A `DataContent` parts (media type `application/x-agentweaver-run-event+json`, via `RunEventDataPartCodec`) on `message:stream`, decoded back into `RunEvent`s on the worker. These are forwarded **in-band** on the same stream today; an external-bus fan-out is a future option, not what ships.
 
@@ -73,34 +77,33 @@ The `RunEvent` codec is the only Agentweaver-owned shim, and it is transport-ind
 - MAF `WorkflowEvent`s (executor-invoked/completed, request-info) — emitted by the worker graph around the leaf.
 - HITL `RequestPort` suspend/resume — a worker graph construct.
 - Checkpoints / session blobs — persisted out-of-band to the DB-backed checkpoint store.
-- Worktree commit and diff — performed on the worker against the shared workspace PVC.
+- Pod-local writable implementation turns prepare Git writeback and return a `PreparedWriteback` DataPart. The worker validates and applies that receipt; not all commit/diff work runs on the shared PVC.
 
 ## 5. Security model (H1–H7)
 
-A2A requires an in-pod HTTP listener and an east-west ingress rule onto Kata-isolated pods. The transport ships **only when all of H1–H7 hold**. These are mandatory gates, not recommendations.
+H1-H7 describe intended security and operational controls. Their implementation and configuration status differ; distinguish code defaults, Kubernetes base configuration, production-overlay configuration, and requirements not established by a repository-only review.
 
 | Gate | Requirement |
 |---|---|
-| **H1 — Transport identity** | TLS **plus** a workload-identity-bound pod server certificate. **mTLS / SPIFFE preferred.** This is now the **production default**: `AgentHostOptions.RequireMtls` / `SandboxAgentOptions.RequireMtls` default to `true`, which selects the `https` scheme and drives the mounted `appsettings.k8s.json` Kestrel endpoint with the workload-bound server cert + `RequireCertificate`. A **plain-HTTP PoC fallback** remains (`RequireMtls=false` → no Kestrel endpoint config, listener binds plain HTTP on the A2A port) and **must not** be used in production. |
-| **H2 — Scoped ingress** | A `NetworkPolicy` ingress rule scoped to **worker-pod → sandbox:port only** (expressed for both plain NetworkPolicy and Cilium). Sandbox pods are otherwise ingress deny-all. |
-| **H3 — A2A app-layer authz** | `/v1/message:stream` requires the per-run runtime turn token delivered by `/configure`; `/v1/card` is authz-gated and minimized. No anonymous discovery. |
-| **H4 — Bounded listener** | Explicit Kestrel timeout, request-body, and stream limits, **plus SSE heartbeats** so a request-timeout does not kill the long-lived turn stream. |
-| **H5 — Idempotent resume** | Resume via Agentweaver's DB checkpoint with **idempotent, sequence-based re-injection**. On mid-turn drop, **re-drive the turn from the last checkpoint** (A2A `message:stream` has no Last-Event-ID replay). |
-| **H6 — No egress broadening** | The sandbox egress allowlist is unchanged: model endpoint, the API broker endpoint, and the run's legitimate git remote(s). Everything else is default-deny. A2A adds **no** egress. |
-| **H7 — Pinned preview** | The preview library is pinned by exact **version + hash**, gated behind the execution-mode flag, and tracked to GA. **The rollback is the `in-api` flag** (see §6), and H7 records the residual-risk mitigations rather than relying on a live second transport. |
+| **H1 — Transport identity** | Code defaults enable mTLS. Kubernetes base disables it on AgentHost and API/worker callers; the production overlay enables HTTPS and client certificates on both ends. Mounted certificates and pinned CAs are not a claim of SPIFFE identity; the client ignores pod-IP hostname mismatch. |
+| **H2 — Scoped ingress** | The A2A NetworkPolicy permits same-namespace API and worker pods to TCP/8088. Policies are additive: preview-gateway ingress permits TCP/3000-9000, including 8088. NetworkPolicy is not a gateway hop. |
+| **H3 — A2A app-layer authz** | Turn submission checks the configured run bearer; card discovery checks the separate CardBearerToken option. Either middleware gate is disabled when its corresponding value is empty. |
+| **H4 — Bounded listener** | Kestrel has declared connection/body/header/keepalive limits. Control calls use a finite timeout; streaming uses an infinite HTTP timeout with worker total/read-idle deadlines. A general transport heartbeat is not established by the configuration field alone. |
+| **H5 — Idempotent resume** | Checkpoint management and durable run events remain in the worker/orchestration tier. PostgreSQL checkpoints support cross-replica reads; event persistence deduplicates by run and sequence. This is not A2A replay or a blanket exactly-once guarantee for model/tool effects. |
+| **H6 — No egress broadening** | Ingress does not grant egress. Current sandbox egress includes DNS, explicit platform-service rules, and public HTTPS excluding configured private/link-local ranges; it is not a per-run Git-host-only allowlist. |
+| **H7 — Pinned preview** | Client/host preview versions and lock hashes are pinned separately. in-api is the code fallback; Kubernetes base selects pod-per-run. Startup configuration rollback is not hot reload or a second wire protocol. |
 
-![5. Security model (H1–H7): Worker pod, Scoped ingress, Transport identity, H3: Authorization, AgentHost listener, v1/message:stream, v1/card, CopilotAIAgent, DB checkpoint store, Sandbox:AgentExecutionMode](../diagrams/reference-a2a-fig1.png)
+![API and worker call AgentHost through scoped transport and separate authorization gates; the worker owns checkpoints outside the pod, while A2ATurnBridgeAgent routes authorized turns.](../diagrams/reference-a2a-fig1.png)
 
-<!-- Rendered from ../diagrams/src/reference-a2a-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/reference-a2a-fig1.drawio.
+     Exported with pinned draw.io Desktop 31.4.5 (PNG, scale 2, border 16).
+     Review and iteration manifest: ../diagrams/reviews/reference-a2a-fig1/. -->
 
-### Notes on the gates
+Notes on the gates:
 
-- **H1 is the one most often misread.** The per-run turn bearer and the agent card's bearer/OAuth2 scheme are app-layer controls; they do not replace transport-layer workload-identity-bound mTLS. Both layers are required in production.
-- **H4 exists because of streaming.** A long agent turn is a long SSE stream. Without explicit limits and heartbeats, a default request timeout will sever a healthy turn.
-- **H5 is owned by Agentweaver, not A2A.** A2A provides no durable resume; the checkpoint store does. Re-injection must be idempotent so a re-driven turn does not duplicate timeline events.
+- Bearer tokens and mTLS are independent controls; label the configured deployment rather than asserting universal mTLS.
+- Listener limits and worker total/read-idle streaming deadlines are distinct.
+- Checkpoints and durable event sequencing are platform-owned, not pod persistence.
 
 ## 6. The `-preview` caveat, the rollback flag, and degraded mode
 
@@ -108,16 +111,16 @@ This section is the operational contract for running a preview dependency on the
 
 ### The caveat (stated prominently)
 
-Agentweaver runs an **A2A `-preview` library on the agent-execution hot path with no alternate wire transport.** This residual risk is **accepted**, conditioned on the H7 mitigations: exact pinning, the execution-mode flag, and GA tracking. Because of it, `in-api` mode remains the **default** until the pod-per-run path completes soak.
+`in-api` is the code fallback. Kubernetes base API and worker deployments explicitly select `pod-per-run`; production additionally enables mTLS. Configuration files do not establish live deployment or soak status.
 
 ### Rollback is a flag, not a second wire
 
 | `Sandbox:AgentExecutionMode` | Behavior |
 |---|---|
-| `in-api` *(default)* | Agent turns run **in-process** in the worker exactly as today. This is the instant, fully-tested rollback for any A2A defect or outage. |
+| `in-api` *(code fallback)* | Agent turns run **in-process** in the worker exactly as today. This is the in-process workflow execution mode and configuration rollback from remote workflow turns. |
 | `pod-per-run` | Agent turns are remoted to a sandbox pod over the A2A transport. |
 
-Switching back to `in-api` **requires no second wire transport and no redeploy of a different protocol.** It removes the A2A path entirely. There is no "A2A vs gRPC vs exec-stdio" wire choice on the agent-turn path — A2A is the **sole** transport, and the rollback is the *mode*, not a *protocol*.
+Rollback changes `Sandbox:AgentExecutionMode` to `in-api` and deploys/restarts the applicable process configuration. Execution-mode selection is registered during startup; hot switching is not established and no second turn wire protocol is introduced.
 
 ### kube-exec-stdio is the degraded-mode fallback only
 
@@ -127,19 +130,98 @@ A `kube-exec-stdio` channel exists for its own per-command purposes and remains 
 
 | Setting | Values | Meaning |
 |---|---|---|
-| `Sandbox:AgentExecutionMode` | `in-api` *(default)* / `pod-per-run` | In-process execution vs A2A-remoted pod execution. The `in-api` value is the rollback. |
+| `Sandbox:AgentExecutionMode` | in-api code fallback; pod-per-run in Kubernetes base | Startup selection, changed through deployment configuration. |
 | `Sandbox:ReleasePodOnSuspend` | `true` *(default)* / `false` | Checkpoint-and-release the pod when the graph suspends on a `RequestPort` or coordinator idle. |
-| `Sandbox:AgentHost:RequireMtls` | `true` *(default)* / `false` | `true` = mTLS/`https` (production); `false` = plain-HTTP PoC listener. Mirrored to the pod as `AgentHost:RequireMtls`. |
+| `Sandbox:AgentHost:RequireMtls` | true in code / production overlay; false in base | Configure host and API/worker client transport consistently. |
 | `Sandbox:AgentHost:Port` | `8088` *(default)* | Pod A2A listener port. |
 | `Sandbox:AgentHost:A2APath` | `/a2a/agent` *(default)* | Base A2A path; routes are `{path}/v1/message:stream` and `{path}/v1/card`. Must match the pod's `AgentHost:A2APath`. |
 | Runtime turn token | generated per run | 256-bit random bearer required on `POST …/v1/message:stream`; delivered to the claimed warm pod by `POST /configure` and stored worker-side in `IAgentHostTurnTokenRegistry`. Empty is local/test only. |
-| `AgentHost:CardBearerToken` | token / empty | Bearer required on `…/v1/card` (H3); empty disables the gate (dev/test only). |
-| `AgentHost:KeyVaultUri` | URI / empty | Names the vault for the legacy runtime-fetch fallback; under the KV-less sandbox identity (issue #471) this fails closed and the run owner's token arrives via the brokered `gitHubAccessToken` in `/configure`. |
-| `AgentHost:KvTokenMountPath` | path / empty | Local CSI-mounted token path; superseded by `AgentHost:KeyVaultUri` in AKS. |
-| `AgentHost:UseSharedTokenStore` | `true` / `false` *(default)* | Local compatibility only. Production AKS stores per-user GitHub tokens in Key Vault and does not mirror them to the shared workspace PVC. |
+| `AgentHost:CardBearerToken` | token / empty (code default) | Non-empty requires a matching bearer on `v1/card`; empty disables the card gate. |
+| `/configure.copilotCredential` | snapshot reference, access token, expiry | Live run-bound Copilot capability, delivered once. Another run or expired capability fails closed; no ambient token-store fallback. |
+| `/configure.byokProviderConfiguration` | provider configuration / null | Separate BYOK boundary; BYOK launch does not transmit a Copilot capability. |
+| `/configure.repositoryAccessToken` / `mcpBrokerToken` | optional, purpose-scoped | Separate repository/MCP authorities, not the card bearer or model credential. |
 
 ### Pod-per-run lifecycle
 
-In `pod-per-run` mode the AgentHost endpoint resolver is the chokepoint every turn passes through (via `RemoteAgentProxy.SetupAsync`). On first resolve for a run with no registered pod, it calls `IAgentHostPodLifecycle.LaunchAgentHostPodAsync(runId)`, which creates a `SandboxClaim` against the shared `agentweaver-agent-host` warm pool, waits for binding, reads the pod IP, calls `POST /configure` with the run/user/token context and `workingDirectory`, waits for `/healthz`, registers the `scheme://podIP:port{path}` endpoint, and records that run's turn bearer token. Concurrent launches for the same run are deduped. On suspend, `RunWatchLoopService` calls `ReleaseAgentHostPodAsync(runId)` when `Sandbox:ReleasePodOnSuspend=true`, which also unregisters the token. Outside a cluster the resolver is a no-op and `pod-per-run` fails fast with a clear message (set `in-api`).
+The executor waits for binding, records the claimed pod and turn token, resolves its IP, and probes `/healthz` until the listener is reachable. A warm pod reports `standby`. It then posts one-time `/configure` and awaits setup completion; a ready configured pod reports `ready`.
 
 See the [A2A bridge deep dive](../deep-dive/a2a-bridge.md) for how these settings interact with checkpointing and resume, and the [distributed-agents experience doc](../experience/a2a-distributed-agents.md) for what they change operationally.
+
+<!-- diagram-context:reference-a2a-fig1:start -->
+<details id="diagram-context-reference-a2a-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A2A: a remote turn, not a remote workflow</td></tr>
+<tr><td>subtitle</td><td>Transport and capabilities stop at the pod boundary. Checkpoints stay with orchestration.</td></tr>
+<tr><td>platform-title</td><td>PLATFORM / AKS</td></tr>
+<tr><td>platform-subtitle</td><td>API and worker are permitted AgentHost callers</td></tr>
+<tr><td>pod-title</td><td>PER-RUN AGENTHOST POD</td></tr>
+<tr><td>pod-subtitle</td><td>Kata boundary / listener :8088 / no workflow DB</td></tr>
+<tr><td>API caller</td><td>API caller</td></tr>
+<tr><td>API caller</td><td>Sandbox lifecycle and control</td></tr>
+<tr><td>Worker / remote proxy</td><td>Worker / remote proxy</td></tr>
+<tr><td>Worker / remote proxy</td><td>Owns the orchestration graph</td></tr>
+<tr><td>Worker / remote proxy</td><td>RemoteAgentProxy</td></tr>
+<tr><td>Checkpoint manager</td><td>Checkpoint manager</td></tr>
+<tr><td>Checkpoint manager</td><td>JSON workflow state / resume</td></tr>
+<tr><td>Durable platform store</td><td>Durable platform store</td></tr>
+<tr><td>Durable platform store</td><td>Checkpoints + run events</td></tr>
+<tr><td>Configure once</td><td>Configure once</td></tr>
+<tr><td>Configure once</td><td>Live Copilot capability OR BYOK</td></tr>
+<tr><td>Configure once</td><td>/healthz, then /configure</td></tr>
+<tr><td>Turn gate</td><td>Turn gate</td></tr>
+<tr><td>Turn gate</td><td>Run-scoped bearer</td></tr>
+<tr><td>Card gate</td><td>Card gate</td></tr>
+<tr><td>Card gate</td><td>Separate option</td></tr>
+<tr><td>A2ATurnBridgeAgent</td><td>A2ATurnBridgeAgent</td></tr>
+<tr><td>A2ATurnBridgeAgent</td><td>Per-turn prompt / skills / API context</td></tr>
+<tr><td>A2ATurnBridgeAgent</td><td>purpose-routing runner</td></tr>
+<tr><td>Card gate</td><td>Empty CardBearerToken: card gate disabled.</td></tr>
+<tr><td>transport-title</td><td>TRANSPORT CONTROLS</td></tr>
+<tr><td>tls</td><td>Mounted certificates; pinned CA validation. Base: mTLS off. Production overlay: on.</td></tr>
+<tr><td>policy</td><td>NetworkPolicy is not a gateway hop. API + worker: TCP/8088.</td></tr>
+<tr><td>additive</td><td>Policies are additive: preview ingress range also includes 8088.</td></tr>
+<tr><td>credential-note</td><td>Separate authorities</td></tr>
+<tr><td>credential-detail</td><td>TLS identity, card token, turn token and model capability are not interchangeable. Pod returns text / RunEvent DataParts; writable turns can return a writeback receipt.</td></tr>
+<tr><td>Configure once</td><td>health / configure</td></tr>
+<tr><td>Turn gate</td><td>turn / ordered stream</td></tr>
+<tr><td>Checkpoint manager</td><td>save / resume</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:reference-a2a-fig1:end -->
+
+<!-- diagram-context:canonical-agent-communication-a2a:start -->
+<details id="diagram-context-canonical-agent-communication-a2a" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A2A remotes a leaf turn, not the graph</td></tr>
+<tr><td>takeaway</td><td>Setup and task cross to AgentHost; assistant output and structured events return.</td></tr>
+<tr><td>Workflow graph</td><td>Workflow graph</td></tr>
+<tr><td>Workflow graph</td><td>Host owns gates/checkpoints</td></tr>
+<tr><td>Workflow graph</td><td>Five factory-created leaf types</td></tr>
+<tr><td>RemoteAgentProxy</td><td>RemoteAgentProxy</td></tr>
+<tr><td>RemoteAgentProxy</td><td>Build setup DataContent</td></tr>
+<tr><td>RemoteAgentProxy</td><td>Task TextContent in same message</td></tr>
+<tr><td>AgentHost bridge</td><td>AgentHost bridge</td></tr>
+<tr><td>AgentHost bridge</td><td>message:stream over HTTP+JSON</td></tr>
+<tr><td>AgentHost bridge</td><td>Apply per-turn context</td></tr>
+<tr><td>Caller event pipeline</td><td>Caller event pipeline</td></tr>
+<tr><td>Caller event pipeline</td><td>Decoded structured events</td></tr>
+<tr><td>Caller event pipeline</td><td>Durable state outside pod</td></tr>
+<tr><td>Proxy stream decoder</td><td>Proxy stream decoder</td></tr>
+<tr><td>Proxy stream decoder</td><td>Output + RunEventDataPart</td></tr>
+<tr><td>Proxy stream decoder</td><td>Check definitive turn end</td></tr>
+<tr><td>Leaf runtime</td><td>Leaf runtime</td></tr>
+<tr><td>Leaf runtime</td><td>Execute provider/tool loop</td></tr>
+<tr><td>Leaf runtime</td><td>Stream updates and events</td></tr>
+<tr><td>arrow-1</td><td>invoke</td></tr>
+<tr><td>arrow-2</td><td>send</td></tr>
+<tr><td>arrow-3</td><td>run</td></tr>
+<tr><td>arrow-4</td><td>stream</td></tr>
+<tr><td>arrow-5</td><td>append</td></tr>
+<tr><td>note-0</td><td>Claim/configure is a separate lifecycle, completed before this exchange.</td></tr>
+<tr><td>note-1</td><td>EOF alone is not successful completion; structured failures remain failures.</td></tr>
+<tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-agent-communication-a2a:end -->

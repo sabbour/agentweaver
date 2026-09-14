@@ -1,1 +1,22 @@
-d89cb606dbc3d21638850b48bd66aae04ce9b66f8b29e48258dd3994acacc6fd
+{
+  "version": 2,
+  "source": {
+    "file": "workflow-pm-discovery.drawio",
+    "sha256": "389089ee6f037e8e0695c03d84fd75e2062510a611b67ef86a96b630982df935"
+  },
+  "drawio": {
+    "file": "workflow-pm-discovery.drawio",
+    "sha256": "4b3ba534c7d5613e714b83f6e22f60dc1a341bd7090c10df856ed8e16e1fdac9"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "workflow-pm-discovery.png",
+    "sha256": "2a5645c37718ab0a733fda293bc8463a457675dfda7e9ccffdddb79164e4c896"
+  }
+}

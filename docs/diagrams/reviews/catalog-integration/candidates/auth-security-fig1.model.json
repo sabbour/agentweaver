@@ -1,0 +1,510 @@
+{
+  "title": "Authenticate, then authorize",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Protected request",
+      "subLabel": "Endpoint classification",
+      "meta": "No GitHubLegacy scheme",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "REQUEST",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n1",
+      "label": "Scheme selector",
+      "subLabel": "Ordered, not permissive",
+      "meta": "Entra is the default",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "ROUTING",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n2",
+      "label": "Entra handler",
+      "subLabel": "Platform caller identity",
+      "meta": "Invalid identity: reject",
+      "icon": "window",
+      "shape": "image",
+      "badge": {
+        "text": "IDENTITY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n3",
+      "label": "Scoped handlers",
+      "subLabel": "Metadata-limited alternatives",
+      "meta": "Not a fallback chain",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "SCOPED",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n4",
+      "label": "Resource authorizer",
+      "subLabel": "After authentication",
+      "meta": "Caller ≠ resource grant",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "ACCESS",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n5",
+      "label": "Protected operation",
+      "subLabel": "Authorized resource scope",
+      "meta": "Capability ≠ identity",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESULT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "classify",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "otherwise",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "eligible",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "authenticated",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "authenticated",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "authorized",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "boundary0",
+      "label": "IDENTITY BOUNDARY"
+    },
+    {
+      "id": "boundary1",
+      "label": "AUTHORIZATION BOUNDARY"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n0",
+          "label": "Protected request",
+          "subLabel": "Endpoint classification",
+          "meta": "No GitHubLegacy scheme",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "REQUEST",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 559.1142857142856,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n1",
+          "label": "Scheme selector",
+          "subLabel": "Ordered, not permissive",
+          "meta": "Entra is the default",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "ROUTING",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1057.5142857142855,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n2",
+          "label": "Entra handler",
+          "subLabel": "Platform caller identity",
+          "meta": "Invalid identity: reject",
+          "icon": "window",
+          "shape": "image",
+          "badge": {
+            "text": "IDENTITY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 506.2321428571429
+        },
+        "data": {
+          "id": "n3",
+          "label": "Scoped handlers",
+          "subLabel": "Metadata-limited alternatives",
+          "meta": "Not a fallback chain",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "SCOPED",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 559.1142857142856,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n4",
+          "label": "Resource authorizer",
+          "subLabel": "After authentication",
+          "meta": "Caller ≠ resource grant",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "ACCESS",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1057.5142857142855,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n5",
+          "label": "Protected operation",
+          "subLabel": "Authorized resource scope",
+          "meta": "Capability ≠ identity",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESULT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "group-boundary0",
+        "type": "band",
+        "position": {
+          "x": 36.428571428571416,
+          "y": 157.85714285714283
+        },
+        "style": {
+          "width": 1383.853571428571,
+          "height": 239.82142857142856
+        },
+        "data": {
+          "label": "IDENTITY BOUNDARY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.428571428571416,
+          "y": 165.85714285714283
+        },
+        "data": {
+          "label": "IDENTITY BOUNDARY",
+          "width": 1343.853571428571
+        }
+      },
+      {
+        "id": "group-boundary1",
+        "type": "band",
+        "position": {
+          "x": 36.428571428571416,
+          "y": 440.1785714285714
+        },
+        "style": {
+          "width": 1383.853571428571,
+          "height": 239.8214285714286
+        },
+        "data": {
+          "label": "AUTHORIZATION BOUNDARY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.428571428571416,
+          "y": 448.1785714285714
+        },
+        "data": {
+          "label": "AUTHORIZATION BOUNDARY",
+          "width": 1343.853571428571
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "classify",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 559.1142857142856,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 479.91428571428565,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "otherwise",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 899.1142857142856,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 1057.5142857142855,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 978.3142857142856,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n1",
+        "target": "n3",
+        "label": "eligible",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 780.1142857142856,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 780.1142857142856,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 478.0119956379498,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 478.0119956379498,
+              "y": 545.8321428571429
+            },
+            {
+              "x": 400.71428571428567,
+              "y": 545.8321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 629.0631406761177,
+            "y": 437.1428571428571
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n2",
+        "target": "n4",
+        "label": "authenticated",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1176.5142857142855,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 1176.5142857142855,
+              "y": 409.82142857142856
+            },
+            {
+              "x": 678.1142857142856,
+              "y": 409.82142857142856
+            },
+            {
+              "x": 678.1142857142856,
+              "y": 520.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 927.3142857142856,
+            "y": 409.82142857142856
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n4",
+        "label": "authenticated",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 559.1142857142856,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 479.91428571428565,
+            "y": 572.2321428571429
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n4",
+        "target": "n5",
+        "label": "authorized",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 899.1142857142856,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 1057.5142857142855,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 978.3142857142856,
+            "y": 572.2321428571429
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1456.710714285714,
+    "canvasHeight": 884.9107142857142
+  }
+}

@@ -1,0 +1,1 @@
+OK: canonical-workflow-authoring.png and editable draw.io source are in sync with canonical-workflow-authoring.drawio

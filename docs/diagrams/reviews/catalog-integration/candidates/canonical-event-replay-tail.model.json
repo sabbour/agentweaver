@@ -1,0 +1,658 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Replay-Then-Tail Synchronization",
+  "alt": "Replay-Then-Tail Synchronization: Subscriber provides last seen sequence, Create or get live channel, Read persisted events with sequence greater than cursor, Yield replayed events in order, Replay batch contained terminal?, Complete after draining batch, Tail channel, Event sequence already replayed?, Yield live event, Terminal event or channel closed?",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Subscriber provides last seen sequence",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Create or get live channel",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Read persisted events with sequence greater than cursor",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Yield replayed events in order",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Replay batch contained terminal?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Done",
+      "label": "Complete after draining batch",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Tail channel",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Event sequence already replayed?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Yield live event",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Terminal event or channel closed?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "Done",
+      "label": "yes"
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "label": "no"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "G",
+      "to": "F",
+      "label": "yes"
+    },
+    {
+      "from": "G",
+      "to": "H",
+      "label": "no"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "Done",
+      "label": "yes"
+    },
+    {
+      "from": "I",
+      "to": "F",
+      "label": "no"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "A",
+        "type": "card",
+        "position": {
+          "x": 384,
+          "y": 80
+        },
+        "data": {
+          "id": "A",
+          "label": "Subscriber provides last seen sequence",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "B",
+        "type": "card",
+        "position": {
+          "x": 384,
+          "y": 264
+        },
+        "data": {
+          "id": "B",
+          "label": "Create or get live channel",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "C",
+        "type": "card",
+        "position": {
+          "x": 384,
+          "y": 448
+        },
+        "data": {
+          "id": "C",
+          "label": "Read persisted events with sequence greater than cursor",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "D",
+        "type": "card",
+        "position": {
+          "x": 384,
+          "y": 660
+        },
+        "data": {
+          "id": "D",
+          "label": "Yield replayed events in order",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "E",
+        "type": "card",
+        "position": {
+          "x": 384,
+          "y": 844
+        },
+        "data": {
+          "id": "E",
+          "label": "Replay batch contained terminal?",
+          "icon": "branch",
+          "badge": {
+            "text": "Decision",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "Done",
+        "type": "card",
+        "position": {
+          "x": 80,
+          "y": 1146.4
+        },
+        "data": {
+          "id": "Done",
+          "label": "Complete after draining batch",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "F",
+        "type": "card",
+        "position": {
+          "x": 525.6666666666666,
+          "y": 1146.4
+        },
+        "data": {
+          "id": "F",
+          "label": "Tail channel",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "G",
+        "type": "card",
+        "position": {
+          "x": 525.6666666666666,
+          "y": 1440.8000000000002
+        },
+        "data": {
+          "id": "G",
+          "label": "Event sequence already replayed?",
+          "icon": "branch",
+          "badge": {
+            "text": "Decision",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "H",
+        "type": "card",
+        "position": {
+          "x": 468.99999999999994,
+          "y": 1735.2000000000003
+        },
+        "data": {
+          "id": "H",
+          "label": "Yield live event",
+          "icon": "box",
+          "badge": {
+            "text": "Events",
+            "tone": "teal"
+          }
+        }
+      },
+      {
+        "id": "I",
+        "type": "card",
+        "position": {
+          "x": 468.99999999999994,
+          "y": 1919.2000000000003
+        },
+        "data": {
+          "id": "I",
+          "label": "Terminal event or channel closed?",
+          "icon": "branch",
+          "badge": {
+            "text": "Decision",
+            "tone": "marigold"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "A",
+        "target": "B",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 554,
+              "y": 184
+            },
+            {
+              "x": 554,
+              "y": 264
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e1",
+        "source": "B",
+        "target": "C",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 554,
+              "y": 368
+            },
+            {
+              "x": 554,
+              "y": 448
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e2",
+        "source": "C",
+        "target": "D",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 554,
+              "y": 580
+            },
+            {
+              "x": 554,
+              "y": 660
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e3",
+        "source": "D",
+        "target": "E",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 554,
+              "y": 764
+            },
+            {
+              "x": 554,
+              "y": 844
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e4",
+        "source": "E",
+        "target": "Done",
+        "label": "yes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 497.3333333333333,
+              "y": 948
+            },
+            {
+              "x": 497.3333333333333,
+              "y": 980
+            },
+            {
+              "x": 193.33333333333326,
+              "y": 980
+            },
+            {
+              "x": 193.33333333333337,
+              "y": 1146.4
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 168.13333333333327,
+            "y": 1043.2
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "E",
+        "target": "F",
+        "label": "no",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 610.6666666666666,
+              "y": 948
+            },
+            {
+              "x": 610.6666666666666,
+              "y": 1146.4
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 632.4666666666666,
+            "y": 1043.2
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "F",
+        "target": "G",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 695.6666666666666,
+              "y": 1250.4
+            },
+            {
+              "x": 695.6666666666666,
+              "y": 1440.8000000000002
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e7",
+        "source": "G",
+        "target": "F",
+        "label": "yes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 752.3333333333333,
+              "y": 1544.8000000000002
+            },
+            {
+              "x": 752.3333333333333,
+              "y": 1576.8000000000002
+            },
+            {
+              "x": 889.6666666666666,
+              "y": 1576.8000000000002
+            },
+            {
+              "x": 889.6666666666666,
+              "y": 1114.4
+            },
+            {
+              "x": 780.6666666666666,
+              "y": 1114.4
+            },
+            {
+              "x": 780.6666666666666,
+              "y": 1146.4
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 915.8666666666667,
+            "y": 1345.6000000000001
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "G",
+        "target": "H",
+        "label": "no",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 639,
+              "y": 1544.8000000000002
+            },
+            {
+              "x": 639,
+              "y": 1735.2000000000003
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 618.1999999999999,
+            "y": 1640.0000000000002
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "H",
+        "target": "I",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 639,
+              "y": 1839.2000000000003
+            },
+            {
+              "x": 639,
+              "y": 1919.2000000000003
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e10",
+        "source": "I",
+        "target": "Done",
+        "label": "yes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 582.3333333333333,
+              "y": 2023.2000000000003
+            },
+            {
+              "x": 582.3333333333333,
+              "y": 2055.2000000000003
+            },
+            {
+              "x": 444,
+              "y": 2055.2000000000003
+            },
+            {
+              "x": 444,
+              "y": 1114.4
+            },
+            {
+              "x": 306.66666666666663,
+              "y": 1114.4
+            },
+            {
+              "x": 306.66666666666663,
+              "y": 1146.4
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 418.8,
+            "y": 1492.8000000000002
+          }
+        }
+      },
+      {
+        "id": "e11",
+        "source": "I",
+        "target": "F",
+        "label": "no",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 695.6666666666666,
+              "y": 2023.2000000000003
+            },
+            {
+              "x": 695.6666666666666,
+              "y": 2055.2000000000003
+            },
+            {
+              "x": 963.0666666666666,
+              "y": 2055.2000000000003
+            },
+            {
+              "x": 963.0666666666666,
+              "y": 1090.4
+            },
+            {
+              "x": 695.6666666666666,
+              "y": 1090.4
+            },
+            {
+              "x": 695.6666666666666,
+              "y": 1146.4
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 984.8666666666666,
+            "y": 1492.8000000000002
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1083.6666666666665,
+    "canvasHeight": 2135.2000000000003
+  }
+}

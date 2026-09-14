@@ -1,0 +1,133 @@
+{
+  "diagram": "experience-00-overview-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "experience-00-overview-fig1-pitch.drawio",
+    "png": "experience-00-overview-fig1-pitch.png",
+    "change_record": "experience-00-overview-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "experience-00-overview-fig1-pass-01.drawio",
+      "png": "experience-00-overview-fig1-pass-01.png",
+      "change_record": "experience-00-overview-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1029,
+      "result_meaningful_xml": 18967,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 18.43245869776482
+    },
+    {
+      "drawio": "experience-00-overview-fig1-pass-02.drawio",
+      "png": "experience-00-overview-fig1-pass-02.png",
+      "change_record": "experience-00-overview-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-00-overview-fig1-pass-03.drawio",
+      "png": "experience-00-overview-fig1-pass-03.png",
+      "change_record": "experience-00-overview-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-00-overview-fig1-pass-04.drawio",
+      "png": "experience-00-overview-fig1-pass-04.png",
+      "change_record": "experience-00-overview-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "inspect",
+          "evidence": "apps/web/src/App.tsx:103-125",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n4",
+          "relationship": "requests",
+          "evidence": "apps/web/src/api/sse.ts:237-246",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n4",
+          "target": "n1",
+          "relationship": "SSE events",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:481-514",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n5",
+          "relationship": "tool call",
+          "evidence": "apps/Agentweaver.Mcp/Program.cs:85-98",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n5",
+          "target": "n2",
+          "relationship": "result",
+          "evidence": "apps/Agentweaver.Mcp/Tools/RunTools.cs:229-265",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n5",
+          "target": "n4",
+          "relationship": "forward",
+          "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359-382",
+          "result": "clean"
+        },
+        {
+          "id": "e6",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "API result",
+          "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:376-382",
+          "result": "clean"
+        },
+        {
+          "id": "e7",
+          "source": "n4",
+          "target": "n3",
+          "relationship": "access",
+          "evidence": "apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:158-162",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

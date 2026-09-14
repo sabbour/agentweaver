@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 3623,
+  "result_meaningful_xml": 36825,
+  "baseline_visible_structures": 12,
+  "result_visible_structures": 132,
+  "growth_ratio": 10.164229,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-agent-communication-handoff\\fluent-pitch-remediation\\canonical-agent-communication-handoff-pitch.drawio",
+  "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-agent-communication-handoff\\fluent-pitch-remediation\\canonical-agent-communication-handoff-pass-01.drawio"
+}

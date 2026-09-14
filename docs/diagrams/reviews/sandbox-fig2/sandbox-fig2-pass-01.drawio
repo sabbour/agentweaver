@@ -1,0 +1,268 @@
+<mxfile host="Agentweaver" agent="GPT-6 Astra execution-plan authoring" version="31.4.5" type="device" compressed="false">
+  <diagram id="sandbox-fig2" name="Choose Kubernetes before local probing">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="793.7" pageHeight="559.37" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Choose Kubernetes before local probing" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=21;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="14" width="746" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="The API router owns cluster selection; the local factory can fall back to direct." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="48" width="746" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="router" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="router-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="router">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="router-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="router">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="router-title" value="API executor router" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="router">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="router-subtitle" value="Backend override / cluster detect" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="router">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="router-metadata" value="Explicit local bypasses cluster" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="router">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="router-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="router">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="router-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="router">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="cluster">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-icon" value="" style="shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="cluster">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-title" value="Kubernetes selected" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="cluster">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-subtitle" value="Initialize claim executor" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="cluster">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-metadata" value="Failure throws; no local fallback" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="cluster">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="cluster">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="cluster-badge" value="K8S" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="cluster">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="claim" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="claim">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-icon" value="" style="shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="claim">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-title" value="Claim backend" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-subtitle" value="Bound pod command contract" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-metadata" value="Not the in-pod PodExec client" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="claim">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="claim-badge" value="AW" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#d2ccf8;strokeColor=none;fontColor=#3f3682;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="claim">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="factory" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="factory">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="factory">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-title" value="Local factory" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="factory">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-subtitle" value="Only when router selects local" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="factory">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-metadata" value="Probe host-supported backends" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="factory">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="factory">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="factory-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="factory">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="windows" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="windows">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="windows">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-title" value="Windows ladder" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="windows">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-subtitle" value="processcontainer -&gt; WSL" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="windows">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-metadata" value="wsl-bwrap real; unshare not real" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="windows">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="windows">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="windows-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="windows">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="linux" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="linux">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="linux">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-title" value="Linux ladder" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="linux">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-subtitle" value="bubblewrap -&gt; LXC" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="linux">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-metadata" value="Host tools must be available" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="linux">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="linux">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="linux-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="linux">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="fallback">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="fallback">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-title" value="No usable isolation" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fallback">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-subtitle" value="Automatic local fallback" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fallback">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-metadata" value="Also explicit direct option" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fallback">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="fallback">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="fallback-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="fallback">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="direct" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="direct">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="direct">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-title" value="Direct passthrough" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="direct">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-subtitle" value="IsRealIsolation = false" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="direct">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-metadata" value="Trusted/disposable host only" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="direct">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="direct">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="direct-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="direct">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="shell" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="shell">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="shell">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-title" value="Command registration" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="shell">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-subtitle" value="ShellEnabled AND real or direct" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="shell">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-metadata" value="wsl-unshare: no controlled shell" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="shell">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="shell">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="shell-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="shell">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-1" value="select" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="router" target="cluster">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-2" value="ready" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="cluster" target="claim">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-3" value="local" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="router" target="factory">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-4" value="Windows" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="factory" target="windows">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-5" value="Linux" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="factory" target="linux">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-6" value="unavailable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="windows" target="fallback">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-7" value="unavailable" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="linux" target="fallback">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-8" value="warn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="fallback" target="direct">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-9" value="gate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="direct" target="shell">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="note-0" value="The local platform ladders are alternatives, not a Windows-to-Linux chain." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="502" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-1" value="Kubernetes failure never silently descends into the local ladder." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="517" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-2" value="Runtime emits sandbox.selected; factory choice is not an isolation guarantee." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="532" width="744" height="14" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

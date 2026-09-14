@@ -1,0 +1,785 @@
+{
+  "area": "reference",
+  "status": "blocked",
+  "model": "gpt-6-astra",
+  "plan": ".github/skills/docs-diagram-audit/reports/plan-reference.json",
+  "plan_sha256": "ab4fb81c40b7ca6b4ef898870da2ecfbecaff82bfb97f6a4c6b7c4abe9f42fde",
+  "research_agents": 3,
+  "diagrams_redesigned": 2,
+  "diagrams_merged_and_retired": 1,
+  "post_pitch_passes": 9,
+  "final_connectors_traced": 14,
+  "documents_reviewed": 23,
+  "documents_changed": 21,
+  "documents_retained_unchanged": [
+    "docs/reference/mcp-tools.md",
+    "docs/reference/token-usage.md"
+  ],
+  "concepts_complete": 73,
+  "concepts_blocked": 1,
+  "dispositions": {
+    "reuse": 24,
+    "redesign": 2,
+    "retain": 46,
+    "remove": 1,
+    "merge": 1
+  },
+  "diagrams": [
+    {
+      "name": "reference-a2a-fig1",
+      "page": "A5-landscape",
+      "png_dimensions": [
+        1638,
+        1168
+      ],
+      "edges_traced": 5,
+      "source_sha256": "253fdce5b6653c032cac2fec96851b5e354fbc7f41aa517a67f5be9754f8db9e",
+      "png_sha256": "852f255d889005a2c165a02b258fd978e280ff0fb4ddf04c2a7cc86445b77ff1",
+      "growth": 12.368921,
+      "final_pass": 4
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "page": "A5-landscape",
+      "png_dimensions": [
+        1638,
+        1168
+      ],
+      "edges_traced": 9,
+      "source_sha256": "b4a372780d3c746e7af4fcdd9663e47fde12e50562e59242467c5d8858ab6820",
+      "png_sha256": "ddcdfb2d5fe65286ce796d394f1156fa4728d371461659e30f344af44286e3e7",
+      "growth": 11.986494,
+      "final_pass": 5
+    }
+  ],
+  "concept_results": [
+    {
+      "id": "reference-a2a-message-transport",
+      "document": "docs/reference/a2a.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-agent-communication-a2a",
+      "result": "Consumer now uses stable canonical-agent-communication-a2a.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-a2a-security-boundaries",
+      "document": "docs/reference/a2a.md",
+      "disposition": "redesign",
+      "status": "complete",
+      "target": null,
+      "result": "Published editable A5 Fluent draw.io and pinned PNG; see docs/diagrams/reviews/reference-a2a-fig1/iteration-manifest.json."
+    },
+    {
+      "id": "reference-a2a-mode-and-credential-reference",
+      "document": "docs/reference/a2a.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-communication-shared-state",
+      "document": "docs/reference/agent-communication.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-agent-communication-shared",
+      "result": "Consumer now uses stable canonical-agent-communication-shared.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-communication-handoff",
+      "document": "docs/reference/agent-communication.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-agent-communication-handoff",
+      "result": "Consumer now uses stable canonical-agent-communication-handoff.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-communication-a2a",
+      "document": "docs/reference/agent-communication.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-agent-communication-a2a",
+      "result": "Consumer now uses stable canonical-agent-communication-a2a.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-agent-definition-generation",
+      "document": "docs/reference/agent-definition.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "agent-definition-fig1",
+      "result": "Consumer now uses stable agent-definition-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-agent-definition-file-tree",
+      "document": "docs/reference/agent-definition.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-ax-comparison",
+      "document": "docs/reference/agent-executor.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-ax-integration-proposal",
+      "document": "docs/reference/agent-executor.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-authority",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-stream-replay",
+      "document": "docs/reference/api.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-durable-event-stream",
+      "result": "Consumer now uses stable canonical-durable-event-stream.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-api-run-controls",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-workflow-graph-contract",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-project-casting-memory",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-automation",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-api-coordinator-lifecycle",
+      "document": "docs/reference/api.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-coordinator-journey",
+      "result": "Consumer now uses stable canonical-coordinator-journey.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-api-preview-and-sandbox",
+      "document": "docs/reference/api.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "sandbox-browser-preview-fig1",
+      "result": "Consumer now uses stable sandbox-browser-preview-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-api-assistant-and-observability",
+      "document": "docs/reference/api.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-cluster-bounded-snapshot",
+      "document": "docs/reference/cluster-diagnostics.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-cluster-topology-layers",
+      "document": "docs/reference/cluster-diagnostics.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-cluster-obsolete-resource-graph",
+      "document": "docs/reference/cluster-diagnostics.md",
+      "disposition": "remove",
+      "status": "complete",
+      "target": null,
+      "result": "Removed the obsolete resource_graph schema/example; current bounded diagnostics and topology remain textual."
+    },
+    {
+      "id": "reference-coordinator-launch-contract",
+      "document": "docs/reference/coordinator.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-coordinator-journey",
+      "result": "Consumer now uses stable canonical-coordinator-journey.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-coordinator-workflow-selection",
+      "document": "docs/reference/coordinator.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-workflow-selection",
+      "result": "Consumer now uses stable canonical-workflow-selection.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-coordinator-plan-and-child-status",
+      "document": "docs/reference/coordinator.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-coordinator-steering-and-assembly",
+      "document": "docs/reference/coordinator.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "resilient-assembly-review-fig1",
+      "result": "Consumer now uses stable resilient-assembly-review-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-events-envelope-and-taxonomy",
+      "document": "docs/reference/events.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-events-replay-and-waits",
+      "document": "docs/reference/events.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-durable-event-stream",
+      "result": "Consumer now uses stable canonical-durable-event-stream.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-events-workflow-projection",
+      "document": "docs/reference/events.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-events-coordinator-lifecycle",
+      "document": "docs/reference/events.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "resilient-assembly-review-fig1",
+      "result": "Consumer now uses stable resilient-assembly-review-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-events-casting-and-preview",
+      "document": "docs/reference/events.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-live-preview-process",
+      "document": "docs/reference/live-preview-provisioning.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "live-preview-provisioning-fig1",
+      "result": "Consumer now uses stable live-preview-provisioning-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-live-preview-retention",
+      "document": "docs/reference/live-preview-provisioning.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-live-preview-credentials-and-ui",
+      "document": "docs/reference/live-preview-provisioning.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-generated-tool-catalog",
+      "document": "docs/reference/mcp-tools.md",
+      "disposition": "retain",
+      "status": "blocked",
+      "target": null,
+      "result": "Retained generated catalog unchanged and in sync. Its preview-approval exclusion and full-parameter-reference promise originate in forbidden producer files. See execution.json blocker."
+    },
+    {
+      "id": "reference-mcp-transport-auth",
+      "document": "docs/reference/mcp.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-mcp-provider-context",
+      "document": "docs/reference/mcp.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "reference-provider-context-lifecycle",
+      "result": "Consolidated to API prose/anchor. Unassigned shared provider-context asset remains a planning placeholder; no bitmap authored or linked."
+    },
+    {
+      "id": "reference-mcp-run-control",
+      "document": "docs/reference/mcp.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-coordinator-journey",
+      "result": "Consumer now uses stable canonical-coordinator-journey.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-mcp-catalog-and-capabilities",
+      "document": "docs/reference/mcp.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-memory-layer-selection",
+      "document": "docs/reference/memory.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-memory-context",
+      "result": "Consumer now uses stable canonical-memory-context.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-memory-provenance-and-envelope",
+      "document": "docs/reference/memory.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-memory-scribe-export",
+      "document": "docs/reference/memory.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-generation-model-precedence",
+      "document": "docs/reference/project-generation-model-settings.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-generation-provider-errors",
+      "document": "docs/reference/project-generation-model-settings.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-skills-acquisition-assignment",
+      "document": "docs/reference/project-skills.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "project-skills-fig1",
+      "result": "Consumer now uses stable project-skills-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-skills-source-boundary",
+      "document": "docs/reference/project-skills.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-blueprint-signal-mapping",
+      "document": "docs/reference/repo-blueprint-suggestions.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-blueprint-selection-authority",
+      "document": "docs/reference/repo-blueprint-suggestions.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-resilient-review-loop",
+      "document": "docs/reference/resilient-assembly-review.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "resilient-assembly-review-fig1",
+      "result": "Consumer now uses stable resilient-assembly-review-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-resilient-scoping-lockout",
+      "document": "docs/reference/resilient-assembly-review.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-resilient-verdict-diagnostics",
+      "document": "docs/reference/resilient-assembly-review.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-browser-preview-routing",
+      "document": "docs/reference/sandbox-browser-preview.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "sandbox-browser-preview-fig1",
+      "result": "Consumer now uses stable sandbox-browser-preview-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-browser-preview-approval-and-expiry",
+      "document": "docs/reference/sandbox-browser-preview.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-sandbox-pod-lifecycle",
+      "document": "docs/reference/sandbox-pods.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-sandbox-capability-boundary",
+      "document": "docs/reference/sandbox-pods.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-sandbox-pod-attribution",
+      "document": "docs/reference/sandbox-pods.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-sandbox-preview-consolidation",
+      "document": "docs/reference/sandbox-pods.md",
+      "disposition": "merge",
+      "status": "complete",
+      "target": "sandbox-browser-preview-fig1",
+      "result": "Consumer now uses stable sandbox-browser-preview-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-sandbox-install-order",
+      "document": "docs/reference/sandbox-setup.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-sandbox-config-troubleshooting",
+      "document": "docs/reference/sandbox-setup.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-scaling-store-provider",
+      "document": "docs/reference/scaling-data-layer.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-scaling-lease-schema",
+      "document": "docs/reference/scaling-data-layer.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-scaling-event-store",
+      "document": "docs/reference/scaling-data-layer.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-durable-event-stream",
+      "result": "Consumer now uses stable canonical-durable-event-stream.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-scaling-deployment-topology",
+      "document": "docs/reference/scaling-data-layer.md",
+      "disposition": "redesign",
+      "status": "complete",
+      "target": null,
+      "result": "Published editable A5 Fluent draw.io and pinned PNG; see docs/diagrams/reviews/reference-scaling-data-layer-fig1/iteration-manifest.json."
+    },
+    {
+      "id": "reference-scaling-rollout-and-connectivity",
+      "document": "docs/reference/scaling-data-layer.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-token-metrics-projection",
+      "document": "docs/reference/token-usage.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-token-credit-unit",
+      "document": "docs/reference/token-usage.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-steering-signal-decision",
+      "document": "docs/reference/unified-steering.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "unified-steering-fig1",
+      "result": "Consumer now uses stable unified-steering-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-steering-budget-recovery",
+      "document": "docs/reference/unified-steering.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "resilient-assembly-review-fig1",
+      "result": "Consumer now uses stable resilient-assembly-review-fig1.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-web-navigation-auth",
+      "document": "docs/reference/web.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-web-run-journey",
+      "document": "docs/reference/web.md",
+      "disposition": "reuse",
+      "status": "complete",
+      "target": "canonical-coordinator-journey",
+      "result": "Consumer now uses stable canonical-coordinator-journey.png; no foreign target asset modified."
+    },
+    {
+      "id": "reference-web-live-graph",
+      "document": "docs/reference/web.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-web-human-actions",
+      "document": "docs/reference/web.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-web-team-memory-and-casting",
+      "document": "docs/reference/web.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    },
+    {
+      "id": "reference-web-source-tree",
+      "document": "docs/reference/web.md",
+      "disposition": "retain",
+      "status": "complete",
+      "target": null,
+      "result": "Applied within the owned document; concise reference material remains searchable prose/table/inline text."
+    }
+  ],
+  "blockers": [
+    {
+      "id": "generated-catalog-source-wording",
+      "document": "docs/reference/mcp-tools.md",
+      "facts": [
+        "coordinator_start description excludes preview from safe auto-approval, contrary to AgentPreviewGate.",
+        "Generated introduction promises a full per-tool parameter reference that the curated MCP page does not provide."
+      ],
+      "required_out_of_scope_files": [
+        "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs",
+        "scripts/gen-docs.mjs"
+      ],
+      "resolution": "Correct producer wording in a separately authorized change, then regenerate all five outputs. Hand-editing only the catalog would fail generated drift."
+    }
+  ],
+  "validation": {
+    "node_tests": {
+      "passed": 27,
+      "failed": 0,
+      "log": "node-tests.log"
+    },
+    "iteration_python_tests": {
+      "passed": 14,
+      "failed": 0,
+      "log": "python-tests.log"
+    },
+    "xml_and_manifest_schema": "passed",
+    "manifest_cross_field_checks": "passed",
+    "independent_pinned_raster_export": "byte-identical to each inspected final-pass PNG",
+    "selective_diagram_drift": "passed; diagram-drift.log",
+    "generated_docs_drift": "all five outputs in sync; generated-docs-check.log",
+    "links": {
+      "documents": 23,
+      "local_links": 190,
+      "fragments": 45,
+      "external_urls_not_network_probed": 9,
+      "failures": []
+    },
+    "docs_build": {
+      "passed": true,
+      "pages": 702,
+      "all_configured_pages_included": true,
+      "command": "VitePress build(docs) with unchanged site config/theme; output/temp/cache redirected into owned review directory",
+      "output": "docs/diagrams/reviews/reference-a2a-fig1/docs-build"
+    },
+    "owned_diff_whitespace": "passed",
+    "transient_build_and_renderer_cache_cleaned": true,
+    "bounded_report_mutation_check": "Only owned rationales and finding details changed; unassigned concept and every other field preserved.",
+    "latest_xml_semantic_check": "Both final sources pass; final-xml-validation.json"
+  },
+  "publication": {
+    "redesigned": [
+      {
+        "name": "reference-a2a-fig1",
+        "growth": 12.368921,
+        "arrows": 5,
+        "retired": [
+          "docs/diagrams/src/reference-a2a-fig1.json",
+          "docs/diagrams/drawio/generated/reference-a2a-fig1.drawio"
+        ],
+        "final_pass": 4
+      },
+      {
+        "name": "reference-scaling-data-layer-fig1",
+        "growth": 11.986494,
+        "arrows": 9,
+        "retired": [
+          "docs/diagrams/src/reference-scaling-data-layer-fig1.json",
+          "docs/diagrams/drawio/generated/reference-scaling-data-layer-fig1.drawio"
+        ],
+        "final_pass": 5
+      }
+    ],
+    "merged": {
+      "diagram": "reference-sandbox-pods-fig1",
+      "disposition": "merge",
+      "target": "sandbox-browser-preview-fig1",
+      "consumer": "docs/reference/sandbox-pods.md",
+      "replacement_png": "docs/diagrams/sandbox-browser-preview-fig1.png",
+      "replacement_source": "docs/diagrams/src/sandbox-browser-preview-fig1.drawio",
+      "consumer_updated_before_retirement": true,
+      "target_assets_modified": false,
+      "reason": "Gateway-primary shared preview model; disabled-preview API-host loopback retained in prose/table.",
+      "retired_assets": [
+        {
+          "path": "docs/diagrams/drawio/generated/reference-sandbox-pods-fig1.drawio",
+          "sha256": "c2515ff533de0e61528106b4d65fb6eea889413e788f533b1989315a885a2114"
+        },
+        {
+          "path": "docs/diagrams/reference-sandbox-pods-fig1.hash.txt",
+          "sha256": "ea1d040d390f3075279cb5e36427da2de80c3cfcc272f019f9aae3f50fda9ed4"
+        },
+        {
+          "path": "docs/diagrams/reference-sandbox-pods-fig1.png",
+          "sha256": "7bb644fcf5de27693d418b3840ed015e9b893dbf7a5a778da3c25edf97973980"
+        },
+        {
+          "path": "docs/diagrams/src/reference-sandbox-pods-fig1.json",
+          "sha256": "cca38107936d632cc1abbadd8db379ace3e82d565253670ec96b7da2f0462569"
+        }
+      ]
+    }
+  },
+  "scope": {
+    "writes": "Only plan-owned documents, exclusive assets/review subtrees, and reference report entries.",
+    "unassigned_report_concepts_unchanged": 1,
+    "plans_inventory_other_reports_pipeline_product_and_foreign_assets_modified": false,
+    "commits_created": false,
+    "concurrent_worktree": "Pre-existing and other-owner changes were preserved; this is not a global audit."
+  },
+  "document_sha256": {
+    "docs/reference/a2a.md": "9dd96084c86e4dae115c976049a8b7fcd986322540b68b991c2f8cb535d71abb",
+    "docs/reference/agent-communication.md": "56145ba3546c886837d80fcdea09369cb3af238cf33e677fa9c73012a149be02",
+    "docs/reference/agent-definition.md": "e874b0542fb8eb5b7d4ec6106355ce07b0152df58cfd81eaa419a2f7b270adcb",
+    "docs/reference/agent-executor.md": "6ebb22ca4738b3f3030455453983248403513d1c721f25e6a3bed1200ddee7b7",
+    "docs/reference/api.md": "eb7bea374cd37855229b5b6ca09ddfedb077a63d1989dc36859db36fe4799f80",
+    "docs/reference/cluster-diagnostics.md": "8ccd3607de42dc0b965853de22f3330d962d5cf609c48ad16962a598c859f90c",
+    "docs/reference/coordinator.md": "d29f6b099b81bb48e8d8611789002723589eccc6304e69fd6d91dc74e430c00c",
+    "docs/reference/events.md": "ab8f90b6dc601f22d07fb5f9763876e73714b9ad674eaa9ccc229b6cd822f0fd",
+    "docs/reference/live-preview-provisioning.md": "f3f6c186e4900fb70795f0376e31d305b8e083516021d71b090c02bd2406b13e",
+    "docs/reference/mcp-tools.md": "9df8238068dc9b9003ef1e888a66ca52f14226b0430761bba29ced0ad48ac9ab",
+    "docs/reference/mcp.md": "98c00d890af58643fe29c5a0c28f88f05f51dac8b862169ff240c10b78e986b6",
+    "docs/reference/memory.md": "5de5b887300f033e801098fe8eb56be1af426f64d7ebd87afbcdf54f468344f4",
+    "docs/reference/project-generation-model-settings.md": "4728ad2dc6b88ee28a98b6f9d547a67ecf2db828ef7bcb54535f19656449ee74",
+    "docs/reference/project-skills.md": "033182a625850d97140476b857499c8645343afd4195e191d04bf3b76637b9c3",
+    "docs/reference/repo-blueprint-suggestions.md": "2dfaab31e75a9cc78124c590711c01e29fc990616e90ed73e21a4bb507942d9f",
+    "docs/reference/resilient-assembly-review.md": "3a1769f17ce382daa91a17c793a627d90d327c5d1351028d3cf17ddfbe1a7b2d",
+    "docs/reference/sandbox-browser-preview.md": "4b82c1889277ea2b74d006b18e63e4e3366ed309b66c1b579e293590a20db32a",
+    "docs/reference/sandbox-pods.md": "a636e36d30dbb3c318e80b6efa0aaa83d92c08fbb6275c79ce6e50885ee9c257",
+    "docs/reference/sandbox-setup.md": "7091eb9d95fb2614ba3ca63cce0de53fd1158db014e120932d6f208d1c39c6f6",
+    "docs/reference/scaling-data-layer.md": "53ba58924c12307ab74bcface394dc66fa96e2d9743c9f42100f0febdd82aed0",
+    "docs/reference/token-usage.md": "ffe2688a84a58b9e61707778a5702e11598ae0742c88d9fb3a633263ef524090",
+    "docs/reference/unified-steering.md": "e63b36344d7960cf74365388b859284639ae9bd9eb3224f970dcb27c26b3012a",
+    "docs/reference/web.md": "c2b8148f99fc5293a479739e5abb4d0930fa4f90e23c18ef2f5c2770c5f5124a"
+  },
+  "validation_note": "Initial standalone link probe omitted the site's attrs.disable setting; corrected the probe, then fixed six actual owned anchors. Repository line endings were restored with normalized Markdown equality verified (line-ending-validation.json). No pipeline/config changes."
+}

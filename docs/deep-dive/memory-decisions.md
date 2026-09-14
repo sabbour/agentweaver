@@ -18,12 +18,10 @@ verified Coordinator run controls manual promotion, merge, rejection, and active
 decision mutation. That keeps team knowledge cumulative while preserving a deliberate
 write boundary around project policy.
 
-![Purpose and mental model: Run worker, Coordinator, PostRunScribeService, MCP tools and API endpoints, DecisionInbox pending, Review and merge, Decisions ledger active, AgentMemory core, learning, pattern, update, SessionContext, MemoryContextCompiler, Squad and Agentweaver context files](../diagrams/memory-decisions-fig1.png)
+![From proposals to usable context: Verified authorship and trust gates control selection; selected content remains untrusted data.](../diagrams/memory-decisions-fig1.png)
 
-<!-- Rendered from ../diagrams/src/memory-decisions-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig1.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig1/v2/iteration-manifest.json. -->
 
 Where this lives:
 
@@ -68,7 +66,7 @@ Agent loopback writes require a short-lived run capability in addition to the in
 API key. The API resolves the project and agent from that verified run and rejects a
 forged agent name.
 
-New memory starts `pending`. It can inform its named agent, but `cross-team` selection
+Memory recorded through the API starts `pending`. It can inform its named agent, but `cross-team` selection
 requires `approved`. Active architectural and scope decisions also require `approved`
 before compilation. Records that predate provenance tracking migrate as `legacy` and
 remain visible but fail closed: they are excluded from every prompt until explicitly
@@ -104,7 +102,14 @@ The ledger also creates auditability. A rejected item is still useful because it
 
 ## Data model as governance state
 
-The memory database is an EF Core-backed store separate from the operational database. It contains more than human memory, but for governance the central tables are decisions, decision inbox entries, agent memory, and session context.
+The memory store is EF Core-backed. SQLite deployments use `memory.db` alongside the
+operational database; PostgreSQL deployments include operational entities in the same
+`MemoryDbContext`. For governance, the central entities are decisions, decision inbox
+entries, agent memory, and session context.
+
+The `PROJECT` ownership edges below are conceptual project scoping, not a claim that
+every edge is an enforced cross-store foreign key. The model explicitly enforces the
+optional decision supersession and inbox-to-decision references.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -183,7 +188,9 @@ The project-wide slug constraint is intentionally stronger than "unique per agen
 
 ## The inbox to promotion model
 
-The inbox is a state machine:
+The inbox is a state machine. Its abbreviated pending self-loop below requires the
+same project, slug, case-insensitive agent name, **source kind, and source identity**;
+matching an agent label alone does not authorize an update.
 
 1. A pending entry is created or updated.
 2. A project owner, verified Coordinator backstop, or bounded post-run Scribe path
@@ -195,7 +202,7 @@ The inbox is a state machine:
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 stateDiagram-v2
     [*] --> Pending: submit inbox entry
-    Pending --> Pending: same agent + same slug\nidempotent update
+    Pending --> Pending: same agent + same slug\nmatching SourceKind + SourceIdentity
     Pending --> Merged: promote / merge
     Pending --> Rejected: reject
     Merged --> [*]
@@ -210,7 +217,10 @@ stateDiagram-v2
     end note
 ```
 
-Promotion must be transactional in spirit. The system should not create an accepted decision without marking the source inbox entry merged, and it should not mark an inbox entry merged without linking to the accepted decision. If a rebuild uses another database, keep that operation atomic.
+The merge/promote endpoints open a database transaction around promotion. The shared
+promotion helper creates an approved active decision, marks the inbox row merged, and
+persists its decision link; the caller owns the transaction. A rebuild should preserve
+that atomic relationship rather than treating the helper alone as a transaction.
 
 There are three promotion paths:
 
@@ -234,21 +244,24 @@ An inbox slug is the human-readable identity of a proposed item. Slugs are also 
 The current submission rule is:
 
 1. If no entry exists for the project and requested slug, create a pending entry with that slug.
-2. If the same agent submits the same slug again and the entry is still pending, update the existing row. This makes retries idempotent.
+2. If the same agent submits the same slug again and the entry is still pending, update the existing row **only when source kind and source identity also match**. This makes retries from the same verified author idempotent.
 3. If the same agent submits the same slug after it was merged or rejected, return a conflict. Historical entries are not silently reopened.
-4. If a different agent submits the same slug, create a new entry with a de-collided slug: `original--agent-segment`.
-5. If that candidate already exists, append a counter: `original--agent-segment--2`, then `--3`, and so on.
+4. If a different agent, or the same agent with different provenance on a pending entry, submits the same slug, allocate a de-collided slug: `original--agent-segment`.
+5. If that candidate already exists, append a counter: `original--agent-segment--2`, then `--3`, and so on. Every numbered candidate loops back through the availability check before insertion.
 
-![Slug de-collision: Submit inbox entry, Requested slug exists?, Create pending entry, Same agent?, Existing entry pending?, Update existing entry, Conflict, Build agent segment, Try requested--agent, Candidate exists?, Create new pending entry, Try requested--agent--N](../diagrams/memory-decisions-fig2.png)
+![Allocate an inbox slug safely: Update only a matching pending author; numbered candidates must be checked again.](../diagrams/memory-decisions-fig2.png)
 
-<!-- Rendered from ../diagrams/src/memory-decisions-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig2.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig2/v2/iteration-manifest.json. -->
 
 This prevents a data-loss bug: if the key were only `(project, slug)` with blind upsert semantics, the second agent to propose "use-postgres" could overwrite the first agent's unrelated proposal. If the key were only `(project, agent, slug)`, both entries could survive in the database but export to the same `.squad/decisions/inbox/use-postgres.md` path and one file would win. De-collision preserves both proposals all the way through the file mirror.
 
-Slug uniqueness is enforced in two layers. The endpoint first selects a free, de-collided slug before insert by probing `requested--agent--N` candidates until one is unused. The unique `(project, slug)` database constraint then guarantees correctness even under concurrency: if two different-agent submissions race and pick the same free candidate, one insert succeeds and the other fails the constraint. The endpoint does not retry after such a uniqueness violation, so a losing concurrent submission surfaces the conflict to the caller rather than transparently re-deriving a new slug.
+Slug uniqueness is enforced in two layers. The endpoint first selects a free,
+de-collided slug before insert by probing candidates until one is unused. The unique
+`(project, slug)` database constraint prevents duplicate rows even if two submissions
+race and pick the same candidate. The endpoint neither retries the failed insert nor
+maps that uniqueness exception to a dedicated HTTP 409 response. A losing concurrent
+insert fails; callers must not assume transparent re-allocation.
 
 ## Memory versus decisions
 
@@ -269,31 +282,59 @@ follows; cross-team memory must also be approved. Session context comes last. Al
 selected strings live inside an explicitly untrusted JSON data envelope, so trust
 controls eligibility without turning stored text into prompt instructions.
 
-![Memory versus decisions: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context](../diagrams/canonical-memory-context.png)
+The shared [context schematic](../diagrams/canonical-memory-context.png) is retained
+as a reference. The eligibility table below makes the current trust and provenance
+gates explicit rather than implying that active status or a tag alone is sufficient.
 
-<!-- Rendered from ../diagrams/src/canonical-memory-context.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Memory selection is bounded. Candidates are scored by importance, then recency, and
+selection stops at the item limit or the first candidate that would exceed the
+approximate token budget. Core context is part of that same candidate set; it is not
+guaranteed to outrank every learning. The default limits are 20 items and approximately
+4,000 tokens (four characters per token). This budget applies to selected memories,
+not to decisions or session data.
 
-Memory selection is bounded. Candidates are scored by importance, then recency, and selected until the item count or approximate token budget is reached. Core context is part of the candidate set, so rebuilds should avoid "dump every memory forever" behavior even when the database contains a long history.
+| Compiler input | Eligibility |
+| --- | --- |
+| Project boundaries | Active, approved `architectural` or `scope` decisions |
+| Agent core context | Same agent, `core_context`, non-legacy |
+| Agent learning/pattern | Same agent, high importance, non-legacy |
+| Other-agent learning/pattern | High importance, approved, whole `cross-team` tag |
+| Session focus | Most recently started open project session |
+
+These filters describe prompt selection, not every record returned by the read APIs.
 
 ## Import and export
 
 Import/export is the bridge between structured database state and human-readable workspace state.
 
-![Import and export: memory.db, .squad/decisions.md, .squad/decisions/inbox/*.md, .squad/agents/*/history.md, .squad/identity/now.md, .agentweaver/context/boundaries.md](../diagrams/memory-decisions-fig4.png)
+![One authority, asymmetric exchange: The store exports several views; only inbox Markdown imports as pending proposals.](../diagrams/memory-decisions-fig4.png)
 
-<!-- Rendered from ../diagrams/src/memory-decisions-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/memory-decisions-fig4.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/memory-decisions-fig4/v2/iteration-manifest.json. -->
 
 ### Export
 
 Export materializes database rows into files. It rewrites pending inbox markdown from current pending rows and removes stale pending markdown before writing the new set. That makes the database authoritative after synchronization.
 
-Exports happen after memory mutations and after post-run Scribe processing. They are best-effort in the endpoint helpers: failures are logged rather than making the main memory write fail. This favors durability of the database write over availability of the mirror.
+The API's ledger exporter selects active **approved** decisions, non-legacy memory
+(with approval additionally required for shared patterns), pending inbox entries, and
+the latest open session. The DTO-based file writer then produces:
+
+| Exported file | Source |
+| --- | --- |
+| `.squad/decisions.md` | Selected decisions |
+| `.squad/decisions/inbox/{slug}.md` | Pending proposals |
+| `.squad/agents/{agent}/history.md` | Selected `learning` and `update` memory |
+| `.squad/identity/now.md` | Current session, when present |
+| `.agentweaver/context/boundaries.md` | Selected `architectural` and `scope` decisions |
+| `.agentweaver/context/patterns.md` | Approved pattern memory |
+
+Decision/inbox mutations and post-run Scribe processing can refresh the mirror.
+Recording or approving agent memory does not itself perform a synchronous export;
+those rows wait for an explicit or subsequent Scribe export. Incidental
+refresh helpers log export failures rather than undoing the main database write.
+Explicit export surfaces failures instead of reporting a successful sync. None of
+the output files other than inbox proposals is an import source.
 
 ### Import
 
@@ -323,7 +364,10 @@ The important rebuild principle is **union first, overwrite only for mirrors**. 
 
 ### Duplicate or colliding slugs
 
-The dangerous case is silent overwrite. De-collision avoids it for different agents. Same-agent same-slug updates are allowed only while the entry is pending, preserving retry safety without reopening history.
+The dangerous case is silent overwrite. De-collision avoids it for different agents
+and for pending entries whose author provenance differs. Same-agent same-slug updates
+require pending status and matching source kind/identity, preserving retry safety
+without reopening history.
 
 ### Promotion half-success
 
@@ -366,8 +410,8 @@ A correct implementation should preserve these rules:
 
 - The database is authoritative; exported files are mirrors.
 - Project + inbox slug is unique.
-- Same agent + same pending slug means idempotent update.
-- Different agent + same requested slug means new de-collided entry.
+- Same agent + same pending slug + matching source kind/identity means idempotent update.
+- Different agent, or different provenance on a pending entry, means a new de-collided entry.
 - Merged and rejected inbox entries are not reopened by a retry.
 - Rejection never deletes the inbox entry.
 - Promotion creates an active decision and links the source inbox entry.
@@ -412,7 +456,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 1. Define entities for decisions, decision inbox entries, agent memory, and session context.
 2. Add project/status/agent indexes and unique constraints for project+slug and project+session id.
 3. Implement inbox submission with required-field validation.
-4. Implement slug de-collision: same-agent pending updates; different-agent collisions allocate `slug--agent`, then numbered candidates.
+4. Implement slug de-collision: same-agent pending updates require matching provenance; other pending collisions allocate `slug--agent`, then availability-checked numbered candidates.
 5. Implement inbox list filters by status, type, and agent, defaulting to pending.
 6. Implement transactional, authorized promotion from inbox entry to an approved active decision.
 7. Implement rejection as a retained status transition.
@@ -424,7 +468,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
     bounded memory, then current session, all inside an explicitly untrusted data envelope.
 13. Implement DTO-based export to `.squad/` and `.agentweaver/context/`.
 14. Implement import from `.squad/decisions/inbox/*.md` as a non-destructive union.
-15. Trigger export after memory mutations and after post-run Scribe processing.
+15. Refresh mirrors after decision/inbox mutations and post-run Scribe processing; keep agent-memory recording latency independent of filesystem export.
 16. Add a post-run Scribe path that auto-merges only low-risk entries attributable to
     the exact completed run and reports higher-risk entries for review.
 17. Add a verified Coordinator finalization backstop for its own run-scoped
@@ -446,3 +490,211 @@ To rebuild memory and decision governance from these concepts, implement the sys
 - Import that overwrites existing rows by slug can destroy review history; import should add missing pending items only.
 - A file mirror that cannot represent two entries with the same slug is why de-collision exists.
 - Backups that omit `memory.db` omit the team's governance history.
+
+<!-- diagram-context:canonical-memory-context:start -->
+<details id="diagram-context-canonical-memory-context" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Context is selected data, not instructions</td></tr>
+<tr><td>takeaway</td><td>Approved decisions, jointly ranked memories and the open session converge into untrusted JSON.</td></tr>
+<tr><td>group-title0</td><td>SCOPED INPUTS</td></tr>
+<tr><td>group-title1</td><td>SELECTION AND SERIALIZATION</td></tr>
+<tr><td>Active decisions</td><td>Active decisions</td></tr>
+<tr><td>Active decisions</td><td>Project-wide boundaries</td></tr>
+<tr><td>Active decisions</td><td>Approved architecture / scope</td></tr>
+<tr><td>Active decisions</td><td>Oldest-created first</td></tr>
+<tr><td>Active decisions</td><td>Child prompts: decisions only</td></tr>
+<tr><td>Core + learnings</td><td>Core + learnings</td></tr>
+<tr><td>Core + learnings</td><td>Agent-scoped candidates</td></tr>
+<tr><td>Core + learnings</td><td>Core: exclude legacy trust</td></tr>
+<tr><td>Core + learnings</td><td>High learning / pattern</td></tr>
+<tr><td>Core + learnings</td><td>Approved cross-team allowed</td></tr>
+<tr><td>Open session</td><td>Open session</td></tr>
+<tr><td>Open session</td><td>Latest active session</td></tr>
+<tr><td>Open session</td><td>Focus / issues / summary</td></tr>
+<tr><td>Open session</td><td>Ended sessions excluded</td></tr>
+<tr><td>Open session</td><td>Latest StartedAt wins</td></tr>
+<tr><td>Joint rank + budget</td><td>Joint rank + budget</td></tr>
+<tr><td>Joint rank + budget</td><td>One combined memory list</td></tr>
+<tr><td>Joint rank + budget</td><td>Importance, then recency</td></tr>
+<tr><td>Joint rank + budget</td><td>Stop at item / char limit</td></tr>
+<tr><td>Joint rank + budget</td><td>Approximation: 4 chars/token</td></tr>
+<tr><td>Context compiler</td><td>Context compiler</td></tr>
+<tr><td>Context compiler</td><td>Assemble scoped sections</td></tr>
+<tr><td>Context compiler</td><td>Decisions + selected memory</td></tr>
+<tr><td>Context compiler</td><td>Add current session</td></tr>
+<tr><td>Context compiler</td><td>Empty inputs → null</td></tr>
+<tr><td>Untrusted JSON</td><td>Untrusted JSON</td></tr>
+<tr><td>Untrusted JSON</td><td>Historical data, not authority</td></tr>
+<tr><td>Untrusted JSON</td><td>Explicit boundary markers</td></tr>
+<tr><td>Untrusted JSON</td><td>Ignore embedded instructions</td></tr>
+<tr><td>Untrusted JSON</td><td>untrusted-context.v1</td></tr>
+<tr><td>relation-0</td><td>1 combine / sort</td></tr>
+<tr><td>relation-1</td><td>2 approved</td></tr>
+<tr><td>relation-2</td><td>3 latest open</td></tr>
+<tr><td>relation-3</td><td>4 selected</td></tr>
+<tr><td>relation-4</td><td>5 serialize</td></tr>
+<tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. That budget bounds selected memories—not decisions or the entire context.</td></tr>
+<tr><td>assurance-0-label</td><td>Joint memory ordering</td></tr>
+<tr><td>assurance-0-fact</td><td>Importance first; recency breaks ties.</td></tr>
+<tr><td>assurance-0-source</td><td>MemoryContextCompiler.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Bounded selection</td></tr>
+<tr><td>assurance-1-fact</td><td>Item / character limits cover memory.</td></tr>
+<tr><td>assurance-2-label</td><td>Injection resistance</td></tr>
+<tr><td>assurance-2-fact</td><td>Context is wrapped as untrusted JSON.</td></tr>
+<tr><td>assurance-2-source</td><td>MemoryContextCompilerSecurityTests.cs</td></tr>
+<tr><td>n0</td><td>Approved architecture / scope; Oldest-created first</td></tr>
+<tr><td>n1</td><td>Core: exclude legacy trust; High learning / pattern</td></tr>
+<tr><td>n2</td><td>Focus / issues / summary; Ended sessions excluded</td></tr>
+<tr><td>n3</td><td>Importance, then recency; Stop at item / char limit</td></tr>
+<tr><td>n4</td><td>Decisions + selected memory; Add current session</td></tr>
+<tr><td>n5</td><td>Explicit boundary markers; Ignore embedded instructions</td></tr>
+<tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-memory-context:end -->
+
+<!-- diagram-context:memory-decisions-fig1:start -->
+<details id="diagram-context-memory-decisions-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>From proposals to usable context</td></tr>
+<tr><td>takeaway</td><td>Verified authorship and trust gates control selection; selected content remains untrusted data.</td></tr>
+<tr><td>group-title-0</td><td>AUTHORED PROPOSALS</td></tr>
+<tr><td>group-title-1</td><td>GOVERNANCE ALTERNATIVES</td></tr>
+<tr><td>group-title-2</td><td>ELIGIBILITY AND PROMPT BOUNDARY</td></tr>
+<tr><td>Resolve authorship</td><td>Resolve authorship</td></tr>
+<tr><td>Resolve authorship</td><td>Human or verified run</td></tr>
+<tr><td>Resolve authorship</td><td>exact project scope</td></tr>
+<tr><td>Pending inbox</td><td>Pending inbox</td></tr>
+<tr><td>Pending inbox</td><td>Persist source provenance</td></tr>
+<tr><td>Pending inbox</td><td>decision proposal</td></tr>
+<tr><td>Pending memory</td><td>Pending memory</td></tr>
+<tr><td>Pending memory</td><td>Validate type and importance</td></tr>
+<tr><td>Pending memory</td><td>source + pending trust</td></tr>
+<tr><td>Authorized promotion</td><td>Authorized promotion</td></tr>
+<tr><td>Authorized promotion</td><td>Owner / verified Coordinator</td></tr>
+<tr><td>Authorized promotion</td><td>transactional decision</td></tr>
+<tr><td>Authorized rejection</td><td>Authorized rejection</td></tr>
+<tr><td>Authorized rejection</td><td>Retain rejected inbox row</td></tr>
+<tr><td>Authorized rejection</td><td>history is not deletion</td></tr>
+<tr><td>Scoped Scribe path</td><td>Scoped Scribe path</td></tr>
+<tr><td>Scoped Scribe path</td><td>Only eligible low-risk entries</td></tr>
+<tr><td>Scoped Scribe path</td><td>same run + time window</td></tr>
+<tr><td>Approved boundaries</td><td>Approved boundaries</td></tr>
+<tr><td>Approved boundaries</td><td>Active architecture / scope</td></tr>
+<tr><td>Approved boundaries</td><td>approved trust required</td></tr>
+<tr><td>Memory + session</td><td>Memory + session</td></tr>
+<tr><td>Memory + session</td><td>Non-legacy; cross-team gated</td></tr>
+<tr><td>Memory + session</td><td>bounded memory selection</td></tr>
+<tr><td>Untrusted JSON</td><td>Untrusted JSON</td></tr>
+<tr><td>Untrusted JSON</td><td>Eligibility is not authority</td></tr>
+<tr><td>Untrusted JSON</td><td>data, not instructions</td></tr>
+<tr><td>e0</td><td>submit</td></tr>
+<tr><td>e1</td><td>record</td></tr>
+<tr><td>e2</td><td>approve</td></tr>
+<tr><td>e3</td><td>reject</td></tr>
+<tr><td>e4</td><td>eligible</td></tr>
+<tr><td>e6</td><td>filter</td></tr>
+<tr><td>e7</td><td>serialize</td></tr>
+<tr><td>groups</td><td>AUTHORED PROPOSALS; GOVERNANCE ALTERNATIVES; ELIGIBILITY AND PROMPT BOUNDARY</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:memory-decisions-fig1:end -->
+
+<!-- diagram-context:memory-decisions-fig2:start -->
+<details id="diagram-context-memory-decisions-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Allocate an inbox slug safely</td></tr>
+<tr><td>takeaway</td><td>Update only a matching pending author; numbered candidates must be checked again.</td></tr>
+<tr><td>group-title-0</td><td>REQUESTED IDENTITY</td></tr>
+<tr><td>group-title-1</td><td>UPDATE OR ALLOCATE</td></tr>
+<tr><td>group-title-2</td><td>AVAILABILITY LOOP AND INSERT</td></tr>
+<tr><td>Verified submission</td><td>Verified submission</td></tr>
+<tr><td>Verified submission</td><td>Project + requested slug</td></tr>
+<tr><td>Verified submission</td><td>authorized author</td></tr>
+<tr><td>Requested slug exists?</td><td>Requested slug exists?</td></tr>
+<tr><td>Requested slug exists?</td><td>Look up within project</td></tr>
+<tr><td>Requested slug exists?</td><td>project / slug</td></tr>
+<tr><td>Same-agent terminal?</td><td>Same-agent terminal?</td></tr>
+<tr><td>Same-agent terminal?</td><td>Merged or rejected replay</td></tr>
+<tr><td>Same-agent terminal?</td><td>explicit conflict</td></tr>
+<tr><td>Pending match?</td><td>Pending match?</td></tr>
+<tr><td>Pending match?</td><td>Same agent, kind, identity</td></tr>
+<tr><td>Pending match?</td><td>SourceKind + identity</td></tr>
+<tr><td>Update existing</td><td>Update existing</td></tr>
+<tr><td>Update existing</td><td>Preserve proposal identity</td></tr>
+<tr><td>Update existing</td><td>idempotent pending edit</td></tr>
+<tr><td>Allocate candidate</td><td>Allocate candidate</td></tr>
+<tr><td>Allocate candidate</td><td>Slug plus agent segment</td></tr>
+<tr><td>Allocate candidate</td><td>slug--agent</td></tr>
+<tr><td>Candidate available?</td><td>Candidate available?</td></tr>
+<tr><td>Candidate available?</td><td>Check every numbered slug</td></tr>
+<tr><td>Candidate available?</td><td>repeat the lookup</td></tr>
+<tr><td>Increment suffix</td><td>Increment suffix</td></tr>
+<tr><td>Increment suffix</td><td>Try the next candidate</td></tr>
+<tr><td>Increment suffix</td><td>--2, --3, ...</td></tr>
+<tr><td>Insert pending</td><td>Insert pending</td></tr>
+<tr><td>Insert pending</td><td>Unique project/slug backstop</td></tr>
+<tr><td>Insert pending</td><td>racing insert may fail</td></tr>
+<tr><td>e0</td><td>lookup</td></tr>
+<tr><td>e1</td><td>absent</td></tr>
+<tr><td>e2</td><td>exists</td></tr>
+<tr><td>e3</td><td>pending</td></tr>
+<tr><td>e4</td><td>match</td></tr>
+<tr><td>e5</td><td>different</td></tr>
+<tr><td>e6</td><td>other</td></tr>
+<tr><td>e7</td><td>test</td></tr>
+<tr><td>e8</td><td>occupied</td></tr>
+<tr><td>e9</td><td>recheck</td></tr>
+<tr><td>e10</td><td>free</td></tr>
+<tr><td>groups</td><td>REQUESTED IDENTITY; UPDATE OR ALLOCATE; AVAILABILITY LOOP AND INSERT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:memory-decisions-fig2:end -->
+
+<!-- diagram-context:memory-decisions-fig4:start -->
+<details id="diagram-context-memory-decisions-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One authority, asymmetric exchange</td></tr>
+<tr><td>takeaway</td><td>The store exports several views; only inbox Markdown imports as pending proposals.</td></tr>
+<tr><td>group-title-0</td><td>AUTHORITATIVE STORE AND POLICY VIEWS</td></tr>
+<tr><td>group-title-1</td><td>OPERATIONAL FILE VIEWS</td></tr>
+<tr><td>group-title-2</td><td>PATTERNS AND THE NARROW IMPORT PATH</td></tr>
+<tr><td>Memory store</td><td>Memory store</td></tr>
+<tr><td>Memory store</td><td>Provider-neutral authority</td></tr>
+<tr><td>Memory store</td><td>SQLite: memory.db</td></tr>
+<tr><td>Approved decisions</td><td>Approved decisions</td></tr>
+<tr><td>Approved decisions</td><td>Active decisions only</td></tr>
+<tr><td>Approved decisions</td><td>decisions.md</td></tr>
+<tr><td>Approved boundaries</td><td>Approved boundaries</td></tr>
+<tr><td>Approved boundaries</td><td>Architecture / scope only</td></tr>
+<tr><td>Approved boundaries</td><td>boundaries.md</td></tr>
+<tr><td>Pending inbox files</td><td>Pending inbox files</td></tr>
+<tr><td>Pending inbox files</td><td>Rewrite current pending set</td></tr>
+<tr><td>Pending inbox files</td><td>decisions/inbox/*.md</td></tr>
+<tr><td>Agent history</td><td>Agent history</td></tr>
+<tr><td>Agent history</td><td>Eligible learning / updates</td></tr>
+<tr><td>Agent history</td><td>agent history.md</td></tr>
+<tr><td>Current session</td><td>Current session</td></tr>
+<tr><td>Current session</td><td>Latest open session only</td></tr>
+<tr><td>Current session</td><td>identity/now.md</td></tr>
+<tr><td>Approved patterns</td><td>Approved patterns</td></tr>
+<tr><td>Approved patterns</td><td>Pattern memories only</td></tr>
+<tr><td>Approved patterns</td><td>patterns.md</td></tr>
+<tr><td>Inbox parser</td><td>Inbox parser</td></tr>
+<tr><td>Inbox parser</td><td>Parse; skip malformed files</td></tr>
+<tr><td>Inbox parser</td><td>not a general file sync</td></tr>
+<tr><td>Missing-slug proposal</td><td>Missing-slug proposal</td></tr>
+<tr><td>Missing-slug proposal</td><td>Existing slugs stay intact</td></tr>
+<tr><td>Missing-slug proposal</td><td>pending, not approved</td></tr>
+<tr><td>e0</td><td>export</td></tr>
+<tr><td>e6</td><td>inbox</td></tr>
+<tr><td>e7</td><td>missing</td></tr>
+<tr><td>e8</td><td>persist</td></tr>
+<tr><td>groups</td><td>AUTHORITATIVE STORE AND POLICY VIEWS; OPERATIONAL FILE VIEWS; PATTERNS AND THE NARROW IMPORT PATH</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:memory-decisions-fig4:end -->

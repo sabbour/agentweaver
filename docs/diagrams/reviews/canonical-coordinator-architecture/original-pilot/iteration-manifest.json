@@ -1,0 +1,141 @@
+{
+  "diagram": "canonical-coordinator-architecture",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-coordinator-architecture-pitch.drawio",
+    "png": "canonical-coordinator-architecture-pitch.png",
+    "change_record": "canonical-coordinator-architecture-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-coordinator-architecture-pass-01.drawio",
+      "png": "canonical-coordinator-architecture-pass-01.png",
+      "change_record": "canonical-coordinator-architecture-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 2,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 3162,
+      "result_meaningful_xml": 28462,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 9.001265
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "canonical-coordinator-architecture-pass-02.drawio",
+      "png": "canonical-coordinator-architecture-pass-02.png",
+      "change_record": "canonical-coordinator-architecture-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "canonical-coordinator-architecture-pass-03.drawio",
+      "png": "canonical-coordinator-architecture-pass-03.png",
+      "change_record": "canonical-coordinator-architecture-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "canonical-coordinator-architecture-pass-04.drawio",
+      "png": "canonical-coordinator-architecture-pass-04.png",
+      "change_record": "canonical-coordinator-architecture-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e-start",
+          "source": "entry",
+          "target": "coordinator",
+          "relationship": "start parent run",
+          "evidence": "apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:1473-1494; Coordinator/CoordinatorPickupService.cs:186-246",
+          "result": "clean"
+        },
+        {
+          "id": "e-handoff",
+          "source": "coordinator",
+          "target": "dispatch",
+          "relationship": "hand off persisted WorkPlan",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:1172-1188,1241-1248",
+          "result": "clean"
+        },
+        {
+          "id": "e-launch",
+          "source": "dispatch",
+          "target": "children",
+          "relationship": "launch dependency-ready child work",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:384-427,870-906",
+          "result": "clean"
+        },
+        {
+          "id": "e-output",
+          "source": "children",
+          "target": "assembly",
+          "relationship": "usable outputs via dispatch",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:791-816; Coordinator/CoordinatorDispatchService.cs:977-989",
+          "result": "clean"
+        },
+        {
+          "id": "e-plan-state",
+          "source": "coordinator",
+          "target": "state",
+          "relationship": "persist spec and plan",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:103-116; Coordinator/CoordinatorOrchestratorExecutor.cs:1860-1911",
+          "result": "clean"
+        },
+        {
+          "id": "e-review-state",
+          "source": "assembly",
+          "target": "state",
+          "relationship": "record aggregate review",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1195-1248",
+          "result": "clean"
+        },
+        {
+          "id": "e-dispatch-state",
+          "source": "dispatch",
+          "target": "state",
+          "relationship": "persist execution status",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:977-989",
+          "result": "clean"
+        },
+        {
+          "id": "e-state-recovery",
+          "source": "state",
+          "target": "dispatch",
+          "relationship": "recover persisted plan",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:117-133; Coordinator/CoordinatorDispatchService.cs:615-651",
+          "result": "clean"
+        },
+        {
+          "id": "e-revision",
+          "source": "assembly",
+          "target": "coordinator",
+          "relationship": "review feedback enters steering",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2320-2368",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

@@ -1,0 +1,216 @@
+{
+  "title": "The board is a projection",
+  "subtitle": "Columns reflect persisted task and run state—not a separate workflow engine.",
+  "identity": "LIFECYCLE / STATE PROJECTION",
+  "disposition": "redesign",
+  "evidence": "board",
+  "groups": [
+    "Before and during execution",
+    "Review and terminal outcomes"
+  ],
+  "nodes": [
+    {
+      "id": "backlog",
+      "title": "Backlog",
+      "sub": "Captured task; not queued",
+      "meta": "task: backlog",
+      "pill": "CAPTURE",
+      "tone": "neutral",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "No run is required yet",
+        "Move to Ready to queue work"
+      ]
+    },
+    {
+      "id": "ready",
+      "title": "Ready",
+      "sub": "Queued task",
+      "meta": "task: ready",
+      "pill": "QUEUE",
+      "tone": "teal",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Unresolved dependencies stay here",
+        "Blocked is a flag, not a column"
+      ]
+    },
+    {
+      "id": "progress",
+      "title": "Active",
+      "sub": "Work is in progress",
+      "meta": "default non-review bucket",
+      "pill": "EXECUTE",
+      "tone": "green",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Claimed tasks link to their run",
+        "Pending approval is a separate flag"
+      ]
+    },
+    {
+      "id": "failed",
+      "title": "Problems",
+      "sub": "Failed / declined / merge failed",
+      "meta": "or assembly blocked / failed",
+      "pill": "ATTENTION",
+      "tone": "marigold",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Blocked assembly is recoverable",
+        "Not every problem is terminal"
+      ]
+    },
+    {
+      "id": "review",
+      "title": "Human Review",
+      "sub": "AwaitingReview / InReview",
+      "meta": "or assembly stage: Review",
+      "pill": "GATE",
+      "tone": "lavender",
+      "shape": "rhombus",
+      "facts": [
+        "Approval resumes the workflow",
+        "Approval alone is not Done"
+      ]
+    },
+    {
+      "id": "done",
+      "title": "Done",
+      "sub": "Completed / Merged / AssembleReady",
+      "meta": "or plan Complete / stage Done",
+      "pill": "RESULT",
+      "tone": "green",
+      "shape": "mxgraph.flowchart.terminator",
+      "facts": [
+        "Persisted-state mapping",
+        "Not merely a clicked approval"
+      ]
+    }
+  ],
+  "edges": [
+    [
+      "backlog",
+      "ready",
+      "queue"
+    ],
+    [
+      "ready",
+      "progress",
+      "claim + start"
+    ],
+    [
+      "progress",
+      "review",
+      "await review"
+    ],
+    [
+      "review",
+      "done",
+      "finish"
+    ],
+    [
+      "progress",
+      "failed",
+      "problem"
+    ]
+  ],
+  "notes": [
+    "DEFAULT BUCKETS · NOT A NEW STATE MACHINE",
+    "Configured workflow stages may replace the default run columns. Arrows summarize typical changes, not every path.",
+    "The board polls persisted state. Ready tasks with unmet dependencies stay Ready; blocked is a flag."
+  ],
+  "grounding": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+  "nodes_or_participants": [
+    {
+      "id": "backlog",
+      "title": "Backlog",
+      "sub": "Captured task; not queued",
+      "meta": "task: backlog",
+      "pill": "CAPTURE",
+      "tone": "neutral",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "No run is required yet",
+        "Move to Ready to queue work"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    },
+    {
+      "id": "ready",
+      "title": "Ready",
+      "sub": "Queued task",
+      "meta": "task: ready",
+      "pill": "QUEUE",
+      "tone": "teal",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Unresolved dependencies stay here",
+        "Blocked is a flag, not a column"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    },
+    {
+      "id": "progress",
+      "title": "Active",
+      "sub": "Work is in progress",
+      "meta": "default non-review bucket",
+      "pill": "EXECUTE",
+      "tone": "green",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Claimed tasks link to their run",
+        "Pending approval is a separate flag"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    },
+    {
+      "id": "failed",
+      "title": "Problems",
+      "sub": "Failed / declined / merge failed",
+      "meta": "or assembly blocked / failed",
+      "pill": "ATTENTION",
+      "tone": "marigold",
+      "shape": "mxgraph.flowchart.process",
+      "facts": [
+        "Blocked assembly is recoverable",
+        "Not every problem is terminal"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    },
+    {
+      "id": "review",
+      "title": "Human Review",
+      "sub": "AwaitingReview / InReview",
+      "meta": "or assembly stage: Review",
+      "pill": "GATE",
+      "tone": "lavender",
+      "shape": "rhombus",
+      "facts": [
+        "Approval resumes the workflow",
+        "Approval alone is not Done"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    },
+    {
+      "id": "done",
+      "title": "Done",
+      "sub": "Completed / Merged / AssembleReady",
+      "meta": "or plan Complete / stage Done",
+      "pill": "RESULT",
+      "tone": "green",
+      "shape": "mxgraph.flowchart.terminator",
+      "facts": [
+        "Persisted-state mapping",
+        "Not merely a clicked approval"
+      ],
+      "classification": "native:flowchart",
+      "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44"
+    }
+  ]
+}

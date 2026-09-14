@@ -8,14 +8,14 @@ Agentweaver originally permitted no shell execution. The governance policy categ
 
 This feature adds sandboxed shell execution by adopting Microsoft's `mxc` sandboxing engine. The key constraint is that `mxc` is an early preview and its own documentation says its profiles are not yet hardened security boundaries. It is therefore adopted as a **defense-in-depth layer only** — it augments the existing in-process path containment and deny-by-default governance, and never replaces them.
 
-The general principle: the system confirms real isolation is available before permitting any shell command. When confirmation fails, shell remains denied — unless the operator explicitly opts into unsandboxed `direct` execution (`direct: true` in `.agentweaver/settings.yml`), which relies on deployment-level isolation instead. No command runs unsandboxed by default.
+Live `run_command` registration requires `ShellEnabled` and either real isolation or `direct`. The local factory may fall back to direct automatically, not only through explicit opt-in. Direct is not isolation and requires a trusted/disposable surrounding environment. Native shell stays denied.
 
 Once a backend is selected (see the [sandbox deep dive](./sandbox.md)), a `run_command` invocation flows through the triple-layer governance gate, into the chosen executor, and back out as redacted output events:
 
 ![Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …](../diagrams/canonical-sandbox-boundary.png)
 
-<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/canonical-sandbox-boundary.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -31,12 +31,12 @@ Executor selection happens at startup via `SandboxExecutorFactory.Create`. The f
 | 4 | `lxc-native-linux` | Linux + `lxc-exec` found at `/usr/local/bin/lxc-exec` or `/usr/bin/lxc-exec` (only when bwrap is unavailable) |
 | 5 | `direct` | Fallback when no isolation backend is available, **or** selected explicitly via `direct: true` in `.agentweaver/settings.yml` |
 
-When the API runs **inside a Kubernetes cluster** (`KUBERNETES_SERVICE_HOST` is set), the `SandboxExecutorRouter` overrides the factory result with the `kubernetes-sandbox-claim` backend (`KubernetesSandboxExecutor`), which runs commands in a per-run Kata VM pod claimed from a warm pool. See [aks-deployment.md](../aks-deployment.md#sandbox-setup).
+The API router first chooses Kubernetes versus local from `Sandbox:Backend` and cluster detection. Explicit `local` bypasses cluster selection; selected Kubernetes initialization fails closed. Only then does the local path invoke the factory. See the [host selector](../diagrams/sandbox-fig2.png).
 
 The selected executor is injected into the per-run governance context and GitHub
 Copilot SDK runner. Its key properties are:
 
-- **`IsRealIsolation`** — `true` for `processcontainer`, `wsl-bwrap`, `linux-bwrap`, `lxc-native-linux`, and `kubernetes-sandbox-claim`; `false` for `wsl-unshare` and the `direct` fallback. Shell execution requires this to be `true`, **except** for the `direct` backend, which is an explicit opt-out (see [Layer C](#layer-c-executor-gate)).
+- **`IsRealIsolation`** — `true` for `processcontainer`, `wsl-bwrap`, `linux-bwrap`, `lxc-native-linux`, and `kubernetes-sandbox-claim`; `false` for `wsl-unshare` and the `direct` fallback. Shell execution requires this to be `true`, **except** for the `direct` backend, which can be an explicit choice or automatic fallback (see [Layer C](#layer-c-executor-gate)).
 - **`HasNetworkWarning`** — `true` for the Windows `processcontainer` and `wsl-unshare` tiers, whose backends cannot enforce a network allowlist. When set, the runner emits a `sandbox.warning` event (see [Limitations](#limitations)).
 
 The executor selection decision, backend name, and probe reason are emitted as a `sandbox.selected` event when a run starts.
@@ -57,14 +57,11 @@ take longer while the Kata agent relays the signal.
 
 ## Tool architecture
 
-The GitHub Copilot SDK runner registers custom `AIFunction` tools from
-`SandboxToolRegistry.Build`. The registry has ten unconditional tools and adds
-`run_command` when the policy permits it. AgentHost contributes five preview
-lifecycle tools, for 15 or 16 available tools.
+This table is the canonical tool catalog, not a fixed live count. The runner selects intent/outcome, optional question and controlled-command tools; native file tools avoid duplicate custom exposure. AgentHost adds purpose-appropriate preview tools.
 
 | Tool | Purpose | Conditional |
 | --- | --- | --- |
-| `run_command` | Run a shell command in the sandbox | Yes — only when `IsRealIsolation && ShellEnabled` |
+| `run_command` | Run a shell command in the sandbox | `ShellEnabled && (IsRealIsolation || BackendName == "direct")` |
 | `read_file` | Read a file inside the sandbox root | No |
 | `grep_search` | Search file contents with a regex | No |
 | `file_search` | Find files by name pattern | No |
@@ -154,7 +151,7 @@ Only for `run_command`, after both A and B allow. `SandboxGovernance.EvaluateToo
 1. `executor.IsRealIsolation` — must be `true`.
 2. `policy.ShellEnabled` — must be `true`.
 
-If either check fails, the call is denied before any process is spawned. The one exception is the `direct` backend (`PassthroughExecutor`, selected by `direct: true` in `.agentweaver/settings.yml`): it bypasses both checks because the operator has explicitly opted out of in-process isolation and is relying on deployment-level isolation instead.
+These governance checks deny execution except for direct, which bypasses them. Direct can be explicit or an automatic local fallback. Live registration still requires `ShellEnabled`, including direct; approval cannot override policy denial.
 
 Any exception in any layer produces a deny result (fail-closed).
 
@@ -173,11 +170,11 @@ Before a `run_command` invocation reaches the executor, the runner checks `Sandb
 - **Not yet approved** — the runner emits a `shell.approval_required` event and returns a message to the model with the approval endpoint (`POST /api/runs/{id}/shell-approvals`) and the `command_hash` to submit. The model retries the same command on the next turn; because the hash is deterministic, it will find the approval.
 - **Already approved** — the runner logs the approval and falls through to execution immediately without re-emitting the event.
 
-Approvals are scoped to the run. The `IShellApprovalStore` (`InMemoryShellApprovalStore`) holds all approvals for live runs in memory, keyed by `(runId, commandHash)`. The store is cleared when the run completes (normally or on error).
+Approvals are scoped by `(runId, commandHash)`. Local runtime defaults may use an in-memory store; API-hosted runs register durable approval implementations. Not every live approval is process-local or universally cleared at completion.
 
 ## Deployment parity
 
-The same `SandboxExecutorFactory` runs on all targets. Each target gets real isolation through a different tier:
+The API router chooses Kubernetes or local first. Local tiers differ; `wsl-unshare` and direct do not report real isolation:
 
 | Target | Executor backend | Notes |
 | --- | --- | --- |
@@ -269,7 +266,7 @@ Only when bubblewrap is unavailable does the factory fall back to `LinuxNativeMx
 1. `/usr/local/bin/lxc-exec`
 2. `/usr/bin/lxc-exec`
 
-PATH is never consulted for `lxc-exec`. If neither bwrap nor an `lxc-exec` backend is available, the factory falls through to the `direct` (passthrough) executor and shell is denied unless `direct: true` is set in `.agentweaver/settings.yml`.
+PATH is never consulted for `lxc-exec`. If neither isolation backend exists, the factory automatically falls back to direct. Live registration still requires `ShellEnabled`; explicit `direct: true` is not required for fallback.
 
 ## Limitations
 
@@ -294,3 +291,116 @@ SDK v0.1.1 dev-artifacts builds append the executor binary path as a trailing li
 | ID | Description | Status |
 | --- | --- | --- |
 | T012 | Binary bundling. The spec (FR-034) calls for bundling `wxc-exec.exe` per-arch under `bin/<arch>` for zero-configuration discovery. This is blocked pending redistribution license review for the mxc binaries. Until resolved, operators must set `MXC_BIN_DIR` manually. | Open |
+
+<!-- diagram-context:canonical-sandbox-boundary:start -->
+<details id="diagram-context-canonical-sandbox-boundary" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Several checks contain each action</td></tr>
+<tr><td>takeaway</td><td>Native shell is denied; governed tools combine AGT policy, direct containment and execution isolation.</td></tr>
+<tr><td>group-title0</td><td>TOOL SELECTION / POLICY</td></tr>
+<tr><td>group-title1</td><td>POINT-OF-USE CONTAINMENT</td></tr>
+<tr><td>Model tool request</td><td>Model tool request</td></tr>
+<tr><td>Model tool request</td><td>Permission dispatch</td></tr>
+<tr><td>Model tool request</td><td>Native shell: always denied</td></tr>
+<tr><td>Model tool request</td><td>URL approvals handled apart</td></tr>
+<tr><td>Model tool request</td><td>Custom reporting bypass</td></tr>
+<tr><td>Governance</td><td>Governance</td></tr>
+<tr><td>Governance</td><td>Deny-by-default policy</td></tr>
+<tr><td>Governance</td><td>AGT policy must allow</td></tr>
+<tr><td>Governance</td><td>Direct backend must allow</td></tr>
+<tr><td>Governance</td><td>Both checks, not either</td></tr>
+<tr><td>Registered tools</td><td>Registered tools</td></tr>
+<tr><td>Registered tools</td><td>Explicit capability surface</td></tr>
+<tr><td>Registered tools</td><td>Files revalidate at use</td></tr>
+<tr><td>Registered tools</td><td>run_command gates shell</td></tr>
+<tr><td>Registered tools</td><td>Unknown tools denied</td></tr>
+<tr><td>Workspace boundary</td><td>Workspace boundary</td></tr>
+<tr><td>Workspace boundary</td><td>Sandbox filesystem</td></tr>
+<tr><td>Workspace boundary</td><td>Lexical + real-path checks</td></tr>
+<tr><td>Workspace boundary</td><td>Reject symlink escapes</td></tr>
+<tr><td>Workspace boundary</td><td>Bounded / redacted output</td></tr>
+<tr><td>Execution boundary</td><td>Execution boundary</td></tr>
+<tr><td>Execution boundary</td><td>Selected isolation backend</td></tr>
+<tr><td>Execution boundary</td><td>Shell policy + approval</td></tr>
+<tr><td>Execution boundary</td><td>Kata pod in AKS</td></tr>
+<tr><td>Execution boundary</td><td>Direct mode is opt-in</td></tr>
+<tr><td>Credential handling</td><td>Credential handling</td></tr>
+<tr><td>Credential handling</td><td>Current implementation</td></tr>
+<tr><td>Credential handling</td><td>Host + tool options hold token</td></tr>
+<tr><td>Credential handling</td><td>Direct git status / allowed gh</td></tr>
+<tr><td>Credential handling</td><td>No blanket shell injection</td></tr>
+<tr><td>relation-0</td><td>1 governed calls</td></tr>
+<tr><td>relation-1</td><td>2 both allow</td></tr>
+<tr><td>relation-2</td><td>3 file operation</td></tr>
+<tr><td>relation-3</td><td>4 run_command</td></tr>
+<tr><td>relation-4</td><td>5 eligible git / gh</td></tr>
+<tr><td>assurance</td><td>Current code delivers repository credentials into Host/tool options; the normative no-credential contract is NOT met.</td></tr>
+<tr><td>assurance-0-label</td><td>Dispatch exceptions</td></tr>
+<tr><td>assurance-0-fact</td><td>Native shell denied; URL path separate.</td></tr>
+<tr><td>assurance-0-source</td><td>CopilotAIAgent.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Execution isolation</td></tr>
+<tr><td>assurance-1-fact</td><td>Sidecar: separate PID namespace.</td></tr>
+<tr><td>assurance-1-source</td><td>sandbox-template-agenthost.yaml</td></tr>
+<tr><td>assurance-2-label</td><td>Credential reality</td></tr>
+<tr><td>assurance-2-fact</td><td>No blanket shell credential inheritance.</td></tr>
+<tr><td>assurance-2-source</td><td>RunCommandTool.cs</td></tr>
+<tr><td>n0</td><td>Native shell: always denied; URL approvals handled apart</td></tr>
+<tr><td>n1</td><td>AGT policy must allow; Direct backend must allow</td></tr>
+<tr><td>n2</td><td>Files revalidate at use; run_command gates shell</td></tr>
+<tr><td>n3</td><td>Lexical + real-path checks; Reject symlink escapes</td></tr>
+<tr><td>n4</td><td>Shell policy + approval; Kata pod in AKS</td></tr>
+<tr><td>n5</td><td>Host + tool options hold token; Direct git status / allowed gh</td></tr>
+<tr><td>groups</td><td>TOOL SELECTION / POLICY; POINT-OF-USE CONTAINMENT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-sandbox-boundary:end -->
+
+<!-- diagram-context:sandbox-fig2:start -->
+<details id="diagram-context-sandbox-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Choose Kubernetes before local probing</td></tr>
+<tr><td>takeaway</td><td>The API router owns cluster selection; the local factory can fall back to direct.</td></tr>
+<tr><td>API executor router</td><td>API executor router</td></tr>
+<tr><td>API executor router</td><td>Backend override / cluster detect</td></tr>
+<tr><td>API executor router</td><td>Explicit local bypasses cluster</td></tr>
+<tr><td>Kubernetes selected</td><td>Kubernetes selected</td></tr>
+<tr><td>Kubernetes selected</td><td>Initialize claim executor</td></tr>
+<tr><td>Kubernetes selected</td><td>Failure throws; no local fallback</td></tr>
+<tr><td>Claim backend</td><td>Claim backend</td></tr>
+<tr><td>Claim backend</td><td>Bound pod command contract</td></tr>
+<tr><td>Claim backend</td><td>Not the in-pod PodExec client</td></tr>
+<tr><td>Local factory</td><td>Local factory</td></tr>
+<tr><td>Local factory</td><td>Only when router selects local</td></tr>
+<tr><td>Local factory</td><td>Probe host-supported backends</td></tr>
+<tr><td>Windows ladder</td><td>Windows ladder</td></tr>
+<tr><td>Windows ladder</td><td>processcontainer -&gt; WSL</td></tr>
+<tr><td>Windows ladder</td><td>wsl-bwrap real; unshare not real</td></tr>
+<tr><td>Linux ladder</td><td>Linux ladder</td></tr>
+<tr><td>Linux ladder</td><td>bubblewrap -&gt; LXC</td></tr>
+<tr><td>Linux ladder</td><td>Host tools must be available</td></tr>
+<tr><td>No usable isolation</td><td>No usable isolation</td></tr>
+<tr><td>No usable isolation</td><td>Automatic local fallback</td></tr>
+<tr><td>No usable isolation</td><td>Also explicit direct option</td></tr>
+<tr><td>Direct passthrough</td><td>Direct passthrough</td></tr>
+<tr><td>Direct passthrough</td><td>IsRealIsolation = false</td></tr>
+<tr><td>Direct passthrough</td><td>Trusted/disposable host only</td></tr>
+<tr><td>Command registration</td><td>Command registration</td></tr>
+<tr><td>Command registration</td><td>ShellEnabled AND real or direct</td></tr>
+<tr><td>Command registration</td><td>wsl-unshare: no controlled shell</td></tr>
+<tr><td>arrow-1</td><td>select</td></tr>
+<tr><td>arrow-2</td><td>ready</td></tr>
+<tr><td>arrow-3</td><td>local</td></tr>
+<tr><td>arrow-4</td><td>Windows</td></tr>
+<tr><td>arrow-5</td><td>Linux</td></tr>
+<tr><td>arrow-6</td><td>unavailable</td></tr>
+<tr><td>arrow-8</td><td>warn</td></tr>
+<tr><td>arrow-9</td><td>gate</td></tr>
+<tr><td>note-0</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.</td></tr>
+<tr><td>note-1</td><td>Kubernetes failure never silently descends into the local ladder.</td></tr>
+<tr><td>note-2</td><td>Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
+<tr><td>notes</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.; Kubernetes failure never silently descends into the local ladder.; Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-fig2:end -->

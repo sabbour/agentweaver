@@ -1,0 +1,30 @@
+{
+  "status": "blocked-not-certified-equivalent",
+  "model": "gpt-6-astra",
+  "sole_agent": true,
+  "subagents_this_request": 0,
+  "reference": "original-react.png",
+  "reference_matches_current_origin_dev_git_blob": "2b74adaf29e9aa7187f6498f10a4cb41649514dc",
+  "candidate": "candidate-strict.png",
+  "source": "candidate-strict.drawio",
+  "comparison": "comparison-strict.png",
+  "panel_dimensions": [2140, 2018],
+  "comparison_dimensions": [4280, 2018],
+  "comparison_order": ["original React", "strict draw.io candidate"],
+  "phase_one_correction_renders": 1,
+  "remaining_phase_one_correction_renders": 0,
+  "inspection": {
+    "actual_comparison_opened": true,
+    "blinding": "Not claimed: the author knows the panel identities.",
+    "typography_and_hierarchy": "Optically close to the actual React PNG; no oversized banner.",
+    "card_geometry_and_density": "Preserves two columns, row centers, compact widths/heights and margins.",
+    "copy": "Merge subtitle removed; no paragraph blocks or visible debug/provenance strings.",
+    "icons_and_badges": "Actual Fluent icons retained at a normalized footprint; no unsolicited badges.",
+    "surfaces_and_elevation": "Warm palette and restrained layered card depth retained.",
+    "routing": "Separate return approaches and shared terminal trunks are clearer than the rejected candidate.",
+    "overall_polish": "Not certified at least equivalent: arrowheads remain optically heavier than the React original, and full junction/bridge equivalence has not been established."
+  },
+  "publication": "Non-public calibration only; not permission to promote catalog projections.",
+  "residual": "The single permitted strict correction render is exhausted. Do not manufacture another calibration variant or claim approval. Catalog routing, semantic bindings and per-family inspection remain incomplete.",
+  "runtime_semantics": "Legacy workflow copy is used only as visual authority. The current public workflow must retain the repository-grounded PR-publication step."
+}

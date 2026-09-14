@@ -1,0 +1,289 @@
+{
+  "diagram": "guide-architecture-aks-fig1",
+  "source_sha256": "5b9b08d4bbfa8685a638531e6cefb685f4ea2c39600f8bfe527ddbc119b8923b",
+  "png_sha256": "fa4bf32a1439ae7fa847dfb1663a08a3a13ca4685cbd13c9ab8f13c087542855",
+  "prior_model": "docs\\diagrams\\reviews\\guide-architecture-aks-fig1\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "AgentHost: bind once, serve ready"
+    },
+    {
+      "cell": "takeaway",
+      "text": "HTTP reachability is not setup readiness; claim lifetime can span Assistant turns."
+    },
+    {
+      "cell": "l-launch-title",
+      "text": "01 CONTROL-PLANE LAUNCH"
+    },
+    {
+      "cell": "l-setup-title",
+      "text": "02 PURPOSE-BOUND SETUP"
+    },
+    {
+      "cell": "l-turns-title",
+      "text": "03 TURN AND CLAIM LIFETIME"
+    },
+    {
+      "cell": "claim-badge",
+      "text": "CLAIM"
+    },
+    {
+      "cell": "claim-title",
+      "text": "Claim warm pod"
+    },
+    {
+      "cell": "claim-sub",
+      "text": "Persist claim; wait for binding"
+    },
+    {
+      "cell": "claim-meta",
+      "text": "Shared pool: 2 warm pods"
+    },
+    {
+      "cell": "reachable-badge",
+      "text": "HEALTH"
+    },
+    {
+      "cell": "reachable-title",
+      "text": "Probe listener"
+    },
+    {
+      "cell": "reachable-sub",
+      "text": "/healthz success: reachable"
+    },
+    {
+      "cell": "reachable-meta",
+      "text": "200 can mean standby"
+    },
+    {
+      "cell": "configure-badge",
+      "text": "ONE SHOT"
+    },
+    {
+      "cell": "configure-title",
+      "text": "Configure once"
+    },
+    {
+      "cell": "configure-sub",
+      "text": "Run, purpose and capabilities"
+    },
+    {
+      "cell": "configure-meta",
+      "text": "POST /configure"
+    },
+    {
+      "cell": "workspace-badge",
+      "text": "PURPOSE"
+    },
+    {
+      "cell": "workspace-title",
+      "text": "Select workspace"
+    },
+    {
+      "cell": "workspace-sub",
+      "text": "Shared or verified local checkout"
+    },
+    {
+      "cell": "workspace-meta",
+      "text": "LocalReadOnly: no write-back"
+    },
+    {
+      "cell": "setup-badge",
+      "text": "SETUP"
+    },
+    {
+      "cell": "setup-title",
+      "text": "Finish setup"
+    },
+    {
+      "cell": "setup-sub",
+      "text": "Assistant skips project checkout"
+    },
+    {
+      "cell": "setup-meta",
+      "text": "Accepted binding stays consumed"
+    },
+    {
+      "cell": "ready-badge",
+      "text": "READY"
+    },
+    {
+      "cell": "ready-title",
+      "text": "Ready for A2A"
+    },
+    {
+      "cell": "ready-sub",
+      "text": "Setup finished before response"
+    },
+    {
+      "cell": "ready-meta",
+      "text": "IsReady gates traffic"
+    },
+    {
+      "cell": "turn-badge",
+      "text": "SERVING"
+    },
+    {
+      "cell": "turn-title",
+      "text": "Stream a turn"
+    },
+    {
+      "cell": "turn-sub",
+      "text": "Run-bound bearer authentication"
+    },
+    {
+      "cell": "turn-meta",
+      "text": "message:stream"
+    },
+    {
+      "cell": "retain-badge",
+      "text": "REUSE"
+    },
+    {
+      "cell": "retain-title",
+      "text": "Retain Assistant"
+    },
+    {
+      "cell": "retain-sub",
+      "text": "Successful turn keeps its pod"
+    },
+    {
+      "cell": "retain-meta",
+      "text": "Renew MCP token, not configure"
+    },
+    {
+      "cell": "release-badge",
+      "text": "CLEANUP"
+    },
+    {
+      "cell": "release-title",
+      "text": "Release claim"
+    },
+    {
+      "cell": "release-sub",
+      "text": "Unregister and revoke capabilities"
+    },
+    {
+      "cell": "release-meta",
+      "text": "Active preview defers cleanup"
+    },
+    {
+      "cell": "l1",
+      "text": "bound"
+    },
+    {
+      "cell": "l2",
+      "text": "reachable"
+    },
+    {
+      "cell": "l3",
+      "text": "accepted"
+    },
+    {
+      "cell": "l4",
+      "text": "prepare"
+    },
+    {
+      "cell": "l5",
+      "text": "complete"
+    },
+    {
+      "cell": "l6",
+      "text": "dispatch"
+    },
+    {
+      "cell": "l7",
+      "text": "success"
+    },
+    {
+      "cell": "l8",
+      "text": "next turn"
+    },
+    {
+      "cell": "l9",
+      "text": "run ends / failure"
+    },
+    {
+      "cell": "l-409-heading",
+      "text": "CONFIGURATION BOUNDARY"
+    },
+    {
+      "cell": "l-409-body",
+      "text": "Later valid configure attempts return 409, even after accepted setup fails."
+    }
+  ],
+  "context_pages": [
+    "docs/guide/architecture-aks.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "claim",
+      "to": "reachable",
+      "label": "bound",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "reachable",
+      "to": "configure",
+      "label": "reachable",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "configure",
+      "to": "workspace",
+      "label": "accepted",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "workspace",
+      "to": "setup",
+      "label": "prepare",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "setup",
+      "to": "ready",
+      "label": "complete",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "ready",
+      "to": "turn",
+      "label": "dispatch",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "turn",
+      "to": "retain",
+      "label": "success",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "retain",
+      "to": "turn",
+      "label": "next turn",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "turn",
+      "to": "release",
+      "label": "run ends / failure",
+      "result": "clean"
+    }
+  ]
+}

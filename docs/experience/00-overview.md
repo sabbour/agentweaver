@@ -13,12 +13,10 @@ Agentweaver exposes one product through two front doors:
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
 
-![The two surfaces: Human user, Agentweaver web UI, MCP client, Agentweaver MCP server, Agentweaver backend API, Projects, runs, teams,](../diagrams/experience-00-overview-fig1.png)
+![People use the web UI; assistants use MCP; both reach the authoritative API, which returns state and streams run events](../diagrams/experience-00-overview-fig1.png)
 
-<!-- Rendered from ../diagrams/src/experience-00-overview-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/experience-00-overview-fig1.drawio.
+     Published PNG keeps its stable path; use the scoped draw.io authoring workflow. -->
 
 The web UI and MCP server differ in interaction style, not in product intent:
 
@@ -40,34 +38,31 @@ The core loop is the same from either surface:
 
 Agentweaver treats the backend as the source of truth. The web UI loads snapshots for current state and consumes live run streams for what changes after the page opens. MCP tools call the same backend operations and return structured results the client can reason over.
 
+For a live stream, the browser initiates the HTTP request; **event payloads flow from
+API to browser**. `run_watch` likewise consumes API events and reports them through MCP
+to the assistant. Neither stream makes the client authoritative for run state
+(`apps/web/src/api/sse.ts:237`, `apps/Agentweaver.Mcp/Tools/RunTools.cs:229`).
+
 ## Web UI mental model
 
-### Overview command-center redesign
+### Overview
 
-The signed-in **Overview** page is now a live command center with four user-visible regions sourced from real API calls (`apps/web/src/pages/OverviewPage.tsx:180`):
+The signed-in **Overview** page has four user-visible regions sourced from API calls
+(`apps/web/src/pages/OverviewPage.tsx:365-389`):
 
-- **Recent Projects** shows up to four projects sorted by latest activity and links each card to its project. Cards show GitHub/blank origin, active/queued/idle status, last activity, agent count, run count, and issue count (`OverviewPage.tsx:211`). Empty state is **No projects yet.** or **No recent projects to show.** (`OverviewPage.tsx:214`).
-- **AI Usage & Performance** aggregates observability metrics from those recent projects, with a 7d/30d/90d range selector (`OverviewPage.tsx:222`). It shows token consumption, model share, response duration, TTFT, and success rate. The latency tiles display **P50** and **P95** from telemetry; **P99** is intentionally shown as unavailable rather than estimated (`OverviewPage.tsx:151`, `:155`).
-- **Activity Feed** groups recent activity by day and uses empty state **No recent activity.** when the backend has no rows (`OverviewPage.tsx:225`).
-- **Needs Attention** lists degraded overview health, failed recent activity, and queued project work; the happy-path empty state is **Nothing needs attention.** (`OverviewPage.tsx:230`).
+- **Recent projects** links recently active projects with operational counts and queue pressure.
+- **AI usage & performance** aggregates metrics for those recent projects, with a 7d/30d/90d selector. It is not an unqualified total for every project.
+- **Activity feed** groups recent activity by day and shows an empty state when no rows exist.
+- **Needs attention** surfaces health and work requiring attention rather than fabricating healthy activity.
 
-The page refreshes every 10 seconds and also exposes **Refresh** with a countdown indicator (`OverviewPage.tsx:217`).
+Open **Overview** at `/overview` to inspect these live regions. The page polls and offers
+manual refresh; an empty or unavailable metric is not a screenshot of successful work.
 
-![Overview page showing fleet activity at a glance](/screenshots/overview-fleet.png)
-
-> 📸 **Screenshot — `overview-fleet.png`**
-> *Shows:* the **Overview** page titled "Overview" with the subtitle "Fleet activity at a glance.", the **Refresh** button, and the **Live sessions**, **Active workflow runs**, **Active projects**, and **Recent activity** sections (tables carry `aria-label="Live sessions"` and `aria-label="Active workflow runs"`).
-> *Path:* Sign in → click **Overview** in the left rail (or navigate to `/overview`).
-
-The web UI is a signed-in, project-aware control room. It uses a persistent app shell so navigation, project switching, API health, GitHub identity, and the start-orchestration action remain available across project pages and orchestration details.
+The web UI is a signed-in, project-aware control room. It uses a persistent app shell
+for navigation, project switching, API health, the signed-in account, and starting work.
+Entra identity remains distinct from connected GitHub capabilities.
 
 ### The app shell
-
-![Agentweaver signed-in app shell with left navigation rail, top bar, and main content](/screenshots/app-shell.png)
-
-> 📸 **Screenshot — `app-shell.png`**
-> *Shows:* the signed-in shell with the left navigation rail (`aria-label="Primary navigation"`) listing **Overview**, **Projects**, **Sessions**, and project destinations. The top bar has the project switcher, `Alpha` badge, and API status dot.
-> *Path:* Sign in → land on `/overview`.
 
 The shell has three persistent areas:
 
@@ -87,16 +82,19 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 
 | Destination | Route shape | What you do here |
 |---|---|---|
-| **Overview** | `/` and `/overview` | See fleet activity at a glance: in-flight work, queued work, done-today counts, health, active projects, and recent activity. |
+| **Overview** | `/` and `/overview` | Inspect Recent projects, AI usage & performance, Activity feed, and Needs attention. |
 | **Projects** | `/projects` | Browse projects, create a blank project, create a project from GitHub, choose a blueprint, and open a project. |
 | **Sessions** | `/sessions` | Start or open Assistant conversations across projects. |
+| **Assistant** | `/assistant` | Continue a personal conversation; optional project context does not make it a project work-focus session. |
+| **Account settings** | `/settings` | Inspect authentication, AI access, GitHub connections, and MCP client setup. |
+| **Platform settings** | `/platform-settings` | Platform Admin controls, including deployment AI source configuration. |
 
 #### WORK
 
 | Destination | Route shape | What you do here |
 |---|---|---|
-| **Dashboard** | `/projects/:projectId` | Review delivery metrics, throughput for the last 30 days, active runs, active agents, and the agent leaderboard. |
-| **Board** | `/projects/:projectId/board` | Manage the project board across Backlog, Ready, Problems, Human Review, Active, and Done; start coordinator work and open run details. |
+| **Dashboard** | `/projects/:projectId` | Review selected-range delivery metrics, active work, and the agent leaderboard. |
+| **Board** | `/projects/:projectId/board` | Use Backlog, Ready, Active, and Done lanes plus Human Review and Problems attention groups; start work and open run details. |
 | **Flow** | `/projects/:projectId/flow` | See what each agent is working on now, including active, queued, blocked, and done counts grouped by agent and orchestration. |
 | **Orchestrations** | `/projects/:projectId/orchestrations` | List coordinator runs for the project and open the topology view for a multi-agent goal. |
 | **Workspace** | `/projects/:projectId/workspace` | Browse the project repository and active run worktrees read-only; inspect files and decompose a spec file into backlog tasks. |
@@ -106,7 +104,7 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 | Destination | Route shape | What you do here |
 |---|---|---|
 | **Agents** | `/projects/:projectId/team` | Manage the cast working on the project: inspect agents, view charters and capabilities, add members, retire members, re-role agents, and open the casting wizard. |
-| **Memories** | `/projects/:projectId/memories` | Review team decisions, merge or reject decision inbox entries, and create or update agent memory. |
+| **Memories** | `/projects/:projectId/memories` | Review Decisions, Agent memory, and project Session history; acceptance requires appropriate authority. |
 | **Skills** | `/projects/:projectId/skills` | Build a per-project skill catalog, inspect provenance and status, and assign active skills to individual agents. |
 
 #### OPERATIONS
@@ -121,7 +119,11 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 |---|---|---|
 | **Diagnostics** | `/projects/:projectId/diagnostics` | Run real diagnostics checks, switch between global and project scope, and inspect pass/warn/fail details with durations. |
 | **Heartbeat** | `/projects/:projectId/heartbeat` | Monitor background automation status, coordinator heartbeat, checkpoint GC, recent ticks, errors, and service cadence. |
+| **Cluster** | `/projects/:projectId/cluster` | Inspect pod claims, cluster health, and live resource topology. |
+| **Observability** | `/projects/:projectId/observability` | Inspect project metrics and selected-range telemetry. |
+| **Observability > Agents** | `/projects/:projectId/observability/agents` | Inspect the agent-level metrics breakdown. |
 | **Observability > Traces** | `/projects/:projectId/observability/traces` | Preview hierarchical transaction traces for recent coordinator runs. |
+| **Settings** | `/projects/:projectId/settings` | Change project configuration and policies; separate from Account and Platform settings. |
 
 ### Deep project destinations
 
@@ -138,16 +140,16 @@ Most human work starts with a project and ends with review:
 
 ![Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …](../diagrams/canonical-coordinator-journey.png)
 
-<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Shared editable source: ../diagrams/src/canonical-coordinator-journey.drawio.
+     Exported by the official draw.io Desktop CLI. Changes belong to the shared owner. -->
 
 A typical path looks like this:
 
-1. The user opens **Projects**, creates or selects a project, and lands in the project workspace.
+1. The user opens **Projects**, creates or selects a project, and lands on **Dashboard**.
 2. The user opens **Board** to see backlog and run buckets.
-3. The user starts a coordinator orchestration.
+3. The user chooses **Define Outcome** for a reviewable outcome-spec gate, or **Direct**
+   to start without that gate. Alternatively, the user promotes queued work to **Ready**
+   for unattended pickup; that is not a reason to manually start the same goal again.
 4. Agentweaver opens the orchestration detail page. The user sees the coordinator graph, embedded child sessions, tool and shell approval cards, file artifacts, and status badges.
 5. If the run reaches human review, the user approves or rejects it. If the coordinator reaches a confirmation gate, the user confirms or revises the outcome spec before child work is dispatched.
 6. After completion, the user reviews artifacts, memory, decisions, and board state.
@@ -169,7 +171,9 @@ In hosted mode, the MCP server is a thin Resource Server. It validates access at
 
 ### Tool catalog by goal
 
-The tool catalog is broad because it mirrors the product model. It contains 79 tools across 13 groups. A client does not need to know every tool up front; the useful mental model is "pick the domain, then pick the action."
+The tool catalog is broad because it mirrors the product model. Use the generated
+[MCP tool index](../reference/mcp-tools.md) and the connected server's `tools/list`
+instead of a manually maintained tool count. The table below is a goal map, not a full catalog.
 
 | Tool group | User goal it serves | Representative tools |
 |---|---|---|
@@ -183,6 +187,7 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 | **Project** | List, create, inspect, configure, rename, delete projects, and list project runs. | `project_list`, `project_create`, `project_get`, `project_configure`, `project_list_runs` |
 | **Run** | Watch, review, inspect artifacts, retry, and archive runs. | `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry` |
 | **SandboxPolicy** | Read or change the sandbox policy for a repository. | `sandbox_policy_get`, `sandbox_policy_set` |
+| **Skills** | Acquire project skills and assign them to agents. | `skill_list`, `skill_import_preview`, `skill_import`, `skill_assign`, `skill_assignments_list` |
 | **Team** | Cast a team, inspect roster, add or retire members, and fetch charters. | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter` |
 | **Workflow** | List, inspect, sync, generate, and save reusable workflow definitions. | `workflows_list`, `workflow_get`, `workflows_sync`, `workflow_generate`, `workflow_save` |
 | **Workspace** | Browse project workspace refs, file trees, and file contents. | `list_project_workspace_refs`, `list_project_workspace`, `get_project_workspace_file` |
@@ -191,12 +196,10 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 
 An assistant typically uses MCP in a loop like this:
 
-![MCP flow: assistant-driven work: User, MCP client, Agentweaver MCP server, Agentweaver backend](../diagrams/experience-00-overview-fig3.png)
+![Assistant journey: orient, prepare project and team, choose queued pickup or immediate start, inspect progress, and ask the human to review](../diagrams/experience-mcp-client-fig1.png)
 
-<!-- Rendered from ../diagrams/src/experience-00-overview-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/experience-mcp-client-fig1.drawio.
+     Shared with mcp-client.md; replaces the merged experience-00-overview-fig3. -->
 
 The assistant can perform long chains quickly: create a project, apply a blueprint, cast a team, capture backlog, start a coordinator, poll topology, inspect artifacts, and submit memory. The human still owns judgment points: confirming outcome specs, approving risky actions, reviewing output, and deciding whether a team decision should become durable memory.
 
@@ -210,24 +213,24 @@ The table below maps major user goals to where a person goes in the web UI and w
 | **Find or open a project** | **Overview** for active projects or **Projects** gallery for all projects; project switcher for recent/all projects. | `project_list`, `project_get`. |
 | **Configure a project** | **Settings** → General for name and default model. | `project_configure`, `project_rename`, `project_delete`. |
 | **Set sandbox behavior** | **Settings** → Sandbox policy. | `sandbox_policy_get`, `sandbox_policy_set`. |
-| **Set review gates** | **Settings** → Review policy. | `workflows_list`, `workflow_get`, and `workflow_save` for workflow-level gates; `run_review` for execution-time review decisions. The current MCP catalog does not expose a dedicated review-policy settings tool. |
+| **Inspect review gates** | **Workflows** for definitions and **Coordinator run** for active review; the current Settings rail has no Review policy tab. | `workflows_list`, `workflow_get`, and `workflow_save` for workflow-level gates; `run_review` for execution-time review decisions. No dedicated review-policy settings tool is implied. |
 | **Start coordinator work** | **Board** → **Start task** and open the coordinator run. | `coordinator_start`. |
-| **Watch a run** | **Workflow run** or **Execution** page with graph, timeline, files, approvals, and status. | `run_status`, `run_watch`. |
-| **Review or approve a run** | **Workflow run** → human review card and approval banner. | `run_review`. |
-| **Inspect run artifacts** | **Workflow run** → files/artifacts browser and diff/content panels. | `run_show_artifacts`, `run_get_file`. |
+| **Watch a run** | **Coordinator run** and the selected task's **Agent session** panel. | `run_status`, `run_watch`. |
+| **Review or approve a run** | **Coordinator run** → human review and artifacts. | `run_review` (approve or decline). |
+| **Inspect run artifacts** | Orchestration or selected-task artifacts and diff/content panels. | `run_show_artifacts`, `run_get_file`. |
 | **Retry or archive a run** | **Board** or run lists for active/terminal run management. | `run_retry`, `run_archive`, `backlog_archive_task`. |
 | **Coordinate a multi-agent goal** | **Board** → start orchestration, or floating start-orchestration action; then **Orchestrations** / coordinator detail. | `coordinator_start`. |
 | **Confirm or revise coordinator intent** | **Coordinator run** → outcome spec panel. | `coordinator_outcome_spec_get`, `coordinator_outcome_spec_confirm`, `coordinator_outcome_spec_revise`. |
 | **Understand coordinator topology** | **Coordinator run** → Coordinator Graph, child runs, agent rail, assembly panels. | `coordinator_work_plan_get`, `coordinator_children_get`, `orchestration_topology`, `run_watch`. |
 | **Steer active coordinator work** | **Coordinator run** → steer controls for recover, redirect, amend, and stop. | `coordinator_steer`. |
 | **Manage team / cast agents** | **Agents** and **Casting wizard**. | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter`, plus `catalog_list_roles` and `catalog_list_scenarios`. |
-| **Manage decisions and memory** | **Memories** → Decisions and Agent Memory tabs. | `decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `decision_update`, `squad_decide`, `memory_record`, `memory_list`, `memory_get`, `memory_search`. |
-| **Manage session context** | **Memories** and run/collaboration flows that depend on current focus. | `session_start`, `session_current`, `session_update`. |
+| **Manage decisions and memory** | **Memories** → Decisions and Agent memory tabs. | `decision_inbox_submit`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_create`, `decision_list`, `decision_update`, `squad_decide`, `memory_record`, `memory_list`, `memory_get`, `memory_search`. |
+| **Manage session context** | **Memories → Session history** for project work focus, distinct from global Assistant conversations. | `session_start`, `session_current`, `session_update`. |
 | **Import/export memory files** | **Memories** and workspace-backed team context. | `memory_export`, `memory_import`. |
 | **Manage workflows** | **Workflows** page: list, sync, generate, create, edit YAML, visual editor, set default. | `workflows_list`, `workflow_get`, `workflows_sync`, `workflow_generate`, `workflow_save`. |
 | **Manage backlog** | **Board** kanban columns and **Workspace** spec decomposition. | `backlog_capture_task`, `backlog_edit_task`, `backlog_delete_task`, `backlog_get_board`, `backlog_move_to_ready`, `backlog_move_to_backlog`, `backlog_reorder_task`, `send_all_backlog_to_ready`, `backlog_get_workflow_stages`, `backlog_get_settings`, `backlog_set_settings`, `backlog_decompose_spec`. |
 | **Browse workspace files** | **Workspace** page: select base branch or active run worktree, open file tree, inspect file content. | `list_project_workspace_refs`, `list_project_workspace`, `get_project_workspace_file`. |
-| **Operate and diagnose** | **Diagnostics** and **Heartbeat**. | `diagnostics_get`, `heartbeat_status`. |
+| **Operate and diagnose** | **Diagnostics**, **Heartbeat**, **Cluster**, and **Observability**. | `diagnostics_get`, `heartbeat_status`; no dedicated Cluster or full Observability tool parity is implied. |
 | **Manage GitHub capability** | Connect the Repo App in a browser; Project Owners can also connect the project Copilot App. | `github_repo_app_connect`, `github_repo_app_authorization_status`, `github_repo_app_disconnect`, `project_copilot_app_connect`, `project_copilot_app_authorization_status`, `project_copilot_app_disconnect`, `project_github_capability_status`. |
 
 ## Which surface should I use?
@@ -285,3 +288,206 @@ Use this overview as the hub for the experience documentation set:
 - [Workflows & backlog](./workflows-backlog.md)
 - [Operations](./operations.md)
 - [MCP client](./mcp-client.md)
+
+<!-- diagram-context:canonical-coordinator-journey:start -->
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-coordinator-journey:end -->
+
+<!-- diagram-context:experience-00-overview-fig1:start -->
+<details id="diagram-context-experience-00-overview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Two front doors, one product</td></tr>
+<tr><td>takeaway</td><td>Web and MCP share authorization and authoritative state; events flow back to clients.</td></tr>
+<tr><td>group-title-0</td><td>PEOPLE AND CLIENTS</td></tr>
+<tr><td>group-title-1</td><td>AUTHORITATIVE BACKEND</td></tr>
+<tr><td>Human operator</td><td>Human operator</td></tr>
+<tr><td>Human operator</td><td>Inspect and decide</td></tr>
+<tr><td>Human operator</td><td>browser or assistant</td></tr>
+<tr><td>Human operator</td><td>Choose the interface, not a different product.</td></tr>
+<tr><td>Web UI</td><td>Web UI</td></tr>
+<tr><td>Web UI</td><td>Project and run views</td></tr>
+<tr><td>Web UI</td><td>REST + stream request</td></tr>
+<tr><td>Web UI</td><td>Opens the watch request; receives API event payloads.</td></tr>
+<tr><td>MCP client</td><td>MCP client</td></tr>
+<tr><td>MCP client</td><td>Assistant tool caller</td></tr>
+<tr><td>MCP client</td><td>tool result + progress</td></tr>
+<tr><td>MCP client</td><td>Makes explicit tool calls; surfaces decisions to people.</td></tr>
+<tr><td>Product state</td><td>Product state</td></tr>
+<tr><td>Product state</td><td>Projects, teams, runs</td></tr>
+<tr><td>Product state</td><td>knowledge + workspaces</td></tr>
+<tr><td>Product state</td><td>API-authorized reads and mutations; no MCP bypass.</td></tr>
+<tr><td>Agentweaver API</td><td>Agentweaver API</td></tr>
+<tr><td>Agentweaver API</td><td>Authorization boundary</td></tr>
+<tr><td>Agentweaver API</td><td>run snapshots + events</td></tr>
+<tr><td>Agentweaver API</td><td>Owns resource checks and access to product state.</td></tr>
+<tr><td>MCP server</td><td>MCP server</td></tr>
+<tr><td>MCP server</td><td>Authenticated adapter</td></tr>
+<tr><td>MCP server</td><td>validated broker bearer</td></tr>
+<tr><td>MCP server</td><td>Forwards the exact caller token to the API.</td></tr>
+<tr><td>e0</td><td>inspect</td></tr>
+<tr><td>e1</td><td>requests</td></tr>
+<tr><td>e2</td><td>SSE events</td></tr>
+<tr><td>e3</td><td>tool call</td></tr>
+<tr><td>e4</td><td>result</td></tr>
+<tr><td>e5</td><td>forward</td></tr>
+<tr><td>e6</td><td>API result</td></tr>
+<tr><td>e7</td><td>access</td></tr>
+<tr><td>note</td><td>Browser opens the connection; API sends event payloads. MCP results return through MCP.</td></tr>
+<tr><td>n0</td><td>Choose the interface,
+not a different product.</td></tr>
+<tr><td>n1</td><td>Opens the watch request;
+receives API event payloads.</td></tr>
+<tr><td>n2</td><td>Makes explicit tool calls;
+surfaces decisions to people.</td></tr>
+<tr><td>n3</td><td>API-authorized reads and
+mutations; no MCP bypass.</td></tr>
+<tr><td>n4</td><td>Owns resource checks and
+access to product state.</td></tr>
+<tr><td>n5</td><td>Forwards the exact caller
+token to the API.</td></tr>
+<tr><td>groups</td><td>PEOPLE AND CLIENTS; AUTHORITATIVE BACKEND</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-00-overview-fig1:end -->
+
+<!-- diagram-context:experience-mcp-client-fig1:start -->
+<details id="diagram-context-experience-mcp-client-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Assistant-driven work</td></tr>
+<tr><td>takeaway</td><td>Choose one intake path, inspect the result, and preserve explicit human decisions.</td></tr>
+<tr><td>group-title-0</td><td>PREPARE AND CHOOSE</td></tr>
+<tr><td>group-title-1</td><td>OPERATE AND REVIEW</td></tr>
+<tr><td>Human + assistant</td><td>Human + assistant</td></tr>
+<tr><td>Human + assistant</td><td>Agree on the work</td></tr>
+<tr><td>Human + assistant</td><td>MCP calls -&gt; API</td></tr>
+<tr><td>Human + assistant</td><td>The assistant explains actions; a person supplies judgment.</td></tr>
+<tr><td>Project and team</td><td>Project and team</td></tr>
+<tr><td>Project and team</td><td>Inspect or create</td></tr>
+<tr><td>Project and team</td><td>propose -&gt; confirm cast</td></tr>
+<tr><td>Project and team</td><td>Named roles and charters belong to the project.</td></tr>
+<tr><td>Choose intake</td><td>Choose intake</td></tr>
+<tr><td>Choose intake</td><td>Queue OR start now</td></tr>
+<tr><td>Choose intake</td><td>do not start twice</td></tr>
+<tr><td>Choose intake</td><td>Ready pickup is an alternative to an immediate start.</td></tr>
+<tr><td>Human review</td><td>Human review</td></tr>
+<tr><td>Human review</td><td>Read before deciding</td></tr>
+<tr><td>Human review</td><td>run_review: boolean</td></tr>
+<tr><td>Human review</td><td>MCP approve/decline is binary. Feedback uses other surfaces.</td></tr>
+<tr><td>State and artifacts</td><td>State and artifacts</td></tr>
+<tr><td>State and artifacts</td><td>Watch, list, read</td></tr>
+<tr><td>State and artifacts</td><td>API -&gt; MCP -&gt; client</td></tr>
+<tr><td>State and artifacts</td><td>Progress and results return through the MCP adapter.</td></tr>
+<tr><td>Coordinator</td><td>Coordinator</td></tr>
+<tr><td>Coordinator</td><td>Runs and child work</td></tr>
+<tr><td>Coordinator</td><td>status / children / watch</td></tr>
+<tr><td>Coordinator</td><td>Queued: claim then unattended. Direct: no outcome gate.</td></tr>
+<tr><td>e0</td><td>prepare</td></tr>
+<tr><td>e1</td><td>choose</td></tr>
+<tr><td>e2</td><td>start once</td></tr>
+<tr><td>e3</td><td>observe</td></tr>
+<tr><td>e4</td><td>inspect</td></tr>
+<tr><td>note</td><td>Define Outcome is the third start variant: draft, obtain authorized confirmation, then dispatch.</td></tr>
+<tr><td>n0</td><td>The assistant explains actions;
+a person supplies judgment.</td></tr>
+<tr><td>n1</td><td>Named roles and charters
+belong to the project.</td></tr>
+<tr><td>n2</td><td>Ready pickup is an alternative
+to an immediate start.</td></tr>
+<tr><td>n3</td><td>MCP approve/decline is binary.
+Feedback uses other surfaces.</td></tr>
+<tr><td>n4</td><td>Progress and results return
+through the MCP adapter.</td></tr>
+<tr><td>n5</td><td>Queued: claim then unattended.
+Direct: no outcome gate.</td></tr>
+<tr><td>groups</td><td>PREPARE AND CHOOSE; OPERATE AND REVIEW</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-mcp-client-fig1:end -->

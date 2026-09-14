@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "repo-blueprint-suggestions-fig1.drawio",
+    "sha256": "3622157acabc7f4c5538df8f3cedfa335b96a9d1adfdab5b7fbc28d4a876e333"
+  },
+  "drawio": {
+    "file": "repo-blueprint-suggestions-fig1.drawio",
+    "sha256": "748928d3f08f584ec62937d48a5d4d27b00629344b54879d195b31e16c34b765"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "repo-blueprint-suggestions-fig1.png",
+    "sha256": "0e7b254729ea3ef070c78585635ba27cb0f771859fc17de6d9fec5a8553ff17b"
+  }
+}

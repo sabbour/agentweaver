@@ -1,0 +1,163 @@
+{
+  "name": "00-system-overview-fig5",
+  "title": "Memory · promotion before reuse",
+  "takeaway": "Only eligible, approved context returns to prompts; exported files are mirrors, not policy.",
+  "pitch": [
+    "Run observations|Capture source and provenance|Pending inbox",
+    "Future context|Select eligible approved state|Trust-filtered"
+  ],
+  "groups": [
+    "CAPTURE / PROMOTION",
+    "COMMITTED STATE / USE"
+  ],
+  "nodes": [
+    {
+      "id": "agent",
+      "title": "Agent observation",
+      "sub": "Submit pending decision",
+      "detail": "Attach project, agent and run provenance",
+      "meta": "DecisionsEndpoints:125–143",
+      "badge": "CAPTURE",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:125-143",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "inbox",
+      "title": "Decision inbox",
+      "sub": "Unapproved observation",
+      "detail": "No automatic authority from submission",
+      "meta": "DecisionsEndpoints:125–143",
+      "badge": "PENDING",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:125-143",
+      "classification": "native:database"
+    },
+    {
+      "id": "scribe",
+      "title": "Post-run Scribe",
+      "sub": "Select eligible run entries",
+      "detail": "Same project + agent + run + time window",
+      "meta": "PostRunScribeService:25–150",
+      "badge": "FILTER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "approved",
+      "title": "Approved active state",
+      "sub": "Low-risk learning / pattern / update",
+      "detail": "Auto-promotion; architecture / scope stay pending",
+      "meta": "PostRunScribeService:25–150",
+      "badge": "PROMOTE",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150",
+      "classification": "native:database"
+    },
+    {
+      "id": "session",
+      "title": "Current open session",
+      "sub": "Append the run summary",
+      "detail": "Session continuity, not blanket policy adoption",
+      "meta": "PostRunScribeService:25–150",
+      "badge": "SESSION",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "compiler",
+      "title": "Context compiler",
+      "sub": "Trust filters + memory budgets",
+      "detail": "Approved architecture/scope + eligible memories",
+      "meta": "MemoryContextCompiler:55–160",
+      "badge": "SELECT",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:55-160",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "mirrors",
+      "title": "Workspace mirrors",
+      "sub": "Exporter refreshes committed memory",
+      "detail": "One-way export; not an automatic trust input",
+      "meta": "PostRunScribeService:25–150",
+      "badge": "MIRROR",
+      "shape": "folder",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150",
+      "classification": "native:uml"
+    },
+    {
+      "id": "prompt",
+      "title": "Subsequent prompt",
+      "sub": "Include selected context",
+      "detail": "Child prompts use the decisions-only variant",
+      "meta": "MemoryContextCompiler:55–160",
+      "badge": "CONTEXT",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:55-160",
+      "classification": "native:flowchart"
+    }
+  ],
+  "edges": [
+    {
+      "id": "agent-to-inbox",
+      "source": "agent",
+      "target": "inbox",
+      "label": "submit",
+      "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:125-143"
+    },
+    {
+      "id": "inbox-to-scribe",
+      "source": "inbox",
+      "target": "scribe",
+      "label": "eligible entries",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150",
+      "route": "center"
+    },
+    {
+      "id": "scribe-to-approved",
+      "source": "scribe",
+      "target": "approved",
+      "label": "low-risk only",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150"
+    },
+    {
+      "id": "scribe-to-session",
+      "source": "scribe",
+      "target": "session",
+      "label": "append summary",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150"
+    },
+    {
+      "id": "approved-to-compiler",
+      "source": "approved",
+      "target": "compiler",
+      "label": "approved state",
+      "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:55-160"
+    },
+    {
+      "id": "session-to-compiler",
+      "source": "session",
+      "target": "compiler",
+      "label": "current session",
+      "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:55-160"
+    },
+    {
+      "id": "session-to-mirrors",
+      "source": "session",
+      "target": "mirrors",
+      "label": "export committed",
+      "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:25-150"
+    },
+    {
+      "id": "compiler-to-prompt",
+      "source": "compiler",
+      "target": "prompt",
+      "label": "compile",
+      "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:55-160"
+    }
+  ],
+  "scope": "Architecture and scope proposals require coordinator review. An observation alone is never trusted policy."
+}

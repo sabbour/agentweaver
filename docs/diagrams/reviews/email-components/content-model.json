@@ -1,0 +1,211 @@
+{
+  "title": "Components and project references",
+  "subtitle": "Arrows mean compile-time ProjectReference—not HTTP calls or deployment routing.",
+  "identity": "UML COMPONENT / DEPENDENCY",
+  "disposition": "retain",
+  "evidence": "components",
+  "groups": [
+    "Executable projects",
+    "Shared package dependencies · selected edges"
+  ],
+  "nodes": [
+    {
+      "id": "api",
+      "title": "Agentweaver.Api",
+      "sub": "Control plane + workers",
+      "meta": "apps/Agentweaver.Api",
+      "pill": "EXECUTABLE",
+      "tone": "lavender",
+      "shape": "component",
+      "facts": [
+        "References AgentRuntime",
+        "References Api.Data and Squad"
+      ]
+    },
+    {
+      "id": "host",
+      "title": "Agentweaver.AgentHost",
+      "sub": "Sandbox turn host",
+      "meta": "apps/Agentweaver.AgentHost",
+      "pill": "EXECUTABLE",
+      "tone": "green",
+      "shape": "component",
+      "facts": [
+        "References AgentRuntime",
+        "Also directly references Domain"
+      ]
+    },
+    {
+      "id": "mcp",
+      "title": "Agentweaver.Mcp",
+      "sub": "Remote tool surface",
+      "meta": "apps/Agentweaver.Mcp",
+      "pill": "EXECUTABLE",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "No project-reference arrows here",
+        "API client—not a database layer"
+      ]
+    },
+    {
+      "id": "runtime",
+      "title": "AgentRuntime",
+      "sub": "Agent workflow execution",
+      "meta": "packages/Agentweaver.AgentRuntime",
+      "pill": "PACKAGE",
+      "tone": "lavender",
+      "shape": "component",
+      "facts": [
+        "References AgentTools",
+        "Also Domain / SandboxExec / SandboxFs"
+      ]
+    },
+    {
+      "id": "tools",
+      "title": "AgentTools",
+      "sub": "Agent-facing tool adapters",
+      "meta": "packages/Agentweaver.AgentTools",
+      "pill": "PACKAGE",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "References Domain",
+        "References SandboxExec / SandboxFs"
+      ]
+    },
+    {
+      "id": "domain",
+      "title": "Domain",
+      "sub": "Shared domain contracts",
+      "meta": "packages/Agentweaver.Domain",
+      "pill": "PACKAGE",
+      "tone": "neutral",
+      "shape": "component",
+      "facts": [
+        "Referenced by runtime and tools",
+        "Dependency direction is toward Domain"
+      ]
+    }
+  ],
+  "edges": [
+    [
+      "api",
+      "runtime",
+      "references"
+    ],
+    [
+      "host",
+      "runtime",
+      "references"
+    ],
+    [
+      "runtime",
+      "tools",
+      "references"
+    ],
+    [
+      "tools",
+      "domain",
+      "references"
+    ]
+  ],
+  "notes": [
+    "SELECTED DEPENDENCIES, NOT AN EXHAUSTIVE BUILD GRAPH",
+    "UML component symbols retain the component identity; omitted direct references are listed inside cards.",
+    "The web SPA / Web host, Api.Data, migrations, and Squad remain separate projects; no network inference."
+  ],
+  "grounding": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj",
+  "nodes_or_participants": [
+    {
+      "id": "api",
+      "title": "Agentweaver.Api",
+      "sub": "Control plane + workers",
+      "meta": "apps/Agentweaver.Api",
+      "pill": "EXECUTABLE",
+      "tone": "lavender",
+      "shape": "component",
+      "facts": [
+        "References AgentRuntime",
+        "References Api.Data and Squad"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    },
+    {
+      "id": "host",
+      "title": "Agentweaver.AgentHost",
+      "sub": "Sandbox turn host",
+      "meta": "apps/Agentweaver.AgentHost",
+      "pill": "EXECUTABLE",
+      "tone": "green",
+      "shape": "component",
+      "facts": [
+        "References AgentRuntime",
+        "Also directly references Domain"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    },
+    {
+      "id": "mcp",
+      "title": "Agentweaver.Mcp",
+      "sub": "Remote tool surface",
+      "meta": "apps/Agentweaver.Mcp",
+      "pill": "EXECUTABLE",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "No project-reference arrows here",
+        "API client—not a database layer"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    },
+    {
+      "id": "runtime",
+      "title": "AgentRuntime",
+      "sub": "Agent workflow execution",
+      "meta": "packages/Agentweaver.AgentRuntime",
+      "pill": "PACKAGE",
+      "tone": "lavender",
+      "shape": "component",
+      "facts": [
+        "References AgentTools",
+        "Also Domain / SandboxExec / SandboxFs"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    },
+    {
+      "id": "tools",
+      "title": "AgentTools",
+      "sub": "Agent-facing tool adapters",
+      "meta": "packages/Agentweaver.AgentTools",
+      "pill": "PACKAGE",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "References Domain",
+        "References SandboxExec / SandboxFs"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    },
+    {
+      "id": "domain",
+      "title": "Domain",
+      "sub": "Shared domain contracts",
+      "meta": "packages/Agentweaver.Domain",
+      "pill": "PACKAGE",
+      "tone": "neutral",
+      "shape": "component",
+      "facts": [
+        "Referenced by runtime and tools",
+        "Dependency direction is toward Domain"
+      ],
+      "classification": "native:uml",
+      "evidence": "apps/Agentweaver.Api/Agentweaver.Api.csproj; apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj; packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj; packages/Agentweaver.AgentTools/Agentweaver.AgentTools.csproj"
+    }
+  ]
+}

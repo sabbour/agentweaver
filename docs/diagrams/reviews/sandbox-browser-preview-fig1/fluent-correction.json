@@ -1,0 +1,313 @@
+{
+  "diagram": "sandbox-browser-preview-fig1",
+  "source_sha256": "a5384c06f9beafa6df3914ac27e61705673276cbb60793ccb12ae1cd032f8ae7",
+  "png_sha256": "0163479e91a694d5c61bcd26ea715356ca200c02f34f98e29428584a32c466a1",
+  "prior_model": "docs\\diagrams\\reviews\\sandbox-browser-preview-fig1\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Preview readiness follows the public path"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Provision the route, then probe its exact HTTPS URL; object creation alone is not ready."
+    },
+    {
+      "cell": "group-title0",
+      "text": "CONTROL: PROVISION + PROBE"
+    },
+    {
+      "cell": "group-title1",
+      "text": "GATEWAY DATA PATH"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Preview API"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Resolve bound SandboxClaim"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "Patch run selector on pod"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "Create Service + HTTPRoute"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "State from cluster, not cache"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "PROVISION"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Publication probe"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Exact generated HTTPS URL"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "Wait for managed DNS"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Check Gateway + application"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "Only then return ready"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "VERIFY"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Browser preview"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Open the returned URL"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "Run-scoped capability host"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "Keepalive via API"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "Iframe: no-referrer"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "CLIENT"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Preview Gateway"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Separate shared Gateway"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "HTTPS host match"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "HTTPRoute selects Service"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "Not API port-forward"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "ROUTE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "ClusterIP Service"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Per-preview target selector"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "Service :80 → public port"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "Routes to bound sandbox pod"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "Allowed ports 3000–9000"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "NETWORK"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Sandbox preview app"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "AgentHost pod-local path"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Live preview: TCP forwarder"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "0.0.0.0 → loopback app"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "Manual: chosen target port"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "POD"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 after create"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 ready URL"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 HTTPS probe"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 HTTPS"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 route"
+    },
+    {
+      "cell": "e5",
+      "text": "6"
+    },
+    {
+      "cell": "relation-5",
+      "text": "6 public port"
+    },
+    {
+      "cell": "assurance",
+      "text": "No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window."
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "Public readiness"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "Probe the exact generated HTTPS URL."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "SandboxPreviewService.cs"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Rollback on failure"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "Unpublish failed preview resources."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "SandboxPreviewPublicationTests.cs"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Separate ingress"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "DNS managed externally, not by API."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "gateway-preview.yaml"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/sandbox-browser-preview.md",
+    "docs/experience/sandbox-browser-preview.md",
+    "docs/experience/sandbox-pod-execution.md",
+    "docs/reference/api.md",
+    "docs/reference/sandbox-browser-preview.md",
+    "docs/reference/sandbox-pods.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "after create",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "ready URL",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "HTTPS probe",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n3",
+      "label": "HTTPS",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n4",
+      "label": "route",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n5",
+      "label": "public port",
+      "result": "clean"
+    }
+  ]
+}

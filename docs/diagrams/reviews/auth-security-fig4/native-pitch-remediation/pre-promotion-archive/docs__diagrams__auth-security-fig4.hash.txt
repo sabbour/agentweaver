@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "auth-security-fig4.json",
+    "sha256": "8d01845e718326f1e8651e22f727e24db2e242cef4fe573192ee25454724d460"
+  },
+  "drawio": {
+    "file": "auth-security-fig4.drawio",
+    "sha256": "34ebc8608407baf4bfd629a9ebe3495a61a4349403b8a4e0b32037343c75097e"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "auth-security-fig4.png",
+    "sha256": "1ac6105265e7ed994836c5631dc14011b6c283bc25089d77bf33c9e66fc4fc74"
+  }
+}

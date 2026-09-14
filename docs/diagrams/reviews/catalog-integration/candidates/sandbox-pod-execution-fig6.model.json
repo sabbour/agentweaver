@@ -1,0 +1,572 @@
+{
+  "title": "Bind, reach standby, configure once",
+  "nodes": [
+    {
+      "id": "prepare",
+      "label": "Prepare launch",
+      "subLabel": "Resolve provider and run context",
+      "meta": "Mint fresh turn token",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "claim",
+      "label": "Claim warm pod",
+      "subLabel": "Create/adopt; omit spec.env",
+      "meta": "Wait Ready + bound pod name",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "map",
+      "label": "Resolve and register",
+      "subLabel": "Pod mapping / token registry",
+      "meta": "Resolve actual pod IP",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "health",
+      "label": "GET /healthz",
+      "subLabel": "HTTP 200 standby",
+      "meta": "Listener liveness, not turn ready",
+      "icon": "box",
+      "shape": "mxgraph.cisco19.router",
+      "library": "network",
+      "badge": {
+        "text": "Component",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=mxgraph.cisco19.router;html=1;aspect=fixed;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.4;"
+    },
+    {
+      "id": "configure",
+      "label": "POST /configure",
+      "subLabel": "Identity / workspace / approvals",
+      "meta": "Copilot capability OR BYOK",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "setup",
+      "label": "AgentHost setup",
+      "subLabel": "One-time configuration",
+      "meta": "Effective workspace + HOME",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "guards",
+      "label": "Configuration guards",
+      "subLabel": "Second configure: 409",
+      "meta": "Other routes: 503 before ready",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "register",
+      "label": "Register effective endpoint",
+      "meta": "Shared/local/private fallback",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "turn",
+      "label": "First A2A turn",
+      "subLabel": "Production sends turn bearer",
+      "meta": "Equality guard when nonempty",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "prepare",
+      "to": "claim",
+      "label": "launch",
+      "loopback": false
+    },
+    {
+      "from": "claim",
+      "to": "map",
+      "label": "bound",
+      "loopback": false
+    },
+    {
+      "from": "map",
+      "to": "health",
+      "label": "poll",
+      "loopback": false
+    },
+    {
+      "from": "health",
+      "to": "configure",
+      "label": "reachable",
+      "loopback": false
+    },
+    {
+      "from": "configure",
+      "to": "setup",
+      "label": "setup",
+      "loopback": false
+    },
+    {
+      "from": "setup",
+      "to": "register",
+      "label": "ready",
+      "loopback": false
+    },
+    {
+      "from": "register",
+      "to": "turn",
+      "label": "invoke",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "prepare",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 240.66666666666666
+        },
+        "data": {
+          "id": "prepare",
+          "label": "Prepare launch",
+          "subLabel": "Resolve provider and run context",
+          "meta": "Mint fresh turn token",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "claim",
+        "type": "card",
+        "position": {
+          "x": 658.9894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "claim",
+          "label": "Claim warm pod",
+          "subLabel": "Create/adopt; omit spec.env",
+          "meta": "Wait Ready + bound pod name",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "map",
+        "type": "card",
+        "position": {
+          "x": 1122.1894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "map",
+          "label": "Resolve and register",
+          "subLabel": "Pod mapping / token registry",
+          "meta": "Resolve actual pod IP",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "health",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "health",
+          "label": "GET /healthz",
+          "subLabel": "HTTP 200 standby",
+          "meta": "Listener liveness, not turn ready",
+          "icon": "box",
+          "shape": "mxgraph.cisco19.router",
+          "library": "network",
+          "badge": {
+            "text": "Component",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=mxgraph.cisco19.router;html=1;aspect=fixed;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "configure",
+        "type": "card",
+        "position": {
+          "x": 658.9894736842105,
+          "y": 484.66666666666663
+        },
+        "data": {
+          "id": "configure",
+          "label": "POST /configure",
+          "subLabel": "Identity / workspace / approvals",
+          "meta": "Copilot capability OR BYOK",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "setup",
+        "type": "card",
+        "position": {
+          "x": 1122.1894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "setup",
+          "label": "AgentHost setup",
+          "subLabel": "One-time configuration",
+          "meta": "Effective workspace + HOME",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "guards",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "guards",
+          "label": "Configuration guards",
+          "subLabel": "Second configure: 409",
+          "meta": "Other routes: 503 before ready",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "register",
+        "type": "card",
+        "position": {
+          "x": 658.9894736842105,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "register",
+          "label": "Register effective endpoint",
+          "meta": "Shared/local/private fallback",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "turn",
+        "type": "card",
+        "position": {
+          "x": 1122.1894736842105,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "turn",
+          "label": "First A2A turn",
+          "subLabel": "Production sends turn bearer",
+          "meta": "Equality guard when nonempty",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "prepare",
+        "target": "claim",
+        "label": "launch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 658.9894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 597.3894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "claim",
+        "target": "map",
+        "label": "bound",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 998.9894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1122.1894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.5894736842106,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "map",
+        "target": "health",
+        "label": "poll",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1292.1894736842105,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 1292.1894736842105,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 390.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 828.9894736842105,
+            "y": 390.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "health",
+        "target": "configure",
+        "label": "reachable",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 658.9894736842105,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 597.3894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "configure",
+        "target": "setup",
+        "label": "setup",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 998.9894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1122.1894736842105,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.5894736842106,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "setup",
+        "target": "register",
+        "label": "ready",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1292.1894736842105,
+              "y": 602.6666666666666
+            },
+            {
+              "x": 1292.1894736842105,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 828.9894736842105,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 828.9894736842105,
+              "y": 742.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.5894736842106,
+            "y": 634.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "register",
+        "target": "turn",
+        "label": "invoke",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 998.9894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 1122.1894736842105,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.5894736842106,
+            "y": 794.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1657.5315789473684,
+    "canvasHeight": 1100.3938596491228
+  }
+}

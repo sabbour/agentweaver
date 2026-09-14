@@ -1,0 +1,336 @@
+{
+  "name": "guide-architecture-aks-fig5",
+  "title": "Credentials: authority stays in the control plane",
+  "takeaway": "Separate Azure identities; separate Copilot, repository, turn and MCP capabilities.",
+  "pitch": [
+    "API / Worker redeem authorized capability",
+    "AgentHost receives bounded run configuration"
+  ],
+  "nodes": [
+    {
+      "id": "sa",
+      "title": "API + Worker SAs",
+      "subtitle": "Separate Kubernetes RBAC",
+      "meta": "AKS OIDC federation",
+      "badge": "FEDERATE",
+      "icon": "account",
+      "x": 34,
+      "y": 89,
+      "w": 230,
+      "h": 108,
+      "tone": "teal",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423"
+    },
+    {
+      "id": "mi",
+      "title": "API managed identity",
+      "subtitle": "Secrets User + Secrets Officer",
+      "meta": "agentweaver-api-identity",
+      "badge": "PRIVILEGED",
+      "icon": "identity",
+      "x": 292,
+      "y": 89,
+      "w": 230,
+      "h": 108,
+      "tone": "marigold",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423"
+    },
+    {
+      "id": "vault",
+      "title": "Azure Key Vault",
+      "subtitle": "Credential and app-secret authority",
+      "meta": "Runtime and CSI consumers",
+      "badge": "VAULT",
+      "icon": "vault",
+      "x": 292,
+      "y": 249,
+      "w": 230,
+      "h": 108,
+      "tone": "marigold",
+      "evidence": "apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:78-119; apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:81-117"
+    },
+    {
+      "id": "broker",
+      "title": "Capability broker",
+      "subtitle": "Fence run + purpose before/after read",
+      "meta": "No ambient user-token lookup",
+      "badge": "RUN BOUND",
+      "icon": "product",
+      "x": 34,
+      "y": 249,
+      "w": 230,
+      "h": 108,
+      "tone": "lavender",
+      "evidence": "apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:78-119; apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:81-117"
+    },
+    {
+      "id": "hmi",
+      "title": "AgentHost identity",
+      "subtitle": "Separate ServiceAccount federation",
+      "meta": "No Key Vault role assignments",
+      "badge": "NO VAULT",
+      "icon": "identity",
+      "x": 566,
+      "y": 89,
+      "w": 226,
+      "h": 108,
+      "tone": "neutral",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423"
+    },
+    {
+      "id": "configured",
+      "title": "AgentHost runtime",
+      "subtitle": "One-time /configure delivery",
+      "meta": "Copilot or BYOK; repo separate",
+      "badge": "IN MEMORY",
+      "icon": "pod",
+      "x": 566,
+      "y": 249,
+      "w": 226,
+      "h": 108,
+      "tone": "green",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303; apps/Agentweaver.AgentHost/AgentHostGitHubCapabilityCredentialProvider.cs:9-23"
+    },
+    {
+      "id": "csi",
+      "title": "CSI app secrets",
+      "subtitle": "SecretProviderClass configuration",
+      "meta": "Files + synced secretKeyRef",
+      "badge": "API / WORKER",
+      "icon": "service",
+      "x": 34,
+      "y": 425,
+      "w": 230,
+      "h": 108,
+      "tone": "teal",
+      "evidence": "k8s/base/api-deployment.yaml:414-419; worker-deployment.yaml:265-270; secret-provider-class.yaml:1-62"
+    },
+    {
+      "id": "oauth",
+      "title": "OAuth certificates",
+      "subtitle": "API runtime SecretClient",
+      "meta": "Usable active / previous versions",
+      "badge": "API ONLY",
+      "icon": "vault",
+      "x": 292,
+      "y": 425,
+      "w": 230,
+      "h": 108,
+      "tone": "teal",
+      "evidence": "apps/Agentweaver.Api/Program.cs:238-246,905-911; apps/Agentweaver.Api/Auth/OAuth/OAuthServerConfiguration.cs:319-377"
+    },
+    {
+      "id": "mcp",
+      "title": "MCP resource server",
+      "subtitle": "Agentweaver broker JWT only",
+      "meta": "Exact /mcp + mcp:invoke",
+      "badge": "NO MOUNTS",
+      "icon": "service",
+      "x": 566,
+      "y": 425,
+      "w": 226,
+      "h": 108,
+      "tone": "green",
+      "evidence": "k8s/base/mcp-deployment.yaml:45-55,83-84; apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:65-83"
+    }
+  ],
+  "edges": [
+    {
+      "id": "s1",
+      "source": "sa",
+      "target": "mi",
+      "label": "federate",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "s2",
+      "source": "mi",
+      "target": "vault",
+      "label": "authorize",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "s3",
+      "source": "vault",
+      "target": "broker",
+      "label": "redeem",
+      "evidence": "apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:78-119; apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:81-117",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "s4",
+      "source": "broker",
+      "target": "configured",
+      "label": "configure",
+      "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:528-752,956-987,1267-1303",
+      "points": [
+        [
+          149,
+          386
+        ],
+        [
+          679,
+          386
+        ]
+      ],
+      "returnFlow": false,
+      "anchors": "exitX=0.5;exitY=1;entryX=0.5;entryY=1;"
+    },
+    {
+      "id": "s5",
+      "source": "hmi",
+      "target": "configured",
+      "label": "pod identity",
+      "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-260,314-423",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "s6",
+      "source": "vault",
+      "target": "csi",
+      "label": "app secrets",
+      "evidence": "k8s/base/secret-provider-class.yaml:1-62",
+      "points": [
+        [
+          542,
+          303
+        ],
+        [
+          542,
+          408
+        ],
+        [
+          149,
+          408
+        ]
+      ],
+      "returnFlow": false,
+      "anchors": "exitX=1;exitY=0.5;entryX=0.5;entryY=0;"
+    },
+    {
+      "id": "s7",
+      "source": "vault",
+      "target": "oauth",
+      "label": "cert versions",
+      "evidence": "apps/Agentweaver.Api/Auth/OAuth/OAuthServerConfiguration.cs:319-377",
+      "points": [],
+      "returnFlow": false,
+      "anchors": ""
+    },
+    {
+      "id": "s8",
+      "source": "configured",
+      "target": "mcp",
+      "label": "Assistant JWT",
+      "evidence": "apps/Agentweaver.Api/Auth/OAuth/OperatorAssistantBrokerTokenIssuer.cs:23-37,102-113",
+      "points": [],
+      "returnFlow": false,
+      "anchors": "exitX=1;exitY=0.5;entryX=1;entryY=0.5;"
+    }
+  ],
+  "groups": [
+    {
+      "id": "s-control",
+      "title": "TRUSTED CONTROL PLANE",
+      "x": 20,
+      "y": 60,
+      "w": 517,
+      "h": 316
+    },
+    {
+      "id": "s-host",
+      "title": "ISOLATED AGENTHOST",
+      "x": 552,
+      "y": 60,
+      "w": 255,
+      "h": 316
+    },
+    {
+      "id": "s-delivery",
+      "title": "DISTINCT DELIVERY CHANNELS",
+      "x": 20,
+      "y": 396,
+      "w": 787,
+      "h": 154
+    }
+  ],
+  "notes": [
+    {
+      "id": "s-separation",
+      "title": "NO AGENTHOST → VAULT EDGE",
+      "text": "Network reachability is not authorization. Repository, A2A and MCP tokens are not Copilot credentials.",
+      "x": 28,
+      "y": 558,
+      "w": 770,
+      "h": 22
+    }
+  ],
+  "symbols": {
+    "pod": [
+      "shape=mxgraph.kubernetes.icon;prIcon=pod;",
+      "native:kubernetes"
+    ],
+    "service": [
+      "shape=mxgraph.kubernetes.icon;prIcon=svc;",
+      "native:kubernetes"
+    ],
+    "gateway": [
+      "shape=mxgraph.kubernetes.icon;prIcon=crd;",
+      "native:kubernetes"
+    ],
+    "account": [
+      "shape=mxgraph.kubernetes.icon;prIcon=sa;",
+      "native:kubernetes"
+    ],
+    "process": [
+      "shape=process;",
+      "native:flowchart"
+    ],
+    "decision": [
+      "shape=rhombus;",
+      "native:flowchart"
+    ],
+    "person": [
+      "shape=umlActor;",
+      "native:uml"
+    ],
+    "cloud": [
+      "shape=cloud;",
+      "native:cloud"
+    ],
+    "vault": [
+      "shape=image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "identity": [
+      "shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=0;aspect=fixed;",
+      "native:azure"
+    ],
+    "store": [
+      "shape=cylinder3;size=10;",
+      "native:database"
+    ],
+    "product": [
+      "shape=hexagon;",
+      "custom:agentweaver"
+    ]
+  },
+  "orientation": "A5-landscape",
+  "page_units": "100 draw.io units per inch; 827 x 583 approximates 210 x 148 mm",
+  "research_agents": [
+    "guide-runtime-evidence",
+    "guide-network-evidence",
+    "guide-workflow-evidence"
+  ],
+  "model": "gpt-6-astra"
+}

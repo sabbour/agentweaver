@@ -1,0 +1,460 @@
+{
+  "title": "Testing boundary · choose what must stay real",
+  "nodes": [
+    {
+      "id": "host",
+      "label": "Real API host",
+      "subLabel": "WebApplicationFactory / Program",
+      "meta": "AgentweaverWebApplicationFactory",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "REAL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "agent",
+      "label": "Deterministic agent seam",
+      "subLabel": "TestFileEditAgentRunner",
+      "meta": "TestFileEditAgentRunner:44–80",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONTROLLED",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "stores",
+      "label": "Real SQLite stores",
+      "subLabel": "Raw and EF-backed test databases",
+      "meta": "ProjectsWebApplicationFactory",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "REAL",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "http",
+      "label": "Controlled HTTP boundary",
+      "subLabel": "Stub handlers / issuer / API",
+      "meta": "McpBrokerRealProcessTests",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONTROLLED",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "git",
+      "label": "Real Git / policy logic",
+      "subLabel": "Repositories and worktree operations",
+      "meta": "WorkflowWebApplicationFactory",
+      "icon": "box",
+      "shape": "folder",
+      "classification": "native:uml",
+      "badge": {
+        "text": "REAL",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=folder;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "planning",
+      "label": "Planning / workflow seams",
+      "meta": "CoordinatorWebApplicationFactory",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CONTROLLED",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "postgres",
+      "label": "Real PostgreSQL fixture",
+      "subLabel": "postgres:16-alpine Testcontainer",
+      "meta": "PostgresFixture:9–29",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "PROVIDER",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;"
+    },
+    {
+      "id": "mcp",
+      "label": "Real MCP process",
+      "subLabel": "Loopback executable test",
+      "meta": "McpBrokerRealProcessTests:235–255",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "PROCESS",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "host",
+      "to": "agent",
+      "label": "inject seam",
+      "source_edges": [
+        "host-to-agent"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "host",
+      "to": "planning",
+      "label": "planning",
+      "source_edges": [
+        "host-to-planning"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "REAL BEHAVIOR / INFRASTRUCTURE"
+    },
+    {
+      "id": "1",
+      "label": "CONTROLLED EXTERNAL SEAMS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "host",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "host",
+          "label": "Real API host",
+          "subLabel": "WebApplicationFactory / Program",
+          "meta": "AgentweaverWebApplicationFactory",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "REAL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "agent",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "agent",
+          "label": "Deterministic agent seam",
+          "subLabel": "TestFileEditAgentRunner",
+          "meta": "TestFileEditAgentRunner:44–80",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONTROLLED",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "stores",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "stores",
+          "label": "Real SQLite stores",
+          "subLabel": "Raw and EF-backed test databases",
+          "meta": "ProjectsWebApplicationFactory",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "REAL",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "http",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "http",
+          "label": "Controlled HTTP boundary",
+          "subLabel": "Stub handlers / issuer / API",
+          "meta": "McpBrokerRealProcessTests",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONTROLLED",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "git",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "git",
+          "label": "Real Git / policy logic",
+          "subLabel": "Repositories and worktree operations",
+          "meta": "WorkflowWebApplicationFactory",
+          "icon": "box",
+          "shape": "folder",
+          "classification": "native:uml",
+          "badge": {
+            "text": "REAL",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=folder;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "planning",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "planning",
+          "label": "Planning / workflow seams",
+          "meta": "CoordinatorWebApplicationFactory",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CONTROLLED",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "postgres",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "postgres",
+          "label": "Real PostgreSQL fixture",
+          "subLabel": "postgres:16-alpine Testcontainer",
+          "meta": "PostgresFixture:9–29",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "PROVIDER",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "mcp",
+          "label": "Real MCP process",
+          "subLabel": "Loopback executable test",
+          "meta": "McpBrokerRealProcessTests:235–255",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "PROCESS",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 24.087463556851304
+        },
+        "style": {
+          "width": 404,
+          "height": 714
+        },
+        "data": {
+          "label": "REAL BEHAVIOR / INFRASTRUCTURE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 40.087463556851304
+        },
+        "data": {
+          "label": "REAL BEHAVIOR / INFRASTRUCTURE",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 484.48513119533527,
+          "y": 24.087463556851304
+        },
+        "style": {
+          "width": 404,
+          "height": 700
+        },
+        "data": {
+          "label": "CONTROLLED EXTERNAL SEAMS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 504.48513119533527,
+          "y": 40.087463556851304
+        },
+        "data": {
+          "label": "CONTROLLED EXTERNAL SEAMS",
+          "width": 364
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "host",
+        "target": "agent",
+        "label": "inject seam",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 516.4851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 446.0851311953353,
+            "y": 160.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "host",
+        "target": "planning",
+        "label": "planning",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 199.6874635568513
+            },
+            {
+              "x": 445.5044548668328,
+              "y": 199.6874635568513
+            },
+            {
+              "x": 445.5044548668328,
+              "y": 679.2874635568513
+            },
+            {
+              "x": 516.4851311953353,
+              "y": 679.2874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 466.79865776538355,
+            "y": 679.2874635568513
+          }
+        }
+      }
+    ],
+    "canvasWidth": 890.1877551020408,
+    "canvasHeight": 993.6909620991254
+  }
+}

@@ -1,0 +1,181 @@
+{
+  "diagram": "canonical-workflow-selection",
+  "orientation": "A5-portrait",
+  "pitch": {
+    "drawio": "canonical-workflow-selection-pitch.drawio",
+    "png": "canonical-workflow-selection-pitch.png",
+    "change_record": "canonical-workflow-selection-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-workflow-selection-pass-01-upgrade.drawio",
+      "png": "canonical-workflow-selection-pass-01-upgrade.png",
+      "change_record": "canonical-workflow-selection-pass-01-upgrade.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 4277,
+      "result_meaningful_xml": 47258,
+      "growth_ratio": 11.049334
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "canonical-workflow-selection-pass-02.drawio",
+      "png": "canonical-workflow-selection-pass-02.png",
+      "change_record": "canonical-workflow-selection-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "canonical-workflow-selection-pass-03.drawio",
+      "png": "canonical-workflow-selection-pass-03.png",
+      "change_record": "canonical-workflow-selection-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "canonical-workflow-selection-pass-04.drawio",
+      "png": "canonical-workflow-selection-pass-04.png",
+      "change_record": "canonical-workflow-selection-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "edge-01",
+          "source": "available",
+          "target": "explicit",
+          "relationship": "unconditional advance",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-02",
+          "source": "explicit",
+          "target": "explicit-result",
+          "relationship": "available",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-03",
+          "source": "explicit",
+          "target": "conversation",
+          "relationship": "absent / invalid",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-04",
+          "source": "conversation",
+          "target": "explicit-result",
+          "relationship": "available",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-05",
+          "source": "conversation",
+          "target": "count",
+          "relationship": "absent / invalid",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-06",
+          "source": "count",
+          "target": "silent",
+          "relationship": "0 or 1",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-07",
+          "source": "count",
+          "target": "model",
+          "relationship": "2+",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-08",
+          "source": "model",
+          "target": "validate",
+          "relationship": "response",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-09",
+          "source": "model",
+          "target": "fallback",
+          "relationship": "exception",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-10",
+          "source": "validate",
+          "target": "selected",
+          "relationship": "accepted",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-11",
+          "source": "validate",
+          "target": "model",
+          "relationship": "retry once",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-12",
+          "source": "validate",
+          "target": "fallback",
+          "relationship": "2 unusable",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-13",
+          "source": "fallback",
+          "target": "selected",
+          "relationship": "emit choice",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        },
+        {
+          "id": "edge-14",
+          "source": "available",
+          "target": "outer",
+          "relationship": "outer catch",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:271\u2013405; apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs:93\u2013215",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

@@ -1,0 +1,879 @@
+{
+  "eligible": [
+    {
+      "name": "00-system-overview-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\00-system-overview-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "00-system-overview-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\00-system-overview-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "00-system-overview-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\00-system-overview-fig5\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-definition-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-definition-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-framework-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-framework-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-framework-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-framework-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-framework-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-framework-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-runtime-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-runtime-fig2\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "agent-runtime-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\agent-runtime-fig3\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "api-core-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\api-core-fig4\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "api-core-fig6",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\api-core-fig6\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "assistant-runtime-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\assistant-runtime-fig1\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\assistant-runtime-fig1\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "auth-security-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\auth-security-fig1\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\auth-security-fig1\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "auth-security-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\auth-security-fig4\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\auth-security-fig4\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-a2a-execution",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-a2a-execution\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-agent-communication-a2a",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-agent-communication-a2a\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-agent-communication-handoff",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-agent-communication-handoff\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-agent-communication-handoff\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-agent-communication-shared",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-agent-communication-shared\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-aks-components",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-aks-components\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-aks-components\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-aks-network",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-aks-network\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-api-host",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-api-host\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-board-lifecycle",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-board-lifecycle\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-board-lifecycle\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-coordinator-journey",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-coordinator-journey\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-coordinator-journey\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-default-workflow",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-default-workflow\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-default-workflow\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-durable-event-stream-sequence",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-durable-event-stream-sequence\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-durable-event-stream-sequence\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-durable-event-stream",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-durable-event-stream\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-durable-event-stream\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-memory-context",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-memory-context\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-memory-context\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-provider-admission",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-provider-admission\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-provider-admission\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-sandbox-boundary",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-sandbox-boundary\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-sandbox-boundary\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-sandbox-experience",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-sandbox-experience\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-sandbox-experience\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-sandbox-pod-evolution",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-sandbox-pod-evolution\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-testing-boundary",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-testing-boundary\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-workflow-authoring",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-workflow-authoring\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-workflow-invocation",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-workflow-invocation\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-workflow-selection",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-workflow-selection\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\canonical-workflow-selection\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "coordinator-internals-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\coordinator-internals-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "coordinator-internals-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\coordinator-internals-fig3\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "coordinator-internals-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\coordinator-internals-fig4\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\coordinator-internals-fig4\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "data-persistence-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\data-persistence-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "distributed-execution-scaling-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\distributed-execution-scaling-fig3\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "distributed-execution-scaling-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\distributed-execution-scaling-fig4\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "distributed-execution-scaling-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\distributed-execution-scaling-fig5\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "email-architecture",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\email-architecture\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\email-architecture\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "email-components",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\email-components\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\email-components\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "email-coordinator-workflow",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\email-coordinator-workflow\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\email-coordinator-workflow\\fluent-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-00-overview-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-00-overview-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-a2a-distributed-agents-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-a2a-distributed-agents-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-mcp-client-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-mcp-client-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-onboarding-auth-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-onboarding-auth-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-onboarding-auth-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-onboarding-auth-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-operations-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-operations-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-review-workspace-merge-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-review-workspace-merge-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-review-workspace-merge-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-review-workspace-merge-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-sandbox-pod-execution-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-sandbox-pod-execution-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-scaling-operations-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-scaling-operations-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-scaling-operations-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-scaling-operations-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-team-casting-memory-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-team-casting-memory-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "experience-workflows-backlog-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\experience-workflows-backlog-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "frontend-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\frontend-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "frontend-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\frontend-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "frontend-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\frontend-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "frontend-fig6",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\frontend-fig6\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "frontend-fig7",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\frontend-fig7\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "git-integration-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\git-integration-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "git-integration-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\git-integration-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "guide-architecture-aks-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\guide-architecture-aks-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "guide-architecture-aks-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\guide-architecture-aks-fig5\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "guide-example-scenarios-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\guide-example-scenarios-fig3\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "infra-deployment-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\infra-deployment-fig2\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "infra-deployment-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\infra-deployment-fig3\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "infra-deployment-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\infra-deployment-fig4\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "live-preview-provisioning-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\live-preview-provisioning-fig1\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "mcp-server-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\mcp-server-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "memory-decisions-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\memory-decisions-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "memory-decisions-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\memory-decisions-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "memory-decisions-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\memory-decisions-fig4\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "orchestration-fig10",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\orchestration-fig10\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "orchestration-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\orchestration-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "orchestration-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\orchestration-fig3\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "orchestration-fig8",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\orchestration-fig8\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "orchestration-fig9",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\orchestration-fig9\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "project-generation-model-settings-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\project-generation-model-settings-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "project-skills-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\project-skills-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "projects-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\projects-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "projects-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\projects-fig2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "reference-a2a-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\reference-a2a-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\reference-scaling-data-layer-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "repo-blueprint-suggestions-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\repo-blueprint-suggestions-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "resilient-assembly-review-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\resilient-assembly-review-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "review-merge-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\review-merge-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "review-merge-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\review-merge-fig4\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "review-merge-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\review-merge-fig5\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-browser-preview-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-browser-preview-fig1\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\sandbox-browser-preview-fig1\\native-pitch-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-browser-preview-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-browser-preview-fig2\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-fig2\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-fig3\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-pod-execution-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-pod-execution-fig4\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-pod-execution-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-pod-execution-fig5\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-pod-execution-fig6",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-pod-execution-fig6\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "sandbox-pod-execution-fig7",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\sandbox-pod-execution-fig7\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "team-casting-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\team-casting-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "team-casting-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\team-casting-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "team-casting-fig3",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\team-casting-fig3\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "testing-strategy-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\testing-strategy-fig1\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "testing-strategy-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\testing-strategy-fig4\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "unified-steering-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\unified-steering-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-agent-evaluation",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-agent-evaluation\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-agent-evaluation\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-bug-fix",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-bug-fix\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-bug-fix\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-content-authoring",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-content-authoring\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-content-authoring\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig1",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig1\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig11",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig11\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig2",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig2\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig4",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig4\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig5",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig5\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-engine-fig9",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-engine-fig9\\v2\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-incident-response",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-incident-response\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-incident-response\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-infra-ops",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-infra-ops\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-infra-ops\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-pm-discovery",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-pm-discovery\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-pm-discovery\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "workflow-software-delivery",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\workflow-software-delivery\\iteration-manifest.json",
+        "docs\\diagrams\\reviews\\workflow-software-delivery\\fullfluent-remediation\\iteration-manifest.json"
+      ],
+      "already_published": true
+    },
+    {
+      "name": "canonical-pod-process-boundaries",
+      "prior_evidence": [
+        "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\completion-20260913\\iteration-manifest.json"
+      ],
+      "already_published": true
+    }
+  ],
+  "blocked": [],
+  "protected": [
+    "canonical-coordinator-architecture"
+  ],
+  "retire": [
+    "canonical-event-replay-tail",
+    "guide-review-fig1"
+  ]
+}

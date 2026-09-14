@@ -1,0 +1,28 @@
+{
+  "diagram": "infra-deployment-fig4",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "infra-deployment-fig4-pitch.drawio",
+    "png": "infra-deployment-fig4-pitch.png",
+    "change_record": "infra-deployment-fig4-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "infra-deployment-fig4-pass-01.drawio",
+      "png": "infra-deployment-fig4-pass-01.png",
+      "change_record": "infra-deployment-fig4-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "all_arrows_traced": false,
+      "baseline_meaningful_xml": 4661,
+      "result_meaningful_xml": 18589,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 3.9882
+    }
+  ],
+  "final_pass": null
+}

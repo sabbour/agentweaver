@@ -1,0 +1,11 @@
+{
+  "diagram": "coordinator-internals-fig3",
+  "phase": "pass-02",
+  "png_sha256": "fb109609bf010fa21abd2447b88ab27ddf422439250db21885bae40b8598e675",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven print sheets and fourteen original-pixel pairs. The Review API heading collision and resilient budget title wrap are corrected. Existing content and Fluent styling remain intact; residual close-lane issues are recorded per diagram.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

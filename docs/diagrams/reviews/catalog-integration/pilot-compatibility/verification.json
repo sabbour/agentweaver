@@ -1,0 +1,72 @@
+{
+  "status": "passed",
+  "original_dimensions": [
+    1664,
+    1172
+  ],
+  "corrected_dimensions": [
+    1668,
+    1172
+  ],
+  "card_pixel_checks": [
+    {
+      "card": "entry",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.0051655219006868595,
+        0.0051655219006868595,
+        0.006157808805314717
+      ]
+    },
+    {
+      "card": "coordinator",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.014843093303446344,
+        0.01547352199495657,
+        0.0155575791538246
+      ]
+    },
+    {
+      "card": "dispatch",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.020114604760505438,
+        0.02080517190714076,
+        0.021297384660593593
+      ]
+    },
+    {
+      "card": "state",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.007128983222610067,
+        0.004884022069586758,
+        0.005383684269789438
+      ]
+    },
+    {
+      "card": "assembly",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.017070608013449146,
+        0.01558559820678061,
+        0.017659008125525358
+      ]
+    },
+    {
+      "card": "children",
+      "maximum_channel_delta": 2,
+      "mean_channel_delta": [
+        0.021040258595357037,
+        0.02319277108433735,
+        0.022987070232148105
+      ]
+    }
+  ],
+  "semantics_and_geometry_changes": 0,
+  "arrow_marker_updates": 9,
+  "pixel_identity": false,
+  "inspection": "Original and corrected actual PNGs opened individually. All nine arrows traced. Native jump at the status/recovery crossing remains visibly separate; no false junction. Card interiors differ by at most two channel levels after re-rasterization. The marker-driven re-export is transparent, not claimed byte/pixel-identical.",
+  "approval_scope": "Exact canonical XML fingerprint pins all content, geometry and style. The preserved pilot profile cannot be applied to any other source or modified pilot."
+}

@@ -1,0 +1,105 @@
+{
+  "documents": [
+    {
+      "document": "docs/guide/architecture-aks.md",
+      "links": 28,
+      "images": 3
+    },
+    {
+      "document": "docs/guide/assistant.md",
+      "links": 12,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/authentication.md",
+      "links": 8,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/blueprints.md",
+      "links": 5,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/board.md",
+      "links": 13,
+      "images": 1
+    },
+    {
+      "document": "docs/guide/configuration.md",
+      "links": 18,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/deployment-aks.md",
+      "links": 14,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/diagram-authoring.md",
+      "links": 12,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/example-scenarios.md",
+      "links": 20,
+      "images": 2
+    },
+    {
+      "document": "docs/guide/fleet-cutover-validation.md",
+      "links": 9,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/getting-started.md",
+      "links": 30,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/index.md",
+      "links": 28,
+      "images": 1
+    },
+    {
+      "document": "docs/guide/mcp-cli.md",
+      "links": 20,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/operations.md",
+      "links": 28,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/projects.md",
+      "links": 14,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/review.md",
+      "links": 14,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/runs.md",
+      "links": 26,
+      "images": 1
+    },
+    {
+      "document": "docs/guide/teams.md",
+      "links": 21,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/validation.md",
+      "links": 3,
+      "images": 0
+    },
+    {
+      "document": "docs/guide/workflows.md",
+      "links": 17,
+      "images": 1
+    }
+  ],
+  "failures": []
+}

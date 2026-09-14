@@ -1,0 +1,299 @@
+{
+  "diagram": "guide-example-scenarios-fig3",
+  "source_sha256": "1495517e48e53c2d604e868404ac605b4106ad3565a508f46df5d6cc4e65b21a",
+  "png_sha256": "69325da81b0756b0899a92882dc0f426b6d398debea07ef3248090ca46acab5b",
+  "prior_model": "docs\\diagrams\\reviews\\guide-example-scenarios-fig3\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "MCP lifecycle: choose one launch path"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Queue pickup and explicit starts are alternatives; inspection and approvals remain explicit."
+    },
+    {
+      "cell": "m-prep-title",
+      "text": "PREPARE AUTHORITY AND A CONFIRMED TEAM"
+    },
+    {
+      "cell": "m-launch-title",
+      "text": "CHOOSE ONE • DO NOT QUEUE AND EXPLICITLY START THE SAME TASK"
+    },
+    {
+      "cell": "m-observe-title",
+      "text": "OBSERVE, INSPECT AND DECIDE • NOT AUTOMATIC SUCCESS"
+    },
+    {
+      "cell": "auth-badge",
+      "text": "SIGN IN"
+    },
+    {
+      "cell": "auth-title",
+      "text": "Authorize"
+    },
+    {
+      "cell": "auth-sub",
+      "text": "MCP OAuth / Entra identity"
+    },
+    {
+      "cell": "auth-meta",
+      "text": "Repo capability is separate"
+    },
+    {
+      "cell": "project-badge",
+      "text": "PROJECT"
+    },
+    {
+      "cell": "project-title",
+      "text": "Choose project"
+    },
+    {
+      "cell": "project-sub",
+      "text": "project_list / project_create"
+    },
+    {
+      "cell": "project-meta",
+      "text": "Check provider + repo readiness"
+    },
+    {
+      "cell": "team-badge",
+      "text": "TEAM"
+    },
+    {
+      "cell": "team-title",
+      "text": "Confirm team"
+    },
+    {
+      "cell": "team-sub",
+      "text": "team_cast: proposal first"
+    },
+    {
+      "cell": "team-meta",
+      "text": "confirm_proposal_id or confirm"
+    },
+    {
+      "cell": "manual-badge",
+      "text": "MANUAL"
+    },
+    {
+      "cell": "manual-title",
+      "text": "Define outcome"
+    },
+    {
+      "cell": "manual-sub",
+      "text": "coordinator_start"
+    },
+    {
+      "cell": "manual-meta",
+      "text": "defineOutcome; autopilot=false"
+    },
+    {
+      "cell": "direct-badge",
+      "text": "DIRECT"
+    },
+    {
+      "cell": "direct-title",
+      "text": "Start and poll"
+    },
+    {
+      "cell": "direct-sub",
+      "text": "run_task"
+    },
+    {
+      "cell": "direct-meta",
+      "text": "Default direct; creates NEW run"
+    },
+    {
+      "cell": "backlog-badge",
+      "text": "PICKUP"
+    },
+    {
+      "cell": "backlog-title",
+      "text": "Queue for heartbeat"
+    },
+    {
+      "cell": "backlog-sub",
+      "text": "backlog_capture_task"
+    },
+    {
+      "cell": "backlog-meta",
+      "text": "then backlog_move_to_ready"
+    },
+    {
+      "cell": "observe-badge",
+      "text": "READ / CONTROL"
+    },
+    {
+      "cell": "observe-title",
+      "text": "Observe / steer"
+    },
+    {
+      "cell": "observe-sub",
+      "text": "coordinator_work_plan_get"
+    },
+    {
+      "cell": "observe-meta",
+      "text": "coordinator_children_get"
+    },
+    {
+      "cell": "files-badge",
+      "text": "LIST FIRST"
+    },
+    {
+      "cell": "files-title",
+      "text": "Inspect files"
+    },
+    {
+      "cell": "files-sub",
+      "text": "run_show_artifacts"
+    },
+    {
+      "cell": "files-meta",
+      "text": "then run_get_file"
+    },
+    {
+      "cell": "review-badge",
+      "text": "HUMAN"
+    },
+    {
+      "cell": "review-title",
+      "text": "Review when gated"
+    },
+    {
+      "cell": "review-sub",
+      "text": "run_review(approved: bool)"
+    },
+    {
+      "cell": "review-meta",
+      "text": "true approves; false declines"
+    },
+    {
+      "cell": "m1",
+      "text": "authorize"
+    },
+    {
+      "cell": "m2",
+      "text": "prepare"
+    },
+    {
+      "cell": "m3",
+      "text": "confirm"
+    },
+    {
+      "cell": "m4",
+      "text": "new run"
+    },
+    {
+      "cell": "m5",
+      "text": "reserved run"
+    },
+    {
+      "cell": "m6",
+      "text": "list"
+    },
+    {
+      "cell": "m7",
+      "text": "inspect"
+    },
+    {
+      "cell": "m-confirm-heading",
+      "text": "MANUAL GATE"
+    },
+    {
+      "cell": "m-confirm-body",
+      "text": "coordinator_outcome_spec_get → coordinator_outcome_spec_confirm (or coordinator_outcome_spec_revise)."
+    },
+    {
+      "cell": "m-pickup-heading",
+      "text": "HEARTBEAT"
+    },
+    {
+      "cell": "m-pickup-body",
+      "text": "Atomically claims Ready item. Pickup autopilot controls confirmation, not tool or merge approval."
+    },
+    {
+      "cell": "m-direct-heading",
+      "text": "BOUNDED WAIT"
+    },
+    {
+      "cell": "m-direct-body",
+      "text": "Returns artifacts, a gate, a next action, a timeout, or a failure. Never assume completion."
+    },
+    {
+      "cell": "m-outcomes-heading",
+      "text": "REVIEW PARITY"
+    },
+    {
+      "cell": "m-outcomes-body",
+      "text": "Request changes: web/REST review, not run_review. coordinator_steer is separate. memory_export is optional."
+    },
+    {
+      "cell": "m-gates-heading",
+      "text": "COLLECTIVE GATES"
+    },
+    {
+      "cell": "m-gates-body",
+      "text": "Children: Agent → Assemble-ready. Selected workflow gates apply to combined output, not per child."
+    }
+  ],
+  "context_pages": [
+    "docs/guide/example-scenarios.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "auth",
+      "to": "project",
+      "label": "authorize",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "project",
+      "to": "team",
+      "label": "prepare",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "manual",
+      "to": "observe",
+      "label": "confirm",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "direct",
+      "to": "observe",
+      "label": "new run",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "backlog",
+      "to": "observe",
+      "label": "reserved run",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "observe",
+      "to": "files",
+      "label": "list",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "files",
+      "to": "review",
+      "label": "inspect",
+      "result": "clean"
+    }
+  ]
+}

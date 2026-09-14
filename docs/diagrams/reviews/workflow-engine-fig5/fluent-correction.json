@@ -1,0 +1,270 @@
+{
+  "diagram": "workflow-engine-fig5",
+  "source_sha256": "bd775a16dbcbf6e48cb2c21c19bf276eaa12d02ff67c396ef2e2e4b314c93884",
+  "png_sha256": "edef88f7e970be9d5523e43ef0fa76deaa2572287a357b9bd07a9344573220d3",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Discover and cache valid workflows"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Registry sources are categories, not a project-policy precedence chain."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DEFINITION SOURCES"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "VALIDATION AND FILTERING"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "DIAGNOSTICS, CACHE AND AVAILABILITY"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "BUILT-IN"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Embedded default"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Platform-provided definition"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "default retained"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CATALOG"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Conforming catalog"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Known catalog workflows"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "reserved IDs protected"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "PROJECT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Project YAML"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Project-defined documents"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "not review-policy files"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "VALIDATE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Loader + bindability"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Validate usable definitions"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "invalid entries diagnosed"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "IDENTITY"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Identity collisions"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Reserved catalog conflicts"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "materialized default skipped"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "FILTER"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Allowed-set filter"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Filter available choices"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "default retained"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "ERRORS"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Invalid diagnostics"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Keep errors in results"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "not selectable candidates"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "CACHE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Signature cache"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Per-project refresh key"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "sync invalidates/refreshes"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "OUTPUT"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Available candidates"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Valid and allowed workflows"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "selection input"
+    },
+    {
+      "cell": "e0",
+      "text": "load"
+    },
+    {
+      "cell": "e1",
+      "text": "load"
+    },
+    {
+      "cell": "e2",
+      "text": "load"
+    },
+    {
+      "cell": "e3",
+      "text": "check IDs"
+    },
+    {
+      "cell": "e4",
+      "text": "invalid"
+    },
+    {
+      "cell": "e5",
+      "text": "valid"
+    },
+    {
+      "cell": "e6",
+      "text": "cache"
+    },
+    {
+      "cell": "e7",
+      "text": "available"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/workflow-engine.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n3",
+      "label": "load",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n3",
+      "label": "load",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "load",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "check IDs",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n6",
+      "label": "invalid",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n5",
+      "label": "valid",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n5",
+      "to": "n7",
+      "label": "cache",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n7",
+      "to": "n8",
+      "label": "available",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,531 @@
+{
+  "nodes": [
+    {
+      "id": "api",
+      "label": "API caller",
+      "subLabel": "Sandbox lifecycle and control",
+      "meta": "",
+      "shape": "mxgraph.kubernetes.pod",
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.3;",
+      "badge": {
+        "tone": "green"
+      },
+      "group": "platform"
+    },
+    {
+      "id": "worker",
+      "label": "Worker / remote proxy",
+      "subLabel": "Owns the orchestration graph",
+      "meta": "RemoteAgentProxy",
+      "shape": "mxgraph.kubernetes.pod",
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+      "badge": {
+        "tone": "lavender"
+      },
+      "group": "platform"
+    },
+    {
+      "id": "checkpoint",
+      "label": "Checkpoint manager",
+      "subLabel": "JSON workflow state / resume",
+      "meta": "",
+      "shape": "process",
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.3;",
+      "badge": {
+        "tone": "teal"
+      },
+      "group": "platform"
+    },
+    {
+      "id": "database",
+      "label": "Durable platform store",
+      "subLabel": "Checkpoints + run events",
+      "meta": "",
+      "shape": "cylinder3",
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.3;",
+      "badge": {
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "configure",
+      "label": "Configure once",
+      "subLabel": "Live Copilot capability OR BYOK",
+      "meta": "/healthz, then /configure",
+      "shape": "process",
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.3;",
+      "badge": {
+        "tone": "green"
+      },
+      "group": "pod"
+    },
+    {
+      "id": "turn",
+      "label": "Turn gate",
+      "subLabel": "Run-scoped bearer",
+      "meta": "",
+      "shape": "mxgraph.flowchart.decision",
+      "nativeStyle": "shape=mxgraph.flowchart.decision;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+      "badge": {
+        "tone": "lavender"
+      },
+      "group": "pod"
+    },
+    {
+      "id": "card",
+      "label": "Card gate",
+      "subLabel": "Separate option",
+      "meta": "",
+      "shape": "mxgraph.flowchart.document",
+      "nativeStyle": "shape=mxgraph.flowchart.document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.3;",
+      "badge": {
+        "tone": "neutral"
+      },
+      "group": "pod"
+    },
+    {
+      "id": "bridge",
+      "label": "A2ATurnBridgeAgent",
+      "subLabel": "Per-turn prompt / skills / API context",
+      "meta": "purpose-routing runner",
+      "shape": "process",
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+      "badge": {
+        "tone": "lavender"
+      },
+      "group": "pod"
+    }
+  ],
+  "edges": [
+    {
+      "from": "api",
+      "to": "configure",
+      "label": "health / configure",
+      "source_edges": [
+        "configure-call"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "worker",
+      "to": "turn",
+      "label": "turn / ordered stream",
+      "source_edges": [
+        "turn-stream"
+      ],
+      "loopback": false,
+      "bidirectional": true
+    },
+    {
+      "from": "worker",
+      "to": "checkpoint",
+      "label": "",
+      "source_edges": [
+        "checkpoint-write"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    },
+    {
+      "from": "checkpoint",
+      "to": "database",
+      "label": "save / resume",
+      "source_edges": [
+        "checkpoint-store"
+      ],
+      "loopback": false,
+      "bidirectional": true
+    },
+    {
+      "from": "turn",
+      "to": "bridge",
+      "label": "",
+      "source_edges": [
+        "bridge-call"
+      ],
+      "loopback": false,
+      "bidirectional": false
+    }
+  ],
+  "title": "reference-a2a-fig1",
+  "groups": [
+    {
+      "id": "platform",
+      "label": "PLATFORM / AKS"
+    },
+    {
+      "id": "pod",
+      "label": "PER-RUN AGENTHOST POD"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 210.9251101321586,
+          "y": 285.6211453744494
+        },
+        "data": {
+          "id": "api",
+          "label": "API caller",
+          "subLabel": "Sandbox lifecycle and control",
+          "meta": "",
+          "shape": "mxgraph.kubernetes.pod",
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.3;",
+          "badge": {
+            "tone": "green"
+          },
+          "group": "platform"
+        }
+      },
+      {
+        "id": "worker",
+        "type": "card",
+        "position": {
+          "x": 210.9251101321586,
+          "y": 533.9488648638495
+        },
+        "data": {
+          "id": "worker",
+          "label": "Worker / remote proxy",
+          "subLabel": "Owns the orchestration graph",
+          "meta": "RemoteAgentProxy",
+          "shape": "mxgraph.kubernetes.pod",
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+          "badge": {
+            "tone": "lavender"
+          },
+          "group": "platform"
+        }
+      },
+      {
+        "id": "checkpoint",
+        "type": "card",
+        "position": {
+          "x": 210.9251101321586,
+          "y": 786.7760767038094
+        },
+        "data": {
+          "id": "checkpoint",
+          "label": "Checkpoint manager",
+          "subLabel": "JSON workflow state / resume",
+          "meta": "",
+          "shape": "process",
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.3;",
+          "badge": {
+            "tone": "teal"
+          },
+          "group": "platform"
+        }
+      },
+      {
+        "id": "database",
+        "type": "card",
+        "position": {
+          "x": 210.9251101321586,
+          "y": 1019.8678414096917
+        },
+        "data": {
+          "id": "database",
+          "label": "Durable platform store",
+          "subLabel": "Checkpoints + run events",
+          "meta": "",
+          "shape": "cylinder3",
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.3;",
+          "badge": {
+            "tone": "teal"
+          }
+        }
+      },
+      {
+        "id": "configure",
+        "type": "card",
+        "position": {
+          "x": 904.4052863436125,
+          "y": 277.07836772548114
+        },
+        "data": {
+          "id": "configure",
+          "label": "Configure once",
+          "subLabel": "Live Copilot capability OR BYOK",
+          "meta": "/healthz, then /configure",
+          "shape": "process",
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.3;",
+          "badge": {
+            "tone": "green"
+          },
+          "group": "pod"
+        }
+      },
+      {
+        "id": "turn",
+        "type": "card",
+        "position": {
+          "x": 785.330396475771,
+          "y": 530.7976659710953
+        },
+        "data": {
+          "id": "turn",
+          "label": "Turn gate",
+          "subLabel": "Run-scoped bearer",
+          "meta": "",
+          "shape": "mxgraph.flowchart.decision",
+          "nativeStyle": "shape=mxgraph.flowchart.decision;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+          "badge": {
+            "tone": "lavender"
+          },
+          "group": "pod"
+        }
+      },
+      {
+        "id": "card",
+        "type": "card",
+        "position": {
+          "x": 1197.330396475771,
+          "y": 530.7976659710953
+        },
+        "data": {
+          "id": "card",
+          "label": "Card gate",
+          "subLabel": "Separate option",
+          "meta": "",
+          "shape": "mxgraph.flowchart.document",
+          "nativeStyle": "shape=mxgraph.flowchart.document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.3;",
+          "badge": {
+            "tone": "neutral"
+          },
+          "group": "pod"
+        }
+      },
+      {
+        "id": "bridge",
+        "type": "card",
+        "position": {
+          "x": 904.4052863436125,
+          "y": 751.9829800024422
+        },
+        "data": {
+          "id": "bridge",
+          "label": "A2ATurnBridgeAgent",
+          "subLabel": "Per-turn prompt / skills / API context",
+          "meta": "purpose-routing runner",
+          "shape": "process",
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.3;",
+          "badge": {
+            "tone": "lavender"
+          },
+          "group": "pod"
+        }
+      },
+      {
+        "id": "group-platform",
+        "type": "band",
+        "position": {
+          "x": 178.9251101321586,
+          "y": 221.62114537444938
+        },
+        "style": {
+          "width": 404,
+          "height": 693.15493132936
+        },
+        "data": {
+          "label": "PLATFORM / AKS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-platform-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.9251101321586,
+          "y": 237.62114537444938
+        },
+        "data": {
+          "label": "PLATFORM / AKS",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-pod",
+        "type": "band",
+        "position": {
+          "x": 753.330396475771,
+          "y": 213.07836772548114
+        },
+        "style": {
+          "width": 816.0000000000001,
+          "height": 694.9046122769611
+        },
+        "data": {
+          "label": "PER-RUN AGENTHOST POD",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-pod-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 773.330396475771,
+          "y": 229.07836772548114
+        },
+        "data": {
+          "label": "PER-RUN AGENTHOST POD",
+          "width": 776.0000000000001
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "api",
+        "target": "configure",
+        "label": "health / configure",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.9251101321586,
+              "y": 337.6211453744494
+            },
+            {
+              "x": 872.4052863436125,
+              "y": 337.6211453744494
+            },
+            {
+              "x": 872.4052863436125,
+              "y": 343.07836772548114
+            },
+            {
+              "x": 904.4052863436125,
+              "y": 343.07836772548114
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 711.6651982378855,
+            "y": 337.6211453744494
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "worker",
+        "target": "turn",
+        "label": "turn / ordered stream",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.9251101321586,
+              "y": 585.9488648638495
+            },
+            {
+              "x": 753.330396475771,
+              "y": 585.9488648638495
+            },
+            {
+              "x": 753.330396475771,
+              "y": 582.7976659710953
+            },
+            {
+              "x": 785.330396475771,
+              "y": 582.7976659710953
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 662.9251101321586,
+            "y": 585.9488648638495
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "worker",
+        "target": "checkpoint",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 380.9251101321586,
+              "y": 637.9488648638495
+            },
+            {
+              "x": 380.9251101321586,
+              "y": 786.7760767038094
+            }
+          ],
+          "loopback": false,
+          "junctions": []
+        }
+      },
+      {
+        "id": "e3",
+        "source": "checkpoint",
+        "target": "database",
+        "label": "save / resume",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 380.9251101321586,
+              "y": 890.7760767038094
+            },
+            {
+              "x": 380.9251101321586,
+              "y": 1019.8678414096917
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 380.9251101321586,
+            "y": 955.3219590567505
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "turn",
+        "target": "bridge",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 955.330396475771,
+              "y": 634.7976659710953
+            },
+            {
+              "x": 955.330396475771,
+              "y": 666.7976659710953
+            },
+            {
+              "x": 1074.4052863436125,
+              "y": 666.7976659710953
+            },
+            {
+              "x": 1074.4052863436125,
+              "y": 751.9829800024422
+            }
+          ],
+          "loopback": false,
+          "junctions": []
+        }
+      }
+    ],
+    "canvasWidth": 1509.251101321586,
+    "canvasHeight": 1223.7621145374449
+  }
+}

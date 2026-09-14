@@ -1,0 +1,16 @@
+{
+  "diagram": "project-skills-fig1",
+  "manifest": "docs/diagrams/reviews/project-skills-fig1/iteration-manifest.json",
+  "schema": "valid",
+  "repository_manifest_validator": "iteration manifest is valid",
+  "pitch_plus_passes": 5,
+  "actual_open_inspections_recorded": 10,
+  "one_uncompressed_A5_page_all_passes": true,
+  "bounds_and_5_unit_accents": "valid",
+  "native_symbols_and_card_hierarchy": "valid",
+  "exact_arrow_ids_source_target_label_evidence": 7,
+  "growth_ratio": 10.978002,
+  "final_source_sha256": "d74f42ba7e02b1f59834c73bc37c3394f876df72bfd4554fb8274e0ccbe56161",
+  "inspected_final_png_sha256": "0a3c32e88768624cb6ca80c452a92d671845439fecc448a2890df489b03ac096",
+  "publication": "valid"
+}

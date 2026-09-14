@@ -1,0 +1,158 @@
+[
+  {
+    "stage": "pitch",
+    "source_sha256": "1e49e182f6679b61a3f01c4e2c0c427848df1313ab09350b05404d02247f395e",
+    "png_sha256": "0a8a18c1ae168a038117384828c29644d5fb781e65a3ba0d6a4b1be51731c868",
+    "pixel_sha256": "6e54df7c323a59335c60212e8ebef5002ab0ec64f9691ccdcca82b1ee95b9ba2",
+    "png_size": [
+      1567,
+      1103
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 8,
+      "meaningful_count": 2211,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  },
+  {
+    "stage": "pass-01",
+    "source_sha256": "88af2f354b01cf605940a77075dfa013ed4483fafaefd4072c6928eeaccd8918",
+    "png_sha256": "39734b7041ae62d2f09aec88fb60edbe79a1480a0e9d95ddeea6d0bed3066376",
+    "pixel_sha256": "8b6bb4d5c3a47d5f05c794370fb1f3c3741edccd3c9a4bb4d0fa52950aff2e8b",
+    "png_size": [
+      1628,
+      1145
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 84,
+      "meaningful_count": 25227,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  },
+  {
+    "stage": "pass-02",
+    "source_sha256": "5f3f6c949aaca2b9f8ed821058d716076db6c95ab0055f67fc5210c4775ae06f",
+    "png_sha256": "389af70f21157fb46b236f0721f631550ec400021d26941e0fcb6f7850377790",
+    "pixel_sha256": "ca89f9dc54702430a351903912a198296fa613256a806f189b04ce6cdcaf8d09",
+    "png_size": [
+      1628,
+      1159
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 84,
+      "meaningful_count": 25229,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  },
+  {
+    "stage": "pass-03",
+    "source_sha256": "e571904c5a4e6707fcf0f032421ea82d250b40484f75ee0acf5de80d20befba6",
+    "png_sha256": "817f47b4839c946af67091dade11ad3e38c82013d3808d870ec5a93269445526",
+    "pixel_sha256": "93285be098060719b7e76354540f673fd97a1001030d09ef3355a67f29a5341e",
+    "png_size": [
+      1628,
+      1159
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 84,
+      "meaningful_count": 25227,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  },
+  {
+    "stage": "pass-04",
+    "source_sha256": "d8cbc986a23fbfb7ac35e3ecc339d6a12c0fa9041cb176f406281a2d6e466b6d",
+    "png_sha256": "4842cd50b97be6ea316c0d3747447a966907ffc35c2aae64c07776822696b1f8",
+    "pixel_sha256": "8860ac12fd91cae2d5e7cf3b22f25de20b6df90ba7239c5db381d160285804ef",
+    "png_size": [
+      1628,
+      1159
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 84,
+      "meaningful_count": 25239,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  },
+  {
+    "stage": "pass-05",
+    "source_sha256": "e571904c5a4e6707fcf0f032421ea82d250b40484f75ee0acf5de80d20befba6",
+    "png_sha256": "817f47b4839c946af67091dade11ad3e38c82013d3808d870ec5a93269445526",
+    "pixel_sha256": "93285be098060719b7e76354540f673fd97a1001030d09ef3355a67f29a5341e",
+    "png_size": [
+      1628,
+      1159
+    ],
+    "xml": {
+      "metric": "visible-semantic-canonical-xml-v1",
+      "page_width": 827.0,
+      "page_height": 583.0,
+      "visible_structures": 84,
+      "meaningful_count": 25227,
+      "invisible_cells": [],
+      "off_page_cells": [],
+      "duplicate_cells": [],
+      "metadata_padding": []
+    },
+    "inspection": {
+      "print": "Opened the print-normalized contact sheet; final preview pass 6 opened individually.",
+      "enlarged": "Opened this separately exported PNG in the image viewer.",
+      "confirmed": true
+    }
+  }
+]

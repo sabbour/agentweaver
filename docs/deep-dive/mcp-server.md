@@ -41,7 +41,7 @@ Key invariants to preserve when rebuilding:
 
 - `apps/Agentweaver.Mcp`
 - `apps/Agentweaver.Api/Auth/OAuth`
-- `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs`
 - `apps/Agentweaver.Api/Security`
 
 ## 2. Runtime shape: local stdio and hosted HTTP solve different problems
@@ -111,7 +111,7 @@ The resource identifier is not just a URL for routing; it is also the OAuth audi
 
 After reading the Resource Server metadata, the client discovers the Authorization Server metadata. That document advertises the authorization endpoint, token endpoint, JWKS endpoint, registration endpoint, revocation endpoint, supported grant types, and PKCE requirements.
 
-Agentweaver's AS is deliberately public-client friendly: MCP clients use authorization code + PKCE, not a client secret. The server supports S256 PKCE and rejects weaker or missing challenge methods. The GitHub client secret stays server-side because the API brokers the GitHub login internally.
+Agentweaver's AS is deliberately public-client friendly: MCP clients use authorization code + PKCE, not a client secret. It requires S256, the exact resource, and `mcp:invoke`. The API authenticates the user with Entra and obtains consent before issuing a code; existing sufficient consent may avoid a repeated prompt. GitHub repository/Copilot capability handoffs are separate from this platform sign-in.
 
 ### 3.4 The path-suffixed well-known gotcha
 
@@ -127,18 +127,17 @@ This follows the well-known URI convention for issuers/resources with path compo
 
 This is a standards-compliance and interoperability decision, not a cosmetic duplicate. Some clients probe the suffixed form; serving only the bare form breaks those clients even though the resource itself is `/mcp`.
 
-![3.4 The path-suffixed well-known gotcha: MCP client, Agentweaver.Mcp<br/>Resource Server, Agentweaver.Api<br/>Authorization Server, Microsoft Entra ID](../diagrams/mcp-server-fig2.png)
+![MCP discovery, exact-resource consent and PKCE, API-issued broker tokens, MCP validation and API authorization](../diagrams/mcp-server-fig2.png)
 
-<!-- Rendered from ../diagrams/src/mcp-server-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/mcp-server-fig2.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec mcp-server-fig2.
+     Review lineage: ../diagrams/reviews/mcp-server-fig2/iteration-manifest.json. -->
 
 **Where this lives**
 
 - `apps/Agentweaver.Mcp/Program.cs`
 - `apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs`
-- `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
+- `apps/Agentweaver.Api/Endpoints/OAuthAuthorizationServerEndpoints.cs`
 - `docs/mcp-oauth.md`
 - `k8s/base/mcp-httproute.yaml`
 
@@ -148,7 +147,7 @@ The MCP HTTP boundary accepts exactly one credential class: Agentweaver broker a
 
 ### 4.1 No token: challenge, do not guess
 
-If there is no bearer token, MCP returns a discovery challenge. It does not redirect, start GitHub login itself, or invent a local login flow. Resource Servers should tell the client how to discover authorization; clients decide how to run the flow.
+If there is no bearer token, MCP returns a discovery challenge. It does not redirect, start Entra login itself, or invent a local login flow. Resource Servers tell the client how to discover authorization; clients decide how to run the flow.
 
 ### 4.2 Agentweaver OAuth access tokens
 
@@ -161,7 +160,7 @@ The important claims are conceptual rather than implementation-specific:
 - **aud**: the MCP resource, normally `https://HOST/mcp`.
 - **sub**: the authenticated Agentweaver subject.
 - **scope**: includes `mcp:invoke`.
-- **jti**: a unique token identifier used for revocation denylisting.
+- **jti**: a token identifier, not evidence of a standalone application denylist.
 - **exp / nbf / iat**: short-lived token timing, with a small validation clock skew.
 
 The MCP Resource Server validates these tokens offline with the AS public keys from JWKS. Offline validation keeps normal MCP requests fast and avoids a network call to the Authorization Server for every tool invocation. The trade-off is key caching: the Resource Server must refresh JWKS periodically and respect `kid`/key rotation behavior.
@@ -184,11 +183,11 @@ receive `insufficient_scope`.
 Raw Entra tokens, GitHub tokens, API keys, unknown-key JWTs, and compatibility credentials are
 outside the trust boundary and fail closed.
 
-### 4.3 Revocation and the `jti` denylist
+### 4.3 Persisted token state and refresh families
 
-MCP extracts the token identity, including `jti`, but the API owns the authoritative denylist. That is because the API owns OAuth token lifecycle: refresh-token rotation, revocation, and durable storage. MCP forwards the bearer token to the API; the API then rejects tokens whose `jti` has been revoked before natural expiry.
+The API owns OpenIddict-backed clients, authorizations, token entries, consent, and refresh-token-family state. Authorization and refresh validate the exact resource and required scope; refresh also checks grant and family revocation. MCP's offline JWT checks do not substitute for this durable lifecycle or for the API's independent authentication and project authorization.
 
-This works because current MCP tools are proxies to the API. If future MCP tools perform sensitive local work without calling the API, they must either perform the same denylist check or avoid relying solely on MCP-side JWT validation.
+Current tools forward the validated broker token to the API. Do not describe this as an independently verified `jti` denylist or promise that offline MCP validation consults current token state on every request.
 
 ### 4.4 Public issuer/audience pinning
 
@@ -273,10 +272,7 @@ There are three important routing shapes:
 The deployment passes `Auth:OAuth:PublicOrigin` to both services. MCP derives the exact
 `<origin>/mcp` resource and RFC 9728 metadata URL from that one canonical value.
 
-In AKS, run `npm run azure:provision-infra` before the first `npm run azure:deploy-from-local`
-so the required `mcp-api-key` CSI secret is available. Without it, API authentication and
-worker loopback calls fail, and cluster diagnostics report
-`key_vault: critical: secret 'mcp-api-key' not found`.
+Infrastructure provisioning and secret delivery are deployment concerns, not an MCP-client authentication alternative. A deployment's internal service credential must not be presented as a static client key: HTTP MCP accepts broker tokens, and stdio requires an explicitly configured broker token.
 
 **Where this lives**
 
@@ -290,7 +286,7 @@ worker loopback calls fail, and cluster diagnostics report
 If you were recreating Agentweaver's MCP server from scratch, build in this order:
 
 1. **Define the MCP resource identity.** Choose the public resource URI, e.g. `https://HOST/mcp`, and treat it as the JWT audience.
-2. **Implement the Authorization Server separately.** Publish RFC 8414 metadata, run authorization code + PKCE, broker GitHub login server-side, enforce org membership before issuing codes, sign short-lived RS256 JWTs, publish JWKS, support refresh and revocation.
+2. **Implement the Authorization Server separately.** Publish RFC 8414 metadata, authenticate with Entra, validate exact resource/scope and consent, require S256 PKCE, sign short-lived broker JWTs, publish JWKS, and persist token/refresh-family lifecycle state.
 3. **Implement the Resource Server discovery surface.** Serve RFC 9728 protected-resource metadata unauthenticated at both bare and path-suffixed well-known URLs.
 4. **Challenge correctly.** Return `401 WWW-Authenticate: Bearer ... resource_metadata="..."` for unauthenticated MCP requests.
 5. **Validate bearer tokens at MCP.** Use ASP.NET/OpenIddict remote discovery/JWKS and accept only the exact Agentweaver broker-token contract.
@@ -316,3 +312,53 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 
 - [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent whose Tool map is generated from these MCP tools.
 - [MCP tool index](../reference/mcp-tools.md) — the generated list of every `agentweaver-*` tool.
+
+<!-- diagram-context:mcp-server-fig2:start -->
+<details id="diagram-context-mcp-server-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>MCP: discover, consent, invoke</td></tr>
+<tr><td>takeaway</td><td>API-owned OAuth issues broker tokens; MCP validates and forwards the same bearer.</td></tr>
+<tr><td>group-title-0</td><td>DISCOVERY + API AUTHORIZATION</td></tr>
+<tr><td>group-title-1</td><td>TOKEN USE + INDEPENDENT API CHECK</td></tr>
+<tr><td>MCP client</td><td>MCP client</td></tr>
+<tr><td>MCP client</td><td>/mcp challenge → resource metadata</td></tr>
+<tr><td>MCP client</td><td>Configured resource, issuer and scope</td></tr>
+<tr><td>MCP client</td><td>mcp-httproute.yaml:30-46</td></tr>
+<tr><td>API /oauth/token</td><td>API /oauth/token</td></tr>
+<tr><td>API /oauth/token</td><td>Authorization code + PKCE</td></tr>
+<tr><td>API /oauth/token</td><td>OpenIddict issues access / refresh tokens</td></tr>
+<tr><td>API /oauth/token</td><td>Program.cs:982-998</td></tr>
+<tr><td>API authorization server</td><td>API authorization server</td></tr>
+<tr><td>API authorization server</td><td>Exact resource + mcp:invoke</td></tr>
+<tr><td>API authorization server</td><td>OpenIddict owns OAuth endpoint state</td></tr>
+<tr><td>API authorization server</td><td>OAuthAuthorizationServerEndpoints</td></tr>
+<tr><td>Refresh grant checks</td><td>Refresh grant checks</td></tr>
+<tr><td>Refresh grant checks</td><td>Exact resource + grant state</td></tr>
+<tr><td>Refresh grant checks</td><td>Family revocation can reject renewal</td></tr>
+<tr><td>Microsoft Entra ID</td><td>Microsoft Entra ID</td></tr>
+<tr><td>Microsoft Entra ID</td><td>Sign in when needed</td></tr>
+<tr><td>Microsoft Entra ID</td><td>API broker authenticates the human</td></tr>
+<tr><td>MCP broker validation</td><td>MCP broker validation</td></tr>
+<tr><td>MCP broker validation</td><td>Validate accepted broker JWT only</td></tr>
+<tr><td>MCP broker validation</td><td>Tool call forwards that same bearer</td></tr>
+<tr><td>MCP broker validation</td><td>McpBrokerAuthenticationHandler</td></tr>
+<tr><td>Consent decision</td><td>Consent decision</td></tr>
+<tr><td>Consent decision</td><td>Approve → authorization code</td></tr>
+<tr><td>Consent decision</td><td>Deny → access_denied; grant may skip UI</td></tr>
+<tr><td>API resource authorization</td><td>API resource authorization</td></tr>
+<tr><td>API resource authorization</td><td>Forwarded broker bearer</td></tr>
+<tr><td>API resource authorization</td><td>API independently checks access</td></tr>
+<tr><td>API resource authorization</td><td>AgentweaverApiClient.cs:353-391</td></tr>
+<tr><td>MCP client</td><td>discover issuer</td></tr>
+<tr><td>API authorization server</td><td>if needed</td></tr>
+<tr><td>Microsoft Entra ID</td><td>identity</td></tr>
+<tr><td>Consent decision</td><td>code + PKCE</td></tr>
+<tr><td>API /oauth/token</td><td>renewal</td></tr>
+<tr><td>API /oauth/token</td><td>bearer</td></tr>
+<tr><td>MCP broker validation</td><td>same bearer</td></tr>
+<tr><td>scope</td><td>Gateway routes MCP + metadata to MCP; authorization/token/revocation/JWKS belong to the API.</td></tr>
+<tr><td>groups</td><td>DISCOVERY + API AUTHORIZATION; TOKEN USE + INDEPENDENT API CHECK</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:mcp-server-fig2:end -->

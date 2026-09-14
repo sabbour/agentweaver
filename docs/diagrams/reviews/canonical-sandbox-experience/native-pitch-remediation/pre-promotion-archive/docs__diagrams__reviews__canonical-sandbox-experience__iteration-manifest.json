@@ -1,0 +1,109 @@
+{
+  "diagram": "canonical-sandbox-experience",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-sandbox-experience-pitch.drawio",
+    "png": "canonical-sandbox-experience-pitch.png",
+    "change_record": "canonical-sandbox-experience-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-sandbox-experience-pass-01.drawio",
+      "png": "canonical-sandbox-experience-pass-01.png",
+      "change_record": "canonical-sandbox-experience-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 4,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2364,
+      "result_meaningful_xml": 21840,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 9.238578680203046
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "canonical-sandbox-experience-pass-02.drawio",
+      "png": "canonical-sandbox-experience-pass-02.png",
+      "change_record": "canonical-sandbox-experience-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "canonical-sandbox-experience-pass-03.drawio",
+      "png": "canonical-sandbox-experience-pass-03.png",
+      "change_record": "canonical-sandbox-experience-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "canonical-sandbox-experience-pass-04.drawio",
+      "png": "canonical-sandbox-experience-pass-04.png",
+      "change_record": "canonical-sandbox-experience-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "start",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs; docs/deep-dive/sandbox-pod-execution.md; apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs; apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "configure",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs; apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs; apps/Agentweaver.AgentHost/Program.cs:232-285; apps/Agentweaver.AgentHost/AgentHostStartupService.cs",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n2",
+          "target": "n4",
+          "relationship": "tools",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:232-285; apps/Agentweaver.AgentHost/AgentHostStartupService.cs; docs/deep-dive/sandbox.md:12-24; packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n3",
+          "relationship": "events / approvals",
+          "evidence": "apps/Agentweaver.AgentHost/Program.cs:232-285; apps/Agentweaver.AgentHost/AgentHostStartupService.cs; docs/deep-dive/sandbox.md:65-70; packages/Agentweaver.AgentRuntime/InMemoryToolApprovalGate.cs",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "work artifacts",
+          "evidence": "docs/deep-dive/sandbox.md:12-24; packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:308-330; docs/deep-dive/sandbox-pod-execution.md",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

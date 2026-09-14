@@ -1,0 +1,714 @@
+{
+  "title": "MCP lifecycle: choose one launch path",
+  "nodes": [
+    {
+      "id": "auth",
+      "label": "Authorize",
+      "subLabel": "MCP OAuth / Entra identity",
+      "meta": "Repo capability is separate",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "SIGN IN",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#00666d;strokeColor=#00666d;strokeWidth=1;",
+      "group": "m-prep"
+    },
+    {
+      "id": "project",
+      "label": "Choose project",
+      "subLabel": "project_list / project_create",
+      "meta": "Check provider + repo readiness",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "PROJECT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+      "group": "m-prep"
+    },
+    {
+      "id": "team",
+      "label": "Confirm team",
+      "subLabel": "team_cast: proposal first",
+      "meta": "confirm_proposal_id or confirm",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "TEAM",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#0e700e;strokeColor=#0e700e;strokeWidth=1;",
+      "group": "m-prep"
+    },
+    {
+      "id": "manual",
+      "label": "Define outcome",
+      "subLabel": "coordinator_start",
+      "meta": "defineOutcome; autopilot=false",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "MANUAL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+      "group": "m-launch"
+    },
+    {
+      "id": "direct",
+      "label": "Start and poll",
+      "subLabel": "run_task",
+      "meta": "Default direct; creates NEW run",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "DIRECT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#fdfbf8;strokeColor=#00666d;strokeWidth=1;",
+      "group": "m-launch"
+    },
+    {
+      "id": "backlog",
+      "label": "Queue for heartbeat",
+      "subLabel": "backlog_capture_task",
+      "meta": "then backlog_move_to_ready",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "PICKUP",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+      "group": "m-launch"
+    },
+    {
+      "id": "observe",
+      "label": "Observe / steer",
+      "subLabel": "coordinator_work_plan_get",
+      "meta": "coordinator_children_get",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "READ / CONTROL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+      "group": "m-observe"
+    },
+    {
+      "id": "files",
+      "label": "Inspect files",
+      "subLabel": "run_show_artifacts",
+      "meta": "then run_get_file",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "LIST FIRST",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#fdfbf8;strokeColor=#00666d;strokeWidth=1;",
+      "group": "m-observe"
+    },
+    {
+      "id": "review",
+      "label": "Review when gated",
+      "subLabel": "run_review(approved: bool)",
+      "meta": "true approves; false declines",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "HUMAN",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#0e700e;strokeColor=#0e700e;strokeWidth=1;",
+      "group": "m-observe"
+    }
+  ],
+  "edges": [
+    {
+      "from": "auth",
+      "to": "project",
+      "label": "authorize",
+      "loopback": false
+    },
+    {
+      "from": "project",
+      "to": "team",
+      "label": "prepare",
+      "loopback": false
+    },
+    {
+      "from": "manual",
+      "to": "observe",
+      "label": "confirm",
+      "loopback": false
+    },
+    {
+      "from": "direct",
+      "to": "observe",
+      "label": "new run",
+      "loopback": false
+    },
+    {
+      "from": "backlog",
+      "to": "observe",
+      "label": "reserved run",
+      "loopback": false
+    },
+    {
+      "from": "observe",
+      "to": "files",
+      "label": "list",
+      "loopback": false
+    },
+    {
+      "from": "files",
+      "to": "review",
+      "label": "inspect",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "m-prep",
+      "label": "PREPARE AUTHORITY AND A CONFIRMED TEAM"
+    },
+    {
+      "id": "m-launch",
+      "label": "CHOOSE ONE • DO NOT QUEUE AND EXPLICITLY START THE SAME TASK"
+    },
+    {
+      "id": "m-observe",
+      "label": "OBSERVE, INSPECT AND DECIDE • NOT AUTOMATIC SUCCESS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "auth",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 207.6086956521739
+        },
+        "data": {
+          "id": "auth",
+          "label": "Authorize",
+          "subLabel": "MCP OAuth / Entra identity",
+          "meta": "Repo capability is separate",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "SIGN IN",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#00666d;strokeColor=#00666d;strokeWidth=1;",
+          "group": "m-prep"
+        }
+      },
+      {
+        "id": "project",
+        "type": "card",
+        "position": {
+          "x": 699.8608695652174,
+          "y": 193.6086956521739
+        },
+        "data": {
+          "id": "project",
+          "label": "Choose project",
+          "subLabel": "project_list / project_create",
+          "meta": "Check provider + repo readiness",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "PROJECT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+          "group": "m-prep"
+        }
+      },
+      {
+        "id": "team",
+        "type": "card",
+        "position": {
+          "x": 1189.4608695652173,
+          "y": 207.6086956521739
+        },
+        "data": {
+          "id": "team",
+          "label": "Confirm team",
+          "subLabel": "team_cast: proposal first",
+          "meta": "confirm_proposal_id or confirm",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "TEAM",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#0e700e;strokeColor=#0e700e;strokeWidth=1;",
+          "group": "m-prep"
+        }
+      },
+      {
+        "id": "manual",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 451.6086956521739
+        },
+        "data": {
+          "id": "manual",
+          "label": "Define outcome",
+          "subLabel": "coordinator_start",
+          "meta": "defineOutcome; autopilot=false",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "MANUAL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+          "group": "m-launch"
+        }
+      },
+      {
+        "id": "direct",
+        "type": "card",
+        "position": {
+          "x": 699.8608695652174,
+          "y": 451.6086956521739
+        },
+        "data": {
+          "id": "direct",
+          "label": "Start and poll",
+          "subLabel": "run_task",
+          "meta": "Default direct; creates NEW run",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "DIRECT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#fdfbf8;strokeColor=#00666d;strokeWidth=1;",
+          "group": "m-launch"
+        }
+      },
+      {
+        "id": "backlog",
+        "type": "card",
+        "position": {
+          "x": 1189.4608695652173,
+          "y": 451.6086956521739
+        },
+        "data": {
+          "id": "backlog",
+          "label": "Queue for heartbeat",
+          "subLabel": "backlog_capture_task",
+          "meta": "then backlog_move_to_ready",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "PICKUP",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#835b00;strokeColor=#835b00;strokeWidth=1;",
+          "group": "m-launch"
+        }
+      },
+      {
+        "id": "observe",
+        "type": "card",
+        "position": {
+          "x": 210.26086956521738,
+          "y": 719.9130434782609
+        },
+        "data": {
+          "id": "observe",
+          "label": "Observe / steer",
+          "subLabel": "coordinator_work_plan_get",
+          "meta": "coordinator_children_get",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "READ / CONTROL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#3f3682;strokeColor=#3f3682;strokeWidth=1;",
+          "group": "m-observe"
+        }
+      },
+      {
+        "id": "files",
+        "type": "card",
+        "position": {
+          "x": 699.8608695652174,
+          "y": 719.9130434782609
+        },
+        "data": {
+          "id": "files",
+          "label": "Inspect files",
+          "subLabel": "run_show_artifacts",
+          "meta": "then run_get_file",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "LIST FIRST",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#fdfbf8;strokeColor=#00666d;strokeWidth=1;",
+          "group": "m-observe"
+        }
+      },
+      {
+        "id": "review",
+        "type": "card",
+        "position": {
+          "x": 1189.4608695652173,
+          "y": 719.9130434782609
+        },
+        "data": {
+          "id": "review",
+          "label": "Review when gated",
+          "subLabel": "run_review(approved: bool)",
+          "meta": "true approves; false declines",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "HUMAN",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#0e700e;strokeColor=#0e700e;strokeWidth=1;",
+          "group": "m-observe"
+        }
+      },
+      {
+        "id": "group-m-prep",
+        "type": "band",
+        "position": {
+          "x": 178.26086956521738,
+          "y": 123.6086956521739
+        },
+        "style": {
+          "width": 1383.1999999999998,
+          "height": 225.99999999999997
+        },
+        "data": {
+          "label": "PREPARE AUTHORITY AND A CONFIRMED TEAM",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-m-prep-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.26086956521738,
+          "y": 139.6086956521739
+        },
+        "data": {
+          "label": "PREPARE AUTHORITY AND A CONFIRMED TEAM",
+          "width": 1343.1999999999998
+        }
+      },
+      {
+        "id": "group-m-launch",
+        "type": "band",
+        "position": {
+          "x": 178.26086956521738,
+          "y": 358.6086956521739
+        },
+        "style": {
+          "width": 1383.1999999999998,
+          "height": 221
+        },
+        "data": {
+          "label": "CHOOSE ONE • DO NOT QUEUE AND EXPLICITLY START THE SAME TASK",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-m-launch-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.26086956521738,
+          "y": 374.6086956521739
+        },
+        "data": {
+          "label": "CHOOSE ONE • DO NOT QUEUE AND EXPLICITLY START THE SAME TASK",
+          "width": 1343.1999999999998
+        }
+      },
+      {
+        "id": "group-m-observe",
+        "type": "band",
+        "position": {
+          "x": 178.26086956521738,
+          "y": 649.9130434782609
+        },
+        "style": {
+          "width": 1383.1999999999998,
+          "height": 198
+        },
+        "data": {
+          "label": "OBSERVE, INSPECT AND DECIDE • NOT AUTOMATIC SUCCESS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-m-observe-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 198.26086956521738,
+          "y": 665.9130434782609
+        },
+        "data": {
+          "label": "OBSERVE, INSPECT AND DECIDE • NOT AUTOMATIC SUCCESS",
+          "width": 1343.1999999999998
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "auth",
+        "target": "project",
+        "label": "authorize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.2608695652174,
+              "y": 259.6086956521739
+            },
+            {
+              "x": 699.8608695652174,
+              "y": 259.6086956521739
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 625.0608695652174,
+            "y": 259.6086956521739
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "project",
+        "target": "team",
+        "label": "prepare",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1039.8608695652174,
+              "y": 259.6086956521739
+            },
+            {
+              "x": 1189.4608695652173,
+              "y": 259.6086956521739
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1114.6608695652174,
+            "y": 259.6086956521739
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "manual",
+        "target": "observe",
+        "label": "confirm",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 380.2608695652174,
+              "y": 555.6086956521739
+            },
+            {
+              "x": 380.2608695652174,
+              "y": 587.6086956521739
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 587.6086956521739
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 759.2463768115942
+            },
+            {
+              "x": 210.26086956521738,
+              "y": 759.2463768115942
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 279.2608695652174,
+            "y": 587.6086956521739
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "direct",
+        "target": "observe",
+        "label": "new run",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 869.8608695652174,
+              "y": 555.6086956521739
+            },
+            {
+              "x": 869.8608695652174,
+              "y": 587.6086956521739
+            },
+            {
+              "x": 606.2608695652174,
+              "y": 587.6086956521739
+            },
+            {
+              "x": 606.2608695652174,
+              "y": 844.9230434782609
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 844.9230434782609
+            },
+            {
+              "x": 178.26086956521738,
+              "y": 784.5797101449275
+            },
+            {
+              "x": 210.26086956521738,
+              "y": 784.5797101449275
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 738.0608695652174,
+            "y": 587.6086956521739
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "backlog",
+        "target": "observe",
+        "label": "reserved run",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1359.4608695652173,
+              "y": 555.6086956521739
+            },
+            {
+              "x": 1359.4608695652173,
+              "y": 698.9030434782609
+            },
+            {
+              "x": 642.2608695652174,
+              "y": 698.9030434782609
+            },
+            {
+              "x": 642.2608695652174,
+              "y": 759.2463768115942
+            },
+            {
+              "x": 550.2608695652174,
+              "y": 759.2463768115942
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1000.8608695652174,
+            "y": 698.9030434782609
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "observe",
+        "target": "files",
+        "label": "list",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 550.2608695652174,
+              "y": 784.5797101449275
+            },
+            {
+              "x": 667.8608695652174,
+              "y": 784.5797101449275
+            },
+            {
+              "x": 667.8608695652174,
+              "y": 771.9130434782609
+            },
+            {
+              "x": 699.8608695652174,
+              "y": 771.9130434782609
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 638.2608695652174,
+            "y": 784.5797101449275
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "files",
+        "target": "review",
+        "label": "inspect",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1039.8608695652174,
+              "y": 771.9130434782609
+            },
+            {
+              "x": 1189.4608695652173,
+              "y": 771.9130434782609
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1114.6608695652174,
+            "y": 771.9130434782609
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1741.1999999999998,
+    "canvasHeight": 1028.565217391304
+  }
+}

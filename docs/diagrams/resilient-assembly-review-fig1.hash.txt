@@ -1,1 +1,22 @@
-8e03c8aa77c0fa5cfac0501ceca2f20afac8750b94db05dad51286c173dd1549
+{
+  "version": 2,
+  "source": {
+    "file": "resilient-assembly-review-fig1.drawio",
+    "sha256": "bd2265e0a5287a9d6267a9878f2b6d5515e1ba07d776783fbdda7d0f6035fa13"
+  },
+  "drawio": {
+    "file": "resilient-assembly-review-fig1.drawio",
+    "sha256": "11f0d49c5714c946b1ce2d528e80d6adae61665deb3a7860d58040c4430d0147"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "resilient-assembly-review-fig1.png",
+    "sha256": "a092a045812922555560d17d30b767d5b7a500bfba099b55d779dcafa82c28ad"
+  }
+}

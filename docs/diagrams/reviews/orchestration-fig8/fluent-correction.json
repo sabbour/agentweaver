@@ -1,0 +1,281 @@
+{
+  "diagram": "orchestration-fig8",
+  "source_sha256": "e0ed3e851ce006a144a29a4f96851a2042477cfbe50948effad468b0034b427d",
+  "png_sha256": "38f9d367937b0b99b90ccdd429a17669ecb360376178f620fbaaeed309299fee",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Persist the plan before dispatch"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Confirmation, selection and decomposition precede durable child dispatch."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "INTENT AND REUSE"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "SELECTION AND DURABLE PLAN"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "DISPATCH AND COLLECTIVE HANDOFF"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Submitted request"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Goal + caller context"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "manual or pickup"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CONFIRM"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Confirmation boundary"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Manual or unattended policy"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "autopilot-dependent"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "REUSE"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Existing plan?"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Reuse persisted plan"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "avoid decomposing twice"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "SELECT"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Select workflow"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Available definitions"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "explicit choices honored"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "PLAN"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Decompose + validate"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Outcome-complete work"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "compatibility check"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "COMMIT"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Persist WorkPlan"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Subtasks and dependencies"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "workflow identity"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "READY"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Ready frontier"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Dependency satisfaction"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "pending -> ready work"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "EXECUTE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Dispatch children"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Observe classified outcomes"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "isolated child runs"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "HANDOFF"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Collective handoff"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "After child supervision"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "assembly eligibility"
+    },
+    {
+      "cell": "e0",
+      "text": "confirm"
+    },
+    {
+      "cell": "e1",
+      "text": "lookup"
+    },
+    {
+      "cell": "e2",
+      "text": "new"
+    },
+    {
+      "cell": "e3",
+      "text": "decompose"
+    },
+    {
+      "cell": "e4",
+      "text": "persist"
+    },
+    {
+      "cell": "e5",
+      "text": "reuse"
+    },
+    {
+      "cell": "e6",
+      "text": "ready"
+    },
+    {
+      "cell": "e7",
+      "text": "dispatch"
+    },
+    {
+      "cell": "e8",
+      "text": "handoff"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/orchestration.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "confirm",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "lookup",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "new",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "decompose",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "persist",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n2",
+      "to": "n6",
+      "label": "reuse",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n5",
+      "to": "n6",
+      "label": "ready",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n6",
+      "to": "n7",
+      "label": "dispatch",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n7",
+      "to": "n8",
+      "label": "handoff",
+      "result": "clean"
+    }
+  ]
+}

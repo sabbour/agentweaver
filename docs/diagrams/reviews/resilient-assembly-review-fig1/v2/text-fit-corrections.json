@@ -1,0 +1,10 @@
+[
+  {
+    "id": "n8-title",
+    "original_size": 15.0,
+    "font_size": 14.0,
+    "measured_width": 173.29785,
+    "available_width": 179.0,
+    "reason": "Prevent existing label wrapping into adjacent subtitle/metadata"
+  }
+]

@@ -1,0 +1,470 @@
+{
+  "title": "Accept a provider before invoking it",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Prepare context",
+      "subLabel": "Resolve effective provider",
+      "meta": "Signed • expires in 5 min",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "PREPARE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n1",
+      "label": "Accept request",
+      "subLabel": "Re-resolve and compare",
+      "meta": "Replacement context on error",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "ACCEPT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n2",
+      "label": "Accepted plan",
+      "subLabel": "One execution provider",
+      "meta": "Copilot OR BYOK",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "BOUNDARY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n3",
+      "label": "Run snapshot",
+      "subLabel": "Private durable ownership",
+      "meta": "Child / retry inheritance",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DURABLE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cylinder;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n4",
+      "label": "Invocation guard",
+      "subLabel": "Check accepted run boundary",
+      "meta": "No silent provider fallback",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "GUARD",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n5",
+      "label": "Capability fences",
+      "subLabel": "Separate live permission checks",
+      "meta": "Snapshot is not a bypass",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "LIVE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "signed context",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "match",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "capture",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "load boundary",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "Copilot capability",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "boundary0",
+      "label": "PREPARE AND ACCEPT"
+    },
+    {
+      "id": "boundary1",
+      "label": "RUN BOUNDARY AND LIVE FENCES"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n0",
+          "label": "Prepare context",
+          "subLabel": "Resolve effective provider",
+          "meta": "Signed • expires in 5 min",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "PREPARE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 603.1142857142856,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n1",
+          "label": "Accept request",
+          "subLabel": "Re-resolve and compare",
+          "meta": "Replacement context on error",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "ACCEPT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1145.5142857142855,
+          "y": 237.91071428571428
+        },
+        "data": {
+          "id": "n2",
+          "label": "Accepted plan",
+          "subLabel": "One execution provider",
+          "meta": "Copilot OR BYOK",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "BOUNDARY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 60.714285714285694,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n3",
+          "label": "Run snapshot",
+          "subLabel": "Private durable ownership",
+          "meta": "Child / retry inheritance",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DURABLE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cylinder;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 603.1142857142856,
+          "y": 520.2321428571429
+        },
+        "data": {
+          "id": "n4",
+          "label": "Invocation guard",
+          "subLabel": "Check accepted run boundary",
+          "meta": "No silent provider fallback",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "GUARD",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1145.5142857142855,
+          "y": 506.2321428571429
+        },
+        "data": {
+          "id": "n5",
+          "label": "Capability fences",
+          "subLabel": "Separate live permission checks",
+          "meta": "Snapshot is not a bypass",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "LIVE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "group-boundary0",
+        "type": "band",
+        "position": {
+          "x": 36.428571428571416,
+          "y": 157.85714285714283
+        },
+        "style": {
+          "width": 1471.853571428571,
+          "height": 239.82142857142856
+        },
+        "data": {
+          "label": "PREPARE AND ACCEPT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.428571428571416,
+          "y": 165.85714285714283
+        },
+        "data": {
+          "label": "PREPARE AND ACCEPT",
+          "width": 1431.853571428571
+        }
+      },
+      {
+        "id": "group-boundary1",
+        "type": "band",
+        "position": {
+          "x": 36.428571428571416,
+          "y": 440.1785714285714
+        },
+        "style": {
+          "width": 1471.853571428571,
+          "height": 239.8214285714286
+        },
+        "data": {
+          "label": "RUN BOUNDARY AND LIVE FENCES",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.428571428571416,
+          "y": 448.1785714285714
+        },
+        "data": {
+          "label": "RUN BOUNDARY AND LIVE FENCES",
+          "width": 1431.853571428571
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "signed context",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 603.1142857142856,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 501.91428571428565,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "match",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 943.1142857142856,
+              "y": 289.9107142857143
+            },
+            {
+              "x": 1145.5142857142855,
+              "y": 289.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1044.3142857142857,
+            "y": 289.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "capture",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1366.5142857142855,
+              "y": 341.9107142857143
+            },
+            {
+              "x": 1366.5142857142855,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 499.84405670665205,
+              "y": 437.1428571428571
+            },
+            {
+              "x": 499.84405670665205,
+              "y": 551.4321428571429
+            },
+            {
+              "x": 400.71428571428567,
+              "y": 551.4321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 933.1791712104688,
+            "y": 437.1428571428571
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "load boundary",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 400.71428571428567,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 603.1142857142856,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 501.91428571428565,
+            "y": 572.2321428571429
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "Copilot capability",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 943.1142857142856,
+              "y": 572.2321428571429
+            },
+            {
+              "x": 1145.5142857142855,
+              "y": 572.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1044.3142857142857,
+            "y": 572.2321428571429
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1544.710714285714,
+    "canvasHeight": 884.9107142857142
+  }
+}

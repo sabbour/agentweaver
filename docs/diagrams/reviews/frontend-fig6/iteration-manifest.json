@@ -1,0 +1,125 @@
+{
+  "diagram": "frontend-fig6",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "frontend-fig6-pitch.drawio",
+    "png": "frontend-fig6-pitch.png",
+    "change_record": "frontend-fig6-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "frontend-fig6-pass-01.drawio",
+      "png": "frontend-fig6-pass-01.png",
+      "change_record": "frontend-fig6-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2176,
+      "result_meaningful_xml": 23791,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.933364
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "frontend-fig6-pass-02.drawio",
+      "png": "frontend-fig6-pass-02.png",
+      "change_record": "frontend-fig6-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "frontend-fig6-pass-03.drawio",
+      "png": "frontend-fig6-pass-03.png",
+      "change_record": "frontend-fig6-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "frontend-fig6-pass-04.drawio",
+      "png": "frontend-fig6-pass-04.png",
+      "change_record": "frontend-fig6-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "begin-to-entra",
+          "source": "begin",
+          "target": "entra",
+          "relationship": "sign in",
+          "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+          "result": "clean"
+        },
+        {
+          "id": "entra-to-callback",
+          "source": "entra",
+          "target": "callback",
+          "relationship": "callback",
+          "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+          "result": "clean"
+        },
+        {
+          "id": "callback-to-frontend",
+          "source": "callback",
+          "target": "frontend",
+          "relationship": "code",
+          "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+          "result": "clean"
+        },
+        {
+          "id": "frontend-to-exchange",
+          "source": "frontend",
+          "target": "exchange",
+          "relationship": "POST code",
+          "evidence": "apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:398-455",
+          "result": "clean"
+        },
+        {
+          "id": "exchange-to-storage",
+          "source": "exchange",
+          "target": "storage",
+          "relationship": "session",
+          "evidence": "apps/web/src/config.ts:60-138",
+          "result": "clean"
+        },
+        {
+          "id": "storage-to-peer",
+          "source": "storage",
+          "target": "peer",
+          "relationship": "transfer",
+          "evidence": "apps/web/src/config.ts:207-240",
+          "result": "clean"
+        },
+        {
+          "id": "storage-to-requests",
+          "source": "storage",
+          "target": "requests",
+          "relationship": "bearer",
+          "evidence": "apps/web/src/api/sse.ts:239-337",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

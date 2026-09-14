@@ -1,0 +1,846 @@
+{
+  "title": "A dependency DAG, not agent chat",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Confirmed OutcomeSpec",
+      "subLabel": "Intent before decomposition",
+      "meta": "confirmed status",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "SPEC",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Persisted WorkPlan",
+      "subLabel": "Tasks + dependency edges",
+      "meta": "selected workflow",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DAG",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Readiness rule",
+      "subLabel": "Every predecessor satisfied",
+      "meta": "assemble_ready / done",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "RULE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Example root A",
+      "subLabel": "No prerequisites",
+      "meta": "illustrative, not fixed",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "TASK A",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Example root B",
+      "subLabel": "No prerequisites",
+      "meta": "parallel with A",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "TASK B",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Satisfied roots",
+      "subLabel": "Not merely terminal",
+      "meta": "failure does not unlock",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "JOIN",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Example dependent C",
+      "subLabel": "Depends on A",
+      "meta": "illustrative edge",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "TASK C",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Example dependent D",
+      "subLabel": "Depends on A and B",
+      "meta": "illustrative join",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "TASK D",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Collective handoff",
+      "subLabel": "Recheck aggregate eligibility",
+      "meta": "quiescence != success",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "ASSEMBLY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "persist",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "evaluate",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "ready",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "ready",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n6",
+      "label": "A done",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n5",
+      "label": "A done",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "B done",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n7",
+      "label": "both",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n8",
+      "label": "settled",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "settled",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DURABLE INTENT AND READINESS"
+    },
+    {
+      "id": "1",
+      "label": "ILLUSTRATIVE PARALLEL ROOTS"
+    },
+    {
+      "id": "2",
+      "label": "ILLUSTRATIVE DEPENDENTS AND HANDOFF"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Confirmed OutcomeSpec",
+          "subLabel": "Intent before decomposition",
+          "meta": "confirmed status",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "SPEC",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Persisted WorkPlan",
+          "subLabel": "Tasks + dependency edges",
+          "meta": "selected workflow",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DAG",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Readiness rule",
+          "subLabel": "Every predecessor satisfied",
+          "meta": "assemble_ready / done",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "RULE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Example root A",
+          "subLabel": "No prerequisites",
+          "meta": "illustrative, not fixed",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "TASK A",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Example root B",
+          "subLabel": "No prerequisites",
+          "meta": "parallel with A",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "TASK B",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Satisfied roots",
+          "subLabel": "Not merely terminal",
+          "meta": "failure does not unlock",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "JOIN",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Example dependent C",
+          "subLabel": "Depends on A",
+          "meta": "illustrative edge",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "TASK C",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 652.5308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Example dependent D",
+          "subLabel": "Depends on A and B",
+          "meta": "illustrative join",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "TASK D",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1106.9308411214952,
+          "y": 765.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Collective handoff",
+          "subLabel": "Recheck aggregate eligibility",
+          "meta": "quiescence != success",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "ASSEMBLY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 227.73831775700933
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "DURABLE INTENT AND READINESS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 243.73831775700933
+        },
+        "data": {
+          "label": "DURABLE INTENT AND READINESS",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 471.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "ILLUSTRATIVE PARALLEL ROOTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 487.7383177570093
+        },
+        "data": {
+          "label": "ILLUSTRATIVE PARALLEL ROOTS",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 695.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 226
+        },
+        "data": {
+          "label": "ILLUSTRATIVE DEPENDENTS AND HANDOFF",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 711.7383177570093
+        },
+        "data": {
+          "label": "ILLUSTRATIVE DEPENDENTS AND HANDOFF",
+          "width": 1272.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 652.5308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 595.3308411214953,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "evaluate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 992.5308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1049.7308411214954,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "ready",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1242.9308411214952,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1242.9308411214952,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 704.5308411214952,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n2",
+        "target": "n4",
+        "label": "ready",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1310.9308411214952,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1310.9308411214952,
+              "y": 503.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 503.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 535.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1038.9308411214952,
+            "y": 503.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n6",
+        "label": "A done",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 368.13084112149534,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 368.13084112149534,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 267.13084112149534,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n3",
+        "target": "n5",
+        "label": "A done",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 637.3308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 637.3308411214953,
+              "y": 479.39498442367596
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 479.39498442367596
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 575.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 587.7308411214954,
+            "y": 587.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n4",
+        "target": "n5",
+        "label": "B done",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 992.5308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1024.5308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1024.5308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 600.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1065.7308411214954,
+            "y": 600.404984423676
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n5",
+        "target": "n7",
+        "label": "both",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1276.9308411214952,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1276.9308411214952,
+              "y": 747.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 747.7383177570093
+            },
+            {
+              "x": 822.5308411214953,
+              "y": 779.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.9308411214952,
+            "y": 747.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n8",
+        "label": "settled",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 637.3308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 637.3308411214953,
+              "y": 728.0616510903427
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 728.0616510903427
+            },
+            {
+              "x": 1074.9308411214952,
+              "y": 814.404984423676
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 814.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 587.7308411214954,
+            "y": 831.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n7",
+        "target": "n8",
+        "label": "settled",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 992.5308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1024.5308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1024.5308411214953,
+              "y": 849.0716510903427
+            },
+            {
+              "x": 1106.9308411214952,
+              "y": 849.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1057.4908411214954,
+            "y": 849.0716510903427
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1645.0616822429902,
+    "canvasHeight": 1053.1401869158876
+  }
+}

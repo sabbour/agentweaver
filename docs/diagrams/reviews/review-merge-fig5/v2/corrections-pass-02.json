@@ -1,0 +1,7 @@
+{
+  "route_heading_overlap": true,
+  "native_segment_routing": "Keep explicit orthogonal waypoints instead of automatic backtracking/label displacement",
+  "text_fit": [],
+  "content_added_or_removed": false,
+  "composition_reopened": false
+}

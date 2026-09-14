@@ -1,0 +1,109 @@
+{
+  "diagram": "email-architecture",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "email-architecture-pitch.drawio",
+    "png": "email-architecture-pitch.png",
+    "change_record": "email-architecture-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "email-architecture-pass-01.drawio",
+      "png": "email-architecture-pass-01.png",
+      "change_record": "email-architecture-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 3265,
+      "result_meaningful_xml": 36756,
+      "growth_ratio": 11.25758
+    },
+    {
+      "drawio": "email-architecture-pass-02.drawio",
+      "png": "email-architecture-pass-02.png",
+      "change_record": "email-architecture-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "email-architecture-pass-03.drawio",
+      "png": "email-architecture-pass-03.png",
+      "change_record": "email-architecture-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "email-architecture-pass-04.drawio",
+      "png": "email-architecture-pass-04.png",
+      "change_record": "email-architecture-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e1",
+          "source": "mcp",
+          "target": "api",
+          "relationship": "HTTP",
+          "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "api",
+          "target": "sandbox",
+          "relationship": "configure / A2A",
+          "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "entra",
+          "target": "api",
+          "relationship": "identity",
+          "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "github",
+          "target": "api",
+          "relationship": "capability",
+          "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "api",
+          "target": "postgres",
+          "relationship": "read / write",
+          "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

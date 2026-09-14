@@ -1,1 +1,22 @@
-1fc994edc602b8412f9112c890278f563a27742a53c5ca436b9c33791970b34e
+{
+  "version": 2,
+  "source": {
+    "file": "unified-steering-fig1.drawio",
+    "sha256": "52a02df54e25e386ea5adbbd673f43102a9a2b23cd25aaa512013021d5c9b48b"
+  },
+  "drawio": {
+    "file": "unified-steering-fig1.drawio",
+    "sha256": "0a7b83777dcd0b523fbf48b4e559ab5e37406416efc3bfbf08d6d261d2fa7f44"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "unified-steering-fig1.png",
+    "sha256": "d09057ec4d0cda9bc45e12813c856b757d608a56333332b88a7aa9e43e1fc8ad"
+  }
+}

@@ -1,0 +1,286 @@
+{
+  "diagram": "frontend-fig7",
+  "source_sha256": "841b8dd299216a42cd7dd52bda66492cfb22e050958b119deec004d97890e61b",
+  "png_sha256": "6c912b5a230a72d1eff57b8cfe379714f14f81cc792cdce57205c0d9247a575b",
+  "prior_model": "docs\\diagrams\\reviews\\frontend-fig7\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Live timeline: independent inputs"
+    },
+    {
+      "cell": "takeaway",
+      "text": "REST seed and live SSE run concurrently, then merge into a guarded projection."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "INDEPENDENT INPUTS"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "MERGE · PROJECT · RECOVER"
+    },
+    {
+      "cell": "run-title",
+      "text": "Current run ID"
+    },
+    {
+      "cell": "run-subtitle",
+      "text": "Route chooses stream scope"
+    },
+    {
+      "cell": "run-detail",
+      "text": "Run/generation guards reject stale seeds"
+    },
+    {
+      "cell": "run-meta",
+      "text": "useSeededRunStream.ts:43-151"
+    },
+    {
+      "cell": "run-pill",
+      "text": "SCOPE"
+    },
+    {
+      "cell": "merge-title",
+      "text": "Merge run events"
+    },
+    {
+      "cell": "merge-subtitle",
+      "text": "Positive-sequence deduplication"
+    },
+    {
+      "cell": "merge-detail",
+      "text": "Restricted sequence-zero singleton rules"
+    },
+    {
+      "cell": "merge-meta",
+      "text": "mergeRunEvents.ts:23-79"
+    },
+    {
+      "cell": "merge-pill",
+      "text": "MERGE"
+    },
+    {
+      "cell": "rest-title",
+      "text": "Persisted event history"
+    },
+    {
+      "cell": "rest-subtitle",
+      "text": "REST seed requested independently"
+    },
+    {
+      "cell": "rest-detail",
+      "text": "A seed failure does not block live SSE"
+    },
+    {
+      "cell": "rest-meta",
+      "text": "useSeededRunStream.ts:85-134"
+    },
+    {
+      "cell": "rest-pill",
+      "text": "REST"
+    },
+    {
+      "cell": "project-title",
+      "text": "Timeline projection"
+    },
+    {
+      "cell": "project-subtitle",
+      "text": "Reducers + server topology seed"
+    },
+    {
+      "cell": "project-detail",
+      "text": "Render graph, timeline, status and controls"
+    },
+    {
+      "cell": "project-meta",
+      "text": "CoordinatorRunPage.tsx"
+    },
+    {
+      "cell": "project-pill",
+      "text": "DERIVE"
+    },
+    {
+      "cell": "sse-title",
+      "text": "Live event transport"
+    },
+    {
+      "cell": "sse-subtitle",
+      "text": "Authenticated fetch + credentials"
+    },
+    {
+      "cell": "sse-detail",
+      "text": "Last-Event-ID resumes the cursor"
+    },
+    {
+      "cell": "sse-meta",
+      "text": "api/sse.ts:239-337"
+    },
+    {
+      "cell": "sse-pill",
+      "text": "SSE"
+    },
+    {
+      "cell": "buffer-title",
+      "text": "Parser and event buffer"
+    },
+    {
+      "cell": "buffer-subtitle",
+      "text": "Dedupe and bounded retention"
+    },
+    {
+      "cell": "buffer-detail",
+      "text": "Cursor advances with accepted events"
+    },
+    {
+      "cell": "buffer-meta",
+      "text": "api/sse.ts:239-337"
+    },
+    {
+      "cell": "buffer-pill",
+      "text": "BUFFER"
+    },
+    {
+      "cell": "reconnect-title",
+      "text": "Unexpected disconnect"
+    },
+    {
+      "cell": "reconnect-subtitle",
+      "text": "Bounded reconnect backoff"
+    },
+    {
+      "cell": "reconnect-detail",
+      "text": "Explicit reconnect reopens after gate action"
+    },
+    {
+      "cell": "reconnect-meta",
+      "text": "api/sse.ts:239-337"
+    },
+    {
+      "cell": "reconnect-pill",
+      "text": "RETRY"
+    },
+    {
+      "cell": "stop-title",
+      "text": "done / terminal"
+    },
+    {
+      "cell": "stop-subtitle",
+      "text": "Stop the current transport"
+    },
+    {
+      "cell": "stop-detail",
+      "text": "A gate done is not universal run completion"
+    },
+    {
+      "cell": "stop-meta",
+      "text": "api/sse.ts; RunEndpoints.cs"
+    },
+    {
+      "cell": "stop-pill",
+      "text": "STOP"
+    },
+    {
+      "cell": "run-to-rest",
+      "text": "seed"
+    },
+    {
+      "cell": "run-to-sse",
+      "text": "live"
+    },
+    {
+      "cell": "rest-to-merge",
+      "text": "seed events"
+    },
+    {
+      "cell": "sse-to-buffer",
+      "text": "frames"
+    },
+    {
+      "cell": "buffer-to-merge",
+      "text": "events"
+    },
+    {
+      "cell": "merge-to-project",
+      "text": "merged"
+    },
+    {
+      "cell": "sse-to-reconnect",
+      "text": "disconnect"
+    },
+    {
+      "cell": "buffer-to-stop",
+      "text": "done"
+    },
+    {
+      "cell": "scope",
+      "text": "No REST→SSE prerequisite. Backend topology is an input; browser reducers do not author it."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/frontend.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "run",
+      "to": "rest",
+      "label": "seed",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "run",
+      "to": "sse",
+      "label": "live",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "rest",
+      "to": "merge",
+      "label": "seed events",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "sse",
+      "to": "buffer",
+      "label": "frames",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "buffer",
+      "to": "merge",
+      "label": "events",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "merge",
+      "to": "project",
+      "label": "merged",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "sse",
+      "to": "reconnect",
+      "label": "disconnect",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "buffer",
+      "to": "stop",
+      "label": "done",
+      "result": "clean"
+    }
+  ]
+}

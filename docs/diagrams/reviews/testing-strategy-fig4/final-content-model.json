@@ -1,0 +1,164 @@
+{
+  "name": "testing-strategy-fig4",
+  "title": "API test hosting · configure, substitute, request",
+  "takeaway": "Specialized factories keep Program wiring real while selecting isolated state and controlled seams.",
+  "pitch": [
+    "Test factory|Override configuration and DI|Fixture-specific",
+    "Real Program host|Send request and assert contract|Not a live provider test"
+  ],
+  "groups": [
+    "FACTORY SETUP",
+    "HOST / REQUEST / ASSERT"
+  ],
+  "nodes": [
+    {
+      "id": "test",
+      "title": "Test case",
+      "sub": "Select a specialized factory",
+      "detail": "Choose the subsystem and behavior to preserve",
+      "meta": "Helpers/*WebApplicationFactory",
+      "badge": "ARRANGE",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:34-60",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "config",
+      "title": "Fixture configuration",
+      "sub": "Isolated DB, worktree, checkpoints",
+      "detail": "Required provider settings; explicit identity seams",
+      "meta": "WorkflowWebApplicationFactory:34–60",
+      "badge": "CONFIG",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:34-60",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "substitute",
+      "title": "Service replacement",
+      "sub": "Swap IAgentRunner / agent factory",
+      "detail": "Deterministic writes; some gates short-circuited",
+      "meta": "WorkflowWebApplicationFactory:61–82",
+      "badge": "DI",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:61-82",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "host",
+      "title": "Real Program host",
+      "sub": "Startup + DI + middleware",
+      "detail": "Not a direct service-method-only test",
+      "meta": "WebApplicationFactory<Program>",
+      "badge": "HOST",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:34-82",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "state",
+      "title": "Isolated real state",
+      "sub": "SQLite + filesystem / Git as needed",
+      "detail": "Dispose fixture-owned databases and directories",
+      "meta": "WorkflowWebApplicationFactory:86–111",
+      "badge": "STATE",
+      "shape": "cylinder3",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:24-38",
+      "classification": "native:database"
+    },
+    {
+      "id": "request",
+      "title": "Test HTTP client",
+      "sub": "Route, JSON and identity contract",
+      "detail": "Request traverses the configured host",
+      "meta": "WorkflowIntegrationTests:20–31",
+      "badge": "ACT",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/WorkflowIntegrationTests.cs:20-31",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "seam",
+      "title": "Controlled execution",
+      "sub": "No live model invocation required",
+      "detail": "Fake preserves relevant input/output shape",
+      "meta": "TestFileEditAgentRunner:44–80",
+      "badge": "SEAM",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/Helpers/TestFileEditAgentRunner.cs:44-80",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "assert",
+      "title": "Assertions + cleanup",
+      "sub": "Status / payload / state as applicable",
+      "detail": "Retired POST /api/runs test accepts 401 or 410",
+      "meta": "WorkflowIntegrationTests:20–31",
+      "badge": "ASSERT",
+      "shape": "process",
+      "evidence": "tests/Agentweaver.Tests/WorkflowIntegrationTests.cs:20-31",
+      "classification": "native:flowchart"
+    }
+  ],
+  "edges": [
+    {
+      "id": "test-to-config",
+      "source": "test",
+      "target": "config",
+      "label": "configure fixture",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:34-60"
+    },
+    {
+      "id": "test-to-substitute",
+      "source": "test",
+      "target": "substitute",
+      "label": "replace registrations",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:61-82"
+    },
+    {
+      "id": "config-to-host",
+      "source": "config",
+      "target": "host",
+      "label": "build host",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:34-82"
+    },
+    {
+      "id": "substitute-to-host",
+      "source": "substitute",
+      "target": "host",
+      "label": "configure services",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:61-82"
+    },
+    {
+      "id": "substitute-to-state",
+      "source": "substitute",
+      "target": "state",
+      "label": "fixture paths",
+      "evidence": "tests/Agentweaver.Tests/Helpers/WorkflowWebApplicationFactory.cs:24-38",
+      "relationOnly": true
+    },
+    {
+      "id": "request-to-host",
+      "source": "request",
+      "target": "host",
+      "label": "HTTP request",
+      "evidence": "tests/Agentweaver.Tests/WorkflowIntegrationTests.cs:20-31",
+      "route": "right"
+    },
+    {
+      "id": "seam-to-state",
+      "source": "seam",
+      "target": "state",
+      "label": "real file operations",
+      "evidence": "tests/Agentweaver.Tests/Helpers/TestFileEditAgentRunner.cs:44-80"
+    },
+    {
+      "id": "request-to-assert",
+      "source": "request",
+      "target": "assert",
+      "label": "assert result",
+      "evidence": "tests/Agentweaver.Tests/WorkflowIntegrationTests.cs:20-31"
+    }
+  ],
+  "scope": "Fixture legacy auth settings are not production architecture. The retired-route test proves no full workflow."
+}

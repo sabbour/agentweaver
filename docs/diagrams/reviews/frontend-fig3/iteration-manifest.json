@@ -1,0 +1,109 @@
+{
+  "diagram": "frontend-fig3",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "frontend-fig3-pitch.drawio",
+    "png": "frontend-fig3-pitch.png",
+    "change_record": "frontend-fig3-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "frontend-fig3-pass-01.drawio",
+      "png": "frontend-fig3-pass-01.png",
+      "change_record": "frontend-fig3-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2182,
+      "result_meaningful_xml": 22842,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.468378
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "frontend-fig3-pass-02.drawio",
+      "png": "frontend-fig3-pass-02.png",
+      "change_record": "frontend-fig3-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "frontend-fig3-pass-03.drawio",
+      "png": "frontend-fig3-pass-03.png",
+      "change_record": "frontend-fig3-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "frontend-fig3-pass-04.drawio",
+      "png": "frontend-fig3-pass-04.png",
+      "change_record": "frontend-fig3-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "browser-to-static",
+          "source": "browser",
+          "target": "static",
+          "relationship": "asset",
+          "evidence": "apps/Agentweaver.Web/Program.cs:39-50",
+          "result": "clean"
+        },
+        {
+          "id": "static-to-fallback",
+          "source": "static",
+          "target": "fallback",
+          "relationship": "unmatched",
+          "evidence": "apps/Agentweaver.Web/Program.cs:61-65",
+          "result": "clean"
+        },
+        {
+          "id": "config-to-client-origin",
+          "source": "config",
+          "target": "client-origin",
+          "relationship": "supplies",
+          "evidence": "apps/web/src/config.ts:13-36",
+          "result": "clean"
+        },
+        {
+          "id": "client-origin-to-api-host",
+          "source": "client-origin",
+          "target": "api-host",
+          "relationship": "requests",
+          "evidence": "apps/web/src/api/sse.ts:239-337",
+          "result": "clean"
+        },
+        {
+          "id": "docs-route-to-external-docs",
+          "source": "docs-route",
+          "target": "external-docs",
+          "relationship": "302 redirect",
+          "evidence": "apps/Agentweaver.Web/Program.cs:52-59",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

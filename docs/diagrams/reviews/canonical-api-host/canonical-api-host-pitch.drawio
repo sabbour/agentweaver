@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Agentweaver" version="31.4.5" compressed="false">
+  <diagram id="canonical-api-host" name="API host: compose once, authorize each request">
+    <mxGraphModel page="1" pageScale="1" pageWidth="827" pageHeight="583" background="#efeae7" grid="1" gridSize="10">
+      <root>
+        <mxCell id="0" style="" />
+        <mxCell id="1" parent="0" style="" />
+        <mxCell id="title" value="API host: compose once, authorize each request" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=20.689;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="29.748" y="14.778" width="767.504" height="31.034" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-0" value="&lt;b&gt;Client intent&lt;/b&gt;&lt;br&gt;Browser, MCP, or automation&lt;br&gt;&lt;span style=&quot;font-family:Consolas;font-size:10.345px;color:#746d68&quot;&gt;HTTP credential boundary&lt;/span&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;shadow=1;fontFamily=Segoe UI;fontSize=17.734;fontColor=#272320;spacingLeft=60;spacingRight=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="52.059" y="199.506" width="297.482" height="125.615" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-0-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="pitch-0">
+          <mxGeometry x="0.0" y="0.0" width="3.719" height="125.615" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-0-icon" value="" style="shape=umlActor;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;" vertex="1" parent="pitch-0">
+          <mxGeometry x="12.643" y="45.812" width="23.799" height="29.556" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-0-badge" value="INTENT" style="rounded=1;arcSize=100;fillColor=#a6e9ed;strokeColor=none;fontFamily=Segoe UI;fontSize=8.867;fontColor=#00666d;" vertex="1" parent="pitch-0">
+          <mxGeometry x="204.519" y="8.867" width="81.808" height="18.473" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-1" value="&lt;b&gt;API authority&lt;/b&gt;&lt;br&gt;Authenticate, authorize, delegate&lt;br&gt;&lt;span style=&quot;font-family:Consolas;font-size:10.345px;color:#746d68&quot;&gt;Program.cs:1274-1295&lt;/span&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;shadow=1;fontFamily=Segoe UI;fontSize=17.734;fontColor=#272320;spacingLeft=60;spacingRight=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="461.097" y="199.506" width="297.482" height="125.615" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-1-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="pitch-1">
+          <mxGeometry x="0.0" y="0.0" width="3.719" height="125.615" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-1-icon" value="" style="shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;" vertex="1" parent="pitch-1">
+          <mxGeometry x="12.643" y="45.812" width="23.799" height="29.556" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-1-badge" value="AUTHORITY" style="rounded=1;arcSize=100;fillColor=#a6e9ed;strokeColor=none;fontFamily=Segoe UI;fontSize=8.867;fontColor=#00666d;" vertex="1" parent="pitch-1">
+          <mxGeometry x="204.519" y="8.867" width="81.808" height="18.473" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-contract" value="request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=2;fontFamily=Segoe UI;fontSize=10.345;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;" edge="1" parent="1" source="pitch-0" target="pitch-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

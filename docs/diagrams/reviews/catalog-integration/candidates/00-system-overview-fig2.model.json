@@ -1,0 +1,688 @@
+{
+  "title": "Full single-agent run · representative lifecycle",
+  "nodes": [
+    {
+      "id": "launch",
+      "label": "Accepted run",
+      "subLabel": "Provider / capability validation",
+      "meta": "RunOrchestrator:164–255",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "ADMISSION",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "agent",
+      "label": "Agent turn",
+      "subLabel": "Project context + task",
+      "meta": "RunOrchestrator:164–255",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "WORK",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "rai",
+      "label": "Rai safety",
+      "subLabel": "Inspect the successful turn",
+      "meta": "GraphBinder:335–426",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "SAFETY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "review",
+      "label": "Human review",
+      "subLabel": "Nonempty diff, no further Rai revision",
+      "meta": "GraphBinder:335–426",
+      "icon": "box",
+      "shape": "rhombus",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "DECISION",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "empty",
+      "label": "Empty diff result",
+      "subLabel": "Flagged versus unflagged",
+      "meta": "GraphBinder:335–426",
+      "icon": "box",
+      "shape": "rhombus",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "BRANCH",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "merge",
+      "label": "Merge attempt",
+      "subLabel": "Approval uses saved merge data",
+      "meta": "GraphBinder:335–426",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "MERGE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "scribe",
+      "label": "Scribe",
+      "subLabel": "Record nonblocked outcome",
+      "meta": "GraphBinder:335–426",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "RECORD",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "terminal",
+      "label": "Watch loop / terminal",
+      "subLabel": "Output determines persisted state",
+      "meta": "RunWatchLoopService:595–681",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "RESULT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "launch",
+      "to": "agent",
+      "label": "launch",
+      "loopback": false
+    },
+    {
+      "from": "agent",
+      "to": "rai",
+      "label": "turn output",
+      "loopback": false
+    },
+    {
+      "from": "rai",
+      "to": "review",
+      "label": "no revision",
+      "loopback": false
+    },
+    {
+      "from": "rai",
+      "to": "empty",
+      "label": "empty diff",
+      "loopback": false
+    },
+    {
+      "from": "review",
+      "to": "merge",
+      "label": "approve",
+      "loopback": false
+    },
+    {
+      "from": "empty",
+      "to": "scribe",
+      "label": "unflagged",
+      "loopback": false
+    },
+    {
+      "from": "merge",
+      "to": "scribe",
+      "label": "nonblocked",
+      "loopback": false
+    },
+    {
+      "from": "scribe",
+      "to": "terminal",
+      "label": "output",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "EXECUTION + SAFETY"
+    },
+    {
+      "id": "1",
+      "label": "REVIEW + OUTCOME"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "launch",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 94.0874635568513
+        },
+        "data": {
+          "id": "launch",
+          "label": "Accepted run",
+          "subLabel": "Provider / capability validation",
+          "meta": "RunOrchestrator:164–255",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "ADMISSION",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "agent",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "agent",
+          "label": "Agent turn",
+          "subLabel": "Project context + task",
+          "meta": "RunOrchestrator:164–255",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "WORK",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "rai",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "rai",
+          "label": "Rai safety",
+          "subLabel": "Inspect the successful turn",
+          "meta": "GraphBinder:335–426",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "SAFETY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "review",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "review",
+          "label": "Human review",
+          "subLabel": "Nonempty diff, no further Rai revision",
+          "meta": "GraphBinder:335–426",
+          "icon": "box",
+          "shape": "rhombus",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "DECISION",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "empty",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "empty",
+          "label": "Empty diff result",
+          "subLabel": "Flagged versus unflagged",
+          "meta": "GraphBinder:335–426",
+          "icon": "box",
+          "shape": "rhombus",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "BRANCH",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "merge",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 582.0874635568513
+        },
+        "data": {
+          "id": "merge",
+          "label": "Merge attempt",
+          "subLabel": "Approval uses saved merge data",
+          "meta": "GraphBinder:335–426",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "MERGE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "scribe",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "scribe",
+          "label": "Scribe",
+          "subLabel": "Record nonblocked outcome",
+          "meta": "GraphBinder:335–426",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "RECORD",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "terminal",
+        "type": "card",
+        "position": {
+          "x": 516.4851311953353,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "terminal",
+          "label": "Watch loop / terminal",
+          "subLabel": "Output determines persisted state",
+          "meta": "RunWatchLoopService:595–681",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "RESULT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 30.087463556851304
+        },
+        "style": {
+          "width": 884.8,
+          "height": 464
+        },
+        "data": {
+          "label": "EXECUTION + SAFETY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 46.087463556851304
+        },
+        "data": {
+          "label": "EXECUTION + SAFETY",
+          "width": 844.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 518.0874635568513
+        },
+        "style": {
+          "width": 884.8,
+          "height": 464
+        },
+        "data": {
+          "label": "REVIEW + OUTCOME",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 534.0874635568513
+        },
+        "data": {
+          "label": "REVIEW + OUTCOME",
+          "width": 844.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "launch",
+        "target": "agent",
+        "label": "launch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 516.4851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 446.0851311953353,
+              "y": 160.0874635568513
+            },
+            "to": {
+              "x": 446.0851311953353,
+              "y": 152.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 446.0851311953353,
+            "y": 136.88746355685132
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "agent",
+        "target": "rai",
+        "label": "turn output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 516.4851311953353,
+              "y": 182.9674635568513
+            },
+            {
+              "x": 419.9546964127266,
+              "y": 182.9674635568513
+            },
+            {
+              "x": 419.9546964127266,
+              "y": 426.96746355685127
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 426.96746355685127
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 452.48513119533527,
+            "y": 182.9674635568513
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "rai",
+        "target": "review",
+        "label": "no revision",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 404.0874635568513
+            },
+            {
+              "x": 516.4851311953353,
+              "y": 404.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 446.0851311953353,
+              "y": 404.0874635568513
+            },
+            "to": {
+              "x": 446.0851311953353,
+              "y": 452.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 446.0851311953353,
+            "y": 467.28746355685126
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "rai",
+        "target": "empty",
+        "label": "empty diff",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 456.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 596.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 526.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "review",
+        "target": "merge",
+        "label": "approve",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 686.4851311953353,
+              "y": 470.0874635568513
+            },
+            {
+              "x": 686.4851311953353,
+              "y": 582.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 686.4851311953353,
+            "y": 526.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "empty",
+        "target": "scribe",
+        "label": "unflagged",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 205.6851311953353,
+              "y": 700.0874635568513
+            },
+            {
+              "x": 205.6851311953353,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 205.6851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "merge",
+        "target": "scribe",
+        "label": "nonblocked",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 516.4851311953353,
+              "y": 677.1274635568512
+            },
+            {
+              "x": 443.18174955282313,
+              "y": 677.1274635568512
+            },
+            {
+              "x": 443.18174955282313,
+              "y": 914.9674635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 914.9674635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 457.84242588132554,
+            "y": 677.1274635568512
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "scribe",
+        "target": "terminal",
+        "label": "output",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 892.0874635568513
+            },
+            {
+              "x": 516.4851311953353,
+              "y": 892.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 446.0851311953353,
+              "y": 892.0874635568513
+            },
+            "to": {
+              "x": 446.0851311953353,
+              "y": 940.0874635568513
+            }
+          },
+          "labelPos": {
+            "x": 446.0851311953353,
+            "y": 955.2874635568513
+          }
+        }
+      }
+    ],
+    "canvasWidth": 890.1877551020408,
+    "canvasHeight": 993.6909620991254
+  }
+}

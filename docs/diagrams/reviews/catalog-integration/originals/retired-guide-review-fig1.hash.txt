@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "guide-review-fig1.json",
+    "sha256": "59f029f8d1beac41d936941514ebf2e85849788b97c168b31cdfdd9efcd634cf"
+  },
+  "drawio": {
+    "file": "guide-review-fig1.drawio",
+    "sha256": "4040c7808f82db3e675931cf3aacf9eb592e912c69bd5d071d1b60171360c3cf"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "guide-review-fig1.png",
+    "sha256": "0c31ac4988d45d669742379c56cf7d982f33ccfde5fb7338170276046dd1be8a"
+  }
+}

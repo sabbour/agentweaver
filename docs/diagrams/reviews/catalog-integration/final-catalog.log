@@ -1,0 +1,16 @@
+{
+  "xml_checked": 1279,
+  "xml_errors": 0,
+  "public_a5_checked": 121,
+  "public_a5_errors": 0,
+  "png_checked": 121,
+  "stamp_errors": 0,
+  "broken_images": 0,
+  "readme_visuals": 2,
+  "broken_local_links": 21,
+  "new_broken_local_links_vs_head": 0,
+  "new_broken_plan_consumer_links_vs_head": 0,
+  "manifests_checked": 148,
+  "manifests_with_errors": 0,
+  "disposition_residuals": 0
+}

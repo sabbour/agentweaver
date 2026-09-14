@@ -1,0 +1,11 @@
+
+C:\Users\asabbour\Git\agentweaver\.worktrees\drawio-diagram-authoring\docs\diagrams\reviews\canonical-sandbox-experience\native-pitch-remediation\canonical-sandbox-experience-pass-01.drawio -> C:\Users\asabbour\Git\agentweaver\.worktrees\drawio-diagram-authoring\docs\diagrams\reviews\canonical-sandbox-experience\native-pitch-remediation\canonical-sandbox-experience-pass-01.png
+[106896:0913/133356.231:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[106896:0913/133356.231:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[106896:0913/133356.232:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[106896:0913/133356.233:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[106896:0913/133356.233:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[106896:0913/133356.233:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[106896:0913/133356.233:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[106896:0913/133356.233:ERROR:net\disk_cache\disk_cache.cc:290] Unable to create cache
+[106896:0913/133356.233:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2

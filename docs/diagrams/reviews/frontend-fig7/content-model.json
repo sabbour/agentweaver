@@ -1,0 +1,201 @@
+{
+  "name": "frontend-fig7",
+  "title": "Live timeline: independent inputs",
+  "takeaway": "REST seed and live SSE run concurrently, then merge into a guarded projection.",
+  "groups": [
+    "INDEPENDENT INPUTS",
+    "MERGE · PROJECT · RECOVER"
+  ],
+  "nodes": [
+    {
+      "id": "run",
+      "title": "Current run ID",
+      "subtitle": "Route chooses stream scope",
+      "detail": "Run/generation guards reject stale seeds",
+      "meta": "useSeededRunStream.ts:43-151",
+      "badge": "SCOPE",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-151",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "merge",
+      "title": "Merge run events",
+      "subtitle": "Positive-sequence deduplication",
+      "detail": "Restricted sequence-zero singleton rules",
+      "meta": "mergeRunEvents.ts:23-79",
+      "badge": "MERGE",
+      "evidence": "apps/web/src/timeline/mergeRunEvents.ts:23-79",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "rest",
+      "title": "Persisted event history",
+      "subtitle": "REST seed requested independently",
+      "detail": "A seed failure does not block live SSE",
+      "meta": "useSeededRunStream.ts:85-134",
+      "badge": "REST",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:85-134",
+      "shape": "cylinder3",
+      "box": {
+        "x": 36,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "project",
+      "title": "Timeline projection",
+      "subtitle": "Reducers + server topology seed",
+      "detail": "Render graph, timeline, status and controls",
+      "meta": "CoordinatorRunPage.tsx",
+      "badge": "DERIVE",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "sse",
+      "title": "Live event transport",
+      "subtitle": "Authenticated fetch + credentials",
+      "detail": "Last-Event-ID resumes the cursor",
+      "meta": "api/sse.ts:239-337",
+      "badge": "SSE",
+      "evidence": "apps/web/src/api/sse.ts:239-337",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "buffer",
+      "title": "Parser and event buffer",
+      "subtitle": "Dedupe and bounded retention",
+      "detail": "Cursor advances with accepted events",
+      "meta": "api/sse.ts:239-337",
+      "badge": "BUFFER",
+      "evidence": "apps/web/src/api/sse.ts:239-337",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "reconnect",
+      "title": "Unexpected disconnect",
+      "subtitle": "Bounded reconnect backoff",
+      "detail": "Explicit reconnect reopens after gate action",
+      "meta": "api/sse.ts:239-337",
+      "badge": "RETRY",
+      "evidence": "apps/web/src/api/sse.ts:239-337",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "stop",
+      "title": "done / terminal",
+      "subtitle": "Stop the current transport",
+      "detail": "A gate done is not universal run completion",
+      "meta": "api/sse.ts; RunEndpoints.cs",
+      "badge": "STOP",
+      "evidence": "apps/web/src/api/sse.ts:239-337; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:514-555",
+      "shape": "doubleEllipse",
+      "box": {
+        "x": 467,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "run-to-rest",
+      "source": "run",
+      "target": "rest",
+      "label": "seed",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:85-134"
+    },
+    {
+      "id": "run-to-sse",
+      "source": "run",
+      "target": "sse",
+      "label": "live",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-51",
+      "route": "outer"
+    },
+    {
+      "id": "rest-to-merge",
+      "source": "rest",
+      "target": "merge",
+      "label": "seed events",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:139-142",
+      "route": "middle"
+    },
+    {
+      "id": "sse-to-buffer",
+      "source": "sse",
+      "target": "buffer",
+      "label": "frames",
+      "evidence": "apps/web/src/api/sse.ts:239-337"
+    },
+    {
+      "id": "buffer-to-merge",
+      "source": "buffer",
+      "target": "merge",
+      "label": "events",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:139-142",
+      "route": "outer"
+    },
+    {
+      "id": "merge-to-project",
+      "source": "merge",
+      "target": "project",
+      "label": "merged",
+      "evidence": "apps/web/src/timeline/mergeRunEvents.ts:23-79"
+    },
+    {
+      "id": "sse-to-reconnect",
+      "source": "sse",
+      "target": "reconnect",
+      "label": "disconnect",
+      "evidence": "apps/web/src/api/sse.ts:239-337"
+    },
+    {
+      "id": "buffer-to-stop",
+      "source": "buffer",
+      "target": "stop",
+      "label": "done",
+      "evidence": "apps/web/src/api/sse.ts:239-337"
+    }
+  ],
+  "scope": "No REST→SSE prerequisite. Backend topology is an input; browser reducers do not author it."
+}

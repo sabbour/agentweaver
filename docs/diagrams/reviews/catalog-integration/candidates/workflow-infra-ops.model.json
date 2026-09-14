@@ -1,0 +1,788 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Infrastructure & Operations workflow",
+  "alt": "Infrastructure & Operations workflow: Plan, Implement, Validate, RAI Check, Infra & Config Review, Human Review, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "plan",
+      "label": "Plan",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "implement",
+      "label": "Implement",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "validate-gate",
+      "label": "Validate",
+      "subLabel": "devops-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "infra-review",
+      "label": "Infra & Config Review",
+      "subLabel": "security-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "human-review",
+      "label": "Human Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan",
+      "to": "implement"
+    },
+    {
+      "from": "implement",
+      "to": "validate-gate"
+    },
+    {
+      "from": "validate-gate",
+      "to": "rai-check",
+      "label": "pass"
+    },
+    {
+      "from": "validate-gate",
+      "to": "implement",
+      "label": "fail",
+      "loopback": true
+    },
+    {
+      "from": "rai-check",
+      "to": "implement",
+      "label": "revise",
+      "loopback": true
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "infra-review",
+      "label": "review"
+    },
+    {
+      "from": "infra-review",
+      "to": "human-review",
+      "label": "approved"
+    },
+    {
+      "from": "infra-review",
+      "to": "implement",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "infra-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "human-review",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "human-review",
+      "to": "implement",
+      "label": "request-changes",
+      "loopback": true
+    },
+    {
+      "from": "human-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "plan",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 243.06976744186045
+        },
+        "data": {
+          "id": "plan",
+          "label": "Plan",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "implement",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 487.06976744186045
+        },
+        "data": {
+          "id": "implement",
+          "label": "Implement",
+          "subLabel": "agent",
+          "icon": "box",
+          "badge": {
+            "text": "Step",
+            "tone": "neutral"
+          }
+        }
+      },
+      {
+        "id": "validate-gate",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 734.6756787719096
+        },
+        "data": {
+          "id": "validate-gate",
+          "label": "Validate",
+          "subLabel": "devops-engineer · review",
+          "icon": "branch",
+          "badge": {
+            "text": "Peer review",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "rai-check",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 975.0697674418604
+        },
+        "data": {
+          "id": "rai-check",
+          "label": "RAI Check",
+          "subLabel": "review",
+          "icon": "branch",
+          "badge": {
+            "text": "RAI gate",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "infra-review",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 1199.9545600685885
+        },
+        "data": {
+          "id": "infra-review",
+          "label": "Infra & Config Review",
+          "subLabel": "security-engineer · review",
+          "icon": "branch",
+          "badge": {
+            "text": "Peer review",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "human-review",
+        "type": "card",
+        "position": {
+          "x": 452.5581395348837,
+          "y": 1463.0697674418604
+        },
+        "data": {
+          "id": "human-review",
+          "label": "Human Review",
+          "subLabel": "review",
+          "icon": "branch",
+          "badge": {
+            "text": "Human gate",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "terminal-safety-failed",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 727.3540314012513
+        },
+        "data": {
+          "id": "terminal-safety-failed",
+          "label": "Safety Failed",
+          "icon": "window",
+          "badge": {
+            "text": "Stopped",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "terminal-declined",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 1241.7364341085272
+        },
+        "data": {
+          "id": "terminal-declined",
+          "label": "Declined",
+          "icon": "window",
+          "badge": {
+            "text": "Stopped",
+            "tone": "marigold"
+          }
+        }
+      },
+      {
+        "id": "done",
+        "type": "card",
+        "position": {
+          "x": 968.5581395348836,
+          "y": 1707.0697674418604
+        },
+        "data": {
+          "id": "done",
+          "label": "Done",
+          "icon": "window",
+          "badge": {
+            "text": "Done",
+            "tone": "green"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "plan",
+        "target": "implement",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 347.06976744186045
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 487.06976744186045
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e1",
+        "source": "implement",
+        "target": "validate-gate",
+        "label": "",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 591.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 734.6756787719096
+            }
+          ],
+          "junctions": []
+        }
+      },
+      {
+        "id": "e2",
+        "source": "validate-gate",
+        "target": "rai-check",
+        "label": "pass",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 838.6756787719096
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 975.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 934.1515408408752
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "validate-gate",
+        "target": "implement",
+        "label": "fail",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 786.6756787719096
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 526.4031007751938
+            },
+            {
+              "x": 452.5581395348837,
+              "y": 526.4031007751938
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 418.5581395348837,
+            "y": 526.4031007751938
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "rai-check",
+        "target": "implement",
+        "label": "revise",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 360.5581395348837,
+              "y": 1027.0697674418604
+            },
+            {
+              "x": 360.5581395348837,
+              "y": 551.7364341085271
+            },
+            {
+              "x": 452.5581395348837,
+              "y": 551.7364341085271
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 360.5581395348837,
+            "y": 811.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "rai-check",
+        "target": "terminal-safety-failed",
+        "label": "safety-failed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1014.4031007751938
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1014.4031007751938
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 779.3540314012513
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 779.3540314012513
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1066.5581395348836,
+            "y": 1014.4031007751938
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "rai-check",
+        "target": "done",
+        "label": "no-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1039.7364341085272
+            },
+            {
+              "x": 884.5581395348837,
+              "y": 1039.7364341085272
+            },
+            {
+              "x": 884.5581395348837,
+              "y": 1648.0797674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1648.0797674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1759.0697674418604
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1759.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1112.5581395348836,
+            "y": 1648.0797674418604
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "rai-check",
+        "target": "infra-review",
+        "label": "review",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1079.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1199.9545600685885
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 1167.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "infra-review",
+        "target": "human-review",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1303.9545600685885
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1463.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 622.5581395348837,
+            "y": 1383.5121637552245
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "infra-review",
+        "target": "implement",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 420.5581395348837,
+              "y": 1130.9445600685885
+            },
+            {
+              "x": 852.5581395348836,
+              "y": 1130.9445600685885
+            },
+            {
+              "x": 852.5581395348836,
+              "y": 526.4031007751938
+            },
+            {
+              "x": 792.5581395348837,
+              "y": 526.4031007751938
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 708.5581395348837,
+            "y": 1130.9445600685885
+          }
+        }
+      },
+      {
+        "id": "e10",
+        "source": "infra-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1251.9545600685885
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 1293.7364341085272
+            },
+            {
+              "x": 968.5581395348836,
+              "y": 1293.7364341085272
+            }
+          ],
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 808.5581395348837,
+              "y": 1251.9545600685885
+            },
+            "to": {
+              "x": 808.5581395348837,
+              "y": 1331.9545600685885
+            }
+          },
+          "labelPos": {
+            "x": 808.5581395348837,
+            "y": 1347.1545600685886
+          }
+        }
+      },
+      {
+        "id": "e11",
+        "source": "human-review",
+        "target": "done",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 622.5581395348837,
+              "y": 1567.0697674418604
+            },
+            {
+              "x": 622.5581395348837,
+              "y": 1675.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1675.0697674418604
+            },
+            {
+              "x": 1138.5581395348836,
+              "y": 1707.0697674418604
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 880.5581395348836,
+            "y": 1675.0697674418604
+          }
+        }
+      },
+      {
+        "id": "e12",
+        "source": "human-review",
+        "target": "implement",
+        "label": "request-changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 452.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 384.5581395348837,
+              "y": 893.3931007751938
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 893.3931007751938
+            },
+            {
+              "x": 824.5581395348837,
+              "y": 551.7364341085271
+            },
+            {
+              "x": 792.5581395348837,
+              "y": 551.7364341085271
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 536.5581395348837,
+            "y": 893.3931007751938
+          }
+        }
+      },
+      {
+        "id": "e13",
+        "source": "human-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 792.5581395348837,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1515.0697674418604
+            },
+            {
+              "x": 1340.5581395348836,
+              "y": 1293.7364341085272
+            },
+            {
+              "x": 1308.5581395348836,
+              "y": 1293.7364341085272
+            }
+          ],
+          "junctions": [],
+          "labelPos": {
+            "x": 1066.5581395348836,
+            "y": 1515.0697674418604
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1402.9302325581393,
+    "canvasHeight": 1956.0930232558142
+  }
+}

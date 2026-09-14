@@ -1,0 +1,220 @@
+{
+  "diagram": "canonical-testing-boundary",
+  "source_sha256": "58e6ed63ab05e97cc10f4404c5e85a4ade05d4f7224e90cb2bff0a2cd50729b5",
+  "png_sha256": "87f997e67a68fbd457c1d77cd0f35fa3be1a75ba8fbe052ba07a07ced69db318",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-testing-boundary\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Testing boundary · choose what must stay real"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Replace nondeterministic dependencies without replacing the behavior under test."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "REAL BEHAVIOR / INFRASTRUCTURE"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "CONTROLLED EXTERNAL SEAMS"
+    },
+    {
+      "cell": "host-title",
+      "text": "Real API host"
+    },
+    {
+      "cell": "host-subtitle",
+      "text": "WebApplicationFactory / Program"
+    },
+    {
+      "cell": "host-detail",
+      "text": "Middleware, DI, binding and response contracts"
+    },
+    {
+      "cell": "host-metadata",
+      "text": "AgentweaverWebApplicationFactory"
+    },
+    {
+      "cell": "host-badge",
+      "text": "REAL"
+    },
+    {
+      "cell": "agent-title",
+      "text": "Deterministic agent seam"
+    },
+    {
+      "cell": "agent-subtitle",
+      "text": "TestFileEditAgentRunner"
+    },
+    {
+      "cell": "agent-detail",
+      "text": "Real file write / no-change / synthetic safety error"
+    },
+    {
+      "cell": "agent-metadata",
+      "text": "TestFileEditAgentRunner:44–80"
+    },
+    {
+      "cell": "agent-badge",
+      "text": "CONTROLLED"
+    },
+    {
+      "cell": "stores-title",
+      "text": "Real SQLite stores"
+    },
+    {
+      "cell": "stores-subtitle",
+      "text": "Raw and EF-backed test databases"
+    },
+    {
+      "cell": "stores-detail",
+      "text": "Transactions, uniqueness, state and CAS behavior"
+    },
+    {
+      "cell": "stores-metadata",
+      "text": "ProjectsWebApplicationFactory"
+    },
+    {
+      "cell": "stores-badge",
+      "text": "REAL"
+    },
+    {
+      "cell": "http-title",
+      "text": "Controlled HTTP boundary"
+    },
+    {
+      "cell": "http-subtitle",
+      "text": "Stub handlers / issuer / API"
+    },
+    {
+      "cell": "http-detail",
+      "text": "External dependency shape, not live upstream proof"
+    },
+    {
+      "cell": "http-metadata",
+      "text": "McpBrokerRealProcessTests"
+    },
+    {
+      "cell": "http-badge",
+      "text": "CONTROLLED"
+    },
+    {
+      "cell": "git-title",
+      "text": "Real Git / policy logic"
+    },
+    {
+      "cell": "git-subtitle",
+      "text": "Repositories and worktree operations"
+    },
+    {
+      "cell": "git-detail",
+      "text": "Branches, tree hashes, containment and validators"
+    },
+    {
+      "cell": "git-metadata",
+      "text": "WorkflowWebApplicationFactory"
+    },
+    {
+      "cell": "git-badge",
+      "text": "REAL"
+    },
+    {
+      "cell": "planning-title",
+      "text": "Planning / workflow seams"
+    },
+    {
+      "cell": "planning-subtitle",
+      "text": "Fixture-specific factory replacements"
+    },
+    {
+      "cell": "planning-detail",
+      "text": "Some fixtures suppress dispatch or Rai/Scribe"
+    },
+    {
+      "cell": "planning-metadata",
+      "text": "CoordinatorWebApplicationFactory"
+    },
+    {
+      "cell": "planning-badge",
+      "text": "CONTROLLED"
+    },
+    {
+      "cell": "postgres-title",
+      "text": "Real PostgreSQL fixture"
+    },
+    {
+      "cell": "postgres-subtitle",
+      "text": "postgres:16-alpine Testcontainer"
+    },
+    {
+      "cell": "postgres-detail",
+      "text": "Provider locks/migrations need the actual engine"
+    },
+    {
+      "cell": "postgres-metadata",
+      "text": "PostgresFixture:9–29"
+    },
+    {
+      "cell": "postgres-badge",
+      "text": "PROVIDER"
+    },
+    {
+      "cell": "mcp-title",
+      "text": "Real MCP process"
+    },
+    {
+      "cell": "mcp-subtitle",
+      "text": "Loopback executable test"
+    },
+    {
+      "cell": "mcp-detail",
+      "text": "Synthetic JWKS + stub API remain controlled"
+    },
+    {
+      "cell": "mcp-metadata",
+      "text": "McpBrokerRealProcessTests:235–255"
+    },
+    {
+      "cell": "mcp-badge",
+      "text": "PROCESS"
+    },
+    {
+      "cell": "host-to-agent",
+      "text": "inject seam"
+    },
+    {
+      "cell": "host-to-planning",
+      "text": "planning"
+    },
+    {
+      "cell": "scope",
+      "text": "Scope varies by fixture. These tests do not establish live Entra, model-provider or Kubernetes behavior."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/testing-strategy.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "host",
+      "to": "agent",
+      "label": "inject seam",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "host",
+      "to": "planning",
+      "label": "planning",
+      "result": "clean"
+    }
+  ]
+}

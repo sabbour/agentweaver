@@ -1,0 +1,490 @@
+{
+  "title": "MCP trusts the broker, not GitHub",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "External MCP client",
+      "subLabel": "OAuth 2.1 + PKCE S256",
+      "meta": "Entra user sign-in",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "CLIENT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=umlActor;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n1",
+      "label": "Authorization server",
+      "subLabel": "Agentweaver-issued broker",
+      "meta": "Revocable refresh family",
+      "icon": "window",
+      "shape": "image",
+      "badge": {
+        "text": "ISSUER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n2",
+      "label": "Assistant API",
+      "subLabel": "Separate internal issuance",
+      "meta": "Held pod gets refreshed",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "ASSISTANT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "boundary0"
+    },
+    {
+      "id": "n3",
+      "label": "MCP validation",
+      "subLabel": "OpenIddict + strict checks",
+      "meta": "subject • TTL • scope",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "VERIFY",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n4",
+      "label": "API broker handler",
+      "subLabel": "Revalidate forwarded token",
+      "meta": "Same broker, not GitHub",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "VERIFY",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "boundary1"
+    },
+    {
+      "id": "n5",
+      "label": "Resource authorization",
+      "subLabel": "Persisted access checks",
+      "meta": "No implicit project grant",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "ACCESS",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "boundary1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "OAuth exchange",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "broker token",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "turn broker",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "forward broker",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "authorize",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "boundary0",
+      "label": "BROKER ISSUANCE"
+    },
+    {
+      "id": "boundary1",
+      "label": "VALIDATION AND RESOURCE ACCESS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 220.7142857142857,
+          "y": 317.9107142857143
+        },
+        "data": {
+          "id": "n0",
+          "label": "External MCP client",
+          "subLabel": "OAuth 2.1 + PKCE S256",
+          "meta": "Entra user sign-in",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "CLIENT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=umlActor;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 727.9142857142857,
+          "y": 317.9107142857143
+        },
+        "data": {
+          "id": "n1",
+          "label": "Authorization server",
+          "subLabel": "Agentweaver-issued broker",
+          "meta": "Revocable refresh family",
+          "icon": "window",
+          "shape": "image",
+          "badge": {
+            "text": "ISSUER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1235.1142857142859,
+          "y": 317.9107142857143
+        },
+        "data": {
+          "id": "n2",
+          "label": "Assistant API",
+          "subLabel": "Separate internal issuance",
+          "meta": "Held pod gets refreshed",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "ASSISTANT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "boundary0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 220.7142857142857,
+          "y": 600.2321428571429
+        },
+        "data": {
+          "id": "n3",
+          "label": "MCP validation",
+          "subLabel": "OpenIddict + strict checks",
+          "meta": "subject • TTL • scope",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "VERIFY",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 727.9142857142857,
+          "y": 600.2321428571429
+        },
+        "data": {
+          "id": "n4",
+          "label": "API broker handler",
+          "subLabel": "Revalidate forwarded token",
+          "meta": "Same broker, not GitHub",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "VERIFY",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1235.1142857142859,
+          "y": 600.2321428571429
+        },
+        "data": {
+          "id": "n5",
+          "label": "Resource authorization",
+          "subLabel": "Persisted access checks",
+          "meta": "No implicit project grant",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "ACCESS",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "boundary1"
+        }
+      },
+      {
+        "id": "group-boundary0",
+        "type": "band",
+        "position": {
+          "x": 188.7142857142857,
+          "y": 253.91071428571428
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 192
+        },
+        "data": {
+          "label": "BROKER ISSUANCE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 208.7142857142857,
+          "y": 269.9107142857143
+        },
+        "data": {
+          "label": "BROKER ISSUANCE",
+          "width": 1378.4
+        }
+      },
+      {
+        "id": "group-boundary1",
+        "type": "band",
+        "position": {
+          "x": 188.7142857142857,
+          "y": 530.2321428571429
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 198
+        },
+        "data": {
+          "label": "VALIDATION AND RESOURCE ACCESS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-boundary1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 208.7142857142857,
+          "y": 546.2321428571429
+        },
+        "data": {
+          "label": "VALIDATION AND RESOURCE ACCESS",
+          "width": 1378.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "OAuth exchange",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 560.7142857142857,
+              "y": 369.9107142857143
+            },
+            {
+              "x": 727.9142857142857,
+              "y": 369.9107142857143
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 644.3142857142857,
+            "y": 369.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n3",
+        "label": "broker token",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 897.9142857142857,
+              "y": 421.9107142857143
+            },
+            {
+              "x": 897.9142857142857,
+              "y": 453.9107142857143
+            },
+            {
+              "x": 188.7142857142857,
+              "y": 453.9107142857143
+            },
+            {
+              "x": 188.7142857142857,
+              "y": 639.5654761904763
+            },
+            {
+              "x": 220.7142857142857,
+              "y": 639.5654761904763
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 543.3142857142857,
+            "y": 453.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "turn broker",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1405.1142857142859,
+              "y": 421.9107142857143
+            },
+            {
+              "x": 1405.1142857142859,
+              "y": 453.9107142857143
+            },
+            {
+              "x": 1119.1142857142859,
+              "y": 453.9107142857143
+            },
+            {
+              "x": 1119.1142857142859,
+              "y": 725.2421428571429
+            },
+            {
+              "x": 188.7142857142857,
+              "y": 725.2421428571429
+            },
+            {
+              "x": 188.7142857142857,
+              "y": 664.8988095238095
+            },
+            {
+              "x": 220.7142857142857,
+              "y": 664.8988095238095
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1262.1142857142859,
+            "y": 453.9107142857143
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "forward broker",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 560.7142857142857,
+              "y": 652.2321428571429
+            },
+            {
+              "x": 727.9142857142857,
+              "y": 652.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 644.3142857142857,
+            "y": 652.2321428571429
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "authorize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1067.9142857142856,
+              "y": 652.2321428571429
+            },
+            {
+              "x": 1235.1142857142859,
+              "y": 652.2321428571429
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1171.9142857142856,
+            "y": 652.2321428571429
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1794.3107142857143,
+    "canvasHeight": 1044.9107142857142
+  }
+}

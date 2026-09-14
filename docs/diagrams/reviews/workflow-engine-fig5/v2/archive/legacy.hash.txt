@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "workflow-engine-fig5.json",
+    "sha256": "b3b97af703078e6774adcff472ddbb580f36106ab4c6fb7adcae0aca829f967e"
+  },
+  "drawio": {
+    "file": "workflow-engine-fig5.drawio",
+    "sha256": "ee32bf0f7f5a3f4a75c33896b34c316f48b48a555a1d6b4b9e54b1189fe874e7"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "workflow-engine-fig5.png",
+    "sha256": "0d5718195297b3dcfb9ee638f9c04cc57223d8760a9584cdbc6c973bf2cc13df"
+  }
+}

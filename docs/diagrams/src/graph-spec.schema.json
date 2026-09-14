@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Agentweaver architecture diagram graph-spec",
-  "description": "Content source-of-truth for the Fluent-styled React Flow architecture diagrams rendered by docs/diagram-renderer and captured by scripts/docs/capture-diagrams.mjs. Edit this file, then run `npm run docs:render-diagrams` and commit the regenerated PNG + .hash.txt.",
+  "description": "Structured generator input for Agentweaver draw.io diagrams. The browser-free pipeline converts this JSON to editable uncompressed draw.io XML, then exports it with the official draw.io Desktop CLI.",
   "type": "object",
   "required": ["title", "alt", "nodes", "edges"],
   "properties": {
@@ -46,6 +46,12 @@
           "subLabel": { "type": "string" },
           "meta": { "type": "string", "description": "Optional monospace third line (ports/protocol/mode)" },
           "icon": { "type": "string", "enum": ["globe", "branch", "route", "window", "server", "bot", "database", "key", "box"] },
+          "library": {
+            "type": "string",
+            "enum": ["azure", "kubernetes", "c4", "uml", "flowchart", "bpmn", "networking", "database", "cloud", "agentweaver"],
+            "description": "Optional explicit draw.io native library selection. When omitted, the generator infers a semantic library from the node."
+          },
+          "shape": { "type": "string", "description": "Optional draw.io native shape name within the selected library." },
           "badge": {
             "type": "object",
             "required": ["text", "tone"],

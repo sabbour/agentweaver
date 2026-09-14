@@ -1,0 +1,580 @@
+{
+  "title": "Generation preferences, not authority",
+  "nodes": [
+    {
+      "id": "settings",
+      "label": "Project settings",
+      "subLabel": "Blueprint · workflow · outcome spec",
+      "meta": "ProjectSettingsPage.tsx:617-648",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "EDIT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "blueprint",
+      "label": "Blueprint generation",
+      "subLabel": "Resolved blueprint preference",
+      "meta": "BlueprintEndpoints.cs:119-141",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "BLUEPRINT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "record",
+      "label": "Project record",
+      "subLabel": "Save nullable preference values",
+      "meta": "ProjectEndpoints.cs:815-817",
+      "icon": "box",
+      "shape": "cylinder3",
+      "badge": {
+        "text": "PERSIST",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;size=8;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "workflow",
+      "label": "Fallback workflow generation",
+      "subLabel": "Resolved workflow preference",
+      "meta": "BlueprintService.cs:765-773",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "FALLBACK",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "resolve",
+      "label": "Generation model resolver",
+      "meta": "GenerationModelOptions.cs:37-75",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "RESOLVE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "outcome",
+      "label": "Coordinator spec drafter",
+      "meta": "CopilotCoordinatorSpecDrafter:145",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "SPEC",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "caller",
+      "label": "Caller + project authority",
+      "meta": "AiExecutionPlanService.cs",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "ADMIT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "invoke",
+      "label": "Admitted model invocation",
+      "meta": "BlueprintEndpoints.cs:119-141",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "EXECUTE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "settings",
+      "to": "record",
+      "label": "save",
+      "loopback": false
+    },
+    {
+      "from": "record",
+      "to": "resolve",
+      "label": "preferences",
+      "loopback": false
+    },
+    {
+      "from": "resolve",
+      "to": "blueprint",
+      "label": "model",
+      "loopback": false
+    },
+    {
+      "from": "resolve",
+      "to": "workflow",
+      "label": "model",
+      "loopback": false
+    },
+    {
+      "from": "resolve",
+      "to": "outcome",
+      "label": "model",
+      "loopback": false
+    },
+    {
+      "from": "caller",
+      "to": "invoke",
+      "label": "authorize",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "PERSISTED SELECTION + PRECEDENCE"
+    },
+    {
+      "id": "1",
+      "label": "FLOW CONSUMERS + AUTHORITY"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "settings",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 85.11111111111111
+        },
+        "data": {
+          "id": "settings",
+          "label": "Project settings",
+          "subLabel": "Blueprint · workflow · outcome spec",
+          "meta": "ProjectSettingsPage.tsx:617-648",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "EDIT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "blueprint",
+        "type": "card",
+        "position": {
+          "x": 518.5777777777778,
+          "y": 85.11111111111111
+        },
+        "data": {
+          "id": "blueprint",
+          "label": "Blueprint generation",
+          "subLabel": "Resolved blueprint preference",
+          "meta": "BlueprintEndpoints.cs:119-141",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "BLUEPRINT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "record",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "record",
+          "label": "Project record",
+          "subLabel": "Save nullable preference values",
+          "meta": "ProjectEndpoints.cs:815-817",
+          "icon": "box",
+          "shape": "cylinder3",
+          "badge": {
+            "text": "PERSIST",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;size=8;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "workflow",
+        "type": "card",
+        "position": {
+          "x": 518.5777777777778,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "workflow",
+          "label": "Fallback workflow generation",
+          "subLabel": "Resolved workflow preference",
+          "meta": "BlueprintService.cs:765-773",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "FALLBACK",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "resolve",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 587.1111111111111
+        },
+        "data": {
+          "id": "resolve",
+          "label": "Generation model resolver",
+          "meta": "GenerationModelOptions.cs:37-75",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "RESOLVE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "outcome",
+        "type": "card",
+        "position": {
+          "x": 518.5777777777778,
+          "y": 587.1111111111111
+        },
+        "data": {
+          "id": "outcome",
+          "label": "Coordinator spec drafter",
+          "meta": "CopilotCoordinatorSpecDrafter:145",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "SPEC",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "caller",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 831.1111111111111
+        },
+        "data": {
+          "id": "caller",
+          "label": "Caller + project authority",
+          "meta": "AiExecutionPlanService.cs",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "ADMIT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "invoke",
+        "type": "card",
+        "position": {
+          "x": 518.5777777777778,
+          "y": 831.1111111111111
+        },
+        "data": {
+          "id": "invoke",
+          "label": "Admitted model invocation",
+          "meta": "BlueprintEndpoints.cs:119-141",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "EXECUTE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 5.7777777777777715,
+          "y": 15.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "PERSISTED SELECTION + PRECEDENCE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 25.77777777777777,
+          "y": 31.111111111111114
+        },
+        "data": {
+          "label": "PERSISTED SELECTION + PRECEDENCE",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 486.5777777777778,
+          "y": 15.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "FLOW CONSUMERS + AUTHORITY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 506.5777777777778,
+          "y": 31.111111111111114
+        },
+        "data": {
+          "label": "FLOW CONSUMERS + AUTHORITY",
+          "width": 364
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "settings",
+        "target": "record",
+        "label": "save",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 217.11111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 329.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 273.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "record",
+        "target": "resolve",
+        "label": "preferences",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 461.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 587.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 524.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "resolve",
+        "target": "blueprint",
+        "label": "model",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 609.9911111111111
+            },
+            {
+              "x": 421.9624645527197,
+              "y": 609.9911111111111
+            },
+            {
+              "x": 421.9624645527197,
+              "y": 151.11111111111111
+            },
+            {
+              "x": 518.5777777777778,
+              "y": 151.11111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 470.2701211652487,
+            "y": 151.11111111111111
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "resolve",
+        "target": "workflow",
+        "label": "model",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 639.1111111111111
+            },
+            {
+              "x": 461.0065480794019,
+              "y": 639.1111111111111
+            },
+            {
+              "x": 461.0065480794019,
+              "y": 395.1111111111111
+            },
+            {
+              "x": 518.5777777777778,
+              "y": 395.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 419.39216292858987,
+            "y": 639.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "resolve",
+        "target": "outcome",
+        "label": "model",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 672.3911111111111
+            },
+            {
+              "x": 518.5777777777778,
+              "y": 672.3911111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 448.1777777777778,
+              "y": 672.3911111111111
+            },
+            "to": {
+              "x": 448.1777777777778,
+              "y": 680.3911111111111
+            }
+          },
+          "labelPos": {
+            "x": 448.1777777777778,
+            "y": 695.5911111111111
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "caller",
+        "target": "invoke",
+        "label": "authorize",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 883.1111111111111
+            },
+            {
+              "x": 518.5777777777778,
+              "y": 883.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 448.1777777777778,
+            "y": 883.1111111111111
+          }
+        }
+      }
+    ],
+    "canvasWidth": 896.3555555555555,
+    "canvasHeight": 997.4938271604938
+  }
+}

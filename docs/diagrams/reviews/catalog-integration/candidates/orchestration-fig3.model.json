@@ -1,0 +1,856 @@
+{
+  "title": "Child execution and dependency progress",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Pending subtasks",
+      "subLabel": "Persisted dependency map",
+      "meta": "not automatically ready",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "PLAN",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Ready frontier",
+      "subLabel": "All predecessors satisfied",
+      "meta": "not any terminal result",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "READY",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Isolated child",
+      "subLabel": "Launch agent execution",
+      "meta": "separate checkout",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RUN",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Agent result",
+      "subLabel": "Typed conditional output",
+      "meta": "no child RAI executor",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "RESULT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Assemble-ready",
+      "subLabel": "Successful child content",
+      "meta": "satisfies dependents",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "SUCCESS",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Typed turn failure",
+      "subLabel": "Does not satisfy dependents",
+      "meta": "no per-child review",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "FAILURE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Published branch",
+      "subLabel": "Authoritative committed tip",
+      "meta": "not shared mutable files",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "PUBLISH",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Dependency base",
+      "subLabel": "Rebuild prerequisite content",
+      "meta": "new isolated dependent",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "BASE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Parent assembly check",
+      "subLabel": "Quiescence plus eligibility",
+      "meta": "collective gates later",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "HANDOFF",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "evaluate",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "dispatch",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "execute",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "success",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n5",
+      "label": "failed",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n6",
+      "label": "publish",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "integrate",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n1",
+      "label": "unlock",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n8",
+      "label": "settled",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n8",
+      "label": "blocked",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DEPENDENCY ADMISSION"
+    },
+    {
+      "id": "1",
+      "label": "TRIMMED CHILD EXECUTION"
+    },
+    {
+      "id": "2",
+      "label": "PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Pending subtasks",
+          "subLabel": "Persisted dependency map",
+          "meta": "not automatically ready",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "PLAN",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 661.3308411214952,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Ready frontier",
+          "subLabel": "All predecessors satisfied",
+          "meta": "not any terminal result",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "READY",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1124.5308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Isolated child",
+          "subLabel": "Launch agent execution",
+          "meta": "separate checkout",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RUN",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Agent result",
+          "subLabel": "Typed conditional output",
+          "meta": "no child RAI executor",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "RESULT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 661.3308411214952,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Assemble-ready",
+          "subLabel": "Successful child content",
+          "meta": "satisfies dependents",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "SUCCESS",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1124.5308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Typed turn failure",
+          "subLabel": "Does not satisfy dependents",
+          "meta": "no per-child review",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "FAILURE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Published branch",
+          "subLabel": "Authoritative committed tip",
+          "meta": "not shared mutable files",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "PUBLISH",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 661.3308411214952,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Dependency base",
+          "subLabel": "Rebuild prerequisite content",
+          "meta": "new isolated dependent",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "BASE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1124.5308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Parent assembly check",
+          "subLabel": "Quiescence plus eligibility",
+          "meta": "collective gates later",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "HANDOFF",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 227.73831775700933
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 192
+        },
+        "data": {
+          "label": "DEPENDENCY ADMISSION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 243.73831775700933
+        },
+        "data": {
+          "label": "DEPENDENCY ADMISSION",
+          "width": 1290.4
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 471.7383177570093
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 192
+        },
+        "data": {
+          "label": "TRIMMED CHILD EXECUTION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 487.7383177570093
+        },
+        "data": {
+          "label": "TRIMMED CHILD EXECUTION",
+          "width": 1290.4
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 709.7383177570093
+        },
+        "style": {
+          "width": 1330.4,
+          "height": 198
+        },
+        "data": {
+          "label": "PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 725.7383177570093
+        },
+        "data": {
+          "label": "PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY",
+          "width": 1290.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "evaluate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 661.3308411214952,
+              "y": 331.07165109034264
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 610.1308411214953,
+            "y": 331.07165109034264
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "dispatch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1001.3308411214952,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1124.5308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1062.9308411214952,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "execute",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1294.5308411214953,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1294.5308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 730.3308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "success",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 629.3308411214952,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 629.3308411214952,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 661.3308411214952,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 658.1308411214951,
+              "y": 587.7383177570093
+            },
+            "to": {
+              "x": 658.1308411214951,
+              "y": 507.7383177570093
+            }
+          },
+          "labelPos": {
+            "x": 658.1308411214951,
+            "y": 492.53831775700934
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n3",
+        "target": "n5",
+        "label": "failed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 696.0816510903427
+            },
+            {
+              "x": 1092.5308411214953,
+              "y": 696.0816510903427
+            },
+            {
+              "x": 1092.5308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1124.5308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 831.3308411214953,
+            "y": 696.0816510903427
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n4",
+        "target": "n6",
+        "label": "publish",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 797.3308411214952,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 797.3308411214952,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 481.73084112149525,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n6",
+        "target": "n7",
+        "label": "integrate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 661.3308411214952,
+              "y": 844.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 606.6108411214952,
+            "y": 844.404984423676
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n7",
+        "target": "n1",
+        "label": "unlock",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 661.3308411214952,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 608.5308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 608.5308411214953,
+              "y": 356.404984423676
+            },
+            {
+              "x": 661.3308411214952,
+              "y": 356.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 608.5308411214953,
+            "y": 555.0716510903427
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n4",
+        "target": "n8",
+        "label": "settled",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 865.3308411214952,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 865.3308411214952,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 1260.5308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 1260.5308411214953,
+              "y": 779.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1041.3308411214953,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n5",
+        "target": "n8",
+        "label": "blocked",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1294.5308411214953,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1294.5308411214953,
+              "y": 747.7383177570093
+            },
+            {
+              "x": 1328.5308411214953,
+              "y": 747.7383177570093
+            },
+            {
+              "x": 1328.5308411214953,
+              "y": 779.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1311.5308411214953,
+            "y": 747.7383177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1662.6616822429905,
+    "canvasHeight": 1053.1401869158876
+  }
+}

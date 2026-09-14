@@ -1,0 +1,93 @@
+{
+  "schema_valid": true,
+  "ordered_passes_valid": true,
+  "arrow_count": 9,
+  "final_arrow_ids": [
+    "message1",
+    "message2",
+    "message3",
+    "message4",
+    "message5",
+    "message6",
+    "message7",
+    "message8",
+    "message9"
+  ],
+  "passes": [
+    {
+      "pass_number": 1,
+      "png_sha256": "28e78a6fc1cca3e3e3f8e54fab4263d1bd6f8990c9d4fb2db3669667ad6313b7",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 121,
+        "meaningful_count": 33008,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 2,
+      "png_sha256": "8f63c0b7b8c0d15c5b3f41de45fbec1230c163944f55f933e28b97322f898bd9",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 121,
+        "meaningful_count": 33008,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 3,
+      "png_sha256": "8f63c0b7b8c0d15c5b3f41de45fbec1230c163944f55f933e28b97322f898bd9",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 121,
+        "meaningful_count": 33008,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    },
+    {
+      "pass_number": 4,
+      "png_sha256": "8f63c0b7b8c0d15c5b3f41de45fbec1230c163944f55f933e28b97322f898bd9",
+      "xml_analysis": {
+        "metric": "visible-semantic-canonical-xml-v1",
+        "page_width": 827.0,
+        "page_height": 583.0,
+        "visible_structures": 121,
+        "meaningful_count": 33008,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": []
+      }
+    }
+  ],
+  "promotion": {
+    "canonical_xml_matches_review": true,
+    "published_png_pixel_identical_to_inspected_pass_04": true,
+    "png_dimensions": [
+      1617,
+      1145
+    ],
+    "png_sha256": "8f63c0b7b8c0d15c5b3f41de45fbec1230c163944f55f933e28b97322f898bd9",
+    "selective_renderer": "draw.io Desktop 31.4.5",
+    "selective_render_passed": true,
+    "selective_drift_check_passed": true,
+    "duplicate_json_and_generated_sources_removed": true,
+    "derived_email_export_matches": true,
+    "docs_build": "Parent-owned: this worker may not write documentation pages or build output outside its exclusive assets."
+  }
+}

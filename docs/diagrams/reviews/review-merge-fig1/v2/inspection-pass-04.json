@@ -1,0 +1,12 @@
+{
+  "diagram": "review-merge-fig1",
+  "phase": "pass-04",
+  "png_sha256": "ef7c328f1fca12fe8cf05776a374d0edd7d3c41328578d0b105b121bdc1c8e1e",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Individually opened every final diagram PNG and all seven final A5-approximation sheets. Traced each evidenced edge against the final PNG and XML: actor/state endpoints, direction, arrowhead, label association, orthogonal path, native crossing bridges and semantic return rails. No remaining defects; no pass-4 edits were necessary. Independently re-exported all final images with verified official Desktop 31.4.5.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0,
+  "all_arrows_traced": true
+}

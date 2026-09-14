@@ -1,0 +1,164 @@
+{
+  "diagram": "canonical-aks-components",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-aks-components-pitch.drawio",
+    "png": "canonical-aks-components-pitch.png",
+    "change_record": "canonical-aks-components-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "canonical-aks-components-pass-01.drawio",
+      "png": "canonical-aks-components-pass-01.png",
+      "change_record": "canonical-aks-components-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 3,
+      "arrow_defects": 2,
+      "baseline_meaningful_xml": 2211,
+      "result_meaningful_xml": 25227,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 11.409769
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-components-pass-02.drawio",
+      "png": "canonical-aks-components-pass-02.png",
+      "change_record": "canonical-aks-components-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 1
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-components-pass-03.drawio",
+      "png": "canonical-aks-components-pass-03.png",
+      "change_record": "canonical-aks-components-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-components-pass-04.drawio",
+      "png": "canonical-aks-components-pass-04.png",
+      "change_record": "canonical-aks-components-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "HTTPS",
+          "evidence": "k8s/base/frontend-deployment.yaml:10; k8s/base/gateway.yaml; k8s/base/gateway-preview.yaml; k8s/base/api-deployment.yaml:13,67-72,415-419",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n2",
+          "target": "n1",
+          "relationship": "API tools",
+          "evidence": "k8s/base/mcp-deployment.yaml:10; apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs; k8s/base/api-deployment.yaml:13,67-72,415-419",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n5",
+          "relationship": "persist / mount",
+          "evidence": "k8s/base/api-deployment.yaml:13,67-72,415-419; k8s/base/api-deployment.yaml:67-72,415-419; k8s/base/pvc-workspace.yaml; k8s/base/worker-deployment.yaml:266-270",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n3",
+          "target": "n5",
+          "relationship": "persist / mount",
+          "evidence": "k8s/base/worker-deployment.yaml:13,67-72,266-270; k8s/base/worker-hpa.yaml:65-66; k8s/base/api-deployment.yaml:67-72,415-419; k8s/base/pvc-workspace.yaml; k8s/base/worker-deployment.yaml:266-270",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "claim + dispatch",
+          "evidence": "k8s/base/worker-deployment.yaml:13,67-72,266-270; k8s/base/worker-hpa.yaml:65-66; k8s/base/sandbox-warmpool-agenthost.yaml; apps/Agentweaver.AgentHost/Program.cs:232-285",
+          "result": "clean"
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "mode": "correction-only",
+      "drawio": "canonical-aks-components-pass-05.drawio",
+      "png": "canonical-aks-components-pass-05.png",
+      "change_record": "canonical-aks-components-pass-05.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "HTTPS",
+          "evidence": "k8s/base/frontend-deployment.yaml:10; k8s/base/gateway.yaml; k8s/base/gateway-preview.yaml; k8s/base/api-deployment.yaml:13,67-72,415-419",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n2",
+          "target": "n1",
+          "relationship": "API tools",
+          "evidence": "k8s/base/mcp-deployment.yaml:10; apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs; k8s/base/api-deployment.yaml:13,67-72,415-419",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n5",
+          "relationship": "persist / mount",
+          "evidence": "k8s/base/api-deployment.yaml:13,67-72,415-419; k8s/base/api-deployment.yaml:67-72,415-419; k8s/base/pvc-workspace.yaml; k8s/base/worker-deployment.yaml:266-270",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n3",
+          "target": "n5",
+          "relationship": "persist / mount",
+          "evidence": "k8s/base/worker-deployment.yaml:13,67-72,266-270; k8s/base/worker-hpa.yaml:65-66; k8s/base/api-deployment.yaml:67-72,415-419; k8s/base/pvc-workspace.yaml; k8s/base/worker-deployment.yaml:266-270",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "claim + dispatch",
+          "evidence": "k8s/base/worker-deployment.yaml:13,67-72,266-270; k8s/base/worker-hpa.yaml:65-66; k8s/base/sandbox-warmpool-agenthost.yaml; apps/Agentweaver.AgentHost/Program.cs:232-285",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 5
+}

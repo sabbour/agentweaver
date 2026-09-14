@@ -1,0 +1,274 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Build a draft from submitted intent",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:103-117",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Draft reaches confirmation request port",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:158-160",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Revision decision supplies revised draft input",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:129-138",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n1",
+    "relationship": "Revision returns to draft",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:160-164",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        278,
+        293.16
+      ],
+      [
+        278,
+        240
+      ],
+      [
+        397.0,
+        240
+      ],
+      [
+        397.0,
+        220
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n2",
+    "target": "n4",
+    "relationship": "Confirmation selects finalization",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:164-168",
+    "result": "clean",
+    "route": [
+      [
+        613.78,
+        220
+      ],
+      [
+        613.78,
+        248
+      ],
+      [
+        514,
+        248
+      ],
+      [
+        514,
+        318.0
+      ],
+      [
+        504,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n2",
+    "target": "n5",
+    "relationship": "Decline also selects finalization",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:164-168",
+    "result": "clean",
+    "route": [
+      [
+        712.22,
+        220
+      ],
+      [
+        712.22,
+        254
+      ],
+      [
+        663.0,
+        254
+      ],
+      [
+        663.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "Persist confirmed spec and attribution",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:612-631",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        318.0
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n5",
+    "target": "n6",
+    "relationship": "Persist declined spec without confirmation attribution",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:612-631",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        318.0
+      ],
+      [
+        546,
+        318.0
+      ],
+      [
+        546,
+        534
+      ],
+      [
+        131.0,
+        534
+      ],
+      [
+        131.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Orchestrator checks confirmed status",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:142-170",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        248,
+        445.16
+      ],
+      [
+        248,
+        546
+      ],
+      [
+        280,
+        546
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        290,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Only confirmed intent is decomposed",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:142-170",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        416
+      ],
+      [
+        397.0,
+        406
+      ],
+      [
+        532,
+        406
+      ],
+      [
+        532,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  }
+]

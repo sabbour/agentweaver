@@ -6,7 +6,7 @@ These pages explain the **logic and concepts** behind each subsystem — enough 
 
 - [System overview](./00-system-overview.md) — the whole architecture as one mental model: components, AKS topology, the run lifecycle, and core invariants.
 - [API core](./api-core.md) — how the REST host is composed: endpoint groups, stores, run/project services, and the request flow.
-- [Auth & security](./auth-security.md) — the trust model: API keys, GitHub auth, OAuth/MCP token flow, authorization, and security guardrails.
+- [Auth & security](./auth-security.md) — Entra platform identity, project roles, MCP broker tokens, separate GitHub capabilities, and security guardrails.
 
 ### Orchestration & agents
 
@@ -26,7 +26,7 @@ These pages explain the **logic and concepts** behind each subsystem — enough 
 
 ### Data & platform
 
-- [Data & persistence](./data-persistence.md) — the storage model: SQLite stores, EF Core MemoryDb, run events, decisions/memory, and state recovery.
+- [Data & persistence](./data-persistence.md) — production PostgreSQL and local SQLite, provider-selected stores, run events, decisions/memory, and state recovery.
 - [Memory & decisions](./memory-decisions.md) — the shared-ledger governance model: decision inbox, promotion, slug de-collision, and memory import/export.
 - [Events & observability](./events-observability.md) — the event-sourced run model: durable events, SSE streaming, snapshot+stream replay, diagnostics, and metrics.
 - [Frontend](./frontend.md) — the SPA's mental model: routing, API client, the SSE timeline, snapshot+stream state, and static hosting.

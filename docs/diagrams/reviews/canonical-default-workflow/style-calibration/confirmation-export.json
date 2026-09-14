@@ -1,0 +1,19 @@
+{
+  "command": [
+    "C:\\Users\\asabbour\\.copilot\\session-state\\f6a87a42-fc18-4c23-a5f5-3e1c5c41d367\\files\\drawio-cli\\app\\draw.io.exe",
+    "--export",
+    "--format",
+    "png",
+    "--border",
+    "0",
+    "--width",
+    "2140",
+    "--height",
+    "2018",
+    "--output",
+    "docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\candidate.png",
+    "docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\candidate.drawio"
+  ],
+  "exit_code": 0,
+  "output": "\ndocs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\candidate.drawio -> docs\\diagrams\\reviews\\canonical-default-workflow\\style-calibration\\candidate.png\n"
+}

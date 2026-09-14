@@ -1,0 +1,37 @@
+{
+  "diagram": "agent-runtime-fig2",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "agent-runtime-fig2-pass-01.drawio",
+  "png": "agent-runtime-fig2-pass-01.png",
+  "evidence": "packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:548-571,1854-2033; packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:31-37; apps/Agentweaver.Api/Security/RunAuthorship.cs:66-88",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "request": "native:flowchart",
+    "native": "native:flowchart",
+    "denied": "native:flowchart",
+    "command": "native:flowchart",
+    "execute": "native:flowchart",
+    "url": "native:flowchart",
+    "api": "custom:agentweaver",
+    "scope": "native:flowchart",
+    "result": "native:flowchart"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "cef61937c2b4755db4575a89bf930fa339fe34e5e2462a0e18465aa08b3e8d60",
+    "png": "164841b4cc963b4cc25858e22fbfa57f663dfb8182e306166f447eac49e3cdb0"
+  },
+  "png_dimensions": [
+    1565,
+    1114
+  ],
+  "xml_edge_count": 5
+}

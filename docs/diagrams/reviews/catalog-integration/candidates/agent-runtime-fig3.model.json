@@ -1,0 +1,634 @@
+{
+  "title": "A completed turn still needs a durable result",
+  "nodes": [
+    {
+      "id": "admit",
+      "label": "Reserve run",
+      "subLabel": "Validate identity and task",
+      "meta": "Durable admission",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "context",
+      "label": "Prepare context",
+      "subLabel": "Workspace + charter + skills",
+      "meta": "Children: decisions-only memory",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "workflow",
+      "label": "Workflow",
+      "subLabel": "Graph remains in host",
+      "meta": "Local agent or remote leaf",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "turn",
+      "label": "Execute leaf",
+      "subLabel": "Provider and controlled tools",
+      "meta": "Logical, not one physical host",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "envelope",
+      "label": "Prepared writeback",
+      "subLabel": "Required for LocalWritable",
+      "meta": "Missing/invalid means failure",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "apply",
+      "label": "Validate and apply",
+      "subLabel": "Run / base / tree / branch",
+      "meta": "Fast-forward authoritative tree",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "local",
+      "label": "Local/shared result",
+      "subLabel": "No remote envelope required",
+      "meta": "Worker-side post-processing",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "commit",
+      "label": "Commit and diff",
+      "subLabel": "After validated application",
+      "meta": "Ordinary bookkeeping remains",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "watch",
+      "label": "Watch and persist",
+      "subLabel": "Normalize terminal outcome",
+      "meta": "Durable events and status",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "admit",
+      "to": "context",
+      "label": "prepare",
+      "loopback": false
+    },
+    {
+      "from": "context",
+      "to": "workflow",
+      "label": "start",
+      "loopback": false
+    },
+    {
+      "from": "workflow",
+      "to": "turn",
+      "label": "invoke",
+      "loopback": false
+    },
+    {
+      "from": "turn",
+      "to": "envelope",
+      "label": "remote",
+      "loopback": false
+    },
+    {
+      "from": "envelope",
+      "to": "apply",
+      "label": "verify",
+      "loopback": false
+    },
+    {
+      "from": "turn",
+      "to": "local",
+      "label": "local",
+      "loopback": false
+    },
+    {
+      "from": "local",
+      "to": "commit",
+      "label": "record",
+      "loopback": false
+    },
+    {
+      "from": "apply",
+      "to": "commit",
+      "label": "apply",
+      "loopback": false
+    },
+    {
+      "from": "commit",
+      "to": "watch",
+      "label": "persist",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "admit",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "admit",
+          "label": "Reserve run",
+          "subLabel": "Validate identity and task",
+          "meta": "Durable admission",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "context",
+        "type": "card",
+        "position": {
+          "x": 641.3894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "context",
+          "label": "Prepare context",
+          "subLabel": "Workspace + charter + skills",
+          "meta": "Children: decisions-only memory",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "workflow",
+        "type": "card",
+        "position": {
+          "x": 1086.9894736842107,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "workflow",
+          "label": "Workflow",
+          "subLabel": "Graph remains in host",
+          "meta": "Local agent or remote leaf",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "turn",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 484.66666666666663
+        },
+        "data": {
+          "id": "turn",
+          "label": "Execute leaf",
+          "subLabel": "Provider and controlled tools",
+          "meta": "Logical, not one physical host",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "envelope",
+        "type": "card",
+        "position": {
+          "x": 641.3894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "envelope",
+          "label": "Prepared writeback",
+          "subLabel": "Required for LocalWritable",
+          "meta": "Missing/invalid means failure",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "apply",
+        "type": "card",
+        "position": {
+          "x": 1086.9894736842107,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "apply",
+          "label": "Validate and apply",
+          "subLabel": "Run / base / tree / branch",
+          "meta": "Fast-forward authoritative tree",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "local",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "local",
+          "label": "Local/shared result",
+          "subLabel": "No remote envelope required",
+          "meta": "Worker-side post-processing",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "commit",
+        "type": "card",
+        "position": {
+          "x": 641.3894736842105,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "commit",
+          "label": "Commit and diff",
+          "subLabel": "After validated application",
+          "meta": "Ordinary bookkeeping remains",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "watch",
+        "type": "card",
+        "position": {
+          "x": 1086.9894736842107,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "watch",
+          "label": "Watch and persist",
+          "subLabel": "Normalize terminal outcome",
+          "meta": "Durable events and status",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "admit",
+        "target": "context",
+        "label": "prepare",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 641.3894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 588.5894736842106,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "context",
+        "target": "workflow",
+        "label": "start",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 981.3894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1086.9894736842107,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1034.1894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "workflow",
+        "target": "turn",
+        "label": "invoke",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1256.9894736842107,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 1256.9894736842107,
+              "y": 452.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 452.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 484.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 811.3894736842105,
+            "y": 452.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "turn",
+        "target": "envelope",
+        "label": "remote",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 641.3894736842105,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 588.5894736842106,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "envelope",
+        "target": "apply",
+        "label": "verify",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 981.3894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1086.9894736842107,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1034.1894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "turn",
+        "target": "local",
+        "label": "local",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 365.7894736842105,
+              "y": 616.6666666666666
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 742.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 365.7894736842105,
+            "y": 679.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "local",
+        "target": "commit",
+        "label": "record",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 641.3894736842105,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 588.5894736842106,
+            "y": 794.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "apply",
+        "target": "commit",
+        "label": "apply",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1256.9894736842107,
+              "y": 602.6666666666666
+            },
+            {
+              "x": 1256.9894736842107,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 811.3894736842105,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 811.3894736842105,
+              "y": 742.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1034.1894736842105,
+            "y": 634.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "commit",
+        "target": "watch",
+        "label": "persist",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 981.3894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 1086.9894736842107,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1034.1894736842105,
+            "y": 794.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1622.3315789473686,
+    "canvasHeight": 1100.3938596491228
+  }
+}

@@ -1,1 +1,22 @@
-9392731312789992d6df252b20e85835467b48bb2fde83a1a10617ca9b5ebf84
+{
+  "version": 2,
+  "source": {
+    "file": "workflow-agent-evaluation.drawio",
+    "sha256": "fa38200fcf8044589d3538292899172e1e943602e96b0c44495b8c96823d4bba"
+  },
+  "drawio": {
+    "file": "workflow-agent-evaluation.drawio",
+    "sha256": "6b0c9b8f57cc1379ee4129f59153aa2cf2864d174f1a3cccad4d9f7d7f6b2c29"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "workflow-agent-evaluation.png",
+    "sha256": "964e8cc0d28b4ad21f78115ba1e29ab8f32a9499b32bb85a140974e778c5ee9e"
+  }
+}

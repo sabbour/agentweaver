@@ -1,0 +1,37 @@
+{
+  "diagram": "live-preview-provisioning-fig1",
+  "stage": "pitch",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "live-preview-provisioning-fig1-pitch.drawio",
+  "png": "live-preview-provisioning-fig1-pitch.png",
+  "evidence": "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:95-324; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:272-328; tests/Agentweaver.Tests/Preview/PreviewStepTests.cs:194-277,567-597",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "verdict": "custom:agentweaver",
+    "resolve": "native:flowchart",
+    "start": "native:kubernetes",
+    "observe": "native:network",
+    "approval": "native:flowchart",
+    "publish": "native:kubernetes",
+    "private": "native:flowchart",
+    "validate": "native:network",
+    "ready": "custom:agentweaver"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "48ab3612a32e61fbcafd93f7b4d9fa5340fcf6492981d60bfaea20a62ce98fb4",
+    "png": "9d31e3dced05755be1f37b045f43e3f3cf1e483e54f88db69cc997b76cf9218b"
+  },
+  "png_dimensions": [
+    1545,
+    1114
+  ],
+  "xml_edge_count": 5
+}

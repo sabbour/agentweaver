@@ -1,0 +1,34 @@
+{
+  "diagram": "canonical-sandbox-pod-evolution",
+  "stage": "pass-01",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "canonical-sandbox-pod-evolution-pass-01.drawio",
+  "png": "canonical-sandbox-pod-evolution-pass-01.png",
+  "evidence": "apps/Agentweaver.Api/Sandbox/RemoteWorkflowAgentFactory.cs:9-65; apps/Agentweaver.Api/Program.cs:1043-1074; docs/deep-dive/sandbox-pod-execution.md",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "oldgraph": "custom:agentweaver",
+    "oldsdk": "native:flowchart",
+    "oldexec": "native:flowchart",
+    "graph": "custom:agentweaver",
+    "proxy": "custom:agentweaver",
+    "pod": "native:kubernetes"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "9bfea4fc076a8febd8d1df73e154f3f4a5872fd6727cc2ee99e980fd37ca47c6",
+    "png": "7183503a3133afcd1b3cdc0010de047edcb57844f08cff0c07412f8f842693e3"
+  },
+  "png_dimensions": [
+    1565,
+    866
+  ],
+  "xml_edge_count": 4
+}

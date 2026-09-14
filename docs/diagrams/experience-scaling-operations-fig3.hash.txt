@@ -1,1 +1,22 @@
-552b8a8ef7c19068bde74b548e9cfa2ff31e937e9110755ae90acaa68cb52660
+{
+  "version": 2,
+  "source": {
+    "file": "experience-scaling-operations-fig3.drawio",
+    "sha256": "341e6f3f64aed1f4ef9c48369bdae42247fdc9a26f936ea238fc8bc3a5c9c3b7"
+  },
+  "drawio": {
+    "file": "experience-scaling-operations-fig3.drawio",
+    "sha256": "049a51a61e2f8f69fe327a6dbaf53bc398b5b6dc112405d074f0f432ae2102d5"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "experience-scaling-operations-fig3.png",
+    "sha256": "1d4b8243e261026ed0101fa13849c92ee12296c7266d5cf4f6bbacd84aef0f84"
+  }
+}

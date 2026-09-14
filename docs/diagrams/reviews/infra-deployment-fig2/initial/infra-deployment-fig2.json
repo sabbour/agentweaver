@@ -1,0 +1,124 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Secrets and workload identity",
+  "alt": "Secrets and workload identity: Azure Key Vault, Key Vault Secrets User, Kubernetes ServiceAccount, OIDC federated credential, Secrets Store CSI driver, Mounted secret files, Synced Kubernetes Secret, Startup shell exports env vars, API / MCP process",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "KV",
+      "label": "Azure Key Vault",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "RBAC",
+      "label": "Key Vault Secrets User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "managed identity"
+    },
+    {
+      "id": "SA",
+      "label": "Kubernetes ServiceAccount",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "FED",
+      "label": "OIDC federated credential",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "CSI",
+      "label": "Secrets Store CSI driver",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Files",
+      "label": "Mounted secret files",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "K8sSecret",
+      "label": "Synced Kubernetes Secret",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Startup",
+      "label": "Startup shell exports env vars",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Process",
+      "label": "API / MCP process",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "KV",
+      "to": "RBAC"
+    },
+    {
+      "from": "SA",
+      "to": "FED"
+    },
+    {
+      "from": "FED",
+      "to": "RBAC"
+    },
+    {
+      "from": "RBAC",
+      "to": "CSI"
+    },
+    {
+      "from": "CSI",
+      "to": "Files"
+    },
+    {
+      "from": "CSI",
+      "to": "K8sSecret"
+    },
+    {
+      "from": "Files",
+      "to": "Startup"
+    },
+    {
+      "from": "Startup",
+      "to": "Process"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "canonical-sandbox-experience",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-sandbox-experience.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-sandbox-experience.png",
+  "source_sha256": "f62bcc008d56f3b66dc0408a7b60e4373f107fa8d9f5866f35cfd483352c45b5",
+  "png_sha256": "722e8c556c68fcfa58e85980007d4da7bed88327a183d765644fa3a519322eb6",
+  "dimensions": [
+    3220,
+    1221
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

@@ -12,12 +12,11 @@ The test strategy therefore mirrors the architecture from the system overview:
 
 The philosophy is conservative: keep the default suite fast and hermetic, but exercise real infrastructure boundaries wherever correctness depends on them. Tests replace live model calls and external GitHub/network dependencies with deterministic seams, while still using real HTTP routing, real SQLite databases, real git repositories, real workflow state machines, and real sandbox path logic.
 
-![Purpose and mental model: Unit and component tests, In-process API integration, Deterministic workflow tests, Security and sandbox tests, Opt-in / staging e2e, No network, In-process host, Temp git repos, Sandbox boundary, Staging deployment](../diagrams/testing-strategy-fig1.png)
+![Independent unit, API, workflow, frontend, PostgreSQL, MCP-process and deployed assurance boundaries](../diagrams/testing-strategy-fig1.png)
 
-<!-- Rendered from ../diagrams/src/testing-strategy-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/testing-strategy-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec testing-strategy-fig1.
+     Review lineage: ../diagrams/reviews/testing-strategy-fig1/iteration-manifest.json. -->
 
 Where this lives: `tests/Agentweaver.Tests`, `tests/Agentweaver.Tests/Helpers`, `tests/e2e`, `docs/deep-dive/00-system-overview.md`.
 
@@ -30,9 +29,12 @@ Agentweaver's pyramid is intentionally wide in the middle. Pure unit tests are u
 | Unit/component | Local rules are deterministic: path validation, PKCE math, token validation, command construction, parsers, stores, DAG frontier logic. | In-memory objects, fake HTTP handlers, isolated temp directories. |
 | Store/infrastructure | Durable contracts hold: SQLite schemas, compare-and-swap transitions, append-only records, replay, idempotent persistence. | Real SQLite files or in-memory SQLite connections. |
 | API integration | The real host routes requests through middleware, auth, endpoint mapping, services, stores, and response serialization. | `WebApplicationFactory<Program>`, temp SQLite, temp worktree/checkpoint roots, test auth keys. |
-| Workflow integration | Runs move through actual workflow nodes and gates without live model calls. | Real API host, fake workflow agents, real git repos, pending request stores, polling for async completion. |
+| Workflow/service integration | Individual graph, review, merge, and recovery contracts without live model calls; coverage depends on the fixture and invocation. | Fake workflow agents, real git/stores where relevant, pending gates and async polling. |
 | Security/regression | Known escape and race classes stay closed. | Real filesystem paths, real git merges, sandbox validators, opt-in live-provider canaries. |
-| E2E smoke | A deployed instance responds as a user or MCP client would observe it. | Playwright against staging; several OAuth flows are documented/skipped until deployable. |
+| Frontend | Browser state, reducers, routing and components under deterministic inputs. | Vitest/Testing Library in `apps/web`. |
+| PostgreSQL integration | Real provider transactions, sequence serialization and migrations. | PostgreSQL Testcontainers; not proved by SQLite-backed EF tests. |
+| MCP real-process | Actual MCP transport/validation against controlled issuer/API inputs. | Loopback MCP process, synthetic JWKS and stub API; not a deployed end-to-end environment. |
+| E2E smoke | Selected deployed-user paths. | Playwright against configured `AKS_BASE_URL` or staging; credentials/environment required. |
 
 The shape is a trade-off. The suite avoids depending on live providers by default because model output is nondeterministic and credentials are sensitive. But it also avoids over-mocking the system: most integration tests boot the real API and then replace only the external seams that would make the test slow, flaky, or non-hermetic.
 
@@ -44,26 +46,28 @@ The main integration pattern is a custom `WebApplicationFactory<Program>`. Each 
 - isolated worktree and checkpoint directories;
 - test bearer keys and users;
 - test provider configuration values required at startup;
-- development/test bypass flags where the test is not exercising GitHub org authorization;
+- explicit test authentication/bypass seams when identity is not the subject;
 - service replacements for live external seams.
 
-![How API integration tests host the system: Test, Test WebApplicationFactory, Real Program host, Temp SQLite, Temp worktree roots, Deterministic seams](../diagrams/testing-strategy-fig4.png)
+![A test configures and substitutes explicit seams before exercising the real in-process API host](../diagrams/testing-strategy-fig4.png)
 
-<!-- Rendered from ../diagrams/src/testing-strategy-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/testing-strategy-fig4.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec testing-strategy-fig4.
+     Review lineage: ../diagrams/reviews/testing-strategy-fig4/iteration-manifest.json. -->
 
 This approach is important because middleware order and DI wiring are part of the contract. A project endpoint test is not merely testing a service method; it verifies that authentication, route binding, JSON naming, service registration, persistence, and response status codes all agree.
 
 There are several specialized factories because different subsystems need different seams:
 
-- **General API factory**: temp SQLite, temp worktrees, known API key, and test provider values.
-- **Projects factory**: in-memory GitHub token store and no-op project git initializer so project CRUD does not touch the OS credential store or clone real repositories.
-- **Review factory**: two API keys so owner and non-owner review paths can be tested without mocking identity.
-- **Workflow factory**: deterministic file-editing agent and fake workflow agent factory so the real workflow graph can run without GitHub Copilot.
-- **Coordinator factory**: deterministic coordinator spec drafter, signed-out token store, no-op project initializer, and disabled auto-dispatch for scoped coordinator phases.
-- **OAuth factory**: synthetic issuer/audience, test API key, in-memory token store, and no-op git initializer for MCP OAuth integration surfaces.
+- **General API factory**: isolated storage/roots, dummy provider values and an explicit auth test seam.
+- **Projects factory**: real filesystem provider with a no-op Git initializer for CRUD-focused tests.
+- **Review factories**: controlled identities and repositories for authorization and branch effects.
+- **Workflow factory**: deterministic runner and workflow-agent replacements; the calling test determines which graph path executes.
+- **Coordinator factory**: deterministic planning/classification and disabled auto-dispatch for scoped phases.
+- **OAuth/MCP fixtures**: controlled issuer, signing/token state and HTTP/process peers appropriate to each test.
+
+Historical fixture configuration keys are test setup, not evidence of production API-key or
+ambient GitHub-token compatibility.
 
 The common principle is: replace the world outside Agentweaver, not Agentweaver's own control plane.
 
@@ -73,12 +77,11 @@ Where this lives: `tests/Agentweaver.Tests/Helpers`.
 
 Agentweaver tests use fakes deliberately, not casually. A fake is acceptable when it stands at a nondeterministic or external boundary and preserves the shape of the production contract. A fake is not used to skip the behavior being tested.
 
-![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/canonical-testing-boundary.png)
+![Real host, stores, Git and validators versus explicit deterministic model and network test seams](../diagrams/canonical-testing-boundary.png)
 
-<!-- Rendered from ../diagrams/src/canonical-testing-boundary.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/canonical-testing-boundary.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-testing-boundary.
+     Review lineage: ../diagrams/reviews/canonical-testing-boundary/iteration-manifest.json. -->
 
 Key patterns:
 
@@ -109,17 +112,21 @@ Auth tests are split between pure protocol rules and hosted middleware behavior:
 - redirect URI policy allows loopback/native-client shapes and rejects unsafe destinations;
 - PKCE requires S256 and rejects missing or weak challenge inputs;
 - authorization codes and refresh-token paths are specified as single-use/rotating where implemented;
-- org enforcement fails closed for non-members or inconclusive states;
-- MCP bearer middleware keeps backward-compatible static API-key behavior while protecting `/mcp`;
+- Entra and endpoint-classified policies reject invalid identities or unauthorized project roles;
+- MCP accepts broker tokens and rejects upstream tokens/static API keys;
 - discovery and metadata routes are checked through in-process or staging smoke paths.
 
-Some OAuth lifecycle scenarios are represented as skipped acceptance tests. They document the contract the implementation is expected to satisfy as protocol support and staging coverage expand.
+Executable coverage includes `AuthenticationSchemeCutoverTests`, `OpenIddictAuthorizationServerTests`,
+and `McpBrokerRealProcessTests`. A skipped acceptance scenario is not evidence that its behavior
+passed, and old fixture keys are not supported production authentication modes.
 
 Rebuilder rule: test OAuth as a state machine, not just as JSON metadata. Codes, verifiers, redirect URIs, `aud` claims, refresh rotation, and revocation are security invariants, so each should have a positive and negative test.
 
 ### Projects and GitHub integration
 
-Project tests cover the boundary where a repository becomes known to Agentweaver. They verify CRUD, deletion, workspace selection, token redaction, GitHub device/sign-in flows, token storage and refresh, org authorization, and failure-closed behavior when Copilot tokens are signed out.
+Project tests cover CRUD, deletion, workspace selection, role boundaries, capability redaction,
+and caller-bound GitHub repository-selection codes. Direct repository input is rejected by
+`GitHubRepositorySelectionEndpointsTests`; a GitHub connection is not platform sign-in.
 
 Most project endpoint tests do not perform real clones; they use a no-op initializer and isolated workspaces. Git behavior is reserved for tests where branch state is the point.
 
@@ -127,7 +134,7 @@ Rebuilder rule: project tests should distinguish "metadata and policy" from "act
 
 ### Single-run workflows, review, and merge
 
-Workflow and review tests protect the central lifecycle from the system overview:
+Graph, service, and review tests cover parts of the central lifecycle:
 
 1. a run starts against a repository and branch;
 2. the agent changes an isolated worktree;
@@ -136,7 +143,10 @@ Workflow and review tests protect the central lifecycle from the system overview
 5. merges serialize and update the originating branch only when allowed;
 6. terminal states clean up or preserve worktrees according to outcome.
 
-The tests assert observable consequences rather than internal method calls: run status, pending request presence, branch tip tree, worktree cleanup, diff visibility, merge conflict records, SSE events, and idempotent review decisions.
+Tests assert observable state, pending gates, tree hashes, cleanup, diffs, events, and review
+consumption where those are in scope. In particular, current `WorkflowIntegrationTests` checks
+that retired public `POST /api/runs` is rejected (401 or 410); its name does not prove an
+agent-to-review-to-merge traversal.
 
 The important race tests use compare-and-swap style assertions. For example, concurrent approve and request-changes attempts must result in exactly one winner. Append-only revision tests make direct database tampering fail. Prompt-injection tests verify reviewer feedback is nonce-fenced before it is handed back to the agent.
 
@@ -190,9 +200,10 @@ Rebuilder rule: do not treat streams as only live websockets. Test the database 
 
 ### E2E smoke
 
-The Playwright suite is mostly a staging smoke layer. It checks that the SPA shell loads, sign-in renders and redirects, health and docs endpoints respond, protected APIs reject unauthenticated callers, and an authenticated GitHub token can return signed-in status when available.
-
-The OAuth E2E file doubles as a manual runbook for MCP OAuth discovery, PKCE, token exchange, refresh, non-member denial, and static API-key compatibility. The actual tests are skipped until the relevant staging capabilities are deployed and credentials are available.
+Playwright targets a configured deployed instance; it does not automatically launch a fake local
+stack. Evaluate each test's enabled/skipped status and credential requirements. Entra sign-in and
+broker-token MCP are the current contracts; old GitHub-login/static-key scenarios are not
+compatibility promises. Executable loopback OAuth/MCP tests remain a separate assurance boundary.
 
 Rebuilder rule: keep E2E small. Use it to prove deployment wiring and the most important user-visible paths, not to duplicate every API integration test.
 
@@ -200,21 +211,16 @@ Rebuilder rule: keep E2E small. Use it to prove deployment wiring and the most i
 
 Agentweaver cannot make a model deterministic, so tests put determinism at the seam immediately outside the model. The fake agent still performs real file operations and emits representative events; it just chooses from known modes.
 
-```mermaid
-stateDiagram-v2
-    [*] --> StartRun
-    StartRun --> AgentTurn
-    AgentTurn --> ReviewGate: fake agent writes file
-    AgentTurn --> Completed: fake agent makes no changes
-    AgentTurn --> Failed: fake agent raises content safety pattern
-    ReviewGate --> Merged: approve
-    ReviewGate --> Declined: decline
-    ReviewGate --> AgentTurn: request changes
-```
+| Deterministic seam input | What the fake supplies | What a consuming test must assert separately |
+| --- | --- | --- |
+| File-edit mode | A real fixture file change | Diff/tree identity and whichever review/merge path the test invokes. |
+| No-change mode | An unchanged result | The configured graph's no-change outcome, not a universal production state transition. |
+| Safety-failure mode | A synthetic content-safety exception | Failure classification and cleanup in the tested service/graph. |
+| Review decision | An explicit fixture response | Authorization, pending-gate correlation, CAS consumption, and branch effects. |
 
 This pattern has two advantages:
 
-1. The workflow graph, request-port suspension, watch loop, pending request store, run store, event stream, git diff, and merge services are exercised exactly as production would exercise them.
+1. Tests can retain real graph/store/Git behavior while replacing model output; the fixture determines which of those boundaries actually runs.
 2. The test has a stable oracle. If a run fails to reach `awaiting_review`, there is a control-plane problem, not a model-quality problem.
 
 Coordinator tests use the same idea. The drafter is deterministic, but the persisted spec, gate consumption, work-plan records, dependency edges, and events are real. This is the right compromise for a system where the model is one participant, not the source of authority.
@@ -239,12 +245,14 @@ The suite is strong around control-plane invariants, but there are deliberate ga
 
 - Live model-provider behavior is not part of the default suite. Provider-backed sandbox escape tests exist, but they are opt-in through environment configuration.
 - Staging Playwright tests are smoke tests, not full workflow coverage.
-- Several OAuth lifecycle scenarios are skipped acceptance tests; they define the intended contract but do not run in the default suite.
+- Skipped acceptance cases are not passing evidence; executable OAuth lifecycle and real-process MCP tests cover distinct controlled boundaries.
 - Kubernetes sandbox execution is not proven by a default live-cluster E2E. The default coverage focuses on command construction, policy behavior, and API-side sandbox contracts.
-- Frontend behavior is not deeply unit-tested in `tests/Agentweaver.Tests`. The E2E coverage checks major deployed pages and auth redirects.
+- Frontend unit/component tests live separately in `apps/web`; the .NET test directory is not their coverage boundary.
 - Performance, load, and long-running multi-agent soak behavior are not represented as a normal test layer.
 
-The documented test scope covers `tests/Agentweaver.Tests` and `tests/e2e`. Any additional deployment, load, or live AKS sandbox stages that a CI pipeline might run sit outside this scope.
+The documented scope includes .NET, frontend Vitest, PostgreSQL integration, controlled MCP
+process tests, and deployed Playwright smoke. None by itself proves live model, Kubernetes,
+or multi-agent soak behavior.
 
 These gaps are acceptable only if they are explicit. The default suite should remain hermetic, but release gates should add opt-in live checks for the boundaries that cannot be proven locally.
 
@@ -259,7 +267,7 @@ A rebuilt Agentweaver should have tests that protect these invariants:
 - **Merge failures are safe.** Conflicts do not advance the originating branch, and conflict details do not leak raw file content in unsafe places.
 - **Sandbox boundaries fail closed.** Unknown tools, suspicious paths, weak executors, symlink escapes, and out-of-root operations are denied before side effects.
 - **Safe operations still work.** Tests must prove agents can read/write/search inside the workspace so denial checks are not vacuous.
-- **Auth is explicit.** Bearer tokens are validated, OAuth redirects are constrained, PKCE is mandatory, org authorization fails closed, and production bypasses are guarded.
+- **Auth is explicit.** Entra/broker credentials and endpoint/project roles are checked, OAuth redirects are constrained, S256 PKCE is required, and production bypasses are guarded.
 - **Memory promotion is atomic.** Inbox entries, decisions, session context, and exported files remain consistent enough for future agents to trust.
 - **Coordinator work is a DAG.** Dependencies, child states, retries, assembly, and collective review are durable and recomputable.
 - **External nondeterminism is isolated.** Tests can run without live models, real GitHub, or staging unless the test is explicitly opt-in.
@@ -278,3 +286,149 @@ Start with the contracts, then choose the lightest dependency that can prove eac
 8. **Keep E2E narrow and honest.** Use it for deployment wiring, browser redirects, and staging smoke; keep detailed behavior in hermetic integration tests.
 
 The rebuild target is not identical file names. It is the same confidence model: deterministic tests around nondeterministic agents, real persistence for durable claims, real git for repository claims, adversarial tests for security boundaries, and small opt-in live checks for everything that cannot be proven offline.
+
+<!-- diagram-context:canonical-testing-boundary:start -->
+<details id="diagram-context-canonical-testing-boundary" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Testing boundary · choose what must stay real</td></tr>
+<tr><td>takeaway</td><td>Replace nondeterministic dependencies without replacing the behavior under test.</td></tr>
+<tr><td>group-0-title</td><td>REAL BEHAVIOR / INFRASTRUCTURE</td></tr>
+<tr><td>group-1-title</td><td>CONTROLLED EXTERNAL SEAMS</td></tr>
+<tr><td>Real API host</td><td>Real API host</td></tr>
+<tr><td>Real API host</td><td>WebApplicationFactory / Program</td></tr>
+<tr><td>Real API host</td><td>Middleware, DI, binding and response contracts</td></tr>
+<tr><td>Real API host</td><td>AgentweaverWebApplicationFactory</td></tr>
+<tr><td>Deterministic agent seam</td><td>Deterministic agent seam</td></tr>
+<tr><td>Deterministic agent seam</td><td>TestFileEditAgentRunner</td></tr>
+<tr><td>Deterministic agent seam</td><td>Real file write / no-change / synthetic safety error</td></tr>
+<tr><td>Deterministic agent seam</td><td>TestFileEditAgentRunner:44–80</td></tr>
+<tr><td>Real SQLite stores</td><td>Real SQLite stores</td></tr>
+<tr><td>Real SQLite stores</td><td>Raw and EF-backed test databases</td></tr>
+<tr><td>Real SQLite stores</td><td>Transactions, uniqueness, state and CAS behavior</td></tr>
+<tr><td>Real SQLite stores</td><td>ProjectsWebApplicationFactory</td></tr>
+<tr><td>Controlled HTTP boundary</td><td>Controlled HTTP boundary</td></tr>
+<tr><td>Controlled HTTP boundary</td><td>Stub handlers / issuer / API</td></tr>
+<tr><td>Controlled HTTP boundary</td><td>External dependency shape, not live upstream proof</td></tr>
+<tr><td>Controlled HTTP boundary</td><td>McpBrokerRealProcessTests</td></tr>
+<tr><td>Real Git / policy logic</td><td>Real Git / policy logic</td></tr>
+<tr><td>Real Git / policy logic</td><td>Repositories and worktree operations</td></tr>
+<tr><td>Real Git / policy logic</td><td>Branches, tree hashes, containment and validators</td></tr>
+<tr><td>Real Git / policy logic</td><td>WorkflowWebApplicationFactory</td></tr>
+<tr><td>Planning / workflow seams</td><td>Planning / workflow seams</td></tr>
+<tr><td>Planning / workflow seams</td><td>Fixture-specific factory replacements</td></tr>
+<tr><td>Planning / workflow seams</td><td>Some fixtures suppress dispatch or Rai/Scribe</td></tr>
+<tr><td>Planning / workflow seams</td><td>CoordinatorWebApplicationFactory</td></tr>
+<tr><td>Real PostgreSQL fixture</td><td>Real PostgreSQL fixture</td></tr>
+<tr><td>Real PostgreSQL fixture</td><td>postgres:16-alpine Testcontainer</td></tr>
+<tr><td>Real PostgreSQL fixture</td><td>Provider locks/migrations need the actual engine</td></tr>
+<tr><td>Real PostgreSQL fixture</td><td>PostgresFixture:9–29</td></tr>
+<tr><td>Real MCP process</td><td>Real MCP process</td></tr>
+<tr><td>Real MCP process</td><td>Loopback executable test</td></tr>
+<tr><td>Real MCP process</td><td>Synthetic JWKS + stub API remain controlled</td></tr>
+<tr><td>Real MCP process</td><td>McpBrokerRealProcessTests:235–255</td></tr>
+<tr><td>Real API host</td><td>inject seam</td></tr>
+<tr><td>Real API host</td><td>planning</td></tr>
+<tr><td>scope</td><td>Scope varies by fixture. These tests do not establish live Entra, model-provider or Kubernetes behavior.</td></tr>
+<tr><td>groups</td><td>REAL BEHAVIOR / INFRASTRUCTURE; CONTROLLED EXTERNAL SEAMS</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-testing-boundary:end -->
+
+<!-- diagram-context:testing-strategy-fig1:start -->
+<details id="diagram-context-testing-strategy-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Test coverage · independent layers, distinct proof</td></tr>
+<tr><td>takeaway</td><td>Each layer proves a different seam; this is a coverage map, not a sequential execution pipeline.</td></tr>
+<tr><td>group-0-title</td><td>DETERMINISTIC / IN-PROCESS</td></tr>
+<tr><td>group-1-title</td><td>PROVIDER / PROCESS / AUTH / LIVE</td></tr>
+<tr><td>Unit / component</td><td>Unit / component</td></tr>
+<tr><td>Unit / component</td><td>Domain services and validators</td></tr>
+<tr><td>Unit / component</td><td>Focused logic without live provider dependencies</td></tr>
+<tr><td>Unit / component</td><td>tests/Agentweaver.Tests</td></tr>
+<tr><td>Frontend Vitest</td><td>Frontend Vitest</td></tr>
+<tr><td>Frontend Vitest</td><td>Hooks, reducers and components</td></tr>
+<tr><td>Frontend Vitest</td><td>Separate web suite; not downstream of .NET tests</td></tr>
+<tr><td>Frontend Vitest</td><td>apps/web/package.json:11</td></tr>
+<tr><td>In-process API</td><td>In-process API</td></tr>
+<tr><td>In-process API</td><td>Factory + real Program host</td></tr>
+<tr><td>In-process API</td><td>Routing / identity policy / JSON / persistence</td></tr>
+<tr><td>In-process API</td><td>Helpers/*WebApplicationFactory</td></tr>
+<tr><td>Workflow / Git / policy</td><td>Workflow / Git / policy</td></tr>
+<tr><td>Workflow / Git / policy</td><td>Deterministic execution seams</td></tr>
+<tr><td>Workflow / Git / policy</td><td>Real Git when needed; do not infer live model proof</td></tr>
+<tr><td>Workflow / Git / policy</td><td>TestFileEditAgentRunner:44–80</td></tr>
+<tr><td>PostgreSQL integration</td><td>PostgreSQL integration</td></tr>
+<tr><td>PostgreSQL integration</td><td>Testcontainers + migrations</td></tr>
+<tr><td>PostgreSQL integration</td><td>Provider-specific locks and concurrency behavior</td></tr>
+<tr><td>PostgreSQL integration</td><td>PostgresFixture:9–29</td></tr>
+<tr><td>Real MCP process</td><td>Real MCP process</td></tr>
+<tr><td>Real MCP process</td><td>Loopback subprocess tests</td></tr>
+<tr><td>Real MCP process</td><td>Controlled issuer/JWKS and stub API route</td></tr>
+<tr><td>Real MCP process</td><td>McpBrokerRealProcessTests</td></tr>
+<tr><td>OAuth server tests</td><td>OAuth server tests</td></tr>
+<tr><td>OAuth server tests</td><td>Consent, PKCE and refresh state</td></tr>
+<tr><td>OAuth server tests</td><td>Active focused tests; not blanket skipped OAuth</td></tr>
+<tr><td>OAuth server tests</td><td>OpenIddictAuthorizationServerTests</td></tr>
+<tr><td>Opt-in / staging browser</td><td>Opt-in / staging browser</td></tr>
+<tr><td>Opt-in / staging browser</td><td>Playwright deployment tests</td></tr>
+<tr><td>Opt-in / staging browser</td><td>Live target + explicit environment prerequisites</td></tr>
+<tr><td>Opt-in / staging browser</td><td>tests/e2e/playwright.config.ts</td></tr>
+<tr><td>prerequisites</td><td>Prerequisites differ: .NET / Node locally; Docker for Postgres; a configured live target for staging.</td></tr>
+<tr><td>scope</td><td>No arrows: layers run independently. Source presence is evidence of coverage, not a passing test run.</td></tr>
+<tr><td>groups</td><td>DETERMINISTIC / IN-PROCESS; REAL BOUNDARIES / OPT-IN</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:testing-strategy-fig1:end -->
+
+<!-- diagram-context:testing-strategy-fig4:start -->
+<details id="diagram-context-testing-strategy-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>API test hosting · configure, substitute, request</td></tr>
+<tr><td>takeaway</td><td>Specialized factories keep Program wiring real while selecting isolated state and controlled seams.</td></tr>
+<tr><td>group-0-title</td><td>FACTORY SETUP</td></tr>
+<tr><td>group-1-title</td><td>HOST / REQUEST / ASSERT</td></tr>
+<tr><td>Test case</td><td>Test case</td></tr>
+<tr><td>Test case</td><td>Select a specialized factory</td></tr>
+<tr><td>Test case</td><td>Choose the subsystem and behavior to preserve</td></tr>
+<tr><td>Test case</td><td>Helpers/*WebApplicationFactory</td></tr>
+<tr><td>Fixture configuration</td><td>Fixture configuration</td></tr>
+<tr><td>Fixture configuration</td><td>Isolated DB, worktree, checkpoints</td></tr>
+<tr><td>Fixture configuration</td><td>Required provider settings; explicit identity seams</td></tr>
+<tr><td>Fixture configuration</td><td>WorkflowWebApplicationFactory:34–60</td></tr>
+<tr><td>Service replacement</td><td>Service replacement</td></tr>
+<tr><td>Service replacement</td><td>Swap IAgentRunner / agent factory</td></tr>
+<tr><td>Service replacement</td><td>Deterministic writes; some gates short-circuited</td></tr>
+<tr><td>Service replacement</td><td>WorkflowWebApplicationFactory:61–82</td></tr>
+<tr><td>Real Program host</td><td>Real Program host</td></tr>
+<tr><td>Real Program host</td><td>Startup + DI + middleware</td></tr>
+<tr><td>Real Program host</td><td>Not a direct service-method-only test</td></tr>
+<tr><td>Real Program host</td><td>WebApplicationFactory</td></tr>
+<tr><td>Isolated real state</td><td>Isolated real state</td></tr>
+<tr><td>Isolated real state</td><td>SQLite + filesystem / Git as needed</td></tr>
+<tr><td>Isolated real state</td><td>Dispose fixture-owned databases and directories</td></tr>
+<tr><td>Isolated real state</td><td>WorkflowWebApplicationFactory:86–111</td></tr>
+<tr><td>Test HTTP client</td><td>Test HTTP client</td></tr>
+<tr><td>Test HTTP client</td><td>Route, JSON and identity contract</td></tr>
+<tr><td>Test HTTP client</td><td>Request traverses the configured host</td></tr>
+<tr><td>Test HTTP client</td><td>WorkflowIntegrationTests:20–31</td></tr>
+<tr><td>Controlled execution</td><td>Controlled execution</td></tr>
+<tr><td>Controlled execution</td><td>No live model invocation required</td></tr>
+<tr><td>Controlled execution</td><td>Fake preserves relevant input/output shape</td></tr>
+<tr><td>Controlled execution</td><td>TestFileEditAgentRunner:44–80</td></tr>
+<tr><td>Assertions + cleanup</td><td>Assertions + cleanup</td></tr>
+<tr><td>Assertions + cleanup</td><td>Status / payload / state as applicable</td></tr>
+<tr><td>Assertions + cleanup</td><td>Retired POST /api/runs test accepts 401 or 410</td></tr>
+<tr><td>Test case</td><td>configure</td></tr>
+<tr><td>Test case</td><td>replace</td></tr>
+<tr><td>Fixture configuration</td><td>build</td></tr>
+<tr><td>Service replacement</td><td>inject</td></tr>
+<tr><td>Controlled execution</td><td>writes</td></tr>
+<tr><td>Test HTTP client</td><td>assert</td></tr>
+<tr><td>scope</td><td>Fixture legacy auth settings are not production architecture. The retired-route test proves no full workflow.</td></tr>
+<tr><td>groups</td><td>FACTORY SETUP; HOST / REQUEST / ASSERT</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:testing-strategy-fig4:end -->

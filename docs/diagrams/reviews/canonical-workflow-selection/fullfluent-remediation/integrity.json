@@ -1,0 +1,79 @@
+{
+  "diagram": "canonical-workflow-selection",
+  "semantic_edges": 14,
+  "exact_source_tuples": true,
+  "manifest_schema": true,
+  "manifest_crossfields": true,
+  "artifacts": [
+    {
+      "stage": "pitch",
+      "png_dimensions": [
+        1115,
+        1585
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "036a9c624369b7bc2eaae48302df21ae25c9834e521272a57d27b27e1928def6",
+      "visible_structures": 8
+    },
+    {
+      "stage": "pass-01",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "a89eb4f6c81380bd5d359775d7a5f0fa98e1f8b593f066933af6e8c6afe5d297",
+      "visible_structures": 161
+    },
+    {
+      "stage": "pass-02",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "f96dce49f62eb04b997c2fcb8eeb3494d5e62804ccbf5d4a9bb990f33452ec4c",
+      "visible_structures": 161
+    },
+    {
+      "stage": "pass-03",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "b096390c68567b8bf87472c8f70bd009a53b13ec7f4e8fd55ee9291e91632b5d",
+      "visible_structures": 161
+    },
+    {
+      "stage": "pass-04",
+      "png_dimensions": [
+        1216,
+        1704
+      ],
+      "page": [
+        583,
+        827
+      ],
+      "pageScale": 1,
+      "sha256": "b096390c68567b8bf87472c8f70bd009a53b13ec7f4e8fd55ee9291e91632b5d",
+      "visible_structures": 161
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "passed": true,
+  "diagrams": [
+    {
+      "name": "review-merge-fig5",
+      "growth_ratio": 15.501674,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/review-merge-fig5/v2/iteration-manifest.json"
+    },
+    {
+      "name": "coordinator-internals-fig4",
+      "growth_ratio": 16.83081,
+      "arrows": 14,
+      "manifest": "docs/diagrams/reviews/coordinator-internals-fig4/v2/iteration-manifest.json"
+    },
+    {
+      "name": "coordinator-internals-fig2",
+      "growth_ratio": 15.615182,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/coordinator-internals-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "coordinator-internals-fig3",
+      "growth_ratio": 15.519243,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/coordinator-internals-fig3/v2/iteration-manifest.json"
+    },
+    {
+      "name": "git-integration-fig1",
+      "growth_ratio": 14.818774,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/git-integration-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "git-integration-fig2",
+      "growth_ratio": 15.522742,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/git-integration-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "memory-decisions-fig1",
+      "growth_ratio": 15.369594,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/memory-decisions-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "memory-decisions-fig2",
+      "growth_ratio": 15.689968,
+      "arrows": 11,
+      "manifest": "docs/diagrams/reviews/memory-decisions-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "memory-decisions-fig4",
+      "growth_ratio": 15.378628,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/memory-decisions-fig4/v2/iteration-manifest.json"
+    },
+    {
+      "name": "canonical-workflow-invocation",
+      "growth_ratio": 14.865759,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/canonical-workflow-invocation/v2/iteration-manifest.json"
+    },
+    {
+      "name": "orchestration-fig2",
+      "growth_ratio": 15.524558,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/orchestration-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "orchestration-fig3",
+      "growth_ratio": 15.366215,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/orchestration-fig3/v2/iteration-manifest.json"
+    },
+    {
+      "name": "orchestration-fig8",
+      "growth_ratio": 15.255906,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/orchestration-fig8/v2/iteration-manifest.json"
+    },
+    {
+      "name": "orchestration-fig9",
+      "growth_ratio": 15.155296,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/orchestration-fig9/v2/iteration-manifest.json"
+    },
+    {
+      "name": "orchestration-fig10",
+      "growth_ratio": 14.796368,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/orchestration-fig10/v2/iteration-manifest.json"
+    },
+    {
+      "name": "resilient-assembly-review-fig1",
+      "growth_ratio": 15.73725,
+      "arrows": 11,
+      "manifest": "docs/diagrams/reviews/resilient-assembly-review-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "review-merge-fig1",
+      "growth_ratio": 15.037347,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/review-merge-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "review-merge-fig4",
+      "growth_ratio": 15.765902,
+      "arrows": 11,
+      "manifest": "docs/diagrams/reviews/review-merge-fig4/v2/iteration-manifest.json"
+    },
+    {
+      "name": "team-casting-fig1",
+      "growth_ratio": 14.646722,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/team-casting-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "team-casting-fig2",
+      "growth_ratio": 14.817002,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/team-casting-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "team-casting-fig3",
+      "growth_ratio": 14.743887,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/team-casting-fig3/v2/iteration-manifest.json"
+    },
+    {
+      "name": "unified-steering-fig1",
+      "growth_ratio": 14.819176,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/unified-steering-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig1",
+      "growth_ratio": 14.971914,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig1/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig2",
+      "growth_ratio": 15.274331,
+      "arrows": 9,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig2/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig4",
+      "growth_ratio": 14.861688,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig4/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig5",
+      "growth_ratio": 14.724824,
+      "arrows": 8,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig5/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig9",
+      "growth_ratio": 15.39586,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig9/v2/iteration-manifest.json"
+    },
+    {
+      "name": "workflow-engine-fig11",
+      "growth_ratio": 15.403622,
+      "arrows": 10,
+      "manifest": "docs/diagrams/reviews/workflow-engine-fig11/v2/iteration-manifest.json"
+    }
+  ],
+  "arrow_count": 259
+}

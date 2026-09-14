@@ -1,0 +1,271 @@
+{
+  "diagram": "unified-steering-fig1",
+  "source_sha256": "0a7b83777dcd0b523fbf48b4e559ab5e37406416efc3bfbf08d6d261d2fa7f44",
+  "png_sha256": "d09057ec4d0cda9bc45e12813c856b757d608a56333332b88a7aa9e43e1fc8ad",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "One signal, four explicit effects"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Durable decisions choose resume, fresh dispatch, human escalation or advisory continuation."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "NORMALIZED FEEDBACK AND DURABLE DIRECTIVE"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "DECISION AND RESUMABILITY"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "ALTERNATIVE EFFECTS"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Gate feedback"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Implemented assembly sources"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "structured scope"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "SIGNAL"
+    },
+    {
+      "cell": "n1-title",
+      "text": "SteeringSignal"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Normalize reason and targets"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "one decision contract"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "RECORD"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Persist directive"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Received event is visible"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "queued / durable"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "DECIDE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Bounded decider"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Budget + attempt resumability"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "human-only budget reset"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "DECISION"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Persist decision"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Decision event follows commit"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "explicit direction"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "RESUME"
+    },
+    {
+      "cell": "n5-title",
+      "text": "In-place steer"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Keep author and session"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "attempt-specific proof"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "FRESH"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Fresh dispatch"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Conscious fresh execution"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "bounded same-author fallback"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "ESCALATE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Durable human park"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Proceed / exhausted budget"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "not a failure terminal"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "ADVISORY"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Advisory continuation"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "No child-state reset"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "separate from in-place"
+    },
+    {
+      "cell": "e0",
+      "text": "normalize"
+    },
+    {
+      "cell": "e1",
+      "text": "submit"
+    },
+    {
+      "cell": "e2",
+      "text": "decide"
+    },
+    {
+      "cell": "e3",
+      "text": "commit"
+    },
+    {
+      "cell": "e4",
+      "text": "resume"
+    },
+    {
+      "cell": "e5",
+      "text": "fresh"
+    },
+    {
+      "cell": "e6",
+      "text": "Proceed"
+    },
+    {
+      "cell": "e7",
+      "text": "advisory"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/unified-steering.md",
+    "docs/reference/unified-steering.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "normalize",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "submit",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "decide",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "commit",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "resume",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n6",
+      "label": "fresh",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n4",
+      "to": "n7",
+      "label": "Proceed",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n4",
+      "to": "n8",
+      "label": "advisory",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,301 @@
+{
+  "diagram": "canonical-api-host",
+  "source_sha256": "0fd5c909daeb09f4047ca79d32361fdd68df91f60a83a07c11a19f84aa32d1bc",
+  "png_sha256": "ada7c0e316347b2c19db1a4b9c3939dda5eb52d2c150712afbadd346c4bf648d",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-api-host\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "API host: compose once, authorize each request"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Startup prepares the host. Requests never flow through migrations or recovery."
+    },
+    {
+      "cell": "startup-group-title",
+      "text": "BOOTSTRAP"
+    },
+    {
+      "cell": "request-group-title",
+      "text": "PER REQUEST"
+    },
+    {
+      "cell": "classification-guard",
+      "text": "Unclassified endpoint? Fail closed."
+    },
+    {
+      "cell": "startup-title",
+      "text": "Startup composition"
+    },
+    {
+      "cell": "startup-subtitle",
+      "text": "Configuration and service registration"
+    },
+    {
+      "cell": "startup-detail",
+      "text": "Provider selection, migrations, recovery, workspace checks"
+    },
+    {
+      "cell": "startup-metadata",
+      "text": "Program.cs:1200-1254"
+    },
+    {
+      "cell": "startup-badge",
+      "text": "STARTUP"
+    },
+    {
+      "cell": "role-title",
+      "text": "Role-specific HTTP host"
+    },
+    {
+      "cell": "role-subtitle",
+      "text": "Web API or worker probes"
+    },
+    {
+      "cell": "role-detail",
+      "text": "The worker does not expose application endpoint groups"
+    },
+    {
+      "cell": "role-metadata",
+      "text": "Program.cs:1255-1326"
+    },
+    {
+      "cell": "role-badge",
+      "text": "HOST"
+    },
+    {
+      "cell": "client-title",
+      "text": "Client request"
+    },
+    {
+      "cell": "client-subtitle",
+      "text": "Browser / MCP adapter / automation"
+    },
+    {
+      "cell": "client-detail",
+      "text": "MCP forwards a validated broker token, not GitHub auth"
+    },
+    {
+      "cell": "client-metadata",
+      "text": "AgentweaverApiClient.cs:359"
+    },
+    {
+      "cell": "client-badge",
+      "text": "CALLER"
+    },
+    {
+      "cell": "middleware-title",
+      "text": "Cross-cutting policy"
+    },
+    {
+      "cell": "middleware-subtitle",
+      "text": "Integrity, authentication, authorization"
+    },
+    {
+      "cell": "middleware-detail",
+      "text": "Routing / CORS / rate limiting precede identity checks"
+    },
+    {
+      "cell": "middleware-metadata",
+      "text": "Program.cs:1274-1295"
+    },
+    {
+      "cell": "middleware-badge",
+      "text": "POLICY"
+    },
+    {
+      "cell": "services-title",
+      "text": "Application services"
+    },
+    {
+      "cell": "services-subtitle",
+      "text": "Own operation semantics"
+    },
+    {
+      "cell": "services-detail",
+      "text": "Coordinate lifecycle, transactions, and external effects"
+    },
+    {
+      "cell": "services-metadata",
+      "text": "Endpoint modules -> services"
+    },
+    {
+      "cell": "services-badge",
+      "text": "DOMAIN"
+    },
+    {
+      "cell": "handler-title",
+      "text": "Endpoint adapter"
+    },
+    {
+      "cell": "handler-subtitle",
+      "text": "Bind, load, check resource role"
+    },
+    {
+      "cell": "handler-detail",
+      "text": "Viewer / Contributor / Owner; return a safe DTO"
+    },
+    {
+      "cell": "handler-metadata",
+      "text": "ProjectAuthorization.cs:56-86"
+    },
+    {
+      "cell": "handler-badge",
+      "text": "RESOURCE"
+    },
+    {
+      "cell": "stores-title",
+      "text": "Provider-selected stores"
+    },
+    {
+      "cell": "stores-subtitle",
+      "text": "Production Postgres / local SQLite"
+    },
+    {
+      "cell": "stores-detail",
+      "text": "Fresh context or connection per operation"
+    },
+    {
+      "cell": "stores-metadata",
+      "text": "Program.cs:1026-1075"
+    },
+    {
+      "cell": "stores-badge",
+      "text": "DURABLE"
+    },
+    {
+      "cell": "adapters-title",
+      "text": "Workspace and integrations"
+    },
+    {
+      "cell": "adapters-subtitle",
+      "text": "Git, AgentHost, model-provider adapters"
+    },
+    {
+      "cell": "adapters-detail",
+      "text": "Files and execution remain separate from database rows"
+    },
+    {
+      "cell": "adapters-metadata",
+      "text": "Explicit capability boundaries"
+    },
+    {
+      "cell": "adapters-badge",
+      "text": "ADAPTERS"
+    },
+    {
+      "cell": "startup-host",
+      "text": "prepares"
+    },
+    {
+      "cell": "request-policy",
+      "text": "request"
+    },
+    {
+      "cell": "policy-handler",
+      "text": "dispatch"
+    },
+    {
+      "cell": "handler-service",
+      "text": "delegate"
+    },
+    {
+      "cell": "service-store",
+      "text": "read / write"
+    },
+    {
+      "cell": "service-adapters",
+      "text": "invoke"
+    },
+    {
+      "cell": "store-result",
+      "text": "rows"
+    },
+    {
+      "cell": "service-result",
+      "text": "result"
+    },
+    {
+      "cell": "handler-dto",
+      "text": "DTO / HTTP response"
+    },
+    {
+      "cell": "scope",
+      "text": "Worker HTTP: healthz / readyz only. Background registrations are not necessarily worker-exclusive."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/api-core.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "startup",
+      "to": "role",
+      "label": "prepares",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "client",
+      "to": "middleware",
+      "label": "request",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "middleware",
+      "to": "handler",
+      "label": "dispatch",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "handler",
+      "to": "services",
+      "label": "delegate",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "services",
+      "to": "stores",
+      "label": "read / write",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "services",
+      "to": "adapters",
+      "label": "invoke",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "stores",
+      "to": "services",
+      "label": "rows",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "services",
+      "to": "handler",
+      "label": "result",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "handler",
+      "to": "client",
+      "label": "DTO / HTTP response",
+      "result": "clean"
+    }
+  ]
+}

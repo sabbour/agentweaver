@@ -1,0 +1,277 @@
+{
+  "diagram": "agent-runtime-fig3",
+  "source_sha256": "23619f198a0516f75a87745fa27dbe3af573fbfcb222861fecf2411181242fe5",
+  "png_sha256": "9c7fa0184546da57fc54a5e144ef6efe032229897ab7213e9ce12c30e91841b7",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "A completed turn still needs a durable result"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Remote writable results are validated and applied before ordinary worker commit bookkeeping."
+    },
+    {
+      "cell": "admit-title",
+      "text": "Reserve run"
+    },
+    {
+      "cell": "admit-subtitle",
+      "text": "Validate identity and task"
+    },
+    {
+      "cell": "admit-metadata",
+      "text": "Durable admission"
+    },
+    {
+      "cell": "admit-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "context-title",
+      "text": "Prepare context"
+    },
+    {
+      "cell": "context-subtitle",
+      "text": "Workspace + charter + skills"
+    },
+    {
+      "cell": "context-metadata",
+      "text": "Children: decisions-only memory"
+    },
+    {
+      "cell": "context-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "workflow-title",
+      "text": "Workflow"
+    },
+    {
+      "cell": "workflow-subtitle",
+      "text": "Graph remains in host"
+    },
+    {
+      "cell": "workflow-metadata",
+      "text": "Local agent or remote leaf"
+    },
+    {
+      "cell": "workflow-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "turn-title",
+      "text": "Execute leaf"
+    },
+    {
+      "cell": "turn-subtitle",
+      "text": "Provider and controlled tools"
+    },
+    {
+      "cell": "turn-metadata",
+      "text": "Logical, not one physical host"
+    },
+    {
+      "cell": "turn-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "envelope-title",
+      "text": "Prepared writeback"
+    },
+    {
+      "cell": "envelope-subtitle",
+      "text": "Required for LocalWritable"
+    },
+    {
+      "cell": "envelope-metadata",
+      "text": "Missing/invalid means failure"
+    },
+    {
+      "cell": "envelope-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "apply-title",
+      "text": "Validate and apply"
+    },
+    {
+      "cell": "apply-subtitle",
+      "text": "Run / base / tree / branch"
+    },
+    {
+      "cell": "apply-metadata",
+      "text": "Fast-forward authoritative tree"
+    },
+    {
+      "cell": "apply-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "local-title",
+      "text": "Local/shared result"
+    },
+    {
+      "cell": "local-subtitle",
+      "text": "No remote envelope required"
+    },
+    {
+      "cell": "local-metadata",
+      "text": "Worker-side post-processing"
+    },
+    {
+      "cell": "local-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "commit-title",
+      "text": "Commit and diff"
+    },
+    {
+      "cell": "commit-subtitle",
+      "text": "After validated application"
+    },
+    {
+      "cell": "commit-metadata",
+      "text": "Ordinary bookkeeping remains"
+    },
+    {
+      "cell": "commit-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "watch-title",
+      "text": "Watch and persist"
+    },
+    {
+      "cell": "watch-subtitle",
+      "text": "Normalize terminal outcome"
+    },
+    {
+      "cell": "watch-metadata",
+      "text": "Durable events and status"
+    },
+    {
+      "cell": "watch-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "prepare"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "start"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "invoke"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "remote"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "verify"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "local"
+    },
+    {
+      "cell": "arrow-7",
+      "text": "record"
+    },
+    {
+      "cell": "arrow-8",
+      "text": "apply"
+    },
+    {
+      "cell": "arrow-9",
+      "text": "persist"
+    },
+    {
+      "cell": "note-0",
+      "text": "Rows separate admission, remote writeback and final bookkeeping."
+    },
+    {
+      "cell": "note-1",
+      "text": "Local provider serialization does not prove replacement-pod session restoration."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/agent-runtime.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "admit",
+      "to": "context",
+      "label": "prepare",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "context",
+      "to": "workflow",
+      "label": "start",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "workflow",
+      "to": "turn",
+      "label": "invoke",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "turn",
+      "to": "envelope",
+      "label": "remote",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "envelope",
+      "to": "apply",
+      "label": "verify",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "turn",
+      "to": "local",
+      "label": "local",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "local",
+      "to": "commit",
+      "label": "record",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "apply",
+      "to": "commit",
+      "label": "apply",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "commit",
+      "to": "watch",
+      "label": "persist",
+      "result": "clean"
+    }
+  ]
+}

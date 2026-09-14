@@ -1,0 +1,141 @@
+{
+  "diagram": "email-coordinator-workflow",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "email-coordinator-workflow-pitch.drawio",
+    "png": "email-coordinator-workflow-pitch.png",
+    "change_record": "email-coordinator-workflow-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "email-coordinator-workflow-pass-01.drawio",
+      "png": "email-coordinator-workflow-pass-01.png",
+      "change_record": "email-coordinator-workflow-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 4,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.011526,
+      "baseline_meaningful_xml": 3297,
+      "result_meaningful_xml": 33008
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "email-coordinator-workflow-pass-02.drawio",
+      "png": "email-coordinator-workflow-pass-02.png",
+      "change_record": "email-coordinator-workflow-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "email-coordinator-workflow-pass-03.drawio",
+      "png": "email-coordinator-workflow-pass-03.png",
+      "change_record": "email-coordinator-workflow-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "email-coordinator-workflow-pass-04.drawio",
+      "png": "email-coordinator-workflow-pass-04.png",
+      "change_record": "email-coordinator-workflow-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "message1",
+          "source": "human",
+          "target": "coord",
+          "relationship": "1  submit goal; draft and persist OutcomeSpec",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message2",
+          "source": "coord",
+          "target": "human",
+          "relationship": "2  request confirmation / revision",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message3",
+          "source": "human",
+          "target": "coord",
+          "relationship": "3  confirm; persist WorkPlan DAG",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message4",
+          "source": "coord",
+          "target": "children",
+          "relationship": "4  dispatch dependency-ready children",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message5",
+          "source": "children",
+          "target": "coord",
+          "relationship": "5  report settled results; block failed dependents",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message6",
+          "source": "coord",
+          "target": "assembly",
+          "relationship": "6  integrate branches; run configured gates",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message7",
+          "source": "assembly",
+          "target": "human",
+          "relationship": "7  request one collective review",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message8",
+          "source": "human",
+          "target": "assembly",
+          "relationship": "8  approve reviewed integration",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        },
+        {
+          "id": "message9",
+          "source": "assembly",
+          "target": "scribe",
+          "relationship": "9  MergeWorktree → Scribe",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

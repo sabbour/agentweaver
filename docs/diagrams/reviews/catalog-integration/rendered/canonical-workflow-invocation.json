@@ -1,0 +1,14 @@
+{
+  "name": "canonical-workflow-invocation",
+  "family": "deep-dive-orchestration",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-workflow-invocation.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-workflow-invocation.png",
+  "source_sha256": "1972484484dd9981bdb866afb04a53cb114467cf1bf475bc5ccc444568be8868",
+  "png_sha256": "28b239fd934f975aa8b499b073b46db208dea95094557986bf96165975bb0741",
+  "dimensions": [
+    2953,
+    1632
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

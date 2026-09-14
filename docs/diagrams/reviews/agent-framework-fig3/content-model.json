@@ -1,0 +1,158 @@
+{
+  "name": "agent-framework-fig3",
+  "title": "Response delivery is not process restoration",
+  "takeaway": "Live response, another-replica delivery and process recovery are distinct control paths.",
+  "pitch": [
+    "Pending decision|Respond to suspended request|Live or deferred delivery",
+    "Process recovery|Rebuild the right graph|Resume checkpoint"
+  ],
+  "groups": [
+    "RESPONSE DELIVERY",
+    "CHECKPOINT / PROCESS RECOVERY"
+  ],
+  "nodes": [
+    {
+      "id": "checks",
+      "title": "Reviewer / API checks",
+      "sub": "Role, state and provider validation",
+      "detail": "Correlate the pending request identifier",
+      "meta": "RunEndpoints:887–964",
+      "badge": "VALIDATE",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964,1052-1060",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "live",
+      "title": "Existing StreamingRun",
+      "sub": "Local workflow exists",
+      "detail": "SendResponseAsync continues suspended port",
+      "meta": "RunEndpoints:1052–1060",
+      "badge": "LIVE",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964,1052-1060",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "defer",
+      "title": "Durable deferred decision",
+      "sub": "No local workflow, pending request",
+      "detail": "Persist decision for the owning replica",
+      "meta": "RunEndpoints:887–964",
+      "badge": "DEFER",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964",
+      "classification": "native:database"
+    },
+    {
+      "id": "poll",
+      "title": "Owning watch loop",
+      "sub": "Poll pending decisions",
+      "detail": "Deliver via SendResponseAsync, not restore",
+      "meta": "RunWatchLoopService:164–227",
+      "badge": "DELIVER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:164-227",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "checkpoint",
+      "title": "CheckpointManager",
+      "sub": "MAF saves workflow checkpoint",
+      "detail": "Provider selection: shared PG rows or local files",
+      "meta": "Program.cs:1058–1065",
+      "badge": "SAVE",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+      "classification": "native:database"
+    },
+    {
+      "id": "recover",
+      "title": "Recovery service",
+      "sub": "Read latest checkpoint + run",
+      "detail": "Load persisted effective definition",
+      "meta": "RunWorkflowFactory:1561–1586",
+      "badge": "RECOVER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "graph",
+      "title": "Rebuild full / child graph",
+      "sub": "Choose the correct persisted definition",
+      "detail": "Missing worktree/tree mismatches can fail closed",
+      "meta": "WorkflowRestartServiceTests",
+      "badge": "REBUILD",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "resume",
+      "title": "ResumeStreamingAsync",
+      "sub": "Restore process state",
+      "detail": "Restart watch loop; recover suspended gate",
+      "meta": "RunWorkflowFactory:1561–1586",
+      "badge": "RESTORE",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+      "classification": "native:flowchart"
+    }
+  ],
+  "edges": [
+    {
+      "id": "checks-to-live",
+      "source": "checks",
+      "target": "live",
+      "label": "local instance",
+      "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964,1052-1060"
+    },
+    {
+      "id": "checks-to-defer",
+      "source": "checks",
+      "target": "defer",
+      "label": "other replica",
+      "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964"
+    },
+    {
+      "id": "defer-to-poll",
+      "source": "defer",
+      "target": "poll",
+      "label": "poll decision",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:164-227"
+    },
+    {
+      "id": "poll-to-live",
+      "source": "poll",
+      "target": "live",
+      "label": "SendResponseAsync",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:164-227",
+      "returning": true,
+      "route": "right"
+    },
+    {
+      "id": "checkpoint-to-recover",
+      "source": "checkpoint",
+      "target": "recover",
+      "label": "latest checkpoint",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586"
+    },
+    {
+      "id": "recover-to-graph",
+      "source": "recover",
+      "target": "graph",
+      "label": "effective definition",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+      "route": "center"
+    },
+    {
+      "id": "graph-to-resume",
+      "source": "graph",
+      "target": "resume",
+      "label": "rebuild then resume",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586"
+    }
+  ],
+  "scope": "PostgreSQL failure does not select local files. Ordinary approval does not restore a checkpoint."
+}

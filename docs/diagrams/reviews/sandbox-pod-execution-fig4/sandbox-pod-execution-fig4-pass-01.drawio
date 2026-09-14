@@ -1,0 +1,253 @@
+<mxfile host="Agentweaver" agent="GPT-6 Astra execution-plan authoring" version="31.4.5" type="device" compressed="false">
+  <diagram id="sandbox-pod-execution-fig4" name="Local checkout, explicit authoritative writeback">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="793.7" pageHeight="559.37" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Local checkout, explicit authoritative writeback" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=21;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="14" width="746" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="A temporary Git ref is prepared in-pod and validated before the worker fast-forwards." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=11;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="48" width="746" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="source" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="source-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="source">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="source-icon" value="" style="shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;" vertex="1" parent="source">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="source-title" value="Source coordinates" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="source">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="source-subtitle" value="Shared repository + ref" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="source">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="source-metadata" value="Expected base commit and tree" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="source">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="source-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="source">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="source-badge" value="DATA" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#a6e9ed;strokeColor=none;fontColor=#00666d;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="source">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="fetch">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="fetch">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-title" value="Materialize checkout" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fetch">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-subtitle" value="Initialize + shallow fetch" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fetch">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-metadata" value="Verify both commit and tree" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="fetch">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="fetch">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="fetch-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="fetch">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="local" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="102" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="local-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="local">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="local-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="local">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="local-title" value="Ephemeral checkout" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="local">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="local-subtitle" value="Detached immutable base" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="local">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="local-metadata" value="HOME/XDG outside checkout" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="local">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="local-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="local">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="local-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="local">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="readonly">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="readonly">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-title" value="LocalReadOnly" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="readonly">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-subtitle" value="Build / test can write locally" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="readonly">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-metadata" value="Publication is refused" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="readonly">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="readonly">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="readonly-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="readonly">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="writable" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="writable">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="writable">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-title" value="LocalWritable" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="writable">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-subtitle" value="Implementation edits" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="writable">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-metadata" value="Alternate-index final tree" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="writable">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="writable">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="writable-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="writable">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="230" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="prepare">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="prepare">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-title" value="Prepare publication" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="prepare">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-subtitle" value="Flatten nested repo content" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="prepare">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-metadata" value="No gitlinks; restore metadata" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="prepare">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="prepare">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="prepare">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="unchanged">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="unchanged">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-title" value="Equal result tree" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="unchanged">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-subtitle" value="No-change descriptor" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="unchanged">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-metadata" value="No temporary ref push" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="unchanged">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="unchanged">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="unchanged-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="unchanged">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="ref" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="ref">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-icon" value="" style="shape=cylinder3;html=1;aspect=fixed;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;" vertex="1" parent="ref">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-title" value="Changed result tree" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ref">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-subtitle" value="Single-parent commit" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ref">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-metadata" value="Push unique temporary ref" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="ref">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="ref">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="ref-badge" value="DATA" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#a6e9ed;strokeColor=none;fontColor=#00666d;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="ref">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="apply" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="542" y="358" width="228" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="apply">
+          <mxGeometry x="0" y="0" width="5" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-icon" value="" style="shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="apply">
+          <mxGeometry x="14" y="13" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-title" value="Worker validation" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="apply">
+          <mxGeometry x="47" y="10" width="168" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-subtitle" value="Run / ref / base / tree / clean" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="apply">
+          <mxGeometry x="15" y="46" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-metadata" value="Fast-forward authoritative branch" style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Cascadia Code;fontSize=8.5;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="apply">
+          <mxGeometry x="15" y="72" width="147" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-separator" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="apply">
+          <mxGeometry x="15" y="69" width="198" height="0.7" as="geometry" />
+        </mxCell>
+        <mxCell id="apply-badge" value="STEP" style="rounded=1;arcSize=100;whiteSpace=wrap;html=0;fillColor=#9fd89f;strokeColor=none;fontColor=#0e700e;fontFamily=Segoe UI;fontSize=7.5;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="apply">
+          <mxGeometry x="166" y="79" width="48" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-1" value="fetch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="source" target="fetch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-2" value="verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="fetch" target="local">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-3" value="stage" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="writable" target="prepare">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-4" value="validate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=8;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=8;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;" edge="1" parent="1" source="ref" target="apply">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="note-0" value="LocalReadOnly limits publication, not ephemeral build/test writes." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="502" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-1" value="Equal-tree and changed-tree outcomes are alternatives." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="517" width="744" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="note-2" value="Source origin is the shared repository; writeback mints no second GitHub token." style="text;html=0;whiteSpace=wrap;overflow=hidden;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;spacingLeft=0;spacingRight=0;spacingTop=0;spacingBottom=0;" vertex="1" parent="1">
+          <mxGeometry x="24" y="532" width="744" height="14" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

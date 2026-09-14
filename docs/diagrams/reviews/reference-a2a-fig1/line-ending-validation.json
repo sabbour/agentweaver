@@ -1,0 +1,128 @@
+[
+  {
+    "document": "docs/reference/a2a.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "9dd96084c86e4dae115c976049a8b7fcd986322540b68b991c2f8cb535d71abb"
+  },
+  {
+    "document": "docs/reference/agent-communication.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "56145ba3546c886837d80fcdea09369cb3af238cf33e677fa9c73012a149be02"
+  },
+  {
+    "document": "docs/reference/agent-definition.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "e874b0542fb8eb5b7d4ec6106355ce07b0152df58cfd81eaa419a2f7b270adcb"
+  },
+  {
+    "document": "docs/reference/agent-executor.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "6ebb22ca4738b3f3030455453983248403513d1c721f25e6a3bed1200ddee7b7"
+  },
+  {
+    "document": "docs/reference/api.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "eb7bea374cd37855229b5b6ca09ddfedb077a63d1989dc36859db36fe4799f80"
+  },
+  {
+    "document": "docs/reference/cluster-diagnostics.md",
+    "eol": "CRLF",
+    "normalized_content_unchanged": true,
+    "sha256": "8ccd3607de42dc0b965853de22f3330d962d5cf609c48ad16962a598c859f90c"
+  },
+  {
+    "document": "docs/reference/coordinator.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "d29f6b099b81bb48e8d8611789002723589eccc6304e69fd6d91dc74e430c00c"
+  },
+  {
+    "document": "docs/reference/events.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "ab8f90b6dc601f22d07fb5f9763876e73714b9ad674eaa9ccc229b6cd822f0fd"
+  },
+  {
+    "document": "docs/reference/live-preview-provisioning.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "f3f6c186e4900fb70795f0376e31d305b8e083516021d71b090c02bd2406b13e"
+  },
+  {
+    "document": "docs/reference/mcp.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "98c00d890af58643fe29c5a0c28f88f05f51dac8b862169ff240c10b78e986b6"
+  },
+  {
+    "document": "docs/reference/memory.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "5de5b887300f033e801098fe8eb56be1af426f64d7ebd87afbcdf54f468344f4"
+  },
+  {
+    "document": "docs/reference/project-generation-model-settings.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "4728ad2dc6b88ee28a98b6f9d547a67ecf2db828ef7bcb54535f19656449ee74"
+  },
+  {
+    "document": "docs/reference/project-skills.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "033182a625850d97140476b857499c8645343afd4195e191d04bf3b76637b9c3"
+  },
+  {
+    "document": "docs/reference/repo-blueprint-suggestions.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "2dfaab31e75a9cc78124c590711c01e29fc990616e90ed73e21a4bb507942d9f"
+  },
+  {
+    "document": "docs/reference/resilient-assembly-review.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "3a1769f17ce382daa91a17c793a627d90d327c5d1351028d3cf17ddfbe1a7b2d"
+  },
+  {
+    "document": "docs/reference/sandbox-browser-preview.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "4b82c1889277ea2b74d006b18e63e4e3366ed309b66c1b579e293590a20db32a"
+  },
+  {
+    "document": "docs/reference/sandbox-pods.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "a636e36d30dbb3c318e80b6efa0aaa83d92c08fbb6275c79ce6e50885ee9c257"
+  },
+  {
+    "document": "docs/reference/sandbox-setup.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "7091eb9d95fb2614ba3ca63cce0de53fd1158db014e120932d6f208d1c39c6f6"
+  },
+  {
+    "document": "docs/reference/scaling-data-layer.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "53ba58924c12307ab74bcface394dc66fa96e2d9743c9f42100f0febdd82aed0"
+  },
+  {
+    "document": "docs/reference/unified-steering.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "e63b36344d7960cf74365388b859284639ae9bd9eb3224f970dcb27c26b3012a"
+  },
+  {
+    "document": "docs/reference/web.md",
+    "eol": "LF",
+    "normalized_content_unchanged": true,
+    "sha256": "c2b8148f99fc5293a479739e5abb4d0930fa4f90e23c18ef2f5c2770c5f5124a"
+  }
+]

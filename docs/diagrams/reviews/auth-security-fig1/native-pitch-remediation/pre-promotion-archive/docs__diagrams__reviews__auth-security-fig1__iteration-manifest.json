@@ -1,0 +1,117 @@
+{
+  "diagram": "auth-security-fig1",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "auth-security-fig1-pitch.drawio",
+    "png": "auth-security-fig1-pitch.png",
+    "change_record": "auth-security-fig1-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "auth-security-fig1-pass-01.drawio",
+      "png": "auth-security-fig1-pass-01.png",
+      "change_record": "auth-security-fig1-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 4,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "baseline_meaningful_xml": 2359,
+      "result_meaningful_xml": 22532,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 9.551504874947012
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "auth-security-fig1-pass-02.drawio",
+      "png": "auth-security-fig1-pass-02.png",
+      "change_record": "auth-security-fig1-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "auth-security-fig1-pass-03.drawio",
+      "png": "auth-security-fig1-pass-03.png",
+      "change_record": "auth-security-fig1-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "auth-security-fig1-pass-04.drawio",
+      "png": "auth-security-fig1-pass-04.png",
+      "change_record": "auth-security-fig1-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "classify",
+          "evidence": "apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:20-57; apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:28-57",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "otherwise",
+          "evidence": "apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:28-57; apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:131-153",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "eligible",
+          "evidence": "apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:28-57; apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:32-55; 159-250",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n2",
+          "target": "n4",
+          "relationship": "authenticated",
+          "evidence": "apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:131-153; apps/Agentweaver.Api/Security/ProjectAuthorization.cs:56-85,114-135; docs/deep-dive/auth-security.md:5-23",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n4",
+          "relationship": "authenticated",
+          "evidence": "apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs:32-55; 159-250; apps/Agentweaver.Api/Security/ProjectAuthorization.cs:56-85,114-135; docs/deep-dive/auth-security.md:5-23",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "authorized",
+          "evidence": "apps/Agentweaver.Api/Security/ProjectAuthorization.cs:56-85,114-135; docs/deep-dive/auth-security.md:5-23; docs/deep-dive/auth-security.md:5-23; apps/Agentweaver.Api/Security",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

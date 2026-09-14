@@ -1,0 +1,41 @@
+✔ calibrated editable card passes explicit role/token validation (350.7346ms)
+✔ preserved pilot approval pins every visual and semantic attribute (1891.2107ms)
+✔ other diagrams cannot borrow the preserved pilot approval (297.3153ms)
+✔ rejects debug text (291.5376ms)
+✔ rejects font family (292.1681ms)
+✔ rejects role size (287.1976ms)
+✔ rejects role weight (300.4923ms)
+✔ rejects card width (258.1332ms)
+✔ rejects card inset (269.6838ms)
+✔ rejects card radius (246.8724ms)
+✔ rejects accent (297.7814ms)
+✔ rejects elevation (259.2067ms)
+✔ rejects semantic color (285.5436ms)
+✔ rejects prose (248.7771ms)
+✔ rejects icon normalization (248.4ms)
+✔ rejects icon alignment (269.3968ms)
+✔ rejects missing elevation (245.9879ms)
+✔ rejects density (248.8602ms)
+✔ unknown handwritten roles are preserved rather than guessed (274.0264ms)
+✔ normalization is deterministic and idempotent without changing semantic text (561.2272ms)
+✔ badge data does not create unsolicited visual pills (1.4906ms)
+✔ accepts a true shared split and rejects its missing junction (705.4397ms)
+✔ rejects false junction (303.6736ms)
+✔ rejects double arrowheads (266.2321ms)
+✔ rejects opposed shared stubs (295.5255ms)
+✔ rejects diagonal connector (267.7113ms)
+✔ rejects missing bridges (266.1596ms)
+✔ rejects bridge too near elbow (261.6994ms)
+✔ rejects an edge label without a matching surface background (258.1147ms)
+✔ invalid XML returns an explicit machine-readable failure (279.0969ms)
+✔ structured metadata cannot leak as object text onto the canvas (1.1163ms)
+✔ canonical graph has A5 paper with explicit print scaling (260.6283ms)
+✔ ordinary graph markers consume the approved type and size (282.0399ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11052.8204

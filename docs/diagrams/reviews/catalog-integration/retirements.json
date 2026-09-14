@@ -1,0 +1,58 @@
+[
+  {
+    "name": "canonical-event-replay-tail",
+    "target": "canonical-durable-event-stream",
+    "removed": "docs\\diagrams\\src\\canonical-event-replay-tail.json",
+    "sha256": "4676302ced307ed16a3c4c7c0d1d4fbc3331510aea9c87aeac8085ad3f0b284a",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-src--canonical-event-replay-tail.json"
+  },
+  {
+    "name": "canonical-event-replay-tail",
+    "target": "canonical-durable-event-stream",
+    "removed": "docs\\diagrams\\canonical-event-replay-tail.png",
+    "sha256": "965a2673571597aff44421de357b7ca201700dedc4c97247ec91aa43df841673",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-canonical-event-replay-tail.png"
+  },
+  {
+    "name": "canonical-event-replay-tail",
+    "target": "canonical-durable-event-stream",
+    "removed": "docs\\diagrams\\canonical-event-replay-tail.hash.txt",
+    "sha256": "81daed936f5834faa6ab77ca48d81b1d0e274cecc4ea85c873b15aec9dd9a4f7",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-canonical-event-replay-tail.hash.txt"
+  },
+  {
+    "name": "canonical-event-replay-tail",
+    "target": "canonical-durable-event-stream",
+    "removed": "docs\\diagrams\\drawio\\generated\\canonical-event-replay-tail.drawio",
+    "sha256": "6d642067fc355f295696353f90fc649a0e079b46fb44f1a8f46bf8c81729bc86",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-drawio--generated--canonical-event-replay-tail.drawio"
+  },
+  {
+    "name": "guide-review-fig1",
+    "target": "canonical-default-workflow",
+    "removed": "docs\\diagrams\\src\\guide-review-fig1.json",
+    "sha256": "4e493568bb665f7b322a801c1e2d1da69dc6f5acacb43813ddffdfdb760f5436",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-src--guide-review-fig1.json"
+  },
+  {
+    "name": "guide-review-fig1",
+    "target": "canonical-default-workflow",
+    "removed": "docs\\diagrams\\guide-review-fig1.png",
+    "sha256": "0c31ac4988d45d669742379c56cf7d982f33ccfde5fb7338170276046dd1be8a",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-guide-review-fig1.png"
+  },
+  {
+    "name": "guide-review-fig1",
+    "target": "canonical-default-workflow",
+    "removed": "docs\\diagrams\\guide-review-fig1.hash.txt",
+    "sha256": "3804716ef7584bd9b0e839c397d425ba6718c7beec66faa85f1770f1aa47e1e4",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-guide-review-fig1.hash.txt"
+  },
+  {
+    "name": "guide-review-fig1",
+    "target": "canonical-default-workflow",
+    "removed": "docs\\diagrams\\drawio\\generated\\guide-review-fig1.drawio",
+    "sha256": "4040c7808f82db3e675931cf3aacf9eb592e912c69bd5d071d1b60171360c3cf",
+    "archive": "docs\\diagrams\\reviews\\catalog-integration\\originals\\retired-drawio--generated--guide-review-fig1.drawio"
+  }
+]

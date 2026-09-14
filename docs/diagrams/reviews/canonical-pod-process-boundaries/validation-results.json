@@ -1,0 +1,2608 @@
+{
+  "status": "blocked",
+  "research_agents": 3,
+  "research_model": "gpt-6-astra",
+  "renderer_version": "31.4.5",
+  "survivor_drafts": 20,
+  "exported_pairs": 40,
+  "promoted_diagrams": 0,
+  "first_upgrade_pngs_inspected_both_scales": 20,
+  "growth_passes": 0,
+  "results": [
+    {
+      "diagram": "agent-runtime-fig2",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6676,
+        "result_meaningful_xml": 25737,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 82,
+        "growth_ratio": 3.855153,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "agent-runtime-fig2",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "agent-runtime-fig2-pitch.drawio",
+          "png": "agent-runtime-fig2-pitch.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:548-571,1854-2033; packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:31-37; apps/Agentweaver.Api/Security/RunAuthorship.cs:66-88",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "request": "native:flowchart",
+            "native": "native:flowchart",
+            "denied": "native:flowchart",
+            "command": "native:flowchart",
+            "execute": "native:flowchart",
+            "url": "native:flowchart",
+            "api": "custom:agentweaver",
+            "scope": "native:flowchart",
+            "result": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "e3293efc9b9960cd23f15ffcaaf4bd9f9c8ac33682c19cc0e2125d779d31c8ab",
+            "png": "33bc54159b52f47287b970c95ba19de35a01c27deb868ad315d90631d4c72f82"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "agent-runtime-fig2",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "agent-runtime-fig2-pass-01.drawio",
+          "png": "agent-runtime-fig2-pass-01.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:548-571,1854-2033; packages/Agentweaver.AgentTools/SandboxToolRegistry.cs:31-37; apps/Agentweaver.Api/Security/RunAuthorship.cs:66-88",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "request": "native:flowchart",
+            "native": "native:flowchart",
+            "denied": "native:flowchart",
+            "command": "native:flowchart",
+            "execute": "native:flowchart",
+            "url": "native:flowchart",
+            "api": "custom:agentweaver",
+            "scope": "native:flowchart",
+            "result": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "cef61937c2b4755db4575a89bf930fa339fe34e5e2462a0e18465aa08b3e8d60",
+            "png": "164841b4cc963b4cc25858e22fbfa57f663dfb8182e306166f447eac49e3cdb0"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "agent-runtime-fig3",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 7034,
+        "result_meaningful_xml": 26907,
+        "baseline_visible_structures": 20,
+        "result_visible_structures": 85,
+        "growth_ratio": 3.825277,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "agent-runtime-fig3",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "agent-runtime-fig3-pitch.drawio",
+          "png": "agent-runtime-fig3-pitch.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:183-245; apps/Agentweaver.Api/Git/WorktreeManager.cs:512-672; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:326-368",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "admit": "custom:agentweaver",
+            "context": "custom:agentweaver",
+            "workflow": "custom:agentweaver",
+            "turn": "native:flowchart",
+            "envelope": "custom:agentweaver",
+            "apply": "native:flowchart",
+            "local": "native:flowchart",
+            "commit": "native:flowchart",
+            "watch": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "7d8ab4a8721a2555911d90e2ec8ad24c23e2941c07f1191434c393f20866e4f1",
+            "png": "035b5358aa4db6ebea914d8f8c480ff49d899cc3aea8ca967c5f48a99d2d0ecf"
+          },
+          "png_dimensions": [
+            1545,
+            1084
+          ],
+          "xml_edge_count": 7
+        },
+        "pass-01": {
+          "diagram": "agent-runtime-fig3",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "agent-runtime-fig3-pass-01.drawio",
+          "png": "agent-runtime-fig3-pass-01.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:183-245; apps/Agentweaver.Api/Git/WorktreeManager.cs:512-672; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:326-368",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "admit": "custom:agentweaver",
+            "context": "custom:agentweaver",
+            "workflow": "custom:agentweaver",
+            "turn": "native:flowchart",
+            "envelope": "custom:agentweaver",
+            "apply": "native:flowchart",
+            "local": "native:flowchart",
+            "commit": "native:flowchart",
+            "watch": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "f941b6a0775618024b55727d661f79fbe07ea9eee506297a58a44137e68e651b",
+            "png": "560f9b258d0a2c9146bb3906522caabd6d5e08a74a26329084af23c2da7fcf15"
+          },
+          "png_dimensions": [
+            1565,
+            1084
+          ],
+          "xml_edge_count": 9
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "canonical-agent-communication-shared",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6618,
+        "result_meaningful_xml": 25706,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 82,
+        "growth_ratio": 3.884255,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "canonical-agent-communication-shared",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-agent-communication-shared-pitch.drawio",
+          "png": "canonical-agent-communication-shared-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:38-198; apps/Agentweaver.Api/Runs/RunOrchestrator.cs:1041-1081; packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "state": "custom:agentweaver",
+            "compile": "native:flowchart",
+            "context": "custom:agentweaver",
+            "coordinator": "custom:agentweaver",
+            "child": "custom:agentweaver",
+            "handoff": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "host": "native:kubernetes",
+            "events": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "ba6454f86538b688879802593ae2ec29e48f1dc9428c14e1a9217d8867eef7c5",
+            "png": "1b25702f27d7cb02faf8a89fc36da12623523ecbc12d31499a149c54e5854997"
+          },
+          "png_dimensions": [
+            1545,
+            1084
+          ],
+          "xml_edge_count": 6
+        },
+        "pass-01": {
+          "diagram": "canonical-agent-communication-shared",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-agent-communication-shared-pass-01.drawio",
+          "png": "canonical-agent-communication-shared-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:38-198; apps/Agentweaver.Api/Runs/RunOrchestrator.cs:1041-1081; packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "state": "custom:agentweaver",
+            "compile": "native:flowchart",
+            "context": "custom:agentweaver",
+            "coordinator": "custom:agentweaver",
+            "child": "custom:agentweaver",
+            "handoff": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "host": "native:kubernetes",
+            "events": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "5d9620c56a383ea9c6ef46a3fba9af94be2df5973065b10033bfa398e93589dc",
+            "png": "7c3a48ff090d8234c14f60eb36d649d0df2a83a5b87eebb29016212052a45f9f"
+          },
+          "png_dimensions": [
+            1565,
+            1084
+          ],
+          "xml_edge_count": 6
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "canonical-agent-communication-a2a",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5421,
+        "result_meaningful_xml": 18152,
+        "baseline_visible_structures": 15,
+        "result_visible_structures": 57,
+        "growth_ratio": 3.34846,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "canonical-agent-communication-a2a",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-agent-communication-a2a-pitch.drawio",
+          "png": "canonical-agent-communication-a2a-pitch.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:202-265; tests/Agentweaver.Tests/AgentHost/A2ATurnBridgeAgentTests.cs:341-366",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "graph": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "bridge": "native:kubernetes",
+            "writer": "custom:agentweaver",
+            "decode": "native:flowchart",
+            "runtime": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "1168c8f364e24794e4e8f5606397cc58e3bd93442f32e47b51226b2e1f257d56",
+            "png": "0f88eb68f57cbce8790925adb93d8ea8bf76f41c4a853c6109f70d09e53af85c"
+          },
+          "png_dimensions": [
+            1545,
+            836
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "canonical-agent-communication-a2a",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-agent-communication-a2a-pass-01.drawio",
+          "png": "canonical-agent-communication-a2a-pass-01.png",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:220-344; apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:202-265; tests/Agentweaver.Tests/AgentHost/A2ATurnBridgeAgentTests.cs:341-366",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "graph": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "bridge": "native:kubernetes",
+            "writer": "custom:agentweaver",
+            "decode": "native:flowchart",
+            "runtime": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "a432734ae39b1284650e7fcb5ba396d793c06fa0d96cdd8702d349288fa653e5",
+            "png": "d4b3c68ab0c083a1255d909c6a3ca7e80c80a26a08fa180d4eade7a12c563114"
+          },
+          "png_dimensions": [
+            1565,
+            836
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "canonical-sandbox-pod-evolution",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5475,
+        "result_meaningful_xml": 18196,
+        "baseline_visible_structures": 15,
+        "result_visible_structures": 57,
+        "growth_ratio": 3.32347,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "canonical-sandbox-pod-evolution",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-sandbox-pod-evolution-pitch.drawio",
+          "png": "canonical-sandbox-pod-evolution-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/RemoteWorkflowAgentFactory.cs:9-65; apps/Agentweaver.Api/Program.cs:1043-1074; docs/deep-dive/sandbox-pod-execution.md",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "oldgraph": "custom:agentweaver",
+            "oldsdk": "native:flowchart",
+            "oldexec": "native:flowchart",
+            "graph": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "1d29a77a05a88ceaef7269ff2a38e7356d845eb9dd986245cf8b6788b104bfe6",
+            "png": "8062a6a539237911c7f74c9414c70f29ec6d45bb3b126a07692bac6c91228df7"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 4
+        },
+        "pass-01": {
+          "diagram": "canonical-sandbox-pod-evolution",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-sandbox-pod-evolution-pass-01.drawio",
+          "png": "canonical-sandbox-pod-evolution-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/RemoteWorkflowAgentFactory.cs:9-65; apps/Agentweaver.Api/Program.cs:1043-1074; docs/deep-dive/sandbox-pod-execution.md",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "oldgraph": "custom:agentweaver",
+            "oldsdk": "native:flowchart",
+            "oldexec": "native:flowchart",
+            "graph": "custom:agentweaver",
+            "proxy": "custom:agentweaver",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "9bfea4fc076a8febd8d1df73e154f3f4a5872fd6727cc2ee99e980fd37ca47c6",
+            "png": "7183503a3133afcd1b3cdc0010de047edcb57844f08cff0c07412f8f842693e3"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 4
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig3",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5442,
+        "result_meaningful_xml": 18611,
+        "baseline_visible_structures": 15,
+        "result_visible_structures": 58,
+        "growth_ratio": 3.419882,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "distributed-execution-scaling-fig3",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig3-pitch.drawio",
+          "png": "distributed-execution-scaling-fig3-pitch.png",
+          "evidence": "k8s/base/worker-hpa.yaml:62-83; apps/Agentweaver.Api/Program.cs:521-528,1043-1086; apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:45-121",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "clients": "native:c4",
+            "web": "native:kubernetes",
+            "sql": "native:database",
+            "hpa": "native:kubernetes",
+            "worker": "native:kubernetes",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "3c48e83ae685a6dd421faef0dadc0e50c51b184fd29233b5a2974ac9f4ab22dc",
+            "png": "95ddae9dbf641085121d1162efdb099374e40801cfc212c83e0058c1b343d8c5"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 4
+        },
+        "pass-01": {
+          "diagram": "distributed-execution-scaling-fig3",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig3-pass-01.drawio",
+          "png": "distributed-execution-scaling-fig3-pass-01.png",
+          "evidence": "k8s/base/worker-hpa.yaml:62-83; apps/Agentweaver.Api/Program.cs:521-528,1043-1086; apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:45-121",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "clients": "native:c4",
+            "web": "native:kubernetes",
+            "sql": "native:database",
+            "hpa": "native:kubernetes",
+            "worker": "native:kubernetes",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "95e2408cb49651578cadf96dd15482e61d26a85c9eb33f364714cd3afaac674e",
+            "png": "12ddbee6ae9d3c282762c19c7fa0a7d06fd330a0f86487ae3bc47335f68b41ac"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig4",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6643,
+        "result_meaningful_xml": 26913,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 85,
+        "growth_ratio": 4.051332,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "distributed-execution-scaling-fig4",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig4-pitch.drawio",
+          "png": "distributed-execution-scaling-fig4-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:183-234; apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:145-169,224-288,409-419; tests/Agentweaver.Tests/PostgresIntegration/RunEventStreamPostgresTests.cs:14-75",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "entry": "custom:agentweaver",
+            "ef": "native:flowchart",
+            "sql": "native:database",
+            "local": "custom:agentweaver",
+            "webA": "native:kubernetes",
+            "browser": "native:c4",
+            "cursor": "native:flowchart",
+            "webB": "native:kubernetes",
+            "resume": "native:c4"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "ac26d0cad1e8acfc2240cdfc5668ddfc3c62e6192ae851d6463a5676f4eae1c4",
+            "png": "472b61c61385604207c69fbcbe6c934948b9de5633b88bdb1b9b5105c60c6766"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "distributed-execution-scaling-fig4",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig4-pass-01.drawio",
+          "png": "distributed-execution-scaling-fig4-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:183-234; apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:145-169,224-288,409-419; tests/Agentweaver.Tests/PostgresIntegration/RunEventStreamPostgresTests.cs:14-75",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "entry": "custom:agentweaver",
+            "ef": "native:flowchart",
+            "sql": "native:database",
+            "local": "custom:agentweaver",
+            "webA": "native:kubernetes",
+            "browser": "native:c4",
+            "cursor": "native:flowchart",
+            "webB": "native:kubernetes",
+            "resume": "native:c4"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "f675ef5664fe8b1fb332f29535ea30554cdadddfafa1eaf18333e7048cc99046",
+            "png": "67cbaedd6ae5a4c266f06fe3b1a52a3201bc738c9fe76907bf24d472a9f301fd"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 8
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "distributed-execution-scaling-fig5",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5440,
+        "result_meaningful_xml": 18198,
+        "baseline_visible_structures": 15,
+        "result_visible_structures": 57,
+        "growth_ratio": 3.345221,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "distributed-execution-scaling-fig5",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig5-pitch.drawio",
+          "png": "distributed-execution-scaling-fig5-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:25-93; apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:84-159,593-610; tests/Agentweaver.Tests/PostgresIntegration/PostgresStoreTests.cs:124-187",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "a": "native:kubernetes",
+            "row": "native:database",
+            "b": "native:kubernetes",
+            "renew": "native:flowchart",
+            "expiry": "native:flowchart",
+            "takeover": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "8b3691f37044d78653c0c2c9f86c2f19a4d7c89cc4d75bb4b1ff83fc955b6833",
+            "png": "1c65361f54c11fc97817e38748b63819dd31c25bfb777abe74ae055c2fc70990"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 4
+        },
+        "pass-01": {
+          "diagram": "distributed-execution-scaling-fig5",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "distributed-execution-scaling-fig5-pass-01.drawio",
+          "png": "distributed-execution-scaling-fig5-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:25-93; apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:84-159,593-610; tests/Agentweaver.Tests/PostgresIntegration/PostgresStoreTests.cs:124-187",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "a": "native:kubernetes",
+            "row": "native:database",
+            "b": "native:kubernetes",
+            "renew": "native:flowchart",
+            "expiry": "native:flowchart",
+            "takeover": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "20c04b20831d828ea232b791adf637a7d5b780439341c35f038bc3d744d597e5",
+            "png": "be07900925cb9475b6e5df4eb2706de8b709d721095381098ee9dbfdb0e86898"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 4
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "infra-deployment-fig2",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6631,
+        "result_meaningful_xml": 26716,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 84,
+        "growth_ratio": 4.028955,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "infra-deployment-fig2",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig2-pitch.drawio",
+          "png": "infra-deployment-fig2-pitch.png",
+          "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-438; k8s/base/secret-provider-class.yaml:16-61; apps/Agentweaver.Api/Program.cs:231-250; k8s/base/mcp-deployment.yaml:45-83",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "sa": "native:kubernetes",
+            "identity": "native:azure",
+            "vault": "native:azure",
+            "csi": "native:kubernetes",
+            "apps": "native:kubernetes",
+            "runtime": "native:database",
+            "mcp": "native:kubernetes",
+            "configure": "custom:agentweaver",
+            "host": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "65ad6be9c5f0d7cf31c0fd9ffd2a1c3b0c6e5271cc6bce6a1b4c44587f7e5c79",
+            "png": "d0d59596ff4dbc43e482b2f772fae03493356dcfc52620218e87a5854c86207d"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "infra-deployment-fig2",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig2-pass-01.drawio",
+          "png": "infra-deployment-fig2-pass-01.png",
+          "evidence": "scripts/azure/steps/15-setup-identity.mjs:245-438; k8s/base/secret-provider-class.yaml:16-61; apps/Agentweaver.Api/Program.cs:231-250; k8s/base/mcp-deployment.yaml:45-83",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "sa": "native:kubernetes",
+            "identity": "native:azure",
+            "vault": "native:azure",
+            "csi": "native:kubernetes",
+            "apps": "native:kubernetes",
+            "runtime": "native:database",
+            "mcp": "native:kubernetes",
+            "configure": "custom:agentweaver",
+            "host": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "970bdefbf5e83bed585bcf5f926bac290e3e96465fb2222a516cbac188f5b86a",
+            "png": "a1f24a2c4a07519b491a2f309b4b878bfb4d6d1cb0a1ab938d555062ab0becc8"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 7
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "infra-deployment-fig3",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 7069,
+        "result_meaningful_xml": 27063,
+        "baseline_visible_structures": 20,
+        "result_visible_structures": 85,
+        "growth_ratio": 3.828406,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "infra-deployment-fig3",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig3-pitch.drawio",
+          "png": "infra-deployment-fig3-pitch.png",
+          "evidence": "scripts/azure/image-spec.mjs:80-141; scripts/azure/steps/20-build-push-images.mjs:352-381; scripts/azure/steps/30-deploy.mjs:52-113,427-561",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "resolve": "native:flowchart",
+            "images": "native:azure",
+            "render": "native:flowchart",
+            "platform": "native:kubernetes",
+            "prereq": "native:kubernetes",
+            "routes": "native:kubernetes",
+            "pool": "native:kubernetes",
+            "deploy": "native:kubernetes",
+            "verify": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "a300d86ebf36a55822c48e508b693e79651ad399789ed907315947043790fee6",
+            "png": "7dec99eb8ea222ca6720c5c5e66a9f7629a2d7df2c55ccfcf00bc2bdfe672f12"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 6
+        },
+        "pass-01": {
+          "diagram": "infra-deployment-fig3",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig3-pass-01.drawio",
+          "png": "infra-deployment-fig3-pass-01.png",
+          "evidence": "scripts/azure/image-spec.mjs:80-141; scripts/azure/steps/20-build-push-images.mjs:352-381; scripts/azure/steps/30-deploy.mjs:52-113,427-561",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "resolve": "native:flowchart",
+            "images": "native:azure",
+            "render": "native:flowchart",
+            "platform": "native:kubernetes",
+            "prereq": "native:kubernetes",
+            "routes": "native:kubernetes",
+            "pool": "native:kubernetes",
+            "deploy": "native:kubernetes",
+            "verify": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "5d85912eff59e4f43b09ad3205eeed4db9aa66acd327eb5f705980cc7812a74a",
+            "png": "3d949b50401cc030dc9ee9a899dbfaa33ff48c8f8473b253ffdb70f57fe69bf7"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 8
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "infra-deployment-fig4",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 4661,
+        "result_meaningful_xml": 18589,
+        "baseline_visible_structures": 13,
+        "result_visible_structures": 58,
+        "growth_ratio": 3.9882,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "infra-deployment-fig4",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig4-pitch.drawio",
+          "png": "infra-deployment-fig4-pitch.png",
+          "evidence": "k8s/base/httproute-api.yaml:25-63; k8s/base/mcp-httproute.yaml:14-46; k8s/base/httproute-frontend.yaml:27-34; k8s/base/worker-deployment.yaml:111-117",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "client": "native:c4",
+            "gateway": "native:network",
+            "match": "native:flowchart",
+            "api": "native:kubernetes",
+            "mcp": "native:kubernetes",
+            "frontend": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "9ac78025a84becd3f849f4cf2e962d6ae558e2e0fce281ad094893b5d81fbb50",
+            "png": "8551a157008385e5fca24d4ffe7d02c9f5aab30416e6ad0f4eed7f50079f418c"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 2
+        },
+        "pass-01": {
+          "diagram": "infra-deployment-fig4",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "infra-deployment-fig4-pass-01.drawio",
+          "png": "infra-deployment-fig4-pass-01.png",
+          "evidence": "k8s/base/httproute-api.yaml:25-63; k8s/base/mcp-httproute.yaml:14-46; k8s/base/httproute-frontend.yaml:27-34; k8s/base/worker-deployment.yaml:111-117",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "client": "native:c4",
+            "gateway": "native:network",
+            "match": "native:flowchart",
+            "api": "native:kubernetes",
+            "mcp": "native:kubernetes",
+            "frontend": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "b24cede4dbe6a85752283b4436d31ade51d8eb7cc14a7e6f484c4997b2f37166",
+            "png": "516ab8377c0e3ec0e3ba1c6d1f03c54fe7b19c158c03491ec594530824bb1cba"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "live-preview-provisioning-fig1",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6733,
+        "result_meaningful_xml": 27074,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 85,
+        "growth_ratio": 4.02109,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "live-preview-provisioning-fig1",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "live-preview-provisioning-fig1-pitch.drawio",
+          "png": "live-preview-provisioning-fig1-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:95-324; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:272-328; tests/Agentweaver.Tests/Preview/PreviewStepTests.cs:194-277,567-597",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "verdict": "custom:agentweaver",
+            "resolve": "native:flowchart",
+            "start": "native:kubernetes",
+            "observe": "native:network",
+            "approval": "native:flowchart",
+            "publish": "native:kubernetes",
+            "private": "native:flowchart",
+            "validate": "native:network",
+            "ready": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "48ab3612a32e61fbcafd93f7b4d9fa5340fcf6492981d60bfaea20a62ce98fb4",
+            "png": "9d31e3dced05755be1f37b045f43e3f3cf1e483e54f88db69cc997b76cf9218b"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "live-preview-provisioning-fig1",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "live-preview-provisioning-fig1-pass-01.drawio",
+          "png": "live-preview-provisioning-fig1-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:95-324; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:272-328; tests/Agentweaver.Tests/Preview/PreviewStepTests.cs:194-277,567-597",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "verdict": "custom:agentweaver",
+            "resolve": "native:flowchart",
+            "start": "native:kubernetes",
+            "observe": "native:network",
+            "approval": "native:flowchart",
+            "publish": "native:kubernetes",
+            "private": "native:flowchart",
+            "validate": "native:network",
+            "ready": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "e5e8768d0d067ab6847b368e789ca11bd522a6ad082d6740dce68489d1f5437f",
+            "png": "0395596e39c57864d957aa193da563182ea18b1db8713e77b8f0b24b2497479c"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 8
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-browser-preview-fig2",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5094,
+        "result_meaningful_xml": 18636,
+        "baseline_visible_structures": 14,
+        "result_visible_structures": 58,
+        "growth_ratio": 3.658422,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-browser-preview-fig2",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-browser-preview-fig2-pitch.drawio",
+          "png": "sandbox-browser-preview-fig2-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:86-196; apps/Agentweaver.AgentHost/PreviewRunner.cs:184-199; tests/Agentweaver.Tests/Sandbox/StartPreviewToolTests.cs:70-93",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "tool": "custom:agentweaver",
+            "endpoint": "native:flowchart",
+            "gate": "custom:agentweaver",
+            "denied": "native:flowchart",
+            "approved": "native:flowchart",
+            "publication": "native:network"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "8acc90c649490aeaff8040c550407ff47c4eafe4114f941f31349883de8bfefe",
+            "png": "19f0a42cbe35acd61c3d1e37aa14f5dc75ecf26cb2e7c1dc4dd95fcf8d3a5840"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 3
+        },
+        "pass-01": {
+          "diagram": "sandbox-browser-preview-fig2",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-browser-preview-fig2-pass-01.drawio",
+          "png": "sandbox-browser-preview-fig2-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:86-196; apps/Agentweaver.AgentHost/PreviewRunner.cs:184-199; tests/Agentweaver.Tests/Sandbox/StartPreviewToolTests.cs:70-93",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "tool": "custom:agentweaver",
+            "endpoint": "native:flowchart",
+            "gate": "custom:agentweaver",
+            "denied": "native:flowchart",
+            "approved": "native:flowchart",
+            "publication": "native:network"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "0f72e71fa2d28e1db3c6853aa5bcf99363b1000071f4a17fb05edd716789ce7e",
+            "png": "c68533f513b111e9defb217e512f3f3d4123292f8396d49ddc48205eb405aa8e"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-fig2",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6694,
+        "result_meaningful_xml": 27413,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 86,
+        "growth_ratio": 4.09516,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-fig2",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-fig2-pitch.drawio",
+          "png": "sandbox-fig2-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:89-109,162-172; packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:20-71; packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:28-34",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "router": "native:flowchart",
+            "cluster": "native:kubernetes",
+            "claim": "custom:agentweaver",
+            "factory": "native:flowchart",
+            "windows": "native:flowchart",
+            "linux": "native:flowchart",
+            "fallback": "native:flowchart",
+            "direct": "native:flowchart",
+            "shell": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "98b789583130a33b44c1c88aa7072ef867640e01d86526b05c4f168554080eb9",
+            "png": "ab28d2c7d67b4a1910b405512f2eee45bd6246387fc7d88cdea2e578f11fdbe0"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "sandbox-fig2",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-fig2-pass-01.drawio",
+          "png": "sandbox-fig2-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs:89-109,162-172; packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs:20-71; packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:28-34",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "router": "native:flowchart",
+            "cluster": "native:kubernetes",
+            "claim": "custom:agentweaver",
+            "factory": "native:flowchart",
+            "windows": "native:flowchart",
+            "linux": "native:flowchart",
+            "fallback": "native:flowchart",
+            "direct": "native:flowchart",
+            "shell": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "cd331dd47f06a6e0d91aeaa6e20875cda2799576e88edaae9c5a655ac5f2f35b",
+            "png": "d7c1339f2d79b441140c1bdb9cc3fbd7342466901b10c42581b660567ab84129"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 9
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-fig3",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6683,
+        "result_meaningful_xml": 25820,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 82,
+        "growth_ratio": 3.863534,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-fig3",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-fig3-pitch.drawio",
+          "png": "sandbox-fig3-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:287-361; k8s/base/sandbox-template-agenthost.yaml:104-122,252-280",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "command": "native:flowchart",
+            "executor": "custom:agentweaver",
+            "controller": "native:kubernetes",
+            "result": "native:flowchart",
+            "exec": "native:flowchart",
+            "pod": "native:kubernetes",
+            "adhoc": "custom:agentweaver",
+            "retained": "custom:agentweaver",
+            "preview": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "29314efb489c3e50d5721a8bba104de0cb13c1d7a9b8a7972efaa46dc6a174ae",
+            "png": "91b79a366a92dc07e59a8412a6b68311eeb151471b8c9ea6b0c0dd1b7838d937"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "sandbox-fig3",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-fig3-pass-01.drawio",
+          "png": "sandbox-fig3-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:287-361; k8s/base/sandbox-template-agenthost.yaml:104-122,252-280",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "command": "native:flowchart",
+            "executor": "custom:agentweaver",
+            "controller": "native:kubernetes",
+            "result": "native:flowchart",
+            "exec": "native:flowchart",
+            "pod": "native:kubernetes",
+            "adhoc": "custom:agentweaver",
+            "retained": "custom:agentweaver",
+            "preview": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "a7039d7ba3f9676571d0cb2a80ae6794c23375385ab3bb2ed60d5079826f5139",
+            "png": "4f93d6856a2d7adbf9f75410f9c9383541727a78efc9a976445fb97b990010e6"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig4",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6297,
+        "result_meaningful_xml": 25361,
+        "baseline_visible_structures": 18,
+        "result_visible_structures": 81,
+        "growth_ratio": 4.027473,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-pod-execution-fig4",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig4-pitch.drawio",
+          "png": "sandbox-pod-execution-fig4-pitch.png",
+          "evidence": "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:98-148,285-378,524-550; apps/Agentweaver.Api/Git/WorktreeManager.cs:521-672; tests/Agentweaver.Tests/AgentHost/PodLocalWorkspaceManagerTests.cs:224-256",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "source": "native:database",
+            "fetch": "native:flowchart",
+            "local": "native:flowchart",
+            "readonly": "native:flowchart",
+            "writable": "native:flowchart",
+            "prepare": "native:flowchart",
+            "unchanged": "native:flowchart",
+            "ref": "native:database",
+            "apply": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "946464eb9dabb3408d9910cd6e14966ebd00153acc57b861d790309c82ee5cfe",
+            "png": "a8b7f3b1dd6b0d96353564ae9c52bac959f33e81deae7012646e9dd1aa41abab"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 4
+        },
+        "pass-01": {
+          "diagram": "sandbox-pod-execution-fig4",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig4-pass-01.drawio",
+          "png": "sandbox-pod-execution-fig4-pass-01.png",
+          "evidence": "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:98-148,285-378,524-550; apps/Agentweaver.Api/Git/WorktreeManager.cs:521-672; tests/Agentweaver.Tests/AgentHost/PodLocalWorkspaceManagerTests.cs:224-256",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "source": "native:database",
+            "fetch": "native:flowchart",
+            "local": "native:flowchart",
+            "readonly": "native:flowchart",
+            "writable": "native:flowchart",
+            "prepare": "native:flowchart",
+            "unchanged": "native:flowchart",
+            "ref": "native:database",
+            "apply": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "2233c0812816b857f6793e5e08e4441b5759c3716fed5f8f86c4b60811023b06",
+            "png": "6f9a2ca0b5de72fabae2193f686ef5f0c79eccbb936d6022e220af64c9fdca3d"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 4
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig5",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5102,
+        "result_meaningful_xml": 18643,
+        "baseline_visible_structures": 14,
+        "result_visible_structures": 58,
+        "growth_ratio": 3.654057,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-pod-execution-fig5",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig5-pitch.drawio",
+          "png": "sandbox-pod-execution-fig5-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:183-189,635-737,1448-1482; docs/deep-dive/sandbox-pod-execution.md",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "dispatch": "custom:agentweaver",
+            "claim": "custom:agentweaver",
+            "pending": "custom:agentweaver",
+            "observer": "custom:agentweaver",
+            "bound": "native:kubernetes",
+            "ready": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "c35f1842773ad1c4f5521151063acffedb9a5ee699d694c994b84a112fafabfb",
+            "png": "064e582b85456e4f7a8059e2b314a733d248150453db050725479e815f53712a"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 3
+        },
+        "pass-01": {
+          "diagram": "sandbox-pod-execution-fig5",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig5-pass-01.drawio",
+          "png": "sandbox-pod-execution-fig5-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:183-189,635-737,1448-1482; docs/deep-dive/sandbox-pod-execution.md",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "dispatch": "custom:agentweaver",
+            "claim": "custom:agentweaver",
+            "pending": "custom:agentweaver",
+            "observer": "custom:agentweaver",
+            "bound": "native:kubernetes",
+            "ready": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "5fc4f7c59f154ba2deb3b9685d85e5d6c25bb8b6f117409bd32b62d3cd402b9c",
+            "png": "1f9de3996e7ad8ae6362c5d3d049bffc17a537ba783ee23ace0ab5044a8ec84f"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig6",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6679,
+        "result_meaningful_xml": 26594,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 84,
+        "growth_ratio": 3.981734,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-pod-execution-fig6",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig6-pitch.drawio",
+          "png": "sandbox-pod-execution-fig6-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:633-737; apps/Agentweaver.AgentHost/Program.cs:188-202,259-290,386-411; apps/Agentweaver.AgentHost/AgentHostStartupService.cs:166-241",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "prepare": "custom:agentweaver",
+            "claim": "native:kubernetes",
+            "map": "native:flowchart",
+            "health": "native:network",
+            "configure": "native:flowchart",
+            "setup": "native:kubernetes",
+            "guards": "native:flowchart",
+            "register": "custom:agentweaver",
+            "turn": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "addcdd7d7d034d93d5eb037dcd8b91779c38567d36511b329c711815d0331954",
+            "png": "be6498063f475a35193e7b4d1cc279c6db168d5a3c501c8a19c6aba94a75e0be"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "sandbox-pod-execution-fig6",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig6-pass-01.drawio",
+          "png": "sandbox-pod-execution-fig6-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:633-737; apps/Agentweaver.AgentHost/Program.cs:188-202,259-290,386-411; apps/Agentweaver.AgentHost/AgentHostStartupService.cs:166-241",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "prepare": "custom:agentweaver",
+            "claim": "native:kubernetes",
+            "map": "native:flowchart",
+            "health": "native:network",
+            "configure": "native:flowchart",
+            "setup": "native:kubernetes",
+            "guards": "native:flowchart",
+            "register": "custom:agentweaver",
+            "turn": "custom:agentweaver"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "a4e43c2bd7f8d0639e52eefc184e556b77e13d35c704ea52172ab5284e42c2de",
+            "png": "7835ebfa436adb907589a145141e8be26a754ee315ea4626f1e455bf9b7133ae"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 7
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "sandbox-pod-execution-fig7",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 5881,
+        "result_meaningful_xml": 19431,
+        "baseline_visible_structures": 16,
+        "result_visible_structures": 60,
+        "growth_ratio": 3.30403,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "sandbox-pod-execution-fig7",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig7-pitch.drawio",
+          "png": "sandbox-pod-execution-fig7-pitch.png",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1956-2084; apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:74-108; apps/Agentweaver.AgentHost/Program.cs:804-815,962-987",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "operator": "native:c4",
+            "api": "native:flowchart",
+            "durable": "native:database",
+            "response": "native:flowchart",
+            "client": "native:network",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "99c167e770fbbed956eba9b08ef9ab21fd2cc7dadbb15d688d9d30e888483cc4",
+            "png": "90733a4e374db7373f19d1542a820c73c275cf58bf4c99b713877d5fdf6aa7d5"
+          },
+          "png_dimensions": [
+            1545,
+            866
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "sandbox-pod-execution-fig7",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "sandbox-pod-execution-fig7-pass-01.drawio",
+          "png": "sandbox-pod-execution-fig7-pass-01.png",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1956-2084; apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:74-108; apps/Agentweaver.AgentHost/Program.cs:804-815,962-987",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "operator": "native:c4",
+            "api": "native:flowchart",
+            "durable": "native:database",
+            "response": "native:flowchart",
+            "client": "native:network",
+            "pod": "native:kubernetes"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "b5f37723948461bde4637f71e6bb4c8eb7eab810252ffad6be53e447ce6df456",
+            "png": "aaa17b48f2ff6430bcf12e6fa8a5280756c49ab402810b171b98565b0d4c2ccc"
+          },
+          "png_dimensions": [
+            1565,
+            866
+          ],
+          "xml_edge_count": 7
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    },
+    {
+      "diagram": "canonical-pod-process-boundaries",
+      "publication_status": "blocked",
+      "growth": {
+        "growth_metric": "visible-semantic-canonical-xml-v1",
+        "baseline_meaningful_xml": 6736,
+        "result_meaningful_xml": 25852,
+        "baseline_visible_structures": 19,
+        "result_visible_structures": 82,
+        "growth_ratio": 3.837886,
+        "minimum_ratio": 9.0,
+        "invisible_cells": [],
+        "off_page_cells": [],
+        "duplicate_cells": [],
+        "metadata_padding": [],
+        "passed": false
+      },
+      "artifacts": {
+        "pitch": {
+          "diagram": "canonical-pod-process-boundaries",
+          "stage": "pitch",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-pod-process-boundaries-pitch.drawio",
+          "png": "canonical-pod-process-boundaries-pitch.png",
+          "evidence": "k8s/base/sandbox-template-agenthost.yaml:58-61,151-162,269-292,341-399; packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs:212-242; packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs:609-655,892-931; tests/Agentweaver.Tests/KataBwrapExecutorTests.cs:29-47,110-164",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "host": "native:kubernetes",
+            "ipc": "native:kubernetes",
+            "executor": "native:kubernetes",
+            "register": "custom:agentweaver",
+            "mount": "native:flowchart",
+            "child": "native:flowchart",
+            "network": "native:cloud",
+            "absent": "native:flowchart",
+            "system": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "45e9c7ac9a6c9fae5357e62e7a0347c7a803e8d20263705c9997347dd1819d69",
+            "png": "794084979468e52f655d554390795700a3d5827148374f34b5f6782df20d3aff"
+          },
+          "png_dimensions": [
+            1545,
+            1114
+          ],
+          "xml_edge_count": 5
+        },
+        "pass-01": {
+          "diagram": "canonical-pod-process-boundaries",
+          "stage": "pass-01",
+          "renderer": "31.4.5",
+          "page": {
+            "width": 793.7,
+            "height": 559.37,
+            "orientation": "A5-landscape"
+          },
+          "source": "canonical-pod-process-boundaries-pass-01.drawio",
+          "png": "canonical-pod-process-boundaries-pass-01.png",
+          "evidence": "k8s/base/sandbox-template-agenthost.yaml:58-61,151-162,269-292,341-399; packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs:212-242; packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs:609-655,892-931; tests/Agentweaver.Tests/KataBwrapExecutorTests.cs:29-47,110-164",
+          "png_inspected_print": true,
+          "png_inspected_enlarged": true,
+          "symbols": {
+            "host": "native:kubernetes",
+            "ipc": "native:kubernetes",
+            "executor": "native:kubernetes",
+            "register": "custom:agentweaver",
+            "mount": "native:flowchart",
+            "child": "native:flowchart",
+            "network": "native:cloud",
+            "absent": "native:flowchart",
+            "system": "native:flowchart"
+          },
+          "publication_status": "draft-not-promoted",
+          "symbols_status": "design-intent-only; resource semantics not approved",
+          "sha256": {
+            "drawio": "fffd56814a69a033796939ad69c494de2f304bbb405fda84aae5adf270b3a721",
+            "png": "9ed1dede21e16d3ed2929322454a7b3cc7c2149f74ccac97cdb094bd74e025a8"
+          },
+          "png_dimensions": [
+            1565,
+            1114
+          ],
+          "xml_edge_count": 5
+        }
+      },
+      "manifest_errors": [
+        "passes must contain at least four entries"
+      ],
+      "final_pass": null,
+      "promoted": false
+    }
+  ],
+  "relative_links": [
+    {
+      "document": "docs/deep-dive/a2a-bridge.md",
+      "target": "../diagrams/canonical-agent-communication-a2a.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/a2a-bridge.md",
+      "target": "../diagrams/sandbox-pod-execution-fig6.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/a2a-bridge.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/a2a-bridge.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/a2a-bridge.md",
+      "target": "./agent-token-delivery.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../diagrams/canonical-agent-communication-shared.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./memory-decisions.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./memory-decisions.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/memory.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/memory.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./memory-decisions.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/memory.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./coordinator-internals.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./orchestration.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./coordinator-internals.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../diagrams/canonical-agent-communication-handoff.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./coordinator-internals.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../diagrams/canonical-agent-communication-a2a.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/a2a.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./distributed-execution-scaling.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../diagrams/canonical-agent-communication-shared.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./memory-decisions.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/memory.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./orchestration.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./coordinator-internals.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/a2a.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../reference/agent-communication.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-communication.md",
+      "target": "../experience/agent-communication.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-runtime.md",
+      "target": "./team-casting.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-runtime.md",
+      "target": "../diagrams/agent-runtime-fig3.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-runtime.md",
+      "target": "../diagrams/agent-runtime-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-runtime.md",
+      "target": "../diagrams/distributed-execution-scaling-fig4.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-runtime.md",
+      "target": "./team-casting.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-token-delivery.md",
+      "target": "../diagrams/sandbox-pod-execution-fig6.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-token-delivery.md",
+      "target": "./auth-security.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-token-delivery.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/agent-token-delivery.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../reference/scaling-data-layer.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../experience/scaling-operations.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../diagrams/canonical-sandbox-pod-evolution.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../reference/scaling-data-layer.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../diagrams/distributed-execution-scaling-fig3.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../diagrams/distributed-execution-scaling-fig5.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../diagrams/distributed-execution-scaling-fig4.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../reference/scaling-data-layer.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../experience/scaling-operations.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./agent-communication.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./data-persistence.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/distributed-execution-scaling.md",
+      "target": "../guide/architecture-aks.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/events-observability.md",
+      "target": "../diagrams/distributed-execution-scaling-fig4.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/events-observability.md",
+      "target": "./token-usage-monitoring.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/events-observability.md",
+      "target": "../reference/cluster-diagnostics.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/infra-deployment.md",
+      "target": "../diagrams/canonical-aks-components.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/infra-deployment.md",
+      "target": "../diagrams/infra-deployment-fig4.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/infra-deployment.md",
+      "target": "../diagrams/infra-deployment-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/infra-deployment.md",
+      "target": "../diagrams/infra-deployment-fig3.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "../reference/live-preview-provisioning.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "../experience/live-preview-provisioning.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "../diagrams/live-preview-provisioning-fig1.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "../reference/live-preview-provisioning.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "../experience/live-preview-provisioning.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/live-preview-provisioning.md",
+      "target": "./coordinator-internals.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../reference/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../experience/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../diagrams/sandbox-browser-preview-fig1.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../diagrams/sandbox-browser-preview-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../reference/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../experience/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "./live-preview-provisioning.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-browser-preview.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../experience/sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/canonical-sandbox-pod-evolution.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/a2a.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../experience/a2a-distributed-agents.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/sandbox-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-setup.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-setup.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/sandbox-pod-execution-fig6.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/sandbox-pod-execution-fig4.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./agent-token-delivery.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/sandbox-pod-execution-fig7.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../experience/sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../guide/deployment-aks.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../diagrams/sandbox-pod-execution-fig5.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-setup.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/sandbox-pods.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../experience/sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./a2a-bridge.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../reference/a2a.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox-pod-execution.md",
+      "target": "../tool-approval-sse-contract.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "../diagrams/canonical-sandbox-boundary.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "../diagrams/sandbox-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "../diagrams/sandbox-fig3.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "../diagrams/sandbox-pod-execution-fig6.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "./infra-deployment.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "./sandbox-pod-execution.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandbox.md",
+      "target": "./sandbox-browser-preview.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandboxed-execution.md",
+      "target": "./sandbox.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandboxed-execution.md",
+      "target": "../diagrams/canonical-sandbox-boundary.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandboxed-execution.md",
+      "target": "../diagrams/sandbox-fig2.png",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/sandboxed-execution.md",
+      "target": "../reference/sandbox-setup.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/token-usage-monitoring.md",
+      "target": "../reference/token-usage.md",
+      "exists": true
+    },
+    {
+      "document": "docs/deep-dive/token-usage-monitoring.md",
+      "target": "./events-observability.md",
+      "exists": true
+    }
+  ],
+  "missing_relative_links": []
+}

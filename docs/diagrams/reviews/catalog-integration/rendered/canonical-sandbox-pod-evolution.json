@@ -1,0 +1,14 @@
+{
+  "name": "canonical-sandbox-pod-evolution",
+  "family": "deep-dive-execution",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-sandbox-pod-evolution.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-sandbox-pod-evolution.png",
+  "source_sha256": "1c66264b0f2bcbd0d8371129604b37ae9296de9a97e4544bc5eed134914938a1",
+  "png_sha256": "c7a606f69b7b80afcc00da0ef119ac536d231538503f67c4172ed75661c22f02",
+  "dimensions": [
+    2705,
+    939
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

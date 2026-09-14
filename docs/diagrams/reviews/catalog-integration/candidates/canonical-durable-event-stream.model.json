@@ -1,0 +1,466 @@
+{
+  "title": "Postgres is the event relay",
+  "nodes": [
+    {
+      "id": "producer",
+      "label": "Run producer",
+      "subLabel": "Append a structured event",
+      "meta": "runId + type + payload",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "PRODUCER",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "append",
+      "label": "EF event stream",
+      "subLabel": "Serialize writes per run",
+      "meta": "pg_advisory_xact_lock",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "APPEND",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "store",
+      "label": "RunEvents",
+      "subLabel": "Shared PostgreSQL table",
+      "meta": "(RunId, Sequence)",
+      "icon": "box",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DURABLE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;size=0.15;",
+      "group": "group0"
+    },
+    {
+      "id": "client",
+      "label": "Web / MCP watcher",
+      "subLabel": "Consume ordered events",
+      "meta": "last delivered cursor",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "CONSUMER",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "sse",
+      "label": "SSE endpoint",
+      "subLabel": "Emit id + event + data",
+      "meta": "ordered response frames",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "STREAM",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "reader",
+      "label": "EF subscriber",
+      "subLabel": "Read Sequence > cursor",
+      "meta": "idle poll: 250 ms",
+      "icon": "box",
+      "shape": "component",
+      "badge": {
+        "text": "SUBSCRIBE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "producer",
+      "to": "append",
+      "label": "append",
+      "loopback": false
+    },
+    {
+      "from": "append",
+      "to": "store",
+      "label": "commit",
+      "loopback": false
+    },
+    {
+      "from": "store",
+      "to": "reader",
+      "label": "ordered batch",
+      "loopback": false
+    },
+    {
+      "from": "reader",
+      "to": "sse",
+      "label": "yield",
+      "loopback": false
+    },
+    {
+      "from": "sse",
+      "to": "client",
+      "label": "SSE frames",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "group0",
+      "label": "Write path · replica A"
+    },
+    {
+      "id": "group1",
+      "label": "Read path · replica B"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "producer",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "producer",
+          "label": "Run producer",
+          "subLabel": "Append a structured event",
+          "meta": "runId + type + payload",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "PRODUCER",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "append",
+        "type": "card",
+        "position": {
+          "x": 561.0728110599077,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "append",
+          "label": "EF event stream",
+          "subLabel": "Serialize writes per run",
+          "meta": "pg_advisory_xact_lock",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "APPEND",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "store",
+        "type": "card",
+        "position": {
+          "x": 1059.4728110599078,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "store",
+          "label": "RunEvents",
+          "subLabel": "Shared PostgreSQL table",
+          "meta": "(RunId, Sequence)",
+          "icon": "box",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DURABLE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;size=0.15;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "client",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "client",
+          "label": "Web / MCP watcher",
+          "subLabel": "Consume ordered events",
+          "meta": "last delivered cursor",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "CONSUMER",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "sse",
+        "type": "card",
+        "position": {
+          "x": 561.0728110599077,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "sse",
+          "label": "SSE endpoint",
+          "subLabel": "Emit id + event + data",
+          "meta": "ordered response frames",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "STREAM",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "reader",
+        "type": "card",
+        "position": {
+          "x": 1059.4728110599078,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "reader",
+          "label": "EF subscriber",
+          "subLabel": "Read Sequence > cursor",
+          "meta": "idle poll: 250 ms",
+          "icon": "box",
+          "shape": "component",
+          "badge": {
+            "text": "SUBSCRIBE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=component;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "group-group0",
+        "type": "band",
+        "position": {
+          "x": 43.870967741935516,
+          "y": 184.88479262672809
+        },
+        "style": {
+          "width": 1374.4036866359445,
+          "height": 286.7281105990784
+        },
+        "data": {
+          "label": "Write path · replica A",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 63.870967741935516,
+          "y": 192.88479262672809
+        },
+        "data": {
+          "label": "Write path · replica A",
+          "width": 1334.4036866359445
+        }
+      },
+      {
+        "id": "group-group1",
+        "type": "band",
+        "position": {
+          "x": 43.870967741935516,
+          "y": 488.84792626728114
+        },
+        "style": {
+          "width": 1374.4036866359445,
+          "height": 286.7281105990782
+        },
+        "data": {
+          "label": "Read path · replica B",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 63.870967741935516,
+          "y": 496.84792626728114
+        },
+        "data": {
+          "label": "Read path · replica B",
+          "width": 1334.4036866359445
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "producer",
+        "target": "append",
+        "label": "append",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 402.6728110599079,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 561.0728110599077,
+              "y": 345.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 481.8728110599078,
+            "y": 345.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "append",
+        "target": "store",
+        "label": "commit",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 901.0728110599077,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1059.4728110599078,
+              "y": 345.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 980.2728110599078,
+            "y": 345.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "store",
+        "target": "reader",
+        "label": "ordered batch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1399.4728110599078,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1427.6755760368662,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1427.6755760368662,
+              "y": 649.447004608295
+            },
+            {
+              "x": 1399.4728110599078,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1427.6755760368662,
+            "y": 497.46543778801845
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "reader",
+        "target": "sse",
+        "label": "yield",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1059.4728110599078,
+              "y": 649.447004608295
+            },
+            {
+              "x": 901.0728110599077,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 980.2728110599078,
+            "y": 649.447004608295
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "sse",
+        "target": "client",
+        "label": "SSE frames",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 561.0728110599077,
+              "y": 649.447004608295
+            },
+            {
+              "x": 402.6728110599079,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 481.8728110599078,
+            "y": 649.447004608295
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1462.1456221198157,
+    "canvasHeight": 913.4562211981568
+  }
+}

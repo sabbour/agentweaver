@@ -1,0 +1,270 @@
+{
+  "diagram": "workflow-engine-fig1",
+  "source_sha256": "1a4f0a486ad0e38610c9225a3b3d74ce45aaa03ee02027179d82582bec784d22",
+  "png_sha256": "9ade4d91fd6415c15e1fa739ce4012214cd85c61b52312568bf2130de85d7e59",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "From workflow definition to execution"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Binding, checkpointed execution and observation are distinct responsibilities."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DECLARATIVE INPUT AND BINDING"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "EXECUTION AND CHECKPOINTS"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "DURABLE OBSERVATION"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Selected definition"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Concrete authored workflow"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "no policy overlay"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CLASSIFY"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Node classification"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Types and gate contracts"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "not fragile node IDs"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "BIND"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Factory + binder"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Executors and typed edges"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "fail closed if unsupported"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "RUNTIME"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Executable MAF graph"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Run the bound workflow"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "not always default chain"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "CHECKPOINT"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Checkpoint store"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Provider-aware persistence"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "not universally files"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "EXAMPLE"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Default example"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Merge -> push-pr -> Scribe"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "authored default only"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "WATCH"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Watch loop"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Consume execution updates"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "supervised observer"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Pending + run state"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Durable request/status state"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "typed terminal projection"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "EVENTS"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Workflow-step events"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Progress for observers"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "not runtime control"
+    },
+    {
+      "cell": "e0",
+      "text": "classify"
+    },
+    {
+      "cell": "e1",
+      "text": "bind"
+    },
+    {
+      "cell": "e2",
+      "text": "execute"
+    },
+    {
+      "cell": "e3",
+      "text": "checkpoint"
+    },
+    {
+      "cell": "e4",
+      "text": "example"
+    },
+    {
+      "cell": "e5",
+      "text": "stream"
+    },
+    {
+      "cell": "e6",
+      "text": "persist"
+    },
+    {
+      "cell": "e7",
+      "text": "publish"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/workflow-engine.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "classify",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "bind",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "execute",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "checkpoint",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n0",
+      "to": "n5",
+      "label": "example",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n3",
+      "to": "n6",
+      "label": "stream",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n6",
+      "to": "n7",
+      "label": "persist",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n6",
+      "to": "n8",
+      "label": "publish",
+      "result": "clean"
+    }
+  ]
+}

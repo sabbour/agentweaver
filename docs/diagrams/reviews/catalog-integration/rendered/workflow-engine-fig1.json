@@ -1,0 +1,14 @@
+{
+  "name": "workflow-engine-fig1",
+  "family": "deep-dive-orchestration",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\workflow-engine-fig1.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\workflow-engine-fig1.png",
+  "source_sha256": "1a4f0a486ad0e38610c9225a3b3d74ce45aaa03ee02027179d82582bec784d22",
+  "png_sha256": "9ade4d91fd6415c15e1fa739ce4012214cd85c61b52312568bf2130de85d7e59",
+  "dimensions": [
+    2939,
+    1735
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

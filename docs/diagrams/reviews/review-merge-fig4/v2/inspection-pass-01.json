@@ -1,0 +1,11 @@
+{
+  "diagram": "review-merge-fig4",
+  "phase": "pass-01",
+  "png_sha256": "67df9a2b2cf4aff2919f69fe26fe26444266f0766488d7bd05b86d0670ded94b",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

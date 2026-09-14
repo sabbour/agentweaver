@@ -1,0 +1,458 @@
+{
+  "title": "MCP uses broker credentials",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "MCP client",
+      "subLabel": "Discover resource/issuer",
+      "meta": "401 challenge + metadata",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "DISCOVER",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Browser consent",
+      "subLabel": "Entra-backed session",
+      "meta": "/oauth/authorize + PKCE",
+      "icon": "globe",
+      "shape": "mxgraph.c4.person",
+      "badge": {
+        "text": "AUTHORIZE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=mxgraph.c4.person;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "OpenIddict",
+      "subLabel": "Bind grant and code",
+      "meta": "client / redirect / resource",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "ISSUER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Authorized API",
+      "subLabel": "Enforce resource access",
+      "meta": "project role / membership",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "API",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "MCP boundary",
+      "subLabel": "Validate broker token",
+      "meta": "issuer + RS256 + lifetime",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESOURCE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Token exchange",
+      "subLabel": "Code + verifier",
+      "meta": "/oauth/token",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "BROKER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "open",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "allow",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n5",
+      "label": "code grant",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n4",
+      "label": "tool bearer",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n3",
+      "label": "forward",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DISCOVERY AND HUMAN CONSENT"
+    },
+    {
+      "id": "1",
+      "label": "TOKEN AND RESOURCE ENFORCEMENT"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n0",
+          "label": "MCP client",
+          "subLabel": "Discover resource/issuer",
+          "meta": "401 challenge + metadata",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "DISCOVER",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 549.1253588516747,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n1",
+          "label": "Browser consent",
+          "subLabel": "Entra-backed session",
+          "meta": "/oauth/authorize + PKCE",
+          "icon": "globe",
+          "shape": "mxgraph.c4.person",
+          "badge": {
+            "text": "AUTHORIZE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=mxgraph.c4.person;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1029.9253588516747,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n2",
+          "label": "OpenIddict",
+          "subLabel": "Bind grant and code",
+          "meta": "client / redirect / resource",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "ISSUER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n3",
+          "label": "Authorized API",
+          "subLabel": "Enforce resource access",
+          "meta": "project role / membership",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "API",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 549.1253588516747,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n4",
+          "label": "MCP boundary",
+          "subLabel": "Validate broker token",
+          "meta": "issuer + RS256 + lifetime",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESOURCE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1029.9253588516747,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n5",
+          "label": "Token exchange",
+          "subLabel": "Code + verifier",
+          "meta": "/oauth/token",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "BROKER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 212.61244019138758
+        },
+        "style": {
+          "width": 1365.6,
+          "height": 192
+        },
+        "data": {
+          "label": "DISCOVERY AND HUMAN CONSENT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 228.61244019138758
+        },
+        "data": {
+          "label": "DISCOVERY AND HUMAN CONSENT",
+          "width": 1325.6
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 582.4019138755981
+        },
+        "style": {
+          "width": 1365.6,
+          "height": 198
+        },
+        "data": {
+          "label": "TOKEN AND RESOURCE ENFORCEMENT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 598.4019138755981
+        },
+        "data": {
+          "label": "TOKEN AND RESOURCE ENFORCEMENT",
+          "width": 1325.6
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "open",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 408.32535885167465,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 549.1253588516747,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 478.7253588516747,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "allow",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 889.1253588516747,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 1029.9253588516747,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 959.5253588516747,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n5",
+        "label": "code grant",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1199.9253588516747,
+              "y": 380.6124401913876
+            },
+            {
+              "x": 1199.9253588516747,
+              "y": 652.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1199.9253588516747,
+            "y": 516.5071770334928
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n5",
+        "target": "n4",
+        "label": "tool bearer",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1029.9253588516747,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 889.1253588516747,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 959.5253588516747,
+            "y": 704.4019138755981
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n3",
+        "label": "forward",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 549.1253588516747,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 408.32535885167465,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 478.7253588516747,
+            "y": 704.4019138755981
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1438.2507177033497,
+    "canvasHeight": 948.4210526315791
+  }
+}

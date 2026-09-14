@@ -51,10 +51,15 @@ A run begins in the API layer, but its core shape is runtime-driven:
 5. **Start a workflow.** The workflow wraps the worker turn with surrounding nodes: review, merge, RAI, Scribe, and coordinator-specific paths when needed.
 6. **Watch and persist.** A watch loop listens to workflow and runtime events, translates them into UI-visible status, persists history, and handles terminal states.
 
+For a remote `LocalWritable` turn, completion includes a prepared-writeback
+envelope. The worker validates and applies that envelope before ordinary
+commit/diff bookkeeping. A missing or invalid required envelope fails the turn;
+it is not a successful no-change result.
+
 ![The life of a run: API endpoint, Run orchestrator, Context compiler, Workflow, Agent turn executor, Turn agent, Provider SDK, Tool/governance plane, Worktree operations, Watch loop / event stream](../diagrams/agent-runtime-fig3.png)
 
-<!-- Rendered from ../diagrams/src/agent-runtime-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+<!-- Generated from ../diagrams/src/agent-runtime-fig3.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing Mermaid.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -97,6 +102,10 @@ This phase intentionally disables provider-side config discovery for the live Co
 The live Copilot worker uses a provider SDK session. If a workflow resumes, the runtime can deserialize the provider session state; otherwise it creates a fresh session. This is why the live worker implements serialization hooks. Ephemeral built-in reviewers such as RAI and Scribe intentionally do not need durable session state because they run short, single-purpose turns.
 
 **Trade-off:** preserving provider session state improves continuity and checkpointing, but it couples the live worker to provider-specific serialization. Agentweaver hides that coupling behind the workflow turn-agent interface.
+
+These local provider hooks do not establish restoration of the same provider
+session in a replacement AgentHost pod. `IWorkflowTurnAgent` exposes setup, turn
+execution and disposal; the remote proxy creates its own A2A session.
 
 ### 3. Stream model execution
 
@@ -219,6 +228,10 @@ Coordinator runs receive additional coordination tools because they manage plans
 
 **Trade-off:** loopback API tools make agents first-class participants in project memory, but they must be scoped by project id, agent name, API base URL, and API key. Without those boundaries, a tool call could affect the wrong project.
 
+The callback also carries run identity and a run capability token, validated by
+API authorship/scope checks. Runtime permission approval does not itself
+authorize a cross-project or cross-run API operation.
+
 ### Human-in-the-loop tools
 
 Some actions require a human or external decision:
@@ -240,8 +253,8 @@ The tool should always produce a useful result even when the gate is unavailable
 
 ![Human-in-the-loop tools: Model requests capability, Runtime classification, Permission handler, Function invocation, Loopback API call, Governance evaluation, Project API authorization/scope, Execute, Return denial + emit tool.error, String result, Normalized run events](../diagrams/agent-runtime-fig2.png)
 
-<!-- Rendered from ../diagrams/src/agent-runtime-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/agent-runtime-fig2.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -282,6 +295,10 @@ Where this lives:
 ## Event emission
 
 Events are the runtime's shared language. They decouple provider-specific streaming from the rest of Agentweaver.
+
+The [durable stream and cross-replica replay sequence](../diagrams/distributed-execution-scaling-fig4.png)
+owns persistence and cursor delivery; the runtime emits into that pipeline
+rather than moving database ownership into AgentHost.
 
 A useful event stream must provide:
 
@@ -395,3 +412,145 @@ RAI and Scribe are workflow safety/memory nodes, not general worker agents. Keep
 - RAI may block or request revision depending on verdict.
 - Scribe should report failure but not invalidate an already-terminal worker run.
 - Both should avoid long-lived session assumptions unless their workflow role changes.
+
+<!-- diagram-context:agent-runtime-fig2:start -->
+<details id="diagram-context-agent-runtime-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Tool permission is not API authorization</td></tr>
+<tr><td>takeaway</td><td>Native shell is denied; controlled commands, URL approval and API scope are separate gates.</td></tr>
+<tr><td>Capability request</td><td>Capability request</td></tr>
+<tr><td>Capability request</td><td>Model intent, not permission</td></tr>
+<tr><td>Capability request</td><td>Classify native / custom / API</td></tr>
+<tr><td>Native shell</td><td>Native shell</td></tr>
+<tr><td>Native shell</td><td>Always rejected</td></tr>
+<tr><td>Native shell</td><td>No approval bypass</td></tr>
+<tr><td>Denied result</td><td>Denied result</td></tr>
+<tr><td>Denied result</td><td>Explicit error to caller</td></tr>
+<tr><td>Denied result</td><td>tool.error / HTTP rejection</td></tr>
+<tr><td>Controlled command</td><td>Controlled command</td></tr>
+<tr><td>Controlled command</td><td>ShellEnabled + real or direct</td></tr>
+<tr><td>Controlled command</td><td>Policy + directory + approval</td></tr>
+<tr><td>Selected executor</td><td>Selected executor</td></tr>
+<tr><td>Selected executor</td><td>Only permitted commands</td></tr>
+<tr><td>Selected executor</td><td>Return redacted command result</td></tr>
+<tr><td>URL permission</td><td>URL permission</td></tr>
+<tr><td>URL permission</td><td>Existing policy or human wait</td></tr>
+<tr><td>URL permission</td><td>Grant / deny / expiry</td></tr>
+<tr><td>API tool</td><td>API tool</td></tr>
+<tr><td>API tool</td><td>Runtime permission first</td></tr>
+<tr><td>API tool</td><td>Authenticated HTTP callback</td></tr>
+<tr><td>API authorization</td><td>API authorization</td></tr>
+<tr><td>API authorization</td><td>Run + project + agent scope</td></tr>
+<tr><td>API authorization</td><td>Allow operation or reject</td></tr>
+<tr><td>Operation result</td><td>Operation result</td></tr>
+<tr><td>Operation result</td><td>Return to requesting agent</td></tr>
+<tr><td>Operation result</td><td>No universal approval gate</td></tr>
+<tr><td>arrow-1</td><td>shell</td></tr>
+<tr><td>arrow-2</td><td>reject</td></tr>
+<tr><td>arrow-3</td><td>allow</td></tr>
+<tr><td>arrow-4</td><td>check</td></tr>
+<tr><td>arrow-5</td><td>return</td></tr>
+<tr><td>note-0</td><td>Native file requests have their own permission/governance checks.</td></tr>
+<tr><td>note-1</td><td>Shell approval can return a retry instruction; URL approval may wait.</td></tr>
+<tr><td>note-2</td><td>The three rows are separate capability paths, not sequential execution.</td></tr>
+<tr><td>notes</td><td>Native file requests have their own permission/governance checks.; Shell approval can return a retry instruction; URL approval may wait.; The three rows are separate capability paths, not sequential execution.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:agent-runtime-fig2:end -->
+
+<!-- diagram-context:agent-runtime-fig3:start -->
+<details id="diagram-context-agent-runtime-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A completed turn still needs a durable result</td></tr>
+<tr><td>takeaway</td><td>Remote writable results are validated and applied before ordinary worker commit bookkeeping.</td></tr>
+<tr><td>Reserve run</td><td>Reserve run</td></tr>
+<tr><td>Reserve run</td><td>Validate identity and task</td></tr>
+<tr><td>Reserve run</td><td>Durable admission</td></tr>
+<tr><td>Prepare context</td><td>Prepare context</td></tr>
+<tr><td>Prepare context</td><td>Workspace + charter + skills</td></tr>
+<tr><td>Prepare context</td><td>Children: decisions-only memory</td></tr>
+<tr><td>Workflow</td><td>Workflow</td></tr>
+<tr><td>Workflow</td><td>Graph remains in host</td></tr>
+<tr><td>Workflow</td><td>Local agent or remote leaf</td></tr>
+<tr><td>Execute leaf</td><td>Execute leaf</td></tr>
+<tr><td>Execute leaf</td><td>Provider and controlled tools</td></tr>
+<tr><td>Execute leaf</td><td>Logical, not one physical host</td></tr>
+<tr><td>Prepared writeback</td><td>Prepared writeback</td></tr>
+<tr><td>Prepared writeback</td><td>Required for LocalWritable</td></tr>
+<tr><td>Prepared writeback</td><td>Missing/invalid means failure</td></tr>
+<tr><td>Validate and apply</td><td>Validate and apply</td></tr>
+<tr><td>Validate and apply</td><td>Run / base / tree / branch</td></tr>
+<tr><td>Validate and apply</td><td>Fast-forward authoritative tree</td></tr>
+<tr><td>Local/shared result</td><td>Local/shared result</td></tr>
+<tr><td>Local/shared result</td><td>No remote envelope required</td></tr>
+<tr><td>Local/shared result</td><td>Worker-side post-processing</td></tr>
+<tr><td>Commit and diff</td><td>Commit and diff</td></tr>
+<tr><td>Commit and diff</td><td>After validated application</td></tr>
+<tr><td>Commit and diff</td><td>Ordinary bookkeeping remains</td></tr>
+<tr><td>Watch and persist</td><td>Watch and persist</td></tr>
+<tr><td>Watch and persist</td><td>Normalize terminal outcome</td></tr>
+<tr><td>Watch and persist</td><td>Durable events and status</td></tr>
+<tr><td>arrow-1</td><td>prepare</td></tr>
+<tr><td>arrow-2</td><td>start</td></tr>
+<tr><td>arrow-3</td><td>invoke</td></tr>
+<tr><td>arrow-4</td><td>remote</td></tr>
+<tr><td>arrow-5</td><td>verify</td></tr>
+<tr><td>arrow-6</td><td>local</td></tr>
+<tr><td>arrow-7</td><td>record</td></tr>
+<tr><td>arrow-8</td><td>apply</td></tr>
+<tr><td>arrow-9</td><td>persist</td></tr>
+<tr><td>note-0</td><td>Rows separate admission, remote writeback and final bookkeeping.</td></tr>
+<tr><td>note-1</td><td>Local provider serialization does not prove replacement-pod session restoration.</td></tr>
+<tr><td>notes</td><td>Rows separate admission, remote writeback and final bookkeeping.; Local provider serialization does not prove replacement-pod session restoration.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:agent-runtime-fig3:end -->
+
+<!-- diagram-context:distributed-execution-scaling-fig4:start -->
+<details id="diagram-context-distributed-execution-scaling-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Durable allocation, then cursor replay</td></tr>
+<tr><td>takeaway</td><td>Cross-replica delivery polls shared rows; local notifications are not a distributed bus.</td></tr>
+<tr><td>RecordNext</td><td>RecordNext</td></tr>
+<tr><td>RecordNext</td><td>Request sequence allocation</td></tr>
+<tr><td>RecordNext</td><td>Append with Sequence = 0</td></tr>
+<tr><td>EF append</td><td>EF append</td></tr>
+<tr><td>EF append</td><td>ReadCommitted + advisory lock</td></tr>
+<tr><td>EF append</td><td>Serialize allocation per run</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>MAX+1 / insert / commit</td></tr>
+<tr><td>RunEvents</td><td>Return assigned sequence</td></tr>
+<tr><td>Local history</td><td>Local history</td></tr>
+<tr><td>Local history</td><td>Updated after durable ack</td></tr>
+<tr><td>Local history</td><td>Notify only local waiters</td></tr>
+<tr><td>Web replica A</td><td>Web replica A</td></tr>
+<tr><td>Web replica A</td><td>Read Sequence &gt; lastSeen</td></tr>
+<tr><td>Web replica A</td><td>250 ms delay only when empty</td></tr>
+<tr><td>Browser watcher</td><td>Browser watcher</td></tr>
+<tr><td>Browser watcher</td><td>SSE sequence IDs</td></tr>
+<tr><td>Browser watcher</td><td>Remember last event cursor</td></tr>
+<tr><td>Reconnect cursor</td><td>Reconnect cursor</td></tr>
+<tr><td>Reconnect cursor</td><td>Last-Event-ID</td></tr>
+<tr><td>Reconnect cursor</td><td>Not tied to original web pod</td></tr>
+<tr><td>Web replica B</td><td>Web replica B</td></tr>
+<tr><td>Web replica B</td><td>Ordered replay and live tail</td></tr>
+<tr><td>Web replica B</td><td>Read same shared RunEvents</td></tr>
+<tr><td>Resumed watcher</td><td>Resumed watcher</td></tr>
+<tr><td>Resumed watcher</td><td>Receive rows after cursor</td></tr>
+<tr><td>Resumed watcher</td><td>No PostgreSQL NOTIFY required</td></tr>
+<tr><td>arrow-1</td><td>append</td></tr>
+<tr><td>arrow-2</td><td>commit</td></tr>
+<tr><td>arrow-3</td><td>ack</td></tr>
+<tr><td>arrow-4</td><td>poll</td></tr>
+<tr><td>arrow-5</td><td>SSE</td></tr>
+<tr><td>arrow-6</td><td>resume</td></tr>
+<tr><td>note-0</td><td>Rows: write-through / live delivery / reconnect on another replica.</td></tr>
+<tr><td>note-1</td><td>Explicit historic sequence: identical content is idempotent; conflicts fail.</td></tr>
+<tr><td>note-2</td><td>SQL commits before local history update; polling reads the shared table.</td></tr>
+<tr><td>notes</td><td>Rows: write-through / live delivery / reconnect on another replica.; Explicit historic sequence: identical content is idempotent; conflicts fail.; SQL commits before local history update; polling reads the shared table.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:distributed-execution-scaling-fig4:end -->

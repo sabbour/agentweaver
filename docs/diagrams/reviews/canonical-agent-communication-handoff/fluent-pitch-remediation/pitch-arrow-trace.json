@@ -1,0 +1,18 @@
+[
+  {
+    "id": "handoff",
+    "source": "role0",
+    "target": "role1",
+    "relationship": "dispatch subtask",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "result",
+    "source": "role1",
+    "target": "role0",
+    "relationship": "results",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  }
+]

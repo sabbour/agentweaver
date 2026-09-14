@@ -1,0 +1,104 @@
+{
+  "diagrams": [
+    {
+      "diagram": "frontend-fig1",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "5c55d63b4c13abae5b6388036e1ac3f37c5ffd09742402fe8bdb38ad0d027de1",
+      "published_png_sha256": "5c55d63b4c13abae5b6388036e1ac3f37c5ffd09742402fe8bdb38ad0d027de1",
+      "canonical_reexport_sha256": "5c55d63b4c13abae5b6388036e1ac3f37c5ffd09742402fe8bdb38ad0d027de1",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "frontend-fig2",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "7c06f7f4cc03b8771a6fc4b3162b930263b606d9c19c9ea9f48c885b637d15ee",
+      "published_png_sha256": "7c06f7f4cc03b8771a6fc4b3162b930263b606d9c19c9ea9f48c885b637d15ee",
+      "canonical_reexport_sha256": "7c06f7f4cc03b8771a6fc4b3162b930263b606d9c19c9ea9f48c885b637d15ee",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "frontend-fig3",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "0ea3bb836601ecdfb67cf7ab2f5846671bdcbb598b3c6945658ad11e5d60d702",
+      "published_png_sha256": "0ea3bb836601ecdfb67cf7ab2f5846671bdcbb598b3c6945658ad11e5d60d702",
+      "canonical_reexport_sha256": "0ea3bb836601ecdfb67cf7ab2f5846671bdcbb598b3c6945658ad11e5d60d702",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "frontend-fig6",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "5dbd2e045d08b9f32c7037a35da20992e0e76864a0c8655b139d1978fc0dba98",
+      "published_png_sha256": "5dbd2e045d08b9f32c7037a35da20992e0e76864a0c8655b139d1978fc0dba98",
+      "canonical_reexport_sha256": "5dbd2e045d08b9f32c7037a35da20992e0e76864a0c8655b139d1978fc0dba98",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "frontend-fig7",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "32809eef66ead8b0388cdbcf7e949993d80ac9a22129159714ab289de9f134c0",
+      "published_png_sha256": "32809eef66ead8b0388cdbcf7e949993d80ac9a22129159714ab289de9f134c0",
+      "canonical_reexport_sha256": "32809eef66ead8b0388cdbcf7e949993d80ac9a22129159714ab289de9f134c0",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "mcp-server-fig2",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "d263a5e186036df8ea3b0c17262bc5a78308d33121d226fef2d31e7fdb667195",
+      "published_png_sha256": "d263a5e186036df8ea3b0c17262bc5a78308d33121d226fef2d31e7fdb667195",
+      "canonical_reexport_sha256": "d263a5e186036df8ea3b0c17262bc5a78308d33121d226fef2d31e7fdb667195",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "project-generation-model-settings-fig1",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "a5fb895e92d9323d01fd56e421ce53ee0e1b9c5fb046d27b4d2201a5f931a78d",
+      "published_png_sha256": "a5fb895e92d9323d01fd56e421ce53ee0e1b9c5fb046d27b4d2201a5f931a78d",
+      "canonical_reexport_sha256": "a5fb895e92d9323d01fd56e421ce53ee0e1b9c5fb046d27b4d2201a5f931a78d",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "project-skills-fig1",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "0a3c32e88768624cb6ca80c452a92d671845439fecc448a2890df489b03ac096",
+      "published_png_sha256": "0a3c32e88768624cb6ca80c452a92d671845439fecc448a2890df489b03ac096",
+      "canonical_reexport_sha256": "0a3c32e88768624cb6ca80c452a92d671845439fecc448a2890df489b03ac096",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "projects-fig1",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "533cc682aef12df12835b60dd12706cfbd6d0bf2f53ef251e9a6cce646b3788a",
+      "published_png_sha256": "533cc682aef12df12835b60dd12706cfbd6d0bf2f53ef251e9a6cce646b3788a",
+      "canonical_reexport_sha256": "533cc682aef12df12835b60dd12706cfbd6d0bf2f53ef251e9a6cce646b3788a",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "projects-fig2",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "f8039df62e98c22b0d28b753fd87c739ef57569a537612312d03e028d0825366",
+      "published_png_sha256": "f8039df62e98c22b0d28b753fd87c739ef57569a537612312d03e028d0825366",
+      "canonical_reexport_sha256": "f8039df62e98c22b0d28b753fd87c739ef57569a537612312d03e028d0825366",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    },
+    {
+      "diagram": "repo-blueprint-suggestions-fig1",
+      "renderer_version": "31.4.5",
+      "inspected_png_sha256": "0e7b254729ea3ef070c78585635ba27cb0f771859fc17de6d9fec5a8553ff17b",
+      "published_png_sha256": "0e7b254729ea3ef070c78585635ba27cb0f771859fc17de6d9fec5a8553ff17b",
+      "canonical_reexport_sha256": "0e7b254729ea3ef070c78585635ba27cb0f771859fc17de6d9fec5a8553ff17b",
+      "byte_identical": true,
+      "repository_stamp_exact": true
+    }
+  ],
+  "selected_repository_drift_check": "OK: frontend-fig1.png and editable draw.io source are in sync with frontend-fig1.drawio\nOK: frontend-fig2.png and editable draw.io source are in sync with frontend-fig2.drawio\nOK: frontend-fig3.png and editable draw.io source are in sync with frontend-fig3.drawio\nOK: frontend-fig6.png and editable draw.io source are in sync with frontend-fig6.drawio\nOK: frontend-fig7.png and editable draw.io source are in sync with frontend-fig7.drawio\nOK: mcp-server-fig2.png and editable draw.io source are in sync with mcp-server-fig2.drawio\nOK: project-generation-model-settings-fig1.png and editable draw.io source are in sync with project-generation-model-settings-fig1.drawio\nOK: project-skills-fig1.png and editable draw.io source are in sync with project-skills-fig1.drawio\nOK: projects-fig1.png and editable draw.io source are in sync with projects-fig1.drawio\nOK: projects-fig2.png and editable draw.io source are in sync with projects-fig2.drawio\nOK: repo-blueprint-suggestions-fig1.png and editable draw.io source are in sync with repo-blueprint-suggestions-fig1.drawio"
+}

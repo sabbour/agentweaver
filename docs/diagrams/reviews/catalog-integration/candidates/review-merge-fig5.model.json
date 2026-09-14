@@ -1,0 +1,790 @@
+{
+  "title": "Review API decision paths",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Caller + access",
+      "subLabel": "Project contributor check",
+      "meta": "legacy: pending owner",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "ACTOR",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Reviewable state?",
+      "subLabel": "Inspect status + pending",
+      "meta": "awaiting_review",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "CHECK",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Replay or conflict",
+      "subLabel": "Matching terminal: reuse",
+      "meta": "otherwise: 409",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "EXIT",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Live pending",
+      "subLabel": "Changes / decline use CAS",
+      "meta": "approve: no merge CAS",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "LOCAL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Deferred pending",
+      "subLabel": "Persist the decision first",
+      "meta": "then status transition",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DURABLE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "No live / no pending",
+      "subLabel": "Validate direct approval",
+      "meta": "changes: 409",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "FALLBACK",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Consume + deliver",
+      "subLabel": "Send workflow response",
+      "meta": "live continuation",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESUME",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Repository lock",
+      "subLabel": "Only on reaching merge",
+      "meta": "lock before CAS",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "LOCK",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Merge CAS + Git",
+      "subLabel": "Guard reviewed tree input",
+      "meta": "release lock on exit",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "MERGE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "replay",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "live",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n4",
+      "label": "deferred",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n5",
+      "label": "direct",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n6",
+      "label": "deliver",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "on merge",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n7",
+      "label": "approve",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "locked",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "ADMISSION AND REPLAY"
+    },
+    {
+      "id": "1",
+      "label": "DELIVERY ALTERNATIVES"
+    },
+    {
+      "id": "2",
+      "label": "CONTINUATION AND MERGE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n0",
+          "label": "Caller + access",
+          "subLabel": "Project contributor check",
+          "meta": "legacy: pending owner",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "ACTOR",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n1",
+          "label": "Reviewable state?",
+          "subLabel": "Inspect status + pending",
+          "meta": "awaiting_review",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "CHECK",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n2",
+          "label": "Replay or conflict",
+          "subLabel": "Matching terminal: reuse",
+          "meta": "otherwise: 409",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "EXIT",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Live pending",
+          "subLabel": "Changes / decline use CAS",
+          "meta": "approve: no merge CAS",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "LOCAL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Deferred pending",
+          "subLabel": "Persist the decision first",
+          "meta": "then status transition",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DURABLE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "No live / no pending",
+          "subLabel": "Validate direct approval",
+          "meta": "changes: 409",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "FALLBACK",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Consume + deliver",
+          "subLabel": "Send workflow response",
+          "meta": "live continuation",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESUME",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Repository lock",
+          "subLabel": "Only on reaching merge",
+          "meta": "lock before CAS",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "LOCK",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Merge CAS + Git",
+          "subLabel": "Guard reviewed tree input",
+          "meta": "release lock on exit",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "MERGE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 147.73831775700933
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "ADMISSION AND REPLAY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 163.73831775700933
+        },
+        "data": {
+          "label": "ADMISSION AND REPLAY",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 391.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "DELIVERY ALTERNATIVES",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 407.7383177570093
+        },
+        "data": {
+          "label": "DELIVERY ALTERNATIVES",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 635.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "CONTINUATION AND MERGE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 651.7383177570093
+        },
+        "data": {
+          "label": "CONTINUATION AND MERGE",
+          "width": 1272.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 492.5308411214953,
+              "y": 263.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 435.3308411214953,
+            "y": 263.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "replay",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 832.5308411214953,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 263.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 889.7308411214952,
+            "y": 263.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n1",
+        "target": "n3",
+        "label": "live",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 662.5308411214953,
+              "y": 315.7383177570093
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 378.13084112149534,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 535.2646757079615,
+            "y": 366.4751598622725
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n1",
+        "target": "n4",
+        "label": "deferred",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 584.3308411214953,
+              "y": 315.7383177570093
+            },
+            {
+              "x": 584.3308411214953,
+              "y": 405.0014756517462
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 405.0014756517462
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 455.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 623.4308411214953,
+            "y": 405.0014756517462
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n1",
+        "target": "n5",
+        "label": "direct",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 740.7308411214954,
+              "y": 315.7383177570093
+            },
+            {
+              "x": 740.7308411214954,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 917.0631719485629,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 917.0631719485629,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 828.897006535029,
+            "y": 366.4751598622725
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n3",
+        "target": "n6",
+        "label": "deliver",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 208.1308411214953,
+              "y": 559.7383177570093
+            },
+            {
+              "x": 208.1308411214953,
+              "y": 610.4751598622724
+            },
+            {
+              "x": 22.242990654205613,
+              "y": 610.4751598622724
+            },
+            {
+              "x": 22.242990654205613,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 38.13084112149531,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 115.18691588785046,
+            "y": 610.4751598622724
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n6",
+        "target": "n7",
+        "label": "on merge",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 492.5308411214953,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 435.3308411214953,
+            "y": 751.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n5",
+        "target": "n7",
+        "label": "approve",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 946.9308411214952,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 862.3985102944275,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 862.3985102944275,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 832.5308411214953,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 862.3985102944275,
+            "y": 617.7783177570093
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n7",
+        "target": "n8",
+        "label": "locked",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 832.5308411214953,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 913.6466305951794,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 913.6466305951794,
+              "y": 649.0014756517462
+            },
+            {
+              "x": 1116.9308411214952,
+              "y": 649.0014756517462
+            },
+            {
+              "x": 1116.9308411214952,
+              "y": 699.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1015.2887358583373,
+            "y": 649.0014756517462
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1325.0616822429902,
+    "canvasHeight": 893.1401869158877
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "diagram": "review-merge-fig5",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pitch.drawio",
+    "png": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pitch.png",
+    "change_record": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-01.drawio",
+      "png": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-01.png",
+      "change_record": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1493,
+      "result_meaningful_xml": 23144,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 15.501674
+    },
+    {
+      "drawio": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-02.drawio",
+      "png": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-02.png",
+      "change_record": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-03.drawio",
+      "png": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-03.png",
+      "change_record": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-04.drawio",
+      "png": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-04.png",
+      "change_record": "docs/diagrams/reviews/review-merge-fig5/v2/review-merge-fig5-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "Fetch and authorize before arbitration",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:862-891",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "Terminal replay or invalid/live-without-pending response",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:879-891",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n3",
+          "relationship": "Local pending review path",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:963-984",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n1",
+          "target": "n4",
+          "relationship": "Persist a decision when local workflow is absent",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:933-957",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n1",
+          "target": "n5",
+          "relationship": "No local workflow and no pending uses direct fallback",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:985-1001",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "n3",
+          "target": "n6",
+          "relationship": "CAS where required, consume pending, send response",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:969-1053",
+          "result": "corrected"
+        },
+        {
+          "id": "e6",
+          "source": "n6",
+          "target": "n7",
+          "relationship": "Workflow continuation eventually reaches guarded merge",
+          "evidence": "apps/Agentweaver.Api/Runs/MergeCoordinator.cs:46-101",
+          "result": "clean"
+        },
+        {
+          "id": "e7",
+          "source": "n5",
+          "target": "n7",
+          "relationship": "Validated direct approval uses shared merge coordinator",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2988-3022",
+          "result": "clean"
+        },
+        {
+          "id": "e8",
+          "source": "n7",
+          "target": "n8",
+          "relationship": "Repository lock precedes merge CAS and Git operation",
+          "evidence": "apps/Agentweaver.Api/Runs/MergeCoordinator.cs:46-101",
+          "result": "corrected"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

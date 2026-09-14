@@ -1,0 +1,150 @@
+{
+  "name": "00-system-overview-fig1",
+  "title": "Agentweaver · boundaries, not one process",
+  "takeaway": "Intent enters through API or MCP; execution and durable state have separate owners.",
+  "pitch": [
+    "Caller intent|HTTP and MCP clients|Authenticated entry",
+    "Governed execution|API controls work|Separate execution leaf"
+  ],
+  "groups": [
+    "INTENT / CONTROL",
+    "EXECUTION / STATE"
+  ],
+  "nodes": [
+    {
+      "id": "web",
+      "title": "Browser / Web host",
+      "sub": "SPA assets and API requests",
+      "detail": "Web serves files; /docs redirects externally",
+      "meta": "Web/Program.cs:39–65",
+      "badge": "STATIC",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Web/Program.cs:39-65",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "api",
+      "title": "API web role",
+      "sub": "Endpoint-classified authority",
+      "detail": "Entra / broker auth + resource-specific roles",
+      "meta": "Program.cs:1274–1295",
+      "badge": "AUTHORITY",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Program.cs:1274-1295",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "mcp",
+      "title": "MCP host",
+      "sub": "Validate broker JWT",
+      "detail": "Tool calls forward the same accepted bearer",
+      "meta": "McpBrokerAuthenticationHandler",
+      "badge": "BROKER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:40-86; AgentweaverApiClient.cs:359-379",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "worker",
+      "title": "Worker role",
+      "sub": "Shared application code",
+      "detail": "Probes only; registrations are not all role-gated",
+      "meta": "Program.cs:1255–1264",
+      "badge": "WORKER",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Program.cs:507-532,1255-1326",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "orchestration",
+      "title": "Run orchestration",
+      "sub": "MAF graphs + service drivers",
+      "detail": "Full runs, trimmed children and collective phase",
+      "meta": "RunWorkflowFactory / Coordinator",
+      "badge": "CONTROL",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:790-825; Coordinator/CoordinatorRunService.cs:1172-1250",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "host",
+      "title": "AgentHost leaf",
+      "sub": "Governed remote agent execution",
+      "detail": "One-shot work; Operator uses per-turn broker",
+      "meta": "RemoteOperatorAssistantAgent",
+      "badge": "EXECUTION",
+      "shape": "process",
+      "evidence": "apps/Agentweaver.Api/Assistant/RemoteOperatorAssistantAgent.cs:77-83; Assistant/AssistantRunService.cs:789-813",
+      "classification": "native:flowchart"
+    },
+    {
+      "id": "postgres",
+      "title": "PostgreSQL",
+      "sub": "Shared EF operational state",
+      "detail": "Events, checkpoints and CAS leases",
+      "meta": "Program.cs:1026–1075",
+      "badge": "DURABLE",
+      "shape": "cylinder3",
+      "evidence": "apps/Agentweaver.Api/Program.cs:1026-1075",
+      "classification": "native:database"
+    },
+    {
+      "id": "workspace",
+      "title": "Workspace + worktrees",
+      "sub": "Files are not the database",
+      "detail": "Each child owns its branch and Git index",
+      "meta": "RunOrchestrator.cs:277–317",
+      "badge": "FILES",
+      "shape": "folder",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+      "classification": "native:uml"
+    }
+  ],
+  "edges": [
+    {
+      "id": "web-to-api",
+      "source": "web",
+      "target": "api",
+      "label": "REST / SSE",
+      "evidence": "apps/Agentweaver.Api/Program.cs:1274-1295"
+    },
+    {
+      "id": "mcp-to-api",
+      "source": "mcp",
+      "target": "api",
+      "label": "forward broker",
+      "evidence": "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:359-379",
+      "route": "left"
+    },
+    {
+      "id": "api-to-orchestration",
+      "source": "api",
+      "target": "orchestration",
+      "label": "delegate",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:164-255",
+      "route": "center"
+    },
+    {
+      "id": "orchestration-to-host",
+      "source": "orchestration",
+      "target": "host",
+      "label": "execute",
+      "evidence": "apps/Agentweaver.Api/Assistant/RemoteOperatorAssistantAgent.cs:77-83"
+    },
+    {
+      "id": "orchestration-to-postgres",
+      "source": "orchestration",
+      "target": "postgres",
+      "label": "persist",
+      "evidence": "apps/Agentweaver.Api/Program.cs:1026-1075"
+    },
+    {
+      "id": "host-to-workspace",
+      "source": "host",
+      "target": "workspace",
+      "label": "worktree",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317"
+    }
+  ],
+  "scope": "Deployment roles ≠ exclusive orchestration ownership. Operator history is not a MAF run graph."
+}

@@ -1,0 +1,125 @@
+{
+  "diagram": "agent-framework-fig3",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "agent-framework-fig3-pitch.drawio",
+    "png": "agent-framework-fig3-pitch.png",
+    "change_record": "agent-framework-fig3-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "agent-framework-fig3-pass-01.drawio",
+      "png": "agent-framework-fig3-pass-01.png",
+      "change_record": "agent-framework-fig3-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 2376,
+      "result_meaningful_xml": 24053,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 10.123316
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig3-pass-02.drawio",
+      "png": "agent-framework-fig3-pass-02.png",
+      "change_record": "agent-framework-fig3-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig3-pass-03.drawio",
+      "png": "agent-framework-fig3-pass-03.png",
+      "change_record": "agent-framework-fig3-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "agent-framework-fig3-pass-04.drawio",
+      "png": "agent-framework-fig3-pass-04.png",
+      "change_record": "agent-framework-fig3-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "checks-to-live",
+          "source": "checks",
+          "target": "live",
+          "relationship": "local instance",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964,1052-1060",
+          "result": "clean"
+        },
+        {
+          "id": "checks-to-defer",
+          "source": "checks",
+          "target": "defer",
+          "relationship": "other replica",
+          "evidence": "apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:887-964",
+          "result": "clean"
+        },
+        {
+          "id": "defer-to-poll",
+          "source": "defer",
+          "target": "poll",
+          "relationship": "poll decision",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:164-227",
+          "result": "clean"
+        },
+        {
+          "id": "poll-to-live",
+          "source": "poll",
+          "target": "live",
+          "relationship": "SendResponseAsync",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:164-227",
+          "result": "clean"
+        },
+        {
+          "id": "checkpoint-to-recover",
+          "source": "checkpoint",
+          "target": "recover",
+          "relationship": "latest checkpoint",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+          "result": "clean"
+        },
+        {
+          "id": "recover-to-graph",
+          "source": "recover",
+          "target": "graph",
+          "relationship": "effective definition",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+          "result": "clean"
+        },
+        {
+          "id": "graph-to-resume",
+          "source": "graph",
+          "target": "resume",
+          "relationship": "rebuild then resume",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1561-1586",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

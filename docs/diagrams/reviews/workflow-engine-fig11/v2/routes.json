@@ -1,0 +1,258 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Description starts bounded draft generation",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Normalize model output and ensure valid draft ID",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:88-112",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Validate cleaned draft with workflow loader",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:88-112",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Validate runtime bindability after loading",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:88-112",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        280,
+        293.16
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        290,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Return a valid draft without saving",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n3",
+    "target": "n6",
+    "relationship": "First validation error supplies one correction attempt",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        342.84
+      ],
+      [
+        248,
+        342.84
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "First binding error supplies one correction attempt",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        372
+      ],
+      [
+        397.0,
+        382
+      ],
+      [
+        516,
+        382
+      ],
+      [
+        516,
+        534
+      ],
+      [
+        131.0,
+        534
+      ],
+      [
+        131.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Corrected draft uses the same validation pipeline",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-112",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        280,
+        445.16
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        290,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n7",
+    "target": "n5",
+    "relationship": "Valid corrected draft returns to caller",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        470.0
+      ],
+      [
+        544,
+        470.0
+      ],
+      [
+        544,
+        382
+      ],
+      [
+        663.0,
+        382
+      ],
+      [
+        663.0,
+        372
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Second invalid result throws generation exception",
+    "evidence": "apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:54-85",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        445.16
+      ],
+      [
+        532,
+        445.16
+      ],
+      [
+        532,
+        406
+      ],
+      [
+        663.0,
+        406
+      ],
+      [
+        663.0,
+        416
+      ]
+    ]
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "diagram": "infra-deployment-fig3",
+  "stage": "pitch",
+  "renderer": "31.4.5",
+  "page": {
+    "width": 793.7,
+    "height": 559.37,
+    "orientation": "A5-landscape"
+  },
+  "source": "infra-deployment-fig3-pitch.drawio",
+  "png": "infra-deployment-fig3-pitch.png",
+  "evidence": "scripts/azure/image-spec.mjs:80-141; scripts/azure/steps/20-build-push-images.mjs:352-381; scripts/azure/steps/30-deploy.mjs:52-113,427-561",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "symbols": {
+    "resolve": "native:flowchart",
+    "images": "native:azure",
+    "render": "native:flowchart",
+    "platform": "native:kubernetes",
+    "prereq": "native:kubernetes",
+    "routes": "native:kubernetes",
+    "pool": "native:kubernetes",
+    "deploy": "native:kubernetes",
+    "verify": "native:flowchart"
+  },
+  "publication_status": "draft-not-promoted",
+  "symbols_status": "design-intent-only; resource semantics not approved",
+  "sha256": {
+    "drawio": "a300d86ebf36a55822c48e508b693e79651ad399789ed907315947043790fee6",
+    "png": "7dec99eb8ea222ca6720c5c5e66a9f7629a2d7df2c55ccfcf00bc2bdfe672f12"
+  },
+  "png_dimensions": [
+    1545,
+    1114
+  ],
+  "xml_edge_count": 6
+}

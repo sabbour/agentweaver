@@ -1,0 +1,16 @@
+{
+  "diagram": "mcp-server-fig2",
+  "manifest": "docs/diagrams/reviews/mcp-server-fig2/iteration-manifest.json",
+  "schema": "valid",
+  "repository_manifest_validator": "iteration manifest is valid",
+  "pitch_plus_passes": 5,
+  "actual_open_inspections_recorded": 10,
+  "one_uncompressed_A5_page_all_passes": true,
+  "bounds_and_5_unit_accents": "valid",
+  "native_symbols_and_card_hierarchy": "valid",
+  "exact_arrow_ids_source_target_label_evidence": 7,
+  "growth_ratio": 11.026292,
+  "final_source_sha256": "b2146630e6f595740b40a661af76ee39efdaf2e14aa0b6afa2bca4acba06285e",
+  "inspected_final_png_sha256": "d263a5e186036df8ea3b0c17262bc5a78308d33121d226fef2d31e7fdb667195",
+  "publication": "valid"
+}

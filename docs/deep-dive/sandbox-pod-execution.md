@@ -37,8 +37,8 @@ The pod was a place to run `run_command`; it was *not* where the agent lived.
 
 ![Before pod-per-run: single-Worker-pod execution: Workflow graph, Agent + live Copilot SDK session, In-memory run-event history, Sandbox pod, SSE to clients](../diagrams/canonical-sandbox-pod-evolution.png)
 
-<!-- Rendered from ../diagrams/src/canonical-sandbox-pod-evolution.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/canonical-sandbox-pod-evolution.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -89,7 +89,7 @@ The AgentHost claim path binds to `AgentHostWarmPoolRef` (default `agentweaver-a
 
 The existing per-command exec path is **retained for its current utility purpose** (ad-hoc
 `run_command`); it is simply never the agent-turn transport. Nothing about pod-per-run deletes that
-capability — see [Sandbox](./sandbox.md#kubernetes-sandbox-lifecycle-claims-over-pods).
+capability — see [Sandbox](./sandbox.md#kubernetes-sandbox-lifecycle-retained-utility-command-contract).
 
 ## The executor seam: how commands are actually isolated
 
@@ -108,15 +108,12 @@ Linux namespace sandbox, or a Kata-isolated Kubernetes pod. The contract itself 
 
 ### One executor per host, chosen at run start
 
-`SandboxExecutorFactory` selects exactly **one** executor for the host at run start, walking a fixed
-ladder and stopping at the first backend that is actually available. It emits a **`sandbox.selected`**
-event carrying `backend`, `isRealIsolation`, and `reason`, so the chosen backend — and *why* it was
-chosen — is observable for every run.
+The API router chooses Kubernetes versus local first; the local factory then probes supported local backends. Runtime observability emits `sandbox.selected` with backend, isolation status and reason. The in-pod PodExec client is a separate executor seam.
 
-![One executor per host, chosen at run start: Run start:, In Kubernetes?, kubernetes-sandbox-claim, Windows?, processcontainer, wsl-bwrap / wsl-unshare, linux-bwrap, lxc-native-linux, direct, sandbox.selected:](../diagrams/sandbox-pod-execution-fig3.png)
+![API router selects Kubernetes or the local factory; local backends may fall back to direct](../diagrams/sandbox-fig2.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/sandbox-fig2.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -139,13 +136,17 @@ The ladder, top to bottom:
   the command directly on the host with **no isolation layer**; the shell still runs, relying on whatever
   isolation the surrounding deployment already provides.
 
-`IsRealIsolation` is `true` for every real backend and `false` for `direct`. The governance gate enforces
+`IsRealIsolation` is false for both `wsl-unshare` and direct. Live `run_command` additionally requires `ShellEnabled`. The governance gate enforces
 a hard rule: a shell command is allowed only when the selected executor reports `IsRealIsolation == true`
 **or** is the `direct` backend. Any *other* non-isolating executor **denies `run_command`** outright — so
 an agent never silently runs a shell command under a half-isolated backend. The exact rows and selection
 conditions live in the [Sandbox backends table](../reference/sandbox-setup.md#sandbox-backends).
 
 ### Two seams, one contract, three tiers
+
+![AgentHost and executor use separate PID namespaces inside one Kata pod. Authenticated pod-private IPC reaches the executor; registered workspace and HOME paths define the child mount view, without exposing the PVC root, sibling runs or IPC token.](../diagrams/canonical-pod-process-boundaries.png)
+
+*Editable source: [canonical-pod-process-boundaries.drawio](../diagrams/src/canonical-pod-process-boundaries.drawio).*
 
 The connective idea for pod-per-run is that **the executor abstraction and pod-per-run agent execution are
 the same seam at different deployment tiers — and the A2A agent-turn remoting is orthogonal to both.**
@@ -186,7 +187,7 @@ boundary**, not by parsing shell syntax. Two containers share the pod:
 - `agentweaver-exec` (same image, `--exec-agent`) executes every model-controlled command inside
   `KataBwrapExecutor`'s per-run mount namespace. It is a real, runtime-created PID namespace with a
   runtime-provided procfs, holds no Kubernetes or AAD identity, and shares only the pod network
-  namespace (so preview ports stay reachable) and the two workspace volumes.
+  namespace (so preview ports stay reachable), workspace volumes and a pod-private authenticated IPC volume.
 
 Within that structure:
 
@@ -361,13 +362,13 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
   `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, and the A2A listener on container port `8088`.
 - **`SandboxWarmPool`** — keeps AgentHost pods pre-built from a template so a claim binds without a cold start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). It pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
 - **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
-  (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
-  `spec.env[]` for static values only on the AgentHost path (paths, port, and mTLS settings). `RunId`, `TurnBearerToken`, and the immutable `CopilotCredential` are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
+  (the pool to bind) and `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`.
+  AgentHost claims omit `spec.env`; static paths, port, and mTLS settings belong to the template/config map. Run identity, turn authentication, and the selected provider payload are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
 
 ![How the controller provisions a run's pod: KubernetesSandboxExecutor, SandboxClaim (CR), agent-sandbox controller, SandboxWarmPool, Kata sandbox pod, PodNameRegistry](../diagrams/sandbox-pod-execution-fig6.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig6.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig6.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing Mermaid.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -399,9 +400,9 @@ they are waiting for `/configure`. This lets
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
-At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the shared orchestration worktree, and reads `AutoApproveTools` from `IRunOptionsStore`. It calls `POST {scheme}://{podIP}:8088/configure` with run identity, workspace descriptors, approval settings, and provider data. The provider data is `copilotCredential` or `byokProviderConfiguration`; `copilotCredential` is required only without BYOK. Repository, preview, and MCP broker credentials are optional and purpose-scoped. `/configure` is one-time, excluded from the readiness gate, and not protected by the turn token because it delivers that token. The NetworkPolicy limiting AgentHost ingress to API and worker pods is the guard.
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the shared orchestration worktree, and reads `AutoApproveTools` from `IRunOptionsStore`. It calls `POST {scheme}://{podIP}:8088/configure` with run identity, workspace descriptors, approval settings, and provider data. The provider data is `copilotCredential` or `byokProviderConfiguration`; `copilotCredential` is required only without BYOK. Repository, preview, and MCP broker credentials are optional and purpose-scoped. `/configure` is one-time, excluded from the readiness gate, and not protected by the turn token because it delivers that token. Its exposure therefore depends on configured transport controls and the complete additive NetworkPolicy set, not an API/worker-only ingress assumption.
 
-After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
+Normal order: **claim bound -> pod IP -> HTTP 200 standby listener -> one-time configuration/SetupAsync -> effective workspace and endpoint registration -> first turn**. `/healthz` is 200 before configuration (`standby`) and afterward (`ready`); other nonexempt routes return 503 before setup. Claims omit `spec.env`. Shared mode uses a valid shared worktree, local modes use verified ephemeral checkouts, and missing Shared coordinates fall back to pod-private storage. Production sends a token; middleware equality is conditional on a nonempty token. The additive preview range includes port 8088, so network policy alone is not API/worker-exclusive.
 
 #### Pod-local execution workspaces
 
@@ -422,8 +423,8 @@ write-back path described below.
 
 ![Pod-local execution workspaces: Authoritative repository + worktree, PodLocalWorkspaceManager, Ephemeral checkout, Workspace mode, Build / test / preview, Implementation turn, Cancellable nested-repo scan, Flatten nested repos, Platform alternate index](../diagrams/sandbox-pod-execution-fig4.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig4.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -455,9 +456,7 @@ There is no bespoke file-copy protocol, patch transport, or force push. The comm
 pod's existing Git environment and credential context; write-back does not mint, serialize, or deliver
 a second credential. In the current pod-local flow, `origin` is the shared source repository path
 delivered in `/configure`, so this publication is a normal Git repository-to-repository push rather
-than a custom network transport. The run's existing GitHub token remains available through the
-AgentHost token store for GitHub operations; the write-back path does not create a parallel token
-mechanism.
+than a custom network transport. Purpose-bound credentials live in configured runtime state, not an ambient AgentHost token store. Filesystem-origin writeback mints no second GitHub credential.
 
 The pushed ref is a unique temporary ref under the Agentweaver write-back namespace. The API side
 then validates the descriptor, commit parent, tree, and authoritative branch state before applying a
@@ -562,7 +561,7 @@ so `tolerations`/`affinity` pass straight through to the rendered pod:
 
 - a **toleration** for `sandbox=kata:NoSchedule` admits pods onto the tainted `katapool`; and
 - a **preferred** (not required) `nodeAffinity` for `agentweaver.io/kata=true` *biases* pods onto
-  `katapool`; cluster-autoscaler scales `katapool` when demand grows — pods are **never stranded**.
+  `katapool`; autoscaling can add capacity, but preferred affinity does not guarantee scheduling, quota or capacity.
 
 The `CriticalAddonsOnly` taint lives only on `nodepool1`; app workloads schedule onto `apppool`
 without any toleration changes.
@@ -580,19 +579,15 @@ How long should a run hold a pod? Two naive answers both fail:
 
 Agentweaver therefore uses a **hybrid**: pod-per-run **with checkpoint-and-release on suspend**.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Claiming
-    Claiming --> Standby: warm pod bound
-    Standby --> Warm: /configure + SetupAsync<br/>session live
-    Warm --> Warm: consecutive agent turns<br/>(reasoning burst stays warm)
-    Warm --> Released: graph suspends on RequestPort<br/>(HITL/review) or coordinator idles
-    Released --> Reclaiming: resume signal<br/>(decision / child completion)
-    Reclaiming --> Standby: re-claim warm pod
-    Standby --> Warm: /configure + rehydrate from checkpoint
-    Warm --> [*]: run completes → release pod
-    Released --> [*]: run cancelled / TTL
-```
+| Transition | Current contract |
+| --- | --- |
+| Claiming -> standby | Controller binding and listener liveness, not configured readiness. |
+| Standby -> active | One-time configuration prepares the effective workspace and leaf. |
+| Active -> active | Consecutive turns retain the pod. |
+| External suspension -> release attempt | With release enabled, checkpoint workflow state and best-effort release/delete the claim. |
+| Active preview -> retained | Positive unexpired route evidence may defer release; keepalive reconciles retention. |
+| Released -> resume | Adopt a replacement warm pod, configure fresh context, resume workflow state. |
+| Terminal / expiry | Cleanup follows claim and preview retention rules. |
 
 The rules of the model:
 
@@ -603,14 +598,12 @@ The rules of the model:
   boundary is graph suspension on a `RequestPort` — a HITL/review gate, or the coordinator loop idling
   while it awaits child runs — **not** a mere inter-turn boundary. While a human is deciding, or while
   the coordinator waits on children, there is nothing for the SDK session to do, so the pod is released
-  back to the warm pool.
+  by deleting/releasing the claim when retention permits, not by returning the same configured pod to the pool.
 - **Resume re-claims a warm pod and rehydrates.** On the resume signal (a HITL decision arrives, or a
   child run completes), the worker re-claims a warm pod and rehydrates the run from the brokered
   checkpoint.
 
-For this to be correct, the checkpoint must carry enough to perfectly reconstruct the suspended run: the
-**serialized agent session blob** plus the **workflow superstep state**, including the correlation id of
-the suspended external request. Two facts make rehydration cheap and safe:
+Workflow checkpoint state preserves the external-request correlation. Local provider serialization does not prove perfect restoration in a replacement AgentHost pod; the remote proxy creates its own A2A session. Durable worktree and fresh configuration are separate:
 
 - the **worktree is already durable** on the shared workspace volume, so no file state needs to travel in
   the checkpoint; and
@@ -633,13 +626,10 @@ generates a 256-bit bearer token, sends it in `POST /configure`, and registers i
 every `message:stream` call, and AgentHost accepts only its own token. This means NetworkPolicy/mTLS are
 not the only gates on the turn endpoint, and a token stolen from one run cannot reach another run's pod.
 
-Egress is **default-deny** with a narrow allowlist: the model endpoint, the API/worker bridge endpoint,
-and the git remote(s) the run legitimately needs. Everything else — especially arbitrary in-cluster
-services and the database — is denied. Sandbox pods talk to the worker tier, never directly to the
-database.
+Egress is default-deny plus public-IP HTTPS with CIDR exclusions, DNS and API/MCP exceptions, not only named model/git endpoints. AgentHost has no application database connection. See [actual policy limits](./infra-deployment.md#network-policy-model).
 
 The pod-root control endpoints use the separately minted per-run preview-runner credential. It is
-delivered only in the `/configure` body, stored in `AgentHostRuntimeState`, and persisted under the
+delivered only in the `/configure` body, kept in AgentHost memory, and separately persisted best-effort by the server-side secret store under the
 replica-safe key returned by `PreviewRunnerCredential.SecretKey(runId)`. The API re-fetches this
 credential when it must call back into the pod for preview control or tool-approval resolution.
 
@@ -658,8 +648,8 @@ and unreachable results map to 404, 409, and 503 respectively.
 
 ![Returning tool-approval decisions to AgentHost: Operator, Run approval endpoint, Persisted run events, DurableToolApprovalGate, AgentHostApprovalHttpClient, AgentHost pod, In-memory IToolApprovalGate](../diagrams/sandbox-pod-execution-fig7.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig7.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI, replacing Mermaid.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -676,7 +666,7 @@ and unreachable results map to 404, 409, and 503 respectively.
 Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator (or a
 running agent) reach *into* a run's sandbox pod: the **sandbox browser preview**. When an agent starts a
 server inside its sandbox (a dev server, a built app, a debug endpoint), the run's pod can expose that port
-back through the API on demand, so a human can open a live preview scoped to exactly that run's pod.
+through an API-provisioned and HTTPS-validated Gateway-direct route, so a human can open a live preview scoped to exactly that run's pod.
 
 In **AKS deployments** (where `Sandbox:Preview:Enabled=true`) this is a **Gateway-direct reverse proxy**: the
 API creates a per-preview `ClusterIP Service` + `HTTPRoute` that attaches to the shared
@@ -695,8 +685,7 @@ at 3 per run and 20 globally, and cleaned up explicitly.
 
 Neither path widens the pod's own egress allowlist; both are inbound tunnels the operator/agent opens, not
 capabilities the sandboxed code can grant itself. The AKS NetworkPolicy
-`sandbox-allow-preview-ingress` (`k8s/base/networkpolicy-sandbox.yaml`) admits TCP 3000–9000 exclusively from
-`agentweaver-preview-gateway` pods — no other source can reach those ports.
+`sandbox-allow-preview-ingress` (`k8s/base/networkpolicy-sandbox.yaml`) admits TCP 3000-9000 from same-namespace preview Gateway pods. TCP 8088 also has API/worker control allows; the additive rules are not exclusive for every port.
 
 > **Dedicated pages:** the browser preview has its own first-class docs —
 > [Deep Dive](./sandbox-browser-preview.md), [Reference](../reference/sandbox-browser-preview.md), and
@@ -736,8 +725,8 @@ To rebuild pod-per-run from these ideas:
 5. **Implement the hybrid lifecycle:** warm across consecutive turns; checkpoint-and-release on
    `RequestPort`/coordinator-idle suspension; re-claim + rehydrate on resume. Gate the release with
    `Sandbox:ReleasePodOnSuspend`.
-6. **Give the pod run-scoped context** via one-time `/configure`: RunId, UserId, the A2A turn bearer token, and the Key Vault user-secret name. Fetch the user token with workload identity and no broker.
-7. **Default deny egress** to model + worker + git only; never let the pod reach the database.
+6. **Give the pod run-scoped context** through one-time `/configure`: identity, workspace descriptors, turn authentication, redeemed Copilot capability **or BYOK**, and purpose-scoped repository/preview/broker credentials. The pod does not fetch ambient user tokens from Key Vault.
+7. **Use the actual network contract:** explicit control/preview ingress and egress exceptions, not a model/worker/git-only allowlist.
 8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`** so production can run `pod-per-run`
    while retaining `in-api` as an instant rollback path.
 
@@ -1141,10 +1130,10 @@ A claim can stay unbound longer than the coordinator's subtask-stall timeout (`C
 
 The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
-![Sequence showing a coordinator dispatching a child run, the sandbox executor polling an unbound claim, periodic provisioning heartbeats resetting the coordinator stall window, and execution starting after the pod becomes ready](../diagrams/sandbox-pod-execution-fig5.png)
+![Provisioning sequence from child dispatch and claim polling through standby listener, one-time configuration, and the first turn, with heartbeats during provisioning](../diagrams/sandbox-pod-execution-fig5.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram).
+<!-- Generated from ../diagrams/src/sandbox-pod-execution-fig5.drawio as editable draw.io XML,
+     then exported by the official draw.io Desktop CLI.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -1172,7 +1161,7 @@ Where this lives:
 | Cancellable, pruned nested-repository discovery | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:575-628` |
 | Nested metadata removal, content staging, gitlink rejection | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:631-735` |
 | Writable-turn finalization after the agent response | `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:198-250` |
-| Existing in-pod GitHub token store | `apps/Agentweaver.AgentHost/PodGitHubTokenStore.cs:6-49` |
+| Purpose-bound credentials in configured runtime state | `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs` |
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
 | Immutable Kata HOME mount and child environment | `packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs` |
@@ -1198,3 +1187,302 @@ Where this lives:
   to the user over a public HTTPS reverse proxy.
 - [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
   `tool.approval_resolved` behavior.
+
+<!-- diagram-context:canonical-sandbox-pod-evolution:start -->
+<details id="diagram-context-canonical-sandbox-pod-evolution" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Move heavy leaf state, keep orchestration</td></tr>
+<tr><td>takeaway</td><td>Remoting compute and migrating the database are independent changes.</td></tr>
+<tr><td>Before: worker graph</td><td>Before: worker graph</td></tr>
+<tr><td>Before: worker graph</td><td>Workflow and gates</td></tr>
+<tr><td>Before: worker graph</td><td>Same host as live leaf state</td></tr>
+<tr><td>Before: live SDK</td><td>Before: live SDK</td></tr>
+<tr><td>Before: live SDK</td><td>Provider session in worker</td></tr>
+<tr><td>Before: live SDK</td><td>Heavy per-run footprint</td></tr>
+<tr><td>Command sandbox</td><td>Command sandbox</td></tr>
+<tr><td>Command sandbox</td><td>Individual shell commands</td></tr>
+<tr><td>Command sandbox</td><td>Separate executor seam</td></tr>
+<tr><td>Now: worker graph</td><td>Now: worker graph</td></tr>
+<tr><td>Now: worker graph</td><td>Workflow and checkpoints</td></tr>
+<tr><td>Now: worker graph</td><td>Keeps orchestration ownership</td></tr>
+<tr><td>Remote leaf proxy</td><td>Remote leaf proxy</td></tr>
+<tr><td>Remote leaf proxy</td><td>Claim/configure then A2A</td></tr>
+<tr><td>Remote leaf proxy</td><td>No database migration implied</td></tr>
+<tr><td>Per-run AgentHost</td><td>Per-run AgentHost</td></tr>
+<tr><td>Per-run AgentHost</td><td>Live SDK + controlled tools</td></tr>
+<tr><td>Per-run AgentHost</td><td>Kata pod with executor sidecar</td></tr>
+<tr><td>arrow-1</td><td>invoke</td></tr>
+<tr><td>arrow-2</td><td>command</td></tr>
+<tr><td>arrow-4</td><td>A2A</td></tr>
+<tr><td>note-0</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.</td></tr>
+<tr><td>note-1</td><td>P1 can retain one SQLite writer; multiple writers require suitable shared storage.</td></tr>
+<tr><td>note-2</td><td>Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
+<tr><td>notes</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.; P1 can retain one SQLite writer; multiple writers require suitable shared storage.; Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-sandbox-pod-evolution:end -->
+
+<!-- diagram-context:sandbox-fig2:start -->
+<details id="diagram-context-sandbox-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Choose Kubernetes before local probing</td></tr>
+<tr><td>takeaway</td><td>The API router owns cluster selection; the local factory can fall back to direct.</td></tr>
+<tr><td>API executor router</td><td>API executor router</td></tr>
+<tr><td>API executor router</td><td>Backend override / cluster detect</td></tr>
+<tr><td>API executor router</td><td>Explicit local bypasses cluster</td></tr>
+<tr><td>Kubernetes selected</td><td>Kubernetes selected</td></tr>
+<tr><td>Kubernetes selected</td><td>Initialize claim executor</td></tr>
+<tr><td>Kubernetes selected</td><td>Failure throws; no local fallback</td></tr>
+<tr><td>Claim backend</td><td>Claim backend</td></tr>
+<tr><td>Claim backend</td><td>Bound pod command contract</td></tr>
+<tr><td>Claim backend</td><td>Not the in-pod PodExec client</td></tr>
+<tr><td>Local factory</td><td>Local factory</td></tr>
+<tr><td>Local factory</td><td>Only when router selects local</td></tr>
+<tr><td>Local factory</td><td>Probe host-supported backends</td></tr>
+<tr><td>Windows ladder</td><td>Windows ladder</td></tr>
+<tr><td>Windows ladder</td><td>processcontainer -&gt; WSL</td></tr>
+<tr><td>Windows ladder</td><td>wsl-bwrap real; unshare not real</td></tr>
+<tr><td>Linux ladder</td><td>Linux ladder</td></tr>
+<tr><td>Linux ladder</td><td>bubblewrap -&gt; LXC</td></tr>
+<tr><td>Linux ladder</td><td>Host tools must be available</td></tr>
+<tr><td>No usable isolation</td><td>No usable isolation</td></tr>
+<tr><td>No usable isolation</td><td>Automatic local fallback</td></tr>
+<tr><td>No usable isolation</td><td>Also explicit direct option</td></tr>
+<tr><td>Direct passthrough</td><td>Direct passthrough</td></tr>
+<tr><td>Direct passthrough</td><td>IsRealIsolation = false</td></tr>
+<tr><td>Direct passthrough</td><td>Trusted/disposable host only</td></tr>
+<tr><td>Command registration</td><td>Command registration</td></tr>
+<tr><td>Command registration</td><td>ShellEnabled AND real or direct</td></tr>
+<tr><td>Command registration</td><td>wsl-unshare: no controlled shell</td></tr>
+<tr><td>arrow-1</td><td>select</td></tr>
+<tr><td>arrow-2</td><td>ready</td></tr>
+<tr><td>arrow-3</td><td>local</td></tr>
+<tr><td>arrow-4</td><td>Windows</td></tr>
+<tr><td>arrow-5</td><td>Linux</td></tr>
+<tr><td>arrow-6</td><td>unavailable</td></tr>
+<tr><td>arrow-8</td><td>warn</td></tr>
+<tr><td>arrow-9</td><td>gate</td></tr>
+<tr><td>note-0</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.</td></tr>
+<tr><td>note-1</td><td>Kubernetes failure never silently descends into the local ladder.</td></tr>
+<tr><td>note-2</td><td>Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
+<tr><td>notes</td><td>The local platform ladders are alternatives, not a Windows-to-Linux chain.; Kubernetes failure never silently descends into the local ladder.; Runtime emits sandbox.selected; factory choice is not an isolation guarantee.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-fig2:end -->
+
+<!-- diagram-context:sandbox-pod-execution-fig4:start -->
+<details id="diagram-context-sandbox-pod-execution-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Local checkout, explicit authoritative writeback</td></tr>
+<tr><td>takeaway</td><td>A temporary Git ref is prepared in-pod and validated before the worker fast-forwards.</td></tr>
+<tr><td>Source coordinates</td><td>Source coordinates</td></tr>
+<tr><td>Source coordinates</td><td>Shared repository + ref</td></tr>
+<tr><td>Source coordinates</td><td>Expected base commit and tree</td></tr>
+<tr><td>Materialize checkout</td><td>Materialize checkout</td></tr>
+<tr><td>Materialize checkout</td><td>Initialize + shallow fetch</td></tr>
+<tr><td>Materialize checkout</td><td>Verify both commit and tree</td></tr>
+<tr><td>Ephemeral checkout</td><td>Ephemeral checkout</td></tr>
+<tr><td>Ephemeral checkout</td><td>Detached immutable base</td></tr>
+<tr><td>Ephemeral checkout</td><td>HOME/XDG outside checkout</td></tr>
+<tr><td>LocalReadOnly</td><td>LocalReadOnly</td></tr>
+<tr><td>LocalReadOnly</td><td>Build / test can write locally</td></tr>
+<tr><td>LocalReadOnly</td><td>Publication is refused</td></tr>
+<tr><td>LocalWritable</td><td>LocalWritable</td></tr>
+<tr><td>LocalWritable</td><td>Implementation edits</td></tr>
+<tr><td>LocalWritable</td><td>Alternate-index final tree</td></tr>
+<tr><td>Prepare publication</td><td>Prepare publication</td></tr>
+<tr><td>Prepare publication</td><td>Flatten nested repo content</td></tr>
+<tr><td>Prepare publication</td><td>No gitlinks; restore metadata</td></tr>
+<tr><td>Equal result tree</td><td>Equal result tree</td></tr>
+<tr><td>Equal result tree</td><td>No-change descriptor</td></tr>
+<tr><td>Equal result tree</td><td>No temporary ref push</td></tr>
+<tr><td>Changed result tree</td><td>Changed result tree</td></tr>
+<tr><td>Changed result tree</td><td>Single-parent commit</td></tr>
+<tr><td>Changed result tree</td><td>Push unique temporary ref</td></tr>
+<tr><td>Worker validation</td><td>Worker validation</td></tr>
+<tr><td>Worker validation</td><td>Run / ref / base / tree / clean</td></tr>
+<tr><td>Worker validation</td><td>Fast-forward authoritative branch</td></tr>
+<tr><td>arrow-1</td><td>fetch</td></tr>
+<tr><td>arrow-2</td><td>verify</td></tr>
+<tr><td>arrow-3</td><td>stage</td></tr>
+<tr><td>arrow-4</td><td>validate</td></tr>
+<tr><td>note-0</td><td>LocalReadOnly limits publication, not ephemeral build/test writes.</td></tr>
+<tr><td>note-1</td><td>Equal-tree and changed-tree outcomes are alternatives.</td></tr>
+<tr><td>note-2</td><td>Source origin is the shared repository; writeback mints no second GitHub token.</td></tr>
+<tr><td>notes</td><td>LocalReadOnly limits publication, not ephemeral build/test writes.; Equal-tree and changed-tree outcomes are alternatives.; Source origin is the shared repository; writeback mints no second GitHub token.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-pod-execution-fig4:end -->
+
+<!-- diagram-context:sandbox-pod-execution-fig5:start -->
+<details id="diagram-context-sandbox-pod-execution-fig5" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Provisioning progress is not turn readiness</td></tr>
+<tr><td>takeaway</td><td>Bound claims, standby health and configured leaf readiness are separate milestones.</td></tr>
+<tr><td>Coordinator dispatch</td><td>Coordinator dispatch</td></tr>
+<tr><td>Coordinator dispatch</td><td>Child launch begins</td></tr>
+<tr><td>Coordinator dispatch</td><td>Admission owned by Kubernetes</td></tr>
+<tr><td>Child executor</td><td>Child executor</td></tr>
+<tr><td>Child executor</td><td>Create/adopt claim</td></tr>
+<tr><td>Child executor</td><td>Poll until controller binding</td></tr>
+<tr><td>Provisioning progress</td><td>Provisioning progress</td></tr>
+<tr><td>Provisioning progress</td><td>provisioning_pending about 20s</td></tr>
+<tr><td>Provisioning progress</td><td>Child stream shows legitimate wait</td></tr>
+<tr><td>Coordinator observer</td><td>Coordinator observer</td></tr>
+<tr><td>Coordinator observer</td><td>Recognize provisioning wait</td></tr>
+<tr><td>Coordinator observer</td><td>Not a completed agent turn</td></tr>
+<tr><td>Claim bound</td><td>Claim bound</td></tr>
+<tr><td>Claim bound</td><td>Ready condition + pod name</td></tr>
+<tr><td>Claim bound</td><td>Resolve actual pod IP</td></tr>
+<tr><td>Configure leaf</td><td>Configure leaf</td></tr>
+<tr><td>Configure leaf</td><td>Standby listener then SetupAsync</td></tr>
+<tr><td>Configure leaf</td><td>Only then start A2A turn</td></tr>
+<tr><td>arrow-1</td><td>launch</td></tr>
+<tr><td>arrow-2</td><td>waiting</td></tr>
+<tr><td>arrow-3</td><td>progress</td></tr>
+<tr><td>arrow-4</td><td>bound</td></tr>
+<tr><td>arrow-5</td><td>setup</td></tr>
+<tr><td>note-0</td><td>Provisioning events distinguish capacity wait from a silent execution stall.</td></tr>
+<tr><td>note-1</td><td>Claim Ready is controller binding, not configured AgentHost readiness.</td></tr>
+<tr><td>note-2</td><td>The configure diagram owns the credential and endpoint-registration sequence.</td></tr>
+<tr><td>notes</td><td>Provisioning events distinguish capacity wait from a silent execution stall.; Claim Ready is controller binding, not configured AgentHost readiness.; The configure diagram owns the credential and endpoint-registration sequence.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-pod-execution-fig5:end -->
+
+<!-- diagram-context:sandbox-pod-execution-fig6:start -->
+<details id="diagram-context-sandbox-pod-execution-fig6" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Bind, reach standby, configure once</td></tr>
+<tr><td>takeaway</td><td>Liveness precedes configuration; production delivers run credentials out of pod specs.</td></tr>
+<tr><td>Prepare launch</td><td>Prepare launch</td></tr>
+<tr><td>Prepare launch</td><td>Resolve provider and run context</td></tr>
+<tr><td>Prepare launch</td><td>Mint fresh turn token</td></tr>
+<tr><td>Claim warm pod</td><td>Claim warm pod</td></tr>
+<tr><td>Claim warm pod</td><td>Create/adopt; omit spec.env</td></tr>
+<tr><td>Claim warm pod</td><td>Wait Ready + bound pod name</td></tr>
+<tr><td>Resolve and register</td><td>Resolve and register</td></tr>
+<tr><td>Resolve and register</td><td>Pod mapping / token registry</td></tr>
+<tr><td>Resolve and register</td><td>Resolve actual pod IP</td></tr>
+<tr><td>GET /healthz</td><td>GET /healthz</td></tr>
+<tr><td>GET /healthz</td><td>HTTP 200 standby</td></tr>
+<tr><td>GET /healthz</td><td>Listener liveness, not turn ready</td></tr>
+<tr><td>POST /configure</td><td>POST /configure</td></tr>
+<tr><td>POST /configure</td><td>Identity / workspace / approvals</td></tr>
+<tr><td>POST /configure</td><td>Copilot capability OR BYOK</td></tr>
+<tr><td>AgentHost setup</td><td>AgentHost setup</td></tr>
+<tr><td>AgentHost setup</td><td>One-time configuration</td></tr>
+<tr><td>AgentHost setup</td><td>Effective workspace + HOME</td></tr>
+<tr><td>Configuration guards</td><td>Configuration guards</td></tr>
+<tr><td>Configuration guards</td><td>Second configure: 409</td></tr>
+<tr><td>Configuration guards</td><td>Other routes: 503 before ready</td></tr>
+<tr><td>Register effective endpoint</td><td>Register effective endpoint</td></tr>
+<tr><td>Register effective endpoint</td><td>Return effective working directory</td></tr>
+<tr><td>Register effective endpoint</td><td>Shared/local/private fallback</td></tr>
+<tr><td>First A2A turn</td><td>First A2A turn</td></tr>
+<tr><td>First A2A turn</td><td>Production sends turn bearer</td></tr>
+<tr><td>First A2A turn</td><td>Equality guard when nonempty</td></tr>
+<tr><td>arrow-1</td><td>launch</td></tr>
+<tr><td>arrow-2</td><td>bound</td></tr>
+<tr><td>arrow-3</td><td>poll</td></tr>
+<tr><td>arrow-4</td><td>reachable</td></tr>
+<tr><td>arrow-5</td><td>setup</td></tr>
+<tr><td>arrow-6</td><td>ready</td></tr>
+<tr><td>arrow-7</td><td>invoke</td></tr>
+<tr><td>note-0</td><td>Top, middle and bottom rows are successive launch stages.</td></tr>
+<tr><td>note-1</td><td>Repository / preview / broker credentials have separate purposes.</td></tr>
+<tr><td>note-2</td><td>Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
+<tr><td>notes</td><td>Top, middle and bottom rows are successive launch stages.; Repository / preview / broker credentials have separate purposes.; Optional schema fields do not imply unconditional endpoint enforcement.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-pod-execution-fig6:end -->
+
+<!-- diagram-context:sandbox-pod-execution-fig7:start -->
+<details id="diagram-context-sandbox-pod-execution-fig7" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Return the decision to the owning gate</td></tr>
+<tr><td>takeaway</td><td>Only an Unknown durable-gate result takes the authenticated pod fallback.</td></tr>
+<tr><td>Operator decision</td><td>Operator decision</td></tr>
+<tr><td>Operator decision</td><td>Coordinator or child run ID</td></tr>
+<tr><td>Operator decision</td><td>Authorize request and owner</td></tr>
+<tr><td>API approval endpoint</td><td>API approval endpoint</td></tr>
+<tr><td>API approval endpoint</td><td>Resolve owning child</td></tr>
+<tr><td>API approval endpoint</td><td>Try durable gate first</td></tr>
+<tr><td>Durable gate</td><td>Durable gate</td></tr>
+<tr><td>Durable gate</td><td>Known terminal: return result</td></tr>
+<tr><td>Durable gate</td><td>Unknown: pod-per-run fallback</td></tr>
+<tr><td>Public response</td><td>Public response</td></tr>
+<tr><td>Public response</td><td>Return mapped result</td></tr>
+<tr><td>Public response</td><td>200 / 404 / 409 / 503</td></tr>
+<tr><td>Approval HTTP client</td><td>Approval HTTP client</td></tr>
+<tr><td>Approval HTTP client</td><td>Resolve pod origin + credential</td></tr>
+<tr><td>Approval HTTP client</td><td>Authenticated control callback</td></tr>
+<tr><td>AgentHost local gate</td><td>AgentHost local gate</td></tr>
+<tr><td>AgentHost local gate</td><td>Resolve pending tool request</td></tr>
+<tr><td>AgentHost local gate</td><td>Return resolution to API</td></tr>
+<tr><td>arrow-1</td><td>grant</td></tr>
+<tr><td>arrow-2</td><td>try</td></tr>
+<tr><td>arrow-3</td><td>unknown</td></tr>
+<tr><td>arrow-4</td><td>forward</td></tr>
+<tr><td>arrow-5</td><td>result</td></tr>
+<tr><td>arrow-6</td><td>return</td></tr>
+<tr><td>arrow-7</td><td>respond</td></tr>
+<tr><td>note-0</td><td>The fallback uses ApprovalHttpClient; arrows summarize request and return.</td></tr>
+<tr><td>note-1</td><td>Configured control auth accepts turn or preview credential; dev can omit both.</td></tr>
+<tr><td>note-2</td><td>Errors and provisional-grant rollback/finalize stay in the consumer prose.</td></tr>
+<tr><td>notes</td><td>The fallback uses ApprovalHttpClient; arrows summarize request and return.; Configured control auth accepts turn or preview credential; dev can omit both.; Errors and provisional-grant rollback/finalize stay in the consumer prose.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:sandbox-pod-execution-fig7:end -->
+
+<!-- diagram-context:canonical-pod-process-boundaries:start -->
+<details id="diagram-context-canonical-pod-process-boundaries" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Two PID namespaces, a narrower child mount view</td></tr>
+<tr><td>takeaway</td><td>Kata isolates the pod; the executor container separates model processes from AgentHost.</td></tr>
+<tr><td>AgentHost container</td><td>AgentHost container</td></tr>
+<tr><td>AgentHost container</td><td>PID namespace A</td></tr>
+<tr><td>AgentHost container</td><td>Provider / A2A / control state</td></tr>
+<tr><td>Pod-private IPC</td><td>Pod-private IPC</td></tr>
+<tr><td>Pod-private IPC</td><td>Authenticated UDS + token</td></tr>
+<tr><td>Pod-private IPC</td><td>Memory-backed emptyDir</td></tr>
+<tr><td>Executor container</td><td>Executor container</td></tr>
+<tr><td>Executor container</td><td>PID namespace B</td></tr>
+<tr><td>Executor container</td><td>No Kubernetes or AAD identity</td></tr>
+<tr><td>Platform registration</td><td>Platform registration</td></tr>
+<tr><td>Platform registration</td><td>Exact workspace and HOME</td></tr>
+<tr><td>Platform registration</td><td>Reject unregistered paths</td></tr>
+<tr><td>Child mount view</td><td>Child mount view</td></tr>
+<tr><td>Child mount view</td><td>Workspace / HOME / scratch / tmp</td></tr>
+<tr><td>Child mount view</td><td>Exact Git metadata read-only</td></tr>
+<tr><td>Model-controlled child</td><td>Model-controlled child</td></tr>
+<tr><td>Model-controlled child</td><td>Runtime-provided executor procfs</td></tr>
+<tr><td>Model-controlled child</td><td>No nested bwrap PID namespace</td></tr>
+<tr><td>Kata pod / VM</td><td>Kata pod / VM</td></tr>
+<tr><td>Kata pod / VM</td><td>Shared pod network</td></tr>
+<tr><td>Kata pod / VM</td><td>VM separates pod from host node</td></tr>
+<tr><td>Absent from child view</td><td>Absent from child view</td></tr>
+<tr><td>Absent from child view</td><td>PVC root / siblings / IPC token</td></tr>
+<tr><td>Absent from child view</td><td>AgentHost PID tree unavailable</td></tr>
+<tr><td>System runtime roots</td><td>System runtime roots</td></tr>
+<tr><td>System runtime roots</td><td>Optional run-private overlays</td></tr>
+<tr><td>System runtime roots</td><td>Not universally read-only /usr</td></tr>
+<tr><td>arrow-1</td><td>request</td></tr>
+<tr><td>arrow-2</td><td>dispatch</td></tr>
+<tr><td>arrow-3</td><td>allowlist</td></tr>
+<tr><td>arrow-4</td><td>spawn</td></tr>
+<tr><td>arrow-5</td><td>execute</td></tr>
+<tr><td>note-0</td><td>All cards are inside one Kata pod; containers have distinct PID namespaces.</td></tr>
+<tr><td>note-1</td><td>The child view is a mount boundary, not a third container/PID namespace.</td></tr>
+<tr><td>note-2</td><td>Startup rejects same-PID-namespace execution; no model access to IPC secrets.</td></tr>
+<tr><td>notes</td><td>All cards are inside one Kata pod; containers have distinct PID namespaces.; The child view is a mount boundary, not a third container/PID namespace.; Startup rejects same-PID-namespace execution; no model access to IPC secrets.</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-pod-process-boundaries:end -->

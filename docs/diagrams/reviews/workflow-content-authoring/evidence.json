@@ -1,0 +1,216 @@
+{
+  "owner": "astra-workflow-assets",
+  "disposition": "retain",
+  "scope": "Only assigned source/raster/hash/generated cleanup/review artifacts; no inventory writes.",
+  "model": {
+    "title": "Content Authoring workflow",
+    "nodes": [
+      {
+        "id": "research",
+        "type": "prompt",
+        "label": "Research",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:14",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "draft",
+        "type": "prompt",
+        "label": "Draft",
+        "role": "agent",
+        "kind": "live",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:20",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "edit",
+        "type": "prompt",
+        "label": "Editorial Review",
+        "role": "review",
+        "kind": "live",
+        "prompt": "Review the drafted content editorially and prepare it for the RAI safety check.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:26",
+        "detail": "Agent task",
+        "metadata": "review"
+      },
+      {
+        "id": "rai-check",
+        "type": "check",
+        "label": "RAI Check",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "rai",
+        "branches": [
+          "revise",
+          "safety-failed",
+          "no-changes",
+          "review"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:33",
+        "detail": "Verdict routing",
+        "metadata": "rai"
+      },
+      {
+        "id": "human-review",
+        "type": "check",
+        "label": "Human Review",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "human-review",
+        "branches": [
+          "approved",
+          "request-changes",
+          "declined"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:45",
+        "detail": "Verdict routing",
+        "metadata": "human-review"
+      },
+      {
+        "id": "publish",
+        "type": "prompt",
+        "label": "Publish",
+        "role": "agent",
+        "kind": "live",
+        "prompt": "Publish or package the approved content without invoking code merge semantics.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:56",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "terminal-safety-failed",
+        "type": "terminal",
+        "label": "Safety Failed",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:63",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "terminal-declined",
+        "type": "terminal",
+        "label": "Declined",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:69",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "done",
+        "type": "terminal",
+        "label": "Done",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:75",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      }
+    ],
+    "edges": [
+      {
+        "source": "research",
+        "target": "draft",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:82\u201383"
+      },
+      {
+        "source": "draft",
+        "target": "edit",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:85\u201386"
+      },
+      {
+        "source": "edit",
+        "target": "rai-check",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:89\u201390"
+      },
+      {
+        "source": "rai-check",
+        "target": "draft",
+        "label": "revise",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:93\u201395"
+      },
+      {
+        "source": "rai-check",
+        "target": "terminal-safety-failed",
+        "label": "safety-failed",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:97\u201399"
+      },
+      {
+        "source": "rai-check",
+        "target": "done",
+        "label": "no-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:101\u2013103"
+      },
+      {
+        "source": "rai-check",
+        "target": "human-review",
+        "label": "review",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:105\u2013107"
+      },
+      {
+        "source": "human-review",
+        "target": "publish",
+        "label": "approved",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:109\u2013111"
+      },
+      {
+        "source": "human-review",
+        "target": "draft",
+        "label": "request-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:113\u2013115"
+      },
+      {
+        "source": "human-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:117\u2013119"
+      },
+      {
+        "source": "publish",
+        "target": "done",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:121\u2013122"
+      }
+    ],
+    "main": [
+      "research",
+      "draft",
+      "edit",
+      "rai-check",
+      "human-review",
+      "publish"
+    ],
+    "note": "Authored graph \u2022 all YAML branches retained",
+    "footer": "Solid: advance / outcome    Dashed marigold: revision / return"
+  },
+  "supplied_research": {
+    "component_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "flow_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "assurance": "Parent reports independent YAML tuple equality: 8/15/11/7/14/6/17 edges. CatalogWorkflowBindingTests gate theory includes evaluation; bindability theory does not.",
+    "reconciled_facts": "Catalog graphs retained, not legacy visuals. No authored merge/PR/Scribe in seven catalogs. Default has explicit merge -> PR -> Scribe. Selection is trigger agnostic; overrides precede singleton, 2 parse attempts, exception fallback immediate."
+  },
+  "visual_sources": [
+    "docs/diagrams/drawio/fluent-template.drawio",
+    "docs/diagrams/drawio/fluent-library.xml",
+    "apps/web/src/components/WorkflowGraphPanel.tsx:1\u201390"
+  ],
+  "assets": "Native diagrams.net flowchart process, decision, document and terminal shapes. No external logos. Native shape implementations distributed with pinned draw.io Desktop 31.4.5 (Apache-2.0 diagrams.net); repository Fluent chrome.",
+  "classifications": {
+    "research": "native:flowchart",
+    "draft": "native:flowchart",
+    "edit": "native:flowchart",
+    "rai-check": "native:flowchart",
+    "human-review": "native:flowchart",
+    "publish": "native:flowchart",
+    "terminal-safety-failed": "native:flowchart",
+    "terminal-declined": "native:flowchart",
+    "done": "native:flowchart"
+  }
+}

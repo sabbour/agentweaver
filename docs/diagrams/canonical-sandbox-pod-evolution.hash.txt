@@ -1,1 +1,22 @@
-58e39333e179d5bebaa119ace26de5740d51718443230e69c0db85f8b1f9ebe2
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-sandbox-pod-evolution.drawio",
+    "sha256": "8a18590425e08ca086e2d1095002ac4843090eda2ca0feb5cc77c0ffcaa37c42"
+  },
+  "drawio": {
+    "file": "canonical-sandbox-pod-evolution.drawio",
+    "sha256": "1c66264b0f2bcbd0d8371129604b37ae9296de9a97e4544bc5eed134914938a1"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-sandbox-pod-evolution.png",
+    "sha256": "c7a606f69b7b80afcc00da0ef119ac536d231538503f67c4172ed75661c22f02"
+  }
+}

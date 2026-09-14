@@ -1,0 +1,52 @@
+{
+  "diagram": "workflow-software-delivery",
+  "renderer": "31.4.5",
+  "manifest_schema_valid": true,
+  "manifest_cross_fields_valid": true,
+  "sources": [
+    {
+      "source": "workflow-software-delivery-pitch.drawio",
+      "sha256": "76a34946deede1efb0d550736d0ccc9a263eb49cab742a2b43c15488cf53c3d5",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-software-delivery-pass-01-upgrade.drawio",
+      "sha256": "cc6c8439baecd73b6ef5b0c92cf8dbf69b10f218ff2cbceb5b6b8cd933e26307",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-software-delivery-pass-02.drawio",
+      "sha256": "7e08fee86d200a2ea5b27bc2037cb5c1d6574bea3643a3378a991978313fd758",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-software-delivery-pass-03.drawio",
+      "sha256": "e24dcb3deead3e8470cc324e90719eee10818ff7c281e7a128528fd985b5a747",
+      "xml_valid": true
+    },
+    {
+      "source": "workflow-software-delivery-pass-04.drawio",
+      "sha256": "e24dcb3deead3e8470cc324e90719eee10818ff7c281e7a128528fd985b5a747",
+      "xml_valid": true
+    }
+  ],
+  "final_arrows": 17,
+  "legacy_yaml_comparison": {
+    "legacy_yaml_node_sets_equal": true,
+    "legacy_yaml_edge_tuples_equal": true,
+    "edges": 17,
+    "missing": [],
+    "extra": []
+  },
+  "final_remaining_visual_defects": 0,
+  "canonical_promoted": true,
+  "residuals": [
+    "Full independent component/flow transcript text supplied under Temp was not copied; summarized handoff and direct code evidence are retained."
+  ],
+  "promotion_source_sha256": "e24dcb3deead3e8470cc324e90719eee10818ff7c281e7a128528fd985b5a747",
+  "promotion_png_sha256": "6353cced8e1094961256798438fca48c98870e8033a7d785ebd50bc021c7ac7e",
+  "scoped_repository_drift_check": "passed",
+  "renderer_stamp_verified": true,
+  "published_png_matches_inspected_pixels": true,
+  "publication_png_sha256": "6353cced8e1094961256798438fca48c98870e8033a7d785ebd50bc021c7ac7e"
+}

@@ -1,0 +1,191 @@
+{
+  "name": "frontend-fig1",
+  "title": "Frontend: intent and projection",
+  "takeaway": "The browser presents backend facts; the API remains the authority.",
+  "groups": [
+    "BROWSER · OPERATOR INTENT",
+    "BACKEND FACTS · UI PROJECTION"
+  ],
+  "nodes": [
+    {
+      "id": "auth",
+      "title": "AuthGate",
+      "subtitle": "Validated SPA session",
+      "detail": "REST and SSE use the session bearer",
+      "meta": "App.tsx",
+      "badge": "SESSION",
+      "evidence": "apps/web/src/App.tsx:399-403",
+      "shape": "umlActor",
+      "box": {
+        "x": 36,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "controls",
+      "title": "Rendered controls",
+      "subtitle": "Status, timeline and graph",
+      "detail": "Operator decisions become new API calls",
+      "meta": "CoordinatorRunPage.tsx",
+      "badge": "PRESENT",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "shell",
+      "title": "AppShell",
+      "subtitle": "TopBar · LeftNav · project switcher",
+      "detail": "ProjectList + Notifications providers",
+      "meta": "AppShell.tsx:134-182",
+      "badge": "CONTEXT",
+      "evidence": "apps/web/src/components/shell/AppShell.tsx:134-182",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "projection",
+      "title": "Client projection",
+      "subtitle": "Reducers combine backend facts",
+      "detail": "Topology is server-authored, not invented",
+      "meta": "CoordinatorRunPage.tsx",
+      "badge": "DERIVE",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "pages",
+      "title": "Route pages",
+      "subtitle": "Board · run · workspace",
+      "detail": "Route parameters select the current scope",
+      "meta": "App.tsx:80-127",
+      "badge": "ROUTES",
+      "evidence": "apps/web/src/App.tsx:80-127",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "live",
+      "title": "Seed + live events",
+      "subtitle": "Independent REST and SSE inputs",
+      "detail": "Positive sequence IDs deduplicate events",
+      "meta": "useSeededRunStream.ts",
+      "badge": "MERGE",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-151",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "client",
+      "title": "API client",
+      "subtitle": "Typed requests and error handling",
+      "detail": "API_URL origin + endpoint /api paths",
+      "meta": "config.ts:13-36",
+      "badge": "REQUEST",
+      "evidence": "apps/web/src/config.ts:13-36",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "api",
+      "title": "Agentweaver API",
+      "subtitle": "Projects · runs · graph · events",
+      "detail": "Server owns persisted state and topology",
+      "meta": "CoordinatorRunPage.tsx",
+      "badge": "AUTHORITY",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "auth-to-shell",
+      "source": "auth",
+      "target": "shell",
+      "label": "enter",
+      "evidence": "apps/web/src/App.tsx:399-403"
+    },
+    {
+      "id": "shell-to-pages",
+      "source": "shell",
+      "target": "pages",
+      "label": "contains",
+      "evidence": "apps/web/src/App.tsx:80-127"
+    },
+    {
+      "id": "pages-to-client",
+      "source": "pages",
+      "target": "client",
+      "label": "request",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842"
+    },
+    {
+      "id": "client-to-api",
+      "source": "client",
+      "target": "api",
+      "label": "HTTP",
+      "evidence": "apps/web/src/config.ts:13-36"
+    },
+    {
+      "id": "api-to-live",
+      "source": "api",
+      "target": "live",
+      "label": "history + SSE",
+      "evidence": "apps/web/src/hooks/useSeededRunStream.ts:43-151"
+    },
+    {
+      "id": "live-to-projection",
+      "source": "live",
+      "target": "projection",
+      "label": "events",
+      "evidence": "apps/web/src/timeline/mergeRunEvents.ts:23-79"
+    },
+    {
+      "id": "projection-to-controls",
+      "source": "projection",
+      "target": "controls",
+      "label": "render",
+      "evidence": "apps/web/src/pages/CoordinatorRunPage.tsx:2842"
+    }
+  ],
+  "scope": "Read direction: intent down the left; backend facts rise on the right."
+}

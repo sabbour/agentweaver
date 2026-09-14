@@ -1,0 +1,11 @@
+{
+  "diagram": "unified-steering-fig1",
+  "phase": "pass-01",
+  "png_sha256": "4a4f8001ad1fccd412442a16887f1fbcbd79955361c31029ec06e0a1185a56f4",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven A5-approximation sheets and all fourteen lossless original-pixel pairs. Checked every diagram for reading order, wrapping, endpoints, crossings and evidence associations; specific remaining defects are noted below.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

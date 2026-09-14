@@ -1,0 +1,316 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Look up requested project-scoped slug",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:49-70",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n8",
+    "relationship": "Unused requested slug creates a pending row",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:130-152",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        514,
+        166.0
+      ],
+      [
+        514,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Existing slug checks terminal replay first",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:76-79",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        141.16
+      ],
+      [
+        514,
+        141.16
+      ],
+      [
+        514,
+        102
+      ],
+      [
+        663.0,
+        102
+      ],
+      [
+        663.0,
+        112
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Pending existing row checks full provenance match",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:81-103",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        166.0
+      ],
+      [
+        546,
+        166.0
+      ],
+      [
+        546,
+        248
+      ],
+      [
+        248,
+        248
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Matching pending author and provenance updates existing row",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:81-103",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        280,
+        293.16
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        290,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n3",
+    "target": "n5",
+    "relationship": "Different pending provenance allocates a new slug",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:114-116",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        342.84
+      ],
+      [
+        248,
+        342.84
+      ],
+      [
+        248,
+        384
+      ],
+      [
+        546,
+        384
+      ],
+      [
+        546,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n2",
+    "target": "n5",
+    "relationship": "Different agent allocates a distinct candidate",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:76-116",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n5",
+    "target": "n6",
+    "relationship": "Check candidate availability",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:117-126",
+    "result": "clean",
+    "route": [
+      [
+        770,
+        318.0
+      ],
+      [
+        780,
+        318.0
+      ],
+      [
+        780,
+        534
+      ],
+      [
+        248,
+        534
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Occupied candidate increments suffix",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:117-126",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        248,
+        445.16
+      ],
+      [
+        248,
+        406
+      ],
+      [
+        397.0,
+        406
+      ],
+      [
+        397.0,
+        416
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n7",
+    "target": "n6",
+    "relationship": "Numbered candidate loops back through availability check",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:117-126",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        470.0
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        280,
+        546
+      ],
+      [
+        131.0,
+        546
+      ],
+      [
+        131.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e10",
+    "source": "n6",
+    "target": "n8",
+    "relationship": "Free candidate is inserted; database enforces uniqueness",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:130-152",
+    "result": "clean",
+    "route": [
+      [
+        24,
+        470.0
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        14,
+        86
+      ],
+      [
+        532,
+        86
+      ],
+      [
+        532,
+        445.16
+      ],
+      [
+        556,
+        445.16
+      ]
+    ]
+  }
+]

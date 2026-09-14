@@ -1,0 +1,216 @@
+{
+  "title": "Identity, control, and execution",
+  "subtitle": "Entra authenticates people; GitHub capabilities authorize purpose-bound repository access.",
+  "identity": "DEPLOYMENT / TRUST BOUNDARIES",
+  "disposition": "retain",
+  "evidence": "deployment",
+  "groups": [
+    "AKS · control and execution workloads",
+    "External identity, capabilities, and durable data"
+  ],
+  "nodes": [
+    {
+      "id": "api",
+      "title": "API + worker",
+      "sub": "Control plane services",
+      "meta": "Postgres + CSI mounted data",
+      "pill": "CONTROL",
+      "tone": "lavender",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "API hosts execution orchestration",
+        "MCP calls API; no MCP database"
+      ]
+    },
+    {
+      "id": "mcp",
+      "title": "MCP service",
+      "sub": "Authenticated tool surface",
+      "meta": "HTTP API client",
+      "pill": "TOOLS",
+      "tone": "teal",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "Broker-token validation",
+        "No database connector from MCP"
+      ]
+    },
+    {
+      "id": "sandbox",
+      "title": "AgentHost pod",
+      "sub": "Constrained turn execution",
+      "meta": "per-run bearer / sandbox",
+      "pill": "EXECUTION",
+      "tone": "green",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "Worker configures and streams A2A",
+        "Repository credential flow exists"
+      ]
+    },
+    {
+      "id": "entra",
+      "title": "Microsoft Entra",
+      "sub": "User identity",
+      "meta": "sign-in / sessions / roles",
+      "pill": "IDENTITY",
+      "tone": "teal",
+      "shape": "mxgraph.azure2.azure_active_directory",
+      "facts": [
+        "Authentication is not repo authority",
+        "Distinct from GitHub capability grants"
+      ]
+    },
+    {
+      "id": "github",
+      "title": "GitHub",
+      "sub": "Purpose-bound capabilities",
+      "meta": "repository authorization",
+      "pill": "CAPABILITY",
+      "tone": "lavender",
+      "shape": "cloud",
+      "facts": [
+        "Constrained credentials can reach execution",
+        "Not a credential-free sandbox"
+      ]
+    },
+    {
+      "id": "postgres",
+      "title": "PostgreSQL",
+      "sub": "Shared durable state",
+      "meta": "API + worker persistence",
+      "pill": "DATA",
+      "tone": "teal",
+      "shape": "cylinder3",
+      "facts": [
+        "Run state / events / project data",
+        "CSI storage serves mounted files"
+      ]
+    }
+  ],
+  "edges": [
+    [
+      "mcp",
+      "api",
+      "HTTP API"
+    ],
+    [
+      "api",
+      "sandbox",
+      "configure / A2A"
+    ],
+    [
+      "entra",
+      "api",
+      "identity"
+    ],
+    [
+      "github",
+      "api",
+      "capability"
+    ],
+    [
+      "api",
+      "postgres",
+      "read / write"
+    ]
+  ],
+  "notes": [
+    "TRUST FLOWS ARE DELIBERATELY DISTINCT",
+    "GitHub authorization constrains repository credentials used during execution; Entra establishes user identity.",
+    "API and worker use PostgreSQL and CSI-mounted storage. MCP is an API client, not another database owner."
+  ],
+  "grounding": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+  "nodes_or_participants": [
+    {
+      "id": "api",
+      "title": "API + worker",
+      "sub": "Control plane services",
+      "meta": "Postgres + CSI mounted data",
+      "pill": "CONTROL",
+      "tone": "lavender",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "API hosts execution orchestration",
+        "MCP calls API; no MCP database"
+      ],
+      "classification": "native:kubernetes",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    },
+    {
+      "id": "mcp",
+      "title": "MCP service",
+      "sub": "Authenticated tool surface",
+      "meta": "HTTP API client",
+      "pill": "TOOLS",
+      "tone": "teal",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "Broker-token validation",
+        "No database connector from MCP"
+      ],
+      "classification": "native:kubernetes",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    },
+    {
+      "id": "sandbox",
+      "title": "AgentHost pod",
+      "sub": "Constrained turn execution",
+      "meta": "per-run bearer / sandbox",
+      "pill": "EXECUTION",
+      "tone": "green",
+      "shape": "mxgraph.kubernetes.pod",
+      "facts": [
+        "Worker configures and streams A2A",
+        "Repository credential flow exists"
+      ],
+      "classification": "native:kubernetes",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    },
+    {
+      "id": "entra",
+      "title": "Microsoft Entra",
+      "sub": "User identity",
+      "meta": "sign-in / sessions / roles",
+      "pill": "IDENTITY",
+      "tone": "teal",
+      "shape": "mxgraph.azure2.azure_active_directory",
+      "facts": [
+        "Authentication is not repo authority",
+        "Distinct from GitHub capability grants"
+      ],
+      "classification": "native:azure",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    },
+    {
+      "id": "github",
+      "title": "GitHub",
+      "sub": "Purpose-bound capabilities",
+      "meta": "repository authorization",
+      "pill": "CAPABILITY",
+      "tone": "lavender",
+      "shape": "cloud",
+      "facts": [
+        "Constrained credentials can reach execution",
+        "Not a credential-free sandbox"
+      ],
+      "classification": "native:cloud",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    },
+    {
+      "id": "postgres",
+      "title": "PostgreSQL",
+      "sub": "Shared durable state",
+      "meta": "API + worker persistence",
+      "pill": "DATA",
+      "tone": "teal",
+      "shape": "cylinder3",
+      "facts": [
+        "Run state / events / project data",
+        "CSI storage serves mounted files"
+      ],
+      "classification": "native:database",
+      "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings"
+    }
+  ]
+}

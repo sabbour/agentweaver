@@ -1,0 +1,43 @@
+✔ recorder-session provider hands cached UI authentication to API calls in memory (1.0137ms)
+✔ recorder-session provider reuses one cached UI session without launching another sign-in (0.1323ms)
+✔ recorder-session provider rejects a cached UI session for another target with refresh guidance (0.3225ms)
+✔ recorder-session provider reports how to refresh an unavailable cached UI session (0.2186ms)
+✔ recorder-session provider requires a target before reading cached authentication (0.104ms)
+✔ API client records no authorization value when using an in-memory provider (33.9598ms)
+✔ public deployment preflight never reads or sends the recorder session token (0.7791ms)
+✔ shortRef strips branch and tag ref prefixes (1.2009ms)
+✔ versionFromRef reads semver from release branches and tags (0.1999ms)
+✔ resolveChannel maps each branch topology stage to a channel (0.0988ms)
+✔ every channel emits the immutable short-sha tag (0.6748ms)
+✔ dev and main pushes add only their moving branch tag (0.2993ms)
+✔ an arbitrary commit build is addressable only by its sha (0.0851ms)
+✔ release-candidate branches get an rc-<version> tag (0.0708ms)
+✔ published releases get semver tags plus latest (0.0775ms)
+✔ prereleases never move latest (0.1044ms)
+✔ missing sha or version inputs fail loudly instead of publishing a mistagged image (1.0818ms)
+✔ primaryTag prefers a semver tag and otherwise identifies the commit (0.2222ms)
+✔ imageReferences lowercases the owner namespace (0.1122ms)
+✔ buildPlan covers exactly the images declared in image-spec (0.1707ms)
+✔ main emits channel, tags and a JSON matrix for the workflow (0.2313ms)
+✔ buildJudgePrompt includes the canonical join-key tuple and frustration contract (34.1988ms)
+✔ judgeEvidence falls back to a schema-valid explicit non-verdict when the judge returns invalid JSON (109.8609ms)
+✔ judgeEvidence falls back when the judge command times out (46.9575ms)
+✔ judgeEvidence falls back when the judge command exits unsuccessfully (103.9334ms)
+✔ validateVerdict accepts a fully conforming cross-surface verdict (1.0971ms)
+✔ validateVerdict rejects not_assessed frustration with a numeric score (0.1939ms)
+✔ validateVerdict rejects join-key mismatches against expected metadata (0.131ms)
+✔ transport validation accepts arbitrary HTTPS and loopback HTTP targets (1.2464ms)
+✔ transport validation rejects malformed or unsafe targets (2.8882ms)
+✔ sanitized preflight evidence records source and transport but never a credential value (1.0506ms)
+✔ persisted API target evidence strips query names, values, fragments, and userinfo (0.2531ms)
+✔ exact path validation rejects path prefixes, suffixes, and trailing slashes (0.1989ms)
+✔ retired environment and TLS bypass flags are absent from active harness entry points (19.12ms)
+✔ MCP HTTP targets use host-agnostic transport validation and exact path semantics (3.9129ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 495.4919

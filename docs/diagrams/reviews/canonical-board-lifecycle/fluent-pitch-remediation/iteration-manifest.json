@@ -1,0 +1,109 @@
+{
+  "diagram": "canonical-board-lifecycle",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "canonical-board-lifecycle-pitch.drawio",
+    "png": "canonical-board-lifecycle-pitch.png",
+    "change_record": "canonical-board-lifecycle-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "canonical-board-lifecycle-pass-01.drawio",
+      "png": "canonical-board-lifecycle-pass-01.png",
+      "change_record": "canonical-board-lifecycle-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 3232,
+      "result_meaningful_xml": 36527,
+      "growth_ratio": 11.301671
+    },
+    {
+      "drawio": "canonical-board-lifecycle-pass-02.drawio",
+      "png": "canonical-board-lifecycle-pass-02.png",
+      "change_record": "canonical-board-lifecycle-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "canonical-board-lifecycle-pass-03.drawio",
+      "png": "canonical-board-lifecycle-pass-03.png",
+      "change_record": "canonical-board-lifecycle-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "canonical-board-lifecycle-pass-04.drawio",
+      "png": "canonical-board-lifecycle-pass-04.png",
+      "change_record": "canonical-board-lifecycle-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e1",
+          "source": "backlog",
+          "target": "ready",
+          "relationship": "queue",
+          "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "ready",
+          "target": "progress",
+          "relationship": "claim + start",
+          "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "progress",
+          "target": "review",
+          "relationship": "await review",
+          "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "review",
+          "target": "done",
+          "relationship": "finish",
+          "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+          "result": "clean"
+        },
+        {
+          "id": "e5",
+          "source": "progress",
+          "target": "failed",
+          "relationship": "problem",
+          "evidence": "apps/Agentweaver.Api/Runs/BoardProjectionService.cs:65-145; apps/Agentweaver.Api/Runs/WorkflowStageProjector.cs:21-80; packages/Agentweaver.Domain/BacklogTaskState.cs; apps/web/src/api/board.ts:20-44",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

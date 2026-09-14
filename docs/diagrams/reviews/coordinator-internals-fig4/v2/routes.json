@@ -1,0 +1,422 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Eligible children provide ordered integration inputs",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:873-981",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Persist aggregate artifacts before resolving checks",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:981-997",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Run applicable authored gate executors",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1023-1194",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n2",
+    "relationship": "Successful check continues the resolved gate list",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1148-1194",
+    "result": "clean",
+    "route": [
+      [
+        131.0,
+        372
+      ],
+      [
+        131.0,
+        382
+      ],
+      [
+        544,
+        382
+      ],
+      [
+        544,
+        240
+      ],
+      [
+        613.78,
+        240
+      ],
+      [
+        613.78,
+        220
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n2",
+    "target": "n4",
+    "relationship": "An authored human gate persists its request",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1198-1234",
+    "result": "clean",
+    "route": [
+      [
+        712.22,
+        220
+      ],
+      [
+        712.22,
+        248
+      ],
+      [
+        514,
+        248
+      ],
+      [
+        514,
+        318.0
+      ],
+      [
+        504,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n2",
+    "relationship": "Normal human-gate approval continues remaining gates",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1443-1464",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        372
+      ],
+      [
+        397.0,
+        392
+      ],
+      [
+        780,
+        392
+      ],
+      [
+        780,
+        166.0
+      ],
+      [
+        770,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n3",
+    "target": "n5",
+    "relationship": "Collective RED parks at durable human review",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:3757-3795",
+    "result": "clean",
+    "route": [
+      [
+        81.78,
+        372
+      ],
+      [
+        81.78,
+        392
+      ],
+      [
+        278,
+        392
+      ],
+      [
+        278,
+        400
+      ],
+      [
+        532,
+        400
+      ],
+      [
+        532,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n3",
+    "target": "n6",
+    "relationship": "Autonomous request-changes enters steering",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1139-1192",
+    "result": "clean",
+    "route": [
+      [
+        24,
+        318.0
+      ],
+      [
+        14,
+        318.0
+      ],
+      [
+        14,
+        534
+      ],
+      [
+        131.0,
+        534
+      ],
+      [
+        131.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "Human request-changes enters scoped steering",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1467-1482",
+    "result": "clean",
+    "route": [
+      [
+        347.78,
+        372
+      ],
+      [
+        347.78,
+        400
+      ],
+      [
+        266,
+        400
+      ],
+      [
+        266,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n6",
+    "target": "n5",
+    "relationship": "Exhaustion or Proceed opens durable human review",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2372-2388",
+    "result": "clean",
+    "route": [
+      [
+        81.78,
+        524
+      ],
+      [
+        81.78,
+        546
+      ],
+      [
+        544,
+        546
+      ],
+      [
+        544,
+        400
+      ],
+      [
+        663.0,
+        400
+      ],
+      [
+        663.0,
+        372
+      ]
+    ]
+  },
+  {
+    "id": "e10",
+    "source": "n6",
+    "target": "n1",
+    "relationship": "Explicit revision effects precede subsequent assembly",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2334-2370",
+    "result": "clean",
+    "route": [
+      [
+        24,
+        470.0
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        14,
+        86
+      ],
+      [
+        280,
+        86
+      ],
+      [
+        280,
+        141.16
+      ],
+      [
+        290,
+        141.16
+      ]
+    ]
+  },
+  {
+    "id": "e11",
+    "source": "n5",
+    "target": "n7",
+    "relationship": "Persisted human-review metadata supports recovery",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1321-1357",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        293.16
+      ],
+      [
+        516,
+        293.16
+      ],
+      [
+        516,
+        534
+      ],
+      [
+        397.0,
+        534
+      ],
+      [
+        397.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e12",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Recovered persisted approval completes using saved artifacts",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1388-1409",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        470.0
+      ],
+      [
+        532,
+        470.0
+      ],
+      [
+        532,
+        534
+      ],
+      [
+        663.0,
+        534
+      ],
+      [
+        663.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e13",
+    "source": "n2",
+    "target": "n8",
+    "relationship": "Finished authored gates reach approved completion",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1678-1698",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        248
+      ],
+      [
+        544,
+        248
+      ],
+      [
+        544,
+        400
+      ],
+      [
+        663.0,
+        400
+      ],
+      [
+        663.0,
+        416
+      ]
+    ]
+  }
+]

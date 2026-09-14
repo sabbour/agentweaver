@@ -1,0 +1,245 @@
+{
+  "diagram": "canonical-agent-communication-shared",
+  "source_sha256": "f55fc6f5652108bc8a69d1266d09cf462b0da1179c77a42eec68939a56870358",
+  "png_sha256": "1828d1e2c852d447583474ceb38d5c5625db9ab32862f33d36e1681ffff84dc7",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Three channels, three different jobs"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Team context, coordinator handoff and A2A execution transport must not be conflated."
+    },
+    {
+      "cell": "state-title",
+      "text": "Project state API"
+    },
+    {
+      "cell": "state-subtitle",
+      "text": "Decisions and eligible memory"
+    },
+    {
+      "cell": "state-metadata",
+      "text": "Pending writes are not authority"
+    },
+    {
+      "cell": "state-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "compile-title",
+      "text": "Host compilation"
+    },
+    {
+      "cell": "compile-subtitle",
+      "text": "Approved scope/architecture"
+    },
+    {
+      "cell": "compile-metadata",
+      "text": "Children: no full memory stack"
+    },
+    {
+      "cell": "compile-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "context-title",
+      "text": "Prepared child context"
+    },
+    {
+      "cell": "context-subtitle",
+      "text": "Charter + skills composed too"
+    },
+    {
+      "cell": "context-metadata",
+      "text": "Injection failure is logged"
+    },
+    {
+      "cell": "context-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "coordinator-title",
+      "text": "Coordinator"
+    },
+    {
+      "cell": "coordinator-subtitle",
+      "text": "Owns subtask structure"
+    },
+    {
+      "cell": "coordinator-metadata",
+      "text": "No peer-chat protocol"
+    },
+    {
+      "cell": "coordinator-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "child-title",
+      "text": "Child run"
+    },
+    {
+      "cell": "child-subtitle",
+      "text": "Bounded assigned outcome"
+    },
+    {
+      "cell": "child-metadata",
+      "text": "Results return upward"
+    },
+    {
+      "cell": "child-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "handoff-title",
+      "text": "Assemble-ready result"
+    },
+    {
+      "cell": "handoff-subtitle",
+      "text": "Parent integrates fragments"
+    },
+    {
+      "cell": "handoff-metadata",
+      "text": "Not independent child merge"
+    },
+    {
+      "cell": "handoff-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "proxy-title",
+      "text": "Worker proxy"
+    },
+    {
+      "cell": "proxy-subtitle",
+      "text": "One leaf execution request"
+    },
+    {
+      "cell": "proxy-metadata",
+      "text": "Setup data + task text"
+    },
+    {
+      "cell": "proxy-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "host-title",
+      "text": "AgentHost pod"
+    },
+    {
+      "cell": "host-subtitle",
+      "text": "Provider session and tools"
+    },
+    {
+      "cell": "host-metadata",
+      "text": "No prompt-compilation DB read"
+    },
+    {
+      "cell": "host-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "events-title",
+      "text": "Returned stream"
+    },
+    {
+      "cell": "events-subtitle",
+      "text": "Output + structured RunEvents"
+    },
+    {
+      "cell": "events-metadata",
+      "text": "Caller owns persistence"
+    },
+    {
+      "cell": "events-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "select"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "inject"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "dispatch"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "report"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "A2A"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "stream"
+    },
+    {
+      "cell": "note-0",
+      "text": "Rows: shared context / coordinator handoff / execution transport."
+    },
+    {
+      "cell": "note-1",
+      "text": "Agents can submit inbox proposals or record pending memory through the API."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/agent-communication.md",
+    "docs/reference/agent-communication.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "state",
+      "to": "compile",
+      "label": "select",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "compile",
+      "to": "context",
+      "label": "inject",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "coordinator",
+      "to": "child",
+      "label": "dispatch",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "child",
+      "to": "handoff",
+      "label": "report",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "proxy",
+      "to": "host",
+      "label": "A2A",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "host",
+      "to": "events",
+      "label": "stream",
+      "result": "clean"
+    }
+  ]
+}

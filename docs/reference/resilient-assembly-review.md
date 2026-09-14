@@ -1,5 +1,7 @@
 # Resilient assembly-review loop — Reference
 
+See [Autonomous budget exhaustion escalates to human review](../diagrams/resilient-assembly-review-fig1.png) for the shared visual model.
+
 Terse reference for the **resilient assembly-review loop** introduced in v0.9.17-rc1: configuration knobs,
 coordinator status transitions, emitted events, and the lockout protocol contract. For the conceptual
 explanation see the [deep dive](../deep-dive/resilient-assembly-review.md); for the operator experience see
@@ -49,7 +51,7 @@ All existing event types; no new event type is introduced. Fields added to exist
 | `coordinator.steering` | `source`, `humanReviewRoundTrip=<n>`, `note` | Emitted when a human request-changes is received after escalation. The autonomous budget is **always** reset (there is no cap); `humanReviewRoundTrip` is the telemetry-only round count. |
 | `coordinator.assembly_implicated_scope_fallback` | `workPlanId`, `source`, `reviewer`, `reason` (`no_target_files_field` \| `target_files_matched_nothing`), `namedFiles`, `touchedFiles`, `contributorIds` | Emitted when the #223 implicated-subtask scoping reverts to the broad all-contributors set because the reviewer's structured `TARGET_FILES:` hint was missing or reverse-mapped to nothing. Makes the fail-safe reversion observable. |
 | `coordinator.assembly_changes_requested` | `workPlanId`, `redispatchSubtaskIds`, `redispatchedSubtaskIds`, `implicatedSubtaskIds`, `dependentSubtaskIds`, `feedback` | When a gate requests changes. `implicatedSubtaskIds` are the reviewer-named (lockout-eligible) subtasks; `dependentSubtaskIds` are their transitive dependents (rebuilt, never locked out); `redispatchSubtaskIds` is their union. |
-| `run.failed` (child run) | `reason=commit_failed_persistent`, `evidence=<exception summary + lock diagnostics>` | Emitted when a persistent commit fault exhausts retries in the child pipeline; the child run fails visibly with structured evidence instead of a silent stream drain. |
+| `run.failed` (child) | `{ message, errorCode, retryable }` | Persistent commit failure terminalizes the child; internal exception/lock evidence is not the public payload. |
 
 ### `coordinator.assembly_review_requested` — accumulated feedback payload
 
@@ -147,8 +149,7 @@ and write it. No new migration is required.
 
 ## Stale git-lock diagnostics
 
-`WorktreeManager.ClearStaleIndexLock` returns an `IndexLockClearResult` record that is included in the
-`ChildTurnFailedOutput.Evidence` string and the `run.failed` event:
+The following fields describe internal `ChildTurnFailedOutput.Evidence`/lock diagnostics. Public persistence/replay normalize `run.failed` to `{ message, errorCode, retryable }`; raw exception/lock evidence is not its payload. Authorized diagnostic projections have separate contracts.
 
 | Field | Meaning |
 |---|---|
@@ -167,3 +168,55 @@ indirection) before checking the lock path, so the diagnostics always refer to t
 - [Resilient assembly-review — User Guide](../experience/resilient-assembly-review.md) — what operators and users observe.
 - [Coordinator reference](./coordinator.md) — the full coordinator status model and event index.
 - [Unified steering reference](./unified-steering.md) — `SteeringSignal`, `SteeringDirection`, and the decider contract.
+
+<!-- diagram-context:resilient-assembly-review-fig1:start -->
+<details id="diagram-context-resilient-assembly-review-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Rejected work keeps useful context</td></tr>
+<tr><td>takeaway</td><td>A steering decision chooses the effect; rejection does not always rotate the author.</td></tr>
+<tr><td>group-title-0</td><td>FEEDBACK AND SCOPE</td></tr>
+<tr><td>group-title-1</td><td>BOUNDED DIRECTION</td></tr>
+<tr><td>group-title-2</td><td>AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+<tr><td>Gate request-changes</td><td>Gate request-changes</td></tr>
+<tr><td>Gate request-changes</td><td>Structured target-file hints</td></tr>
+<tr><td>Gate request-changes</td><td>not prose-inferred blame</td></tr>
+<tr><td>Implicated + dependent</td><td>Implicated + dependent</td></tr>
+<tr><td>Implicated + dependent</td><td>Rebuild closure without blame</td></tr>
+<tr><td>Implicated + dependent</td><td>structured TARGET_FILES</td></tr>
+<tr><td>Signal + decision</td><td>Signal + decision</td></tr>
+<tr><td>Signal + decision</td><td>Persist explicit direction</td></tr>
+<tr><td>Signal + decision</td><td>accumulated context</td></tr>
+<tr><td>In-place revision</td><td>In-place revision</td></tr>
+<tr><td>In-place revision</td><td>Same author and session</td></tr>
+<tr><td>In-place revision</td><td>no reset-to-pending</td></tr>
+<tr><td>Fresh dispatch</td><td>Fresh dispatch</td></tr>
+<tr><td>Fresh dispatch</td><td>Scoped author selection</td></tr>
+<tr><td>Fresh dispatch</td><td>handoff with context</td></tr>
+<tr><td>No alternate author</td><td>No alternate author</td></tr>
+<tr><td>No alternate author</td><td>Context permits same author</td></tr>
+<tr><td>No alternate author</td><td>bounded conscious fallback</td></tr>
+<tr><td>Human escalation</td><td>Human escalation</td></tr>
+<tr><td>Human escalation</td><td>No context or budget left</td></tr>
+<tr><td>Human escalation</td><td>durable review request</td></tr>
+<tr><td>Human decision</td><td>Human decision</td></tr>
+<tr><td>Human decision</td><td>Approve, change or decline</td></tr>
+<tr><td>Human decision</td><td>no wall-clock timeout</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Fresh autonomous budget</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Only human changes reset it</td></tr>
+<tr><td>Fresh autonomous budget</td><td>no human-round-trip cap</td></tr>
+<tr><td>e0</td><td>scope</td></tr>
+<tr><td>e1</td><td>signal</td></tr>
+<tr><td>e2</td><td>resume</td></tr>
+<tr><td>e3</td><td>fresh</td></tr>
+<tr><td>e4</td><td>no alt</td></tr>
+<tr><td>e5</td><td>context</td></tr>
+<tr><td>e6</td><td>no context</td></tr>
+<tr><td>e7</td><td>Proceed</td></tr>
+<tr><td>e8</td><td>await</td></tr>
+<tr><td>e9</td><td>changes</td></tr>
+<tr><td>e10</td><td>retry</td></tr>
+<tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:resilient-assembly-review-fig1:end -->

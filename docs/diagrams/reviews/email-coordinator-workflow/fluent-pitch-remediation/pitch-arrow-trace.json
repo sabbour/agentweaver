@@ -1,0 +1,18 @@
+[
+  {
+    "id": "request",
+    "source": "activation0-0",
+    "target": "activation1-0",
+    "relationship": "submit goal",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+    "result": "clean"
+  },
+  {
+    "id": "response",
+    "source": "activation1-1",
+    "target": "activation0-1",
+    "relationship": "confirm or revise?",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:65-82 and assembly workflow construction; apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; coordinator-provided completed assurance research summary",
+    "result": "clean"
+  }
+]

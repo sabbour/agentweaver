@@ -1,7 +1,7 @@
 # PRD story promotion to coordinated backlog runs
 
-**Issue:** [#285](https://github.com/sabbour/agentweaver/issues/285)  
-**Related:** [#284](https://github.com/sabbour/agentweaver/issues/284)  
+**Issue:** [#285](https://github.com/sabbour/agentweaver/issues/285)
+**Related:** [#284](https://github.com/sabbour/agentweaver/issues/284)
 **Status:** Implementation-ready design
 
 ## Summary
@@ -109,10 +109,10 @@ Construct an undirected graph from the existing `depends_on` edges, then decide 
 connected component in this order:
 
 ```text
-if component contains both "run" and "inline" overrides:
-    fail with conflicting_promotion_overrides
-else if AllowTaskPromotion == false:
+if AllowTaskPromotion == false:
     keep the component inline
+else if component contains both "run" and "inline" overrides:
+    fail with conflicting_promotion_overrides
 else if component contains a "run" override:
     promote the component
 else if component contains an "inline" override:
@@ -157,13 +157,14 @@ When `AllowTaskPromotion` is false there is no promotion reason because no promo
 - Promoted stories are excluded from the current run's `WorkPlan`; the remaining inline stories
   continue through normal dispatch and collective assembly.
 - The parent PRD run does not wait for promoted runs and is not an implicit prerequisite.
-- If every story is promoted, persist a zero-subtask `WorkPlan` with `Status = "delegated"`.
-  `CoordinatorWorkflowFactory` must return a delegated orchestration result, and
-  `CoordinatorRunService` must terminalize that planning-only coordinator run as
-  `RunStatus.Completed` with result `delegated_to_backlog`, skipping dispatch and collective
-  assembly. This is the sole new-run use of the backward-compatible `Completed` status.
+- If classification would promote every story, the current implementation keeps the
+  entire plan inline. It does not create a zero-subtask delegated plan or complete the
+  parent with `delegated_to_backlog`. See
+  `CoordinatorOrchestratorExecutor.cs:1722-1740` and
+  `PrdStoryPromotionPartitionTests.cs`.
 
-`OrchestrateAsync` therefore changes from:
+The following signature/result sketch belongs to the original delegation proposal,
+not the shipped all-inline fallback:
 
 ```csharp
 Task OrchestrateAsync(CoordinatorDraftInput input, CancellationToken ct)
@@ -343,12 +344,15 @@ public sealed record BacklogDependencyStatus(
 A dependency is satisfied if and only if:
 
 ```text
-prerequisite.BacklogTask.RunId is not null
+prerequisite.BacklogTask.ArchivedAt is null
+AND prerequisite.BacklogTask.RunId is not null
+AND prerequisite linked Run exists
 AND prerequisite linked Run.Status == RunStatus.Merged
 ```
 
 `Completed`, `AwaitingReview`, `Declined`, `Failed`, `MergeFailed`, and an archived task do not
-satisfy the edge. Merged is terminal, so eligibility cannot regress after satisfaction.
+satisfy the edge. Eligibility is derived on each read/claim; archiving a prerequisite
+task makes the edge unsatisfied even when its linked run previously merged.
 
 Backlog state and execution eligibility remain separate:
 
@@ -476,6 +480,8 @@ Definitions:
 
 The board keeps the card in the Ready column and renders a blocked badge plus `blocked_reason`.
 There is no new Blocked column and no new `BacklogTaskState`.
+The [shared board lifecycle](../guide/board.md) owns the visual model; dependency
+eligibility stays in the predicate and state definitions here.
 
 ## Coordinator implementation changes
 

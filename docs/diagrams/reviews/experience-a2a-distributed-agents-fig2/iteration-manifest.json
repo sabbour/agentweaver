@@ -1,0 +1,109 @@
+{
+  "diagram": "experience-a2a-distributed-agents-fig2",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "experience-a2a-distributed-agents-fig2-pitch.drawio",
+    "png": "experience-a2a-distributed-agents-fig2-pitch.png",
+    "change_record": "experience-a2a-distributed-agents-fig2-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "drawio": "experience-a2a-distributed-agents-fig2-pass-01.drawio",
+      "png": "experience-a2a-distributed-agents-fig2-pass-01.png",
+      "change_record": "experience-a2a-distributed-agents-fig2-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 1,
+      "mode": "visual-upgrade",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "baseline_meaningful_xml": 1033,
+      "result_meaningful_xml": 17982,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 17.40755082284608
+    },
+    {
+      "drawio": "experience-a2a-distributed-agents-fig2-pass-02.drawio",
+      "png": "experience-a2a-distributed-agents-fig2-pass-02.png",
+      "change_record": "experience-a2a-distributed-agents-fig2-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 2,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-a2a-distributed-agents-fig2-pass-03.drawio",
+      "png": "experience-a2a-distributed-agents-fig2-pass-03.png",
+      "change_record": "experience-a2a-distributed-agents-fig2-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 3,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "drawio": "experience-a2a-distributed-agents-fig2-pass-04.drawio",
+      "png": "experience-a2a-distributed-agents-fig2-pass-04.png",
+      "change_record": "experience-a2a-distributed-agents-fig2-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "number": 4,
+      "mode": "correction-only",
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "e0",
+          "source": "n0",
+          "target": "n1",
+          "relationship": "configure",
+          "evidence": "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:663-691",
+          "result": "clean"
+        },
+        {
+          "id": "e1",
+          "source": "n1",
+          "target": "n2",
+          "relationship": "turn end",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:408-456",
+          "result": "clean"
+        },
+        {
+          "id": "e2",
+          "source": "n1",
+          "target": "n4",
+          "relationship": "failure",
+          "evidence": "packages/Agentweaver.AgentRuntime/Workflow/RemoteAgentProxy.cs:408-456",
+          "result": "clean"
+        },
+        {
+          "id": "e3",
+          "source": "n4",
+          "target": "n5",
+          "relationship": "evaluate",
+          "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:685-743",
+          "result": "clean"
+        },
+        {
+          "id": "e4",
+          "source": "n3",
+          "target": "n0",
+          "relationship": "resume",
+          "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:394-408",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

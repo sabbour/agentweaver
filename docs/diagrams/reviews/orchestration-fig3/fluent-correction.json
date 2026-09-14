@@ -1,0 +1,292 @@
+{
+  "diagram": "orchestration-fig3",
+  "source_sha256": "0691fc5ecddbb76febea95a8ffb572a22ebb61cca6bb571637279d95b69b48c2",
+  "png_sha256": "f92955a187e618ace1d4c54c95ae7801b8b57d06d8691284fb80f0db83523c75",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Child execution and dependency progress"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Children publish typed results and branch content; collective review belongs to the parent."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DEPENDENCY ADMISSION"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "TRIMMED CHILD EXECUTION"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "PLAN"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Pending subtasks"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Persisted dependency map"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "not automatically ready"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "READY"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Ready frontier"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "All predecessors satisfied"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "not any terminal result"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "RUN"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Isolated child"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Launch agent execution"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "separate checkout"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "RESULT"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Agent result"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Typed conditional output"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "no child RAI executor"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "SUCCESS"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Assemble-ready"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Successful child content"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "satisfies dependents"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "FAILURE"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Typed turn failure"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Does not satisfy dependents"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "no per-child review"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "PUBLISH"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Published branch"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Authoritative committed tip"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "not shared mutable files"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "BASE"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Dependency base"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Rebuild prerequisite content"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "new isolated dependent"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "HANDOFF"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Parent assembly check"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Quiescence plus eligibility"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "collective gates later"
+    },
+    {
+      "cell": "e0",
+      "text": "evaluate"
+    },
+    {
+      "cell": "e1",
+      "text": "dispatch"
+    },
+    {
+      "cell": "e2",
+      "text": "execute"
+    },
+    {
+      "cell": "e3",
+      "text": "success"
+    },
+    {
+      "cell": "e4",
+      "text": "failed"
+    },
+    {
+      "cell": "e5",
+      "text": "publish"
+    },
+    {
+      "cell": "e6",
+      "text": "integrate"
+    },
+    {
+      "cell": "e7",
+      "text": "unlock"
+    },
+    {
+      "cell": "e8",
+      "text": "settled"
+    },
+    {
+      "cell": "e9",
+      "text": "blocked"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/orchestration.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "evaluate",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "dispatch",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "execute",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n4",
+      "label": "success",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n5",
+      "label": "failed",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n6",
+      "label": "publish",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n6",
+      "to": "n7",
+      "label": "integrate",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n7",
+      "to": "n1",
+      "label": "unlock",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n4",
+      "to": "n8",
+      "label": "settled",
+      "result": "clean"
+    },
+    {
+      "id": "e9",
+      "from": "n5",
+      "to": "n8",
+      "label": "blocked",
+      "result": "clean"
+    }
+  ]
+}

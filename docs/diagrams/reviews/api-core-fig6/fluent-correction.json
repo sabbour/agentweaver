@@ -1,0 +1,282 @@
+{
+  "diagram": "api-core-fig6",
+  "source_sha256": "7cabe687d3edb8a6493bb497351d43411d95fb6d0b7f5cc3cb72575313051f48",
+  "png_sha256": "8c8bbeb087f7340a934386f9df17f79cdf976244c26ee03cf65cc9569fb98f1b",
+  "prior_model": "docs\\diagrams\\reviews\\api-core-fig6\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "System diagnostics · a narrow live check map"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The protected system snapshot combines checks and counts; it is not the detailed-health surface."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "SYSTEM CHECKS"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "STATUS / COUNTS"
+    },
+    {
+      "cell": "request-title",
+      "text": "Diagnostics request"
+    },
+    {
+      "cell": "request-subtitle",
+      "text": "Protected endpoint"
+    },
+    {
+      "cell": "request-detail",
+      "text": "DiagnosticsService.GetSystemDiagnosticsAsync"
+    },
+    {
+      "cell": "request-metadata",
+      "text": "DiagnosticsEndpoints:52"
+    },
+    {
+      "cell": "request-badge",
+      "text": "REQUEST"
+    },
+    {
+      "cell": "service-title",
+      "text": "Diagnostics service"
+    },
+    {
+      "cell": "service-subtitle",
+      "text": "Ordered live checks"
+    },
+    {
+      "cell": "service-detail",
+      "text": "Capture generated time and total duration"
+    },
+    {
+      "cell": "service-metadata",
+      "text": "DiagnosticsService:89–136"
+    },
+    {
+      "cell": "service-badge",
+      "text": "COLLECT"
+    },
+    {
+      "cell": "storage-title",
+      "text": "SQLite + data directory"
+    },
+    {
+      "cell": "storage-subtitle",
+      "text": "Reachability / write probe"
+    },
+    {
+      "cell": "storage-detail",
+      "text": "SQLite check is not universal PG health proof"
+    },
+    {
+      "cell": "storage-metadata",
+      "text": "DiagnosticsService:1192–1230"
+    },
+    {
+      "cell": "storage-badge",
+      "text": "STORAGE"
+    },
+    {
+      "cell": "builtins-title",
+      "text": "Built-in definitions"
+    },
+    {
+      "cell": "builtins-subtitle",
+      "text": "Workflow + review-policy checks"
+    },
+    {
+      "cell": "builtins-detail",
+      "text": "Report registry availability, not a live run"
+    },
+    {
+      "cell": "builtins-metadata",
+      "text": "DiagnosticsService:97–103"
+    },
+    {
+      "cell": "builtins-badge",
+      "text": "REGISTRY"
+    },
+    {
+      "cell": "heartbeat-title",
+      "text": "Heartbeat + project store"
+    },
+    {
+      "cell": "heartbeat-subtitle",
+      "text": "Status and project-store read"
+    },
+    {
+      "cell": "heartbeat-detail",
+      "text": "Report coordinator heartbeat service state"
+    },
+    {
+      "cell": "heartbeat-metadata",
+      "text": "DiagnosticsService:97–103"
+    },
+    {
+      "cell": "heartbeat-badge",
+      "text": "STATUS"
+    },
+    {
+      "cell": "github-title",
+      "text": "GitHub CLI / auth"
+    },
+    {
+      "cell": "github-subtitle",
+      "text": "Local CLI diagnostic surface"
+    },
+    {
+      "cell": "github-detail",
+      "text": "Do not equate CLI auth with platform sign-in"
+    },
+    {
+      "cell": "github-metadata",
+      "text": "DiagnosticsService:1292+"
+    },
+    {
+      "cell": "github-badge",
+      "text": "CLI"
+    },
+    {
+      "cell": "counts-title",
+      "text": "Counts + pod quota"
+    },
+    {
+      "cell": "counts-subtitle",
+      "text": "Provider-aware run/project counts"
+    },
+    {
+      "cell": "counts-detail",
+      "text": "Quota optional; missing/read failure → unknown"
+    },
+    {
+      "cell": "counts-metadata",
+      "text": "DiagnosticsService:105–138"
+    },
+    {
+      "cell": "counts-badge",
+      "text": "COUNTS"
+    },
+    {
+      "cell": "dto-title",
+      "text": "SystemDiagnosticsDto"
+    },
+    {
+      "cell": "dto-subtitle",
+      "text": "Checks / details / durations"
+    },
+    {
+      "cell": "dto-detail",
+      "text": "API version, uptime, totals and generatedUtc"
+    },
+    {
+      "cell": "dto-metadata",
+      "text": "DiagnosticsService:116–134"
+    },
+    {
+      "cell": "dto-badge",
+      "text": "SNAPSHOT"
+    },
+    {
+      "cell": "request-to-service",
+      "text": "collect"
+    },
+    {
+      "cell": "service-to-storage",
+      "text": "check"
+    },
+    {
+      "cell": "service-to-builtins",
+      "text": "check"
+    },
+    {
+      "cell": "service-to-heartbeat",
+      "text": "check"
+    },
+    {
+      "cell": "service-to-counts",
+      "text": "counts"
+    },
+    {
+      "cell": "github-to-dto",
+      "text": "check"
+    },
+    {
+      "cell": "counts-to-dto",
+      "text": "summary"
+    },
+    {
+      "cell": "scope",
+      "text": "Detailed health separately checks PostgreSQL, Key Vault, warm pool and Kubernetes; probes are cheaper."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/api-core.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "request",
+      "to": "service",
+      "label": "collect",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "service",
+      "to": "storage",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "service",
+      "to": "builtins",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "service",
+      "to": "heartbeat",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "service",
+      "to": "github",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "service",
+      "to": "counts",
+      "label": "read counts",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "github",
+      "to": "dto",
+      "label": "check results",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "counts",
+      "to": "dto",
+      "label": "summary",
+      "result": "clean"
+    }
+  ]
+}

@@ -1,0 +1,918 @@
+{
+  "title": "Rejected work keeps useful context",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Gate request-changes",
+      "subLabel": "Structured target-file hints",
+      "meta": "not prose-inferred blame",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "FEEDBACK",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Implicated + dependent",
+      "subLabel": "Rebuild closure without blame",
+      "meta": "structured TARGET_FILES",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "SCOPE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Signal + decision",
+      "subLabel": "Persist explicit direction",
+      "meta": "accumulated context",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DECIDE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "In-place revision",
+      "subLabel": "Same author and session",
+      "meta": "no reset-to-pending",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESUME",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Fresh dispatch",
+      "subLabel": "Scoped author selection",
+      "meta": "handoff with context",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "FRESH",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "No alternate author",
+      "subLabel": "Context permits same author",
+      "meta": "bounded conscious fallback",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "FALLBACK",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Human escalation",
+      "subLabel": "No context or budget left",
+      "meta": "durable review request",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "PARK",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Human decision",
+      "subLabel": "Approve, change or decline",
+      "meta": "no wall-clock timeout",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "REVIEW",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Fresh autonomous budget",
+      "subLabel": "Only human changes reset it",
+      "meta": "no human-round-trip cap",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RESET",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "scope",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "signal",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "resume",
+      "loopback": true
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "fresh",
+      "loopback": true
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "no alt",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n4",
+      "label": "context",
+      "loopback": true
+    },
+    {
+      "from": "n5",
+      "to": "n6",
+      "label": "no context",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n6",
+      "label": "Proceed",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "await",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "changes",
+      "loopback": true
+    },
+    {
+      "from": "n8",
+      "to": "n2",
+      "label": "retry",
+      "loopback": true
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "FEEDBACK AND SCOPE"
+    },
+    {
+      "id": "1",
+      "label": "BOUNDED DIRECTION"
+    },
+    {
+      "id": "2",
+      "label": "AUTHOR CONTINUITY AND HUMAN ESCALATION"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Gate request-changes",
+          "subLabel": "Structured target-file hints",
+          "meta": "not prose-inferred blame",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "FEEDBACK",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 277.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Implicated + dependent",
+          "subLabel": "Rebuild closure without blame",
+          "meta": "structured TARGET_FILES",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "SCOPE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Signal + decision",
+          "subLabel": "Persist explicit direction",
+          "meta": "accumulated context",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DECIDE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "In-place revision",
+          "subLabel": "Same author and session",
+          "meta": "no reset-to-pending",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESUME",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Fresh dispatch",
+          "subLabel": "Scoped author selection",
+          "meta": "handoff with context",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "FRESH",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "No alternate author",
+          "subLabel": "Context permits same author",
+          "meta": "bounded conscious fallback",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "FALLBACK",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Human escalation",
+          "subLabel": "No context or budget left",
+          "meta": "durable review request",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "PARK",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 670.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Human decision",
+          "subLabel": "Approve, change or decline",
+          "meta": "no wall-clock timeout",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "REVIEW",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1142.1308411214955,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Fresh autonomous budget",
+          "subLabel": "Only human changes reset it",
+          "meta": "no human-round-trip cap",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RESET",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 213.73831775700933
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 220
+        },
+        "data": {
+          "label": "FEEDBACK AND SCOPE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 229.73831775700933
+        },
+        "data": {
+          "label": "FEEDBACK AND SCOPE",
+          "width": 1308.0000000000002
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 471.7383177570093
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 192
+        },
+        "data": {
+          "label": "BOUNDED DIRECTION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 487.7383177570093
+        },
+        "data": {
+          "label": "BOUNDED DIRECTION",
+          "width": 1308.0000000000002
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 709.7383177570093
+        },
+        "style": {
+          "width": 1348.0000000000002,
+          "height": 198
+        },
+        "data": {
+          "label": "AUTHOR CONTINUITY AND HUMAN ESCALATION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 725.7383177570093
+        },
+        "data": {
+          "label": "AUTHOR CONTINUITY AND HUMAN ESCALATION",
+          "width": 1308.0000000000002
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "scope",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 670.1308411214953,
+              "y": 343.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 604.1308411214953,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "signal",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1010.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 331.07165109034264
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1092.1308411214955,
+            "y": 331.07165109034264
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "resume",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1482.1308411214955,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 1550.1308411214955,
+              "y": 331.07165109034264
+            },
+            {
+              "x": 1550.1308411214955,
+              "y": 452.08165109034263
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 452.08165109034263
+            },
+            {
+              "x": 570.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 538.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.1308411214955,
+            "y": 452.08165109034263
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n2",
+        "target": "n4",
+        "label": "fresh",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1482.1308411214955,
+              "y": 356.404984423676
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 356.404984423676
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 518.7283177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 518.7283177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 1010.1308411214953,
+              "y": 575.0716510903427
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1106.1308411214955,
+            "y": 518.7283177570093
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "no alt",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1010.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 600.404984423676
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1142.1308411214955,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1060.1308411214955,
+            "y": 600.404984423676
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n5",
+        "target": "n4",
+        "label": "context",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1482.1308411214955,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 696.0816510903427
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 696.0816510903427
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 670.1308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1076.1308411214955,
+            "y": 696.0816510903427
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n5",
+        "target": "n6",
+        "label": "no context",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1312.1308411214955,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1312.1308411214955,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 739.1308411214953,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n2",
+        "target": "n6",
+        "label": "Proceed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1142.1308411214955,
+              "y": 356.404984423676
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 356.404984423676
+            },
+            {
+              "x": 1110.1308411214955,
+              "y": 500.08165109034263
+            },
+            {
+              "x": 598.9308411214953,
+              "y": 500.08165109034263
+            },
+            {
+              "x": 598.9308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 538.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 854.5308411214953,
+            "y": 500.08165109034263
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n7",
+        "label": "await",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 844.404984423676
+            },
+            {
+              "x": 638.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 670.1308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 588.1308411214953,
+            "y": 844.404984423676
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n7",
+        "target": "n8",
+        "label": "changes",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1010.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1042.1308411214955,
+              "y": 904.7483177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 904.7483177570093
+            },
+            {
+              "x": 1514.1308411214955,
+              "y": 844.404984423676
+            },
+            {
+              "x": 1482.1308411214955,
+              "y": 844.404984423676
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1278.1308411214955,
+            "y": 904.7483177570093
+          }
+        }
+      },
+      {
+        "id": "e10",
+        "source": "n8",
+        "target": "n2",
+        "label": "retry",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1482.1308411214955,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 1563.1408411214954,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 1563.1408411214954,
+              "y": 259.7383177570093
+            },
+            {
+              "x": 1312.1308411214955,
+              "y": 259.7383177570093
+            },
+            {
+              "x": 1312.1308411214955,
+              "y": 291.7383177570093
+            }
+          ],
+          "loopback": true,
+          "junctions": [],
+          "labelPos": {
+            "x": 1522.6358411214956,
+            "y": 819.0716510903427
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1680.261682242991,
+    "canvasHeight": 1053.1401869158876
+  }
+}

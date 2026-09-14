@@ -1,0 +1,294 @@
+{
+  "diagram": "canonical-aks-components",
+  "source_sha256": "53860bd3891008b71addf332d7d8801edbf22afc5bef98d540e29964cd9b828d",
+  "png_sha256": "cc37c6cdebebfc2f21b7e8ba19b1fc7f3c6be97dd5ebb6e3082b51ce30cb3926",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-aks-components\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "AKS separates control from execution"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Replicated API and workers share durable services; AgentHost pods execute isolated turns."
+    },
+    {
+      "cell": "group-title0",
+      "text": "APPLICATION CONTROL"
+    },
+    {
+      "cell": "group-title1",
+      "text": "EXECUTION / DURABLE STATE"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Application ingress"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Frontend deployment"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "AKS App Routing Gateway"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "Frontend: 2 replicas"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "Preview gateway separate"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "EDGE"
+    },
+    {
+      "cell": "n1-title",
+      "text": "API deployment"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Request and run control"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "2 API replicas"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Postgres + CSI secrets"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "Shared workspace mount"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "CONTROL"
+    },
+    {
+      "cell": "n2-title",
+      "text": "MCP deployment"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Broker-authenticated tools"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "1 MCP replica"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "Forwards requests to API"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "No CSI secret mount"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "TOOLS"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Worker deployment"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Background orchestration"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "2 baseline replicas"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "HPA scales from 2 to 3"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "Postgres + CSI secrets"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "WORKERS"
+    },
+    {
+      "cell": "n4-title",
+      "text": "AgentHost pods"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "SandboxClaim warm pool"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "Per-run /configure"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "Kata-isolated agent turns"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "No ambient user secrets"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "SANDBOX"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Durable services"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Postgres + Azure Files"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Run state / events in DB"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "RWX project workspace"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "Key Vault via API/worker CSI"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 HTTPS"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 API tools"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 persist / mount"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 persist / mount"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 claim + dispatch"
+    },
+    {
+      "cell": "assurance",
+      "text": "Application and preview Gateways are separate. AgentHost has no Key Vault-role identity or CSI secret mount."
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "Azure AKS environment"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "GatewayClass: approuting-istio."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "gateway.yaml"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Manifest facts"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "Worker HPA is CPU-based, 2–3."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "worker-hpa.yaml"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Distinct identities"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "AgentHost has no Key Vault role."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "serviceaccount-agenthost.yaml"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/00-system-overview.md",
+    "docs/deep-dive/infra-deployment.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "HTTPS",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n2",
+      "to": "n1",
+      "label": "API tools",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n5",
+      "label": "persist / mount",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n3",
+      "to": "n5",
+      "label": "persist / mount",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n4",
+      "label": "claim + dispatch",
+      "result": "clean"
+    }
+  ]
+}

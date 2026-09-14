@@ -1,0 +1,14 @@
+{
+  "name": "canonical-provider-admission",
+  "family": "shared",
+  "source": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\candidates\\canonical-provider-admission.drawio",
+  "png": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\catalog-integration\\rendered\\canonical-provider-admission.png",
+  "source_sha256": "23b6d73a8531199659a7160fd1d1af77e6d0985e7affb98027e7b0ed9c49438c",
+  "png_sha256": "ae7482058e330419687bf186132b35ef5b10176219718415a482acb92dc6cdca",
+  "dimensions": [
+    3186,
+    1289
+  ],
+  "renderer": "31.4.5",
+  "inspection": "pending"
+}

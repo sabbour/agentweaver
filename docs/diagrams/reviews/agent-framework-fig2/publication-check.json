@@ -1,0 +1,11 @@
+{
+  "name": "agent-framework-fig2",
+  "source_and_generated_match_inspected_final": true,
+  "png_matches_inspected_final": true,
+  "stamp_matches_verified_renderer_and_inspected_png": true,
+  "renderer_version": "31.4.5",
+  "selected_repository_drift_check": "passed",
+  "legacy_json_archived": "legacy-source.json",
+  "source_discovery_has_one_drawio_and_no_json": true,
+  "renderer_profile_cache_removed": true
+}

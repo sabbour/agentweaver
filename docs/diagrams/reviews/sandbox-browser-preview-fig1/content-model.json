@@ -1,0 +1,129 @@
+{
+  "title": "Preview readiness follows the public path",
+  "takeaway": "Provision the route, then probe its exact HTTPS URL; object creation alone is not ready.",
+  "groups": [
+    "CONTROL: PROVISION + PROBE",
+    "GATEWAY DATA PATH"
+  ],
+  "footer": "No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.",
+  "page": "docs/deep-dive/sandbox-browser-preview.md",
+  "nodes": [
+    {
+      "title": "Preview API",
+      "subtitle": "Resolve bound SandboxClaim",
+      "lines": [
+        "Patch run selector on pod",
+        "Create Service + HTTPRoute"
+      ],
+      "meta": "State from cluster, not cache",
+      "badge": "PROVISION",
+      "symbol": "custom",
+      "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:192-305"
+    },
+    {
+      "title": "Publication probe",
+      "subtitle": "Exact generated HTTPS URL",
+      "lines": [
+        "Wait for managed DNS",
+        "Check Gateway + application"
+      ],
+      "meta": "Only then return ready",
+      "badge": "VERIFY",
+      "symbol": "decision",
+      "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:308-380"
+    },
+    {
+      "title": "Browser preview",
+      "subtitle": "Open the returned URL",
+      "lines": [
+        "Run-scoped capability host",
+        "Keepalive via API"
+      ],
+      "meta": "Iframe: no-referrer",
+      "badge": "CLIENT",
+      "symbol": "person",
+      "evidence": "docs/deep-dive/sandbox-browser-preview.md:64-68"
+    },
+    {
+      "title": "Preview Gateway",
+      "subtitle": "Separate shared Gateway",
+      "lines": [
+        "HTTPS host match",
+        "HTTPRoute selects Service"
+      ],
+      "meta": "Not API port-forward",
+      "badge": "ROUTE",
+      "symbol": "azure",
+      "evidence": "k8s/base/gateway-preview.yaml; apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:253-284"
+    },
+    {
+      "title": "ClusterIP Service",
+      "subtitle": "Per-preview target selector",
+      "lines": [
+        "Service :80 → public port",
+        "Routes to bound sandbox pod"
+      ],
+      "meta": "Allowed ports 3000–9000",
+      "badge": "NETWORK",
+      "symbol": "service",
+      "evidence": "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:223-250; k8s/base/networkpolicy-sandbox.yaml"
+    },
+    {
+      "title": "Sandbox preview app",
+      "subtitle": "AgentHost pod-local path",
+      "lines": [
+        "Live preview: TCP forwarder",
+        "0.0.0.0 → loopback app"
+      ],
+      "meta": "Manual: chosen target port",
+      "badge": "POD",
+      "symbol": "pod",
+      "evidence": "apps/Agentweaver.AgentHost/TcpPortForwarder.cs; docs/deep-dive/sandbox-browser-preview.md:71-98"
+    }
+  ],
+  "edges": [
+    [
+      0,
+      1,
+      "after create"
+    ],
+    [
+      1,
+      2,
+      "ready URL"
+    ],
+    [
+      1,
+      3,
+      "HTTPS probe"
+    ],
+    [
+      2,
+      3,
+      "HTTPS"
+    ],
+    [
+      3,
+      4,
+      "route"
+    ],
+    [
+      4,
+      5,
+      "public port"
+    ]
+  ],
+  "pitch": [
+    0,
+    3,
+    5
+  ],
+  "symbol_classifications": {
+    "n0": "custom:agentweaver",
+    "n1": "native:flowchart",
+    "n2": "native:uml",
+    "n3": "native:networking",
+    "n4": "native:kubernetes",
+    "n5": "native:kubernetes"
+  }
+}

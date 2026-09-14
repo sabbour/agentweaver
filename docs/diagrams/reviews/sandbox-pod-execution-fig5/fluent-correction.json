@@ -1,0 +1,189 @@
+{
+  "diagram": "sandbox-pod-execution-fig5",
+  "source_sha256": "cef717ee1b95c668c924f1550530082e7638c188fcc8d73210855576e0cdffe0",
+  "png_sha256": "236b11e895894e837f4fad4d5e89edb56d9c9b050b9746ef31a84767d726dd84",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Provisioning progress is not turn readiness"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Bound claims, standby health and configured leaf readiness are separate milestones."
+    },
+    {
+      "cell": "dispatch-title",
+      "text": "Coordinator dispatch"
+    },
+    {
+      "cell": "dispatch-subtitle",
+      "text": "Child launch begins"
+    },
+    {
+      "cell": "dispatch-metadata",
+      "text": "Admission owned by Kubernetes"
+    },
+    {
+      "cell": "dispatch-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "claim-title",
+      "text": "Child executor"
+    },
+    {
+      "cell": "claim-subtitle",
+      "text": "Create/adopt claim"
+    },
+    {
+      "cell": "claim-metadata",
+      "text": "Poll until controller binding"
+    },
+    {
+      "cell": "claim-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "pending-title",
+      "text": "Provisioning progress"
+    },
+    {
+      "cell": "pending-subtitle",
+      "text": "provisioning_pending about 20s"
+    },
+    {
+      "cell": "pending-metadata",
+      "text": "Child stream shows legitimate wait"
+    },
+    {
+      "cell": "pending-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "observer-title",
+      "text": "Coordinator observer"
+    },
+    {
+      "cell": "observer-subtitle",
+      "text": "Recognize provisioning wait"
+    },
+    {
+      "cell": "observer-metadata",
+      "text": "Not a completed agent turn"
+    },
+    {
+      "cell": "observer-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "bound-title",
+      "text": "Claim bound"
+    },
+    {
+      "cell": "bound-subtitle",
+      "text": "Ready condition + pod name"
+    },
+    {
+      "cell": "bound-metadata",
+      "text": "Resolve actual pod IP"
+    },
+    {
+      "cell": "bound-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "ready-title",
+      "text": "Configure leaf"
+    },
+    {
+      "cell": "ready-subtitle",
+      "text": "Standby listener then SetupAsync"
+    },
+    {
+      "cell": "ready-metadata",
+      "text": "Only then start A2A turn"
+    },
+    {
+      "cell": "ready-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "launch"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "waiting"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "progress"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "bound"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "setup"
+    },
+    {
+      "cell": "note-0",
+      "text": "Provisioning events distinguish capacity wait from a silent execution stall."
+    },
+    {
+      "cell": "note-1",
+      "text": "Claim Ready is controller binding, not configured AgentHost readiness."
+    },
+    {
+      "cell": "note-2",
+      "text": "The configure diagram owns the credential and endpoint-registration sequence."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/sandbox-pod-execution.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "dispatch",
+      "to": "claim",
+      "label": "launch",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "claim",
+      "to": "pending",
+      "label": "waiting",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "pending",
+      "to": "observer",
+      "label": "progress",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "claim",
+      "to": "bound",
+      "label": "bound",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "bound",
+      "to": "ready",
+      "label": "setup",
+      "result": "clean"
+    }
+  ]
+}

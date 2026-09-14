@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "email-components.drawio",
+    "sha256": "6d26296820583222aa83038a9fbd2e0d1b3b658dee94c71836f7ef6f2852e700"
+  },
+  "drawio": {
+    "file": "email-components.drawio",
+    "sha256": "ddf2bd36aa583573d6cfad95d3799606755033fe85868391c8d86fe24f3de9b7"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "email-components.png",
+    "sha256": "025d72d50ae6862bc51d9fe5e44f8ae2454662ae1d64a101cdd1d8313bc5548d"
+  }
+}

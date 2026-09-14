@@ -1,0 +1,530 @@
+{
+  "title": "Static hosting and API origins",
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browser request",
+      "subLabel": "Assets or a client-side route",
+      "meta": "Web/Program.cs:39-65",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "HTTP",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "config",
+      "label": "Runtime configuration",
+      "subLabel": "window.__AGENTWEAVER_CONFIG__",
+      "meta": "config.ts:13-36",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "CONFIG",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "static",
+      "label": "Static file middleware",
+      "subLabel": "Default files + static assets",
+      "meta": "Web/Program.cs:39-50",
+      "icon": "box",
+      "shape": "folder",
+      "badge": {
+        "text": "FILES",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=folder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "client-origin",
+      "label": "Origin resolution",
+      "subLabel": "Origin string, or \"\" = same-origin",
+      "meta": "config.ts:13-36",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "ORIGIN",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "fallback",
+      "label": "SPA route fallback",
+      "subLabel": "Unknown route → index.html",
+      "meta": "Web/Program.cs:61-65",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "SPA",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "api-host",
+      "label": "API destination",
+      "subLabel": "REST + authenticated fetch SSE",
+      "meta": "api/sse.ts:239-337",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "API",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "docs-route",
+      "label": "Documentation route",
+      "subLabel": "/docs and /docs/{path}",
+      "meta": "Web/Program.cs:52-59",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "REDIRECT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "external-docs",
+      "label": "External documentation",
+      "subLabel": "Configured documentation base URL",
+      "meta": "Web/Program.cs:52-59",
+      "icon": "box",
+      "shape": "cloud",
+      "badge": {
+        "text": "EXTERNAL",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cloud;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "browser",
+      "to": "static",
+      "label": "asset",
+      "loopback": false
+    },
+    {
+      "from": "static",
+      "to": "fallback",
+      "label": "unmatched",
+      "loopback": false
+    },
+    {
+      "from": "config",
+      "to": "client-origin",
+      "label": "supplies",
+      "loopback": false
+    },
+    {
+      "from": "client-origin",
+      "to": "api-host",
+      "label": "requests",
+      "loopback": false
+    },
+    {
+      "from": "docs-route",
+      "to": "external-docs",
+      "label": "302 redirect",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "WEB HOST · STATIC DELIVERY"
+    },
+    {
+      "id": "1",
+      "label": "BROWSER · RUNTIME DESTINATIONS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "browser",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 85.11111111111111
+        },
+        "data": {
+          "id": "browser",
+          "label": "Browser request",
+          "subLabel": "Assets or a client-side route",
+          "meta": "Web/Program.cs:39-65",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "HTTP",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "config",
+        "type": "card",
+        "position": {
+          "x": 527.3777777777777,
+          "y": 85.11111111111111
+        },
+        "data": {
+          "id": "config",
+          "label": "Runtime configuration",
+          "subLabel": "window.__AGENTWEAVER_CONFIG__",
+          "meta": "config.ts:13-36",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "CONFIG",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "static",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "static",
+          "label": "Static file middleware",
+          "subLabel": "Default files + static assets",
+          "meta": "Web/Program.cs:39-50",
+          "icon": "box",
+          "shape": "folder",
+          "badge": {
+            "text": "FILES",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=folder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "client-origin",
+        "type": "card",
+        "position": {
+          "x": 527.3777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "client-origin",
+          "label": "Origin resolution",
+          "subLabel": "Origin string, or \"\" = same-origin",
+          "meta": "config.ts:13-36",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "ORIGIN",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "fallback",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 587.1111111111111
+        },
+        "data": {
+          "id": "fallback",
+          "label": "SPA route fallback",
+          "subLabel": "Unknown route → index.html",
+          "meta": "Web/Program.cs:61-65",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "SPA",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "api-host",
+        "type": "card",
+        "position": {
+          "x": 527.3777777777777,
+          "y": 573.1111111111111
+        },
+        "data": {
+          "id": "api-host",
+          "label": "API destination",
+          "subLabel": "REST + authenticated fetch SSE",
+          "meta": "api/sse.ts:239-337",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "API",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "docs-route",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 831.1111111111111
+        },
+        "data": {
+          "id": "docs-route",
+          "label": "Documentation route",
+          "subLabel": "/docs and /docs/{path}",
+          "meta": "Web/Program.cs:52-59",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "REDIRECT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "external-docs",
+        "type": "card",
+        "position": {
+          "x": 527.3777777777777,
+          "y": 817.1111111111111
+        },
+        "data": {
+          "id": "external-docs",
+          "label": "External documentation",
+          "subLabel": "Configured documentation base URL",
+          "meta": "Web/Program.cs:52-59",
+          "icon": "box",
+          "shape": "cloud",
+          "badge": {
+            "text": "EXTERNAL",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cloud;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 5.7777777777777715,
+          "y": 15.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "WEB HOST · STATIC DELIVERY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 25.77777777777777,
+          "y": 31.111111111111114
+        },
+        "data": {
+          "label": "WEB HOST · STATIC DELIVERY",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 495.37777777777774,
+          "y": 15.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 958
+        },
+        "data": {
+          "label": "BROWSER · RUNTIME DESTINATIONS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 515.3777777777777,
+          "y": 31.111111111111114
+        },
+        "data": {
+          "label": "BROWSER · RUNTIME DESTINATIONS",
+          "width": 364
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "browser",
+        "target": "static",
+        "label": "asset",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 217.11111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 329.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 273.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "static",
+        "target": "fallback",
+        "label": "unmatched",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 461.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 587.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 524.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "config",
+        "target": "client-origin",
+        "label": "supplies",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 697.3777777777777,
+              "y": 217.11111111111111
+            },
+            {
+              "x": 697.3777777777777,
+              "y": 329.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 697.3777777777777,
+            "y": 273.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "client-origin",
+        "target": "api-host",
+        "label": "requests",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 697.3777777777777,
+              "y": 461.1111111111111
+            },
+            {
+              "x": 697.3777777777777,
+              "y": 573.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 697.3777777777777,
+            "y": 517.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "docs-route",
+        "target": "external-docs",
+        "label": "302 redirect",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 883.1111111111111
+            },
+            {
+              "x": 527.3777777777777,
+              "y": 883.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 452.5777777777778,
+            "y": 883.1111111111111
+          }
+        }
+      }
+    ],
+    "canvasWidth": 905.1555555555555,
+    "canvasHeight": 997.4938271604938
+  }
+}

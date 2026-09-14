@@ -1,0 +1,392 @@
+{
+  "title": "Provisioning progress is not turn readiness",
+  "nodes": [
+    {
+      "id": "dispatch",
+      "label": "Coordinator dispatch",
+      "subLabel": "Child launch begins",
+      "meta": "Admission owned by Kubernetes",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "claim",
+      "label": "Child executor",
+      "subLabel": "Create/adopt claim",
+      "meta": "Poll until controller binding",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "pending",
+      "label": "Provisioning progress",
+      "subLabel": "provisioning_pending about 20s",
+      "meta": "Child stream shows legitimate wait",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "observer",
+      "label": "Coordinator observer",
+      "subLabel": "Recognize provisioning wait",
+      "meta": "Not a completed agent turn",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "bound",
+      "label": "Claim bound",
+      "subLabel": "Ready condition + pod name",
+      "meta": "Resolve actual pod IP",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "ready",
+      "label": "Configure leaf",
+      "subLabel": "Standby listener then SetupAsync",
+      "meta": "Only then start A2A turn",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "dispatch",
+      "to": "claim",
+      "label": "launch",
+      "loopback": false
+    },
+    {
+      "from": "claim",
+      "to": "pending",
+      "label": "waiting",
+      "loopback": false
+    },
+    {
+      "from": "pending",
+      "to": "observer",
+      "label": "progress",
+      "loopback": false
+    },
+    {
+      "from": "claim",
+      "to": "bound",
+      "label": "bound",
+      "loopback": false
+    },
+    {
+      "from": "bound",
+      "to": "ready",
+      "label": "setup",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "dispatch",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "dispatch",
+          "label": "Coordinator dispatch",
+          "subLabel": "Child launch begins",
+          "meta": "Admission owned by Kubernetes",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "claim",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "claim",
+          "label": "Child executor",
+          "subLabel": "Create/adopt claim",
+          "meta": "Poll until controller binding",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "pending",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 240.66666666666666
+        },
+        "data": {
+          "id": "pending",
+          "label": "Provisioning progress",
+          "subLabel": "provisioning_pending about 20s",
+          "meta": "Child stream shows legitimate wait",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "observer",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "observer",
+          "label": "Coordinator observer",
+          "subLabel": "Recognize provisioning wait",
+          "meta": "Not a completed agent turn",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "bound",
+        "type": "card",
+        "position": {
+          "x": 650.1894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "bound",
+          "label": "Claim bound",
+          "subLabel": "Ready condition + pod name",
+          "meta": "Resolve actual pod IP",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "ready",
+        "type": "card",
+        "position": {
+          "x": 1104.5894736842106,
+          "y": 484.66666666666663
+        },
+        "data": {
+          "id": "ready",
+          "label": "Configure leaf",
+          "subLabel": "Standby listener then SetupAsync",
+          "meta": "Only then start A2A turn",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "dispatch",
+        "target": "claim",
+        "label": "launch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 650.1894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 592.9894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "claim",
+        "target": "pending",
+        "label": "waiting",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "pending",
+        "target": "observer",
+        "label": "progress",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1274.5894736842106,
+              "y": 372.66666666666663
+            },
+            {
+              "x": 1274.5894736842106,
+              "y": 430.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 430.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 770.5894736842106,
+            "y": 430.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "claim",
+        "target": "bound",
+        "label": "bound",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 820.1894736842105,
+              "y": 358.66666666666663
+            },
+            {
+              "x": 820.1894736842105,
+              "y": 498.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 820.1894736842105,
+            "y": 390.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "bound",
+        "target": "ready",
+        "label": "setup",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 990.1894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1104.5894736842106,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1047.3894736842105,
+            "y": 550.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1639.9315789473685,
+    "canvasHeight": 1047.2710526315789
+  }
+}

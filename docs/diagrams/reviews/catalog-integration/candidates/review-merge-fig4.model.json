@@ -1,0 +1,858 @@
+{
+  "title": "Guarded standalone merge",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Reviewed input",
+      "subLabel": "Canonicalize repository path",
+      "meta": "reviewed source + tree",
+      "icon": "window",
+      "shape": "document",
+      "badge": {
+        "text": "INPUT",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Repository lock",
+      "subLabel": "Bounded acquisition wait",
+      "meta": "5-second wait",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "LOCK",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Repository busy",
+      "subLabel": "No acquired lock",
+      "meta": "LockFailed",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "EXIT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "TryStartMerging CAS",
+      "subLabel": "Reload if CAS loses",
+      "meta": "already Merging may proceed",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "CAS",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Guarded Git operation",
+      "subLabel": "Reviewed tree into origin",
+      "meta": "while holding lock",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "GIT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Merged",
+      "subLabel": "Persist commit and status",
+      "meta": "best-effort cleanup",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "SUCCESS",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Blocked / conflict",
+      "subLabel": "Blocked: restore review",
+      "meta": "conflict: MergeFailed",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "RECOVER",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Internal error",
+      "subLabel": "Filtered exception handling",
+      "meta": "revert / internal error",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "ERROR",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Release acquired lock",
+      "subLabel": "Every acquired-lock exit",
+      "meta": "finally",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "RELEASE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "validate",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "busy",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "locked",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "allowed",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "merged",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n6",
+      "label": "blocked",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n7",
+      "label": "error",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n8",
+      "label": "finally",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n8",
+      "label": "finally",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "finally",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n8",
+      "label": "denied",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "INPUT AND LOCK ADMISSION"
+    },
+    {
+      "id": "1",
+      "label": "STATUS GUARD AND GIT"
+    },
+    {
+      "id": "2",
+      "label": "OUTCOMES AND RELEASE"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n0",
+          "label": "Reviewed input",
+          "subLabel": "Canonicalize repository path",
+          "meta": "reviewed source + tree",
+          "icon": "window",
+          "shape": "document",
+          "badge": {
+            "text": "INPUT",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n1",
+          "label": "Repository lock",
+          "subLabel": "Bounded acquisition wait",
+          "meta": "5-second wait",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "LOCK",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 211.73831775700933
+        },
+        "data": {
+          "id": "n2",
+          "label": "Repository busy",
+          "subLabel": "No acquired lock",
+          "meta": "LockFailed",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "EXIT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "TryStartMerging CAS",
+          "subLabel": "Reload if CAS loses",
+          "meta": "already Merging may proceed",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "CAS",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Guarded Git operation",
+          "subLabel": "Reviewed tree into origin",
+          "meta": "while holding lock",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "GIT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 455.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Merged",
+          "subLabel": "Persist commit and status",
+          "meta": "best-effort cleanup",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "SUCCESS",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 38.13084112149531,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Blocked / conflict",
+          "subLabel": "Blocked: restore review",
+          "meta": "conflict: MergeFailed",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "RECOVER",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 492.5308411214953,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Internal error",
+          "subLabel": "Filtered exception handling",
+          "meta": "revert / internal error",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "ERROR",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 946.9308411214952,
+          "y": 699.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Release acquired lock",
+          "subLabel": "Every acquired-lock exit",
+          "meta": "finally",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "RELEASE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 147.73831775700933
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "INPUT AND LOCK ADMISSION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 163.73831775700933
+        },
+        "data": {
+          "label": "INPUT AND LOCK ADMISSION",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 391.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "STATUS GUARD AND GIT",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 407.7383177570093
+        },
+        "data": {
+          "label": "STATUS GUARD AND GIT",
+          "width": 1272.8
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 6.130841121495308,
+          "y": 635.7383177570093
+        },
+        "style": {
+          "width": 1312.8,
+          "height": 192
+        },
+        "data": {
+          "label": "OUTCOMES AND RELEASE",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 26.13084112149531,
+          "y": 651.7383177570093
+        },
+        "data": {
+          "label": "OUTCOMES AND RELEASE",
+          "width": 1272.8
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "validate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 492.5308411214953,
+              "y": 263.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 435.3308411214953,
+            "y": 263.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "busy",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 832.5308411214953,
+              "y": 263.7383177570093
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 263.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 889.7308411214952,
+            "y": 263.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n1",
+        "target": "n3",
+        "label": "locked",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 662.5308411214953,
+              "y": 315.7383177570093
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 366.4751598622725
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 378.13084112149534,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 535.2646757079615,
+            "y": 366.4751598622725
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "allowed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 459.2466305951795,
+              "y": 483.8183177570093
+            },
+            {
+              "x": 459.2466305951795,
+              "y": 405.0014756517462
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 405.0014756517462
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 455.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 560.8887358583374,
+            "y": 405.0014756517462
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "merged",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 832.5308411214953,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 507.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 889.7308411214952,
+            "y": 507.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n4",
+        "target": "n6",
+        "label": "blocked",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 492.5308411214953,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 462.663171948563,
+              "y": 507.7383177570093
+            },
+            {
+              "x": 462.663171948563,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 378.13084112149534,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 462.663171948563,
+            "y": 629.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n4",
+        "target": "n7",
+        "label": "error",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 662.5308411214953,
+              "y": 559.7383177570093
+            },
+            {
+              "x": 662.5308411214953,
+              "y": 699.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 662.5308411214953,
+            "y": 607.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n5",
+        "target": "n8",
+        "label": "finally",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1116.9308411214952,
+              "y": 559.7383177570093
+            },
+            {
+              "x": 1116.9308411214952,
+              "y": 699.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1116.9308411214952,
+            "y": 629.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "n6",
+        "target": "n8",
+        "label": "finally",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 853.4205607476634
+            },
+            {
+              "x": 917.0631719485629,
+              "y": 853.4205607476634
+            },
+            {
+              "x": 917.0631719485629,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 751.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 662.5308411214953,
+            "y": 853.4205607476634
+          }
+        }
+      },
+      {
+        "id": "e9",
+        "source": "n7",
+        "target": "n8",
+        "label": "finally",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 832.5308411214953,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 862.3985102944275,
+              "y": 751.7383177570093
+            },
+            {
+              "x": 862.3985102944275,
+              "y": 727.8183177570094
+            },
+            {
+              "x": 946.9308411214952,
+              "y": 727.8183177570094
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 896.2114426252546,
+            "y": 727.8183177570094
+          }
+        }
+      },
+      {
+        "id": "e10",
+        "source": "n3",
+        "target": "n8",
+        "label": "denied",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 378.13084112149534,
+              "y": 531.6583177570093
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 531.6583177570093
+            },
+            {
+              "x": 407.99851029442766,
+              "y": 649.0014756517462
+            },
+            {
+              "x": 1038.7308411214951,
+              "y": 649.0014756517462
+            },
+            {
+              "x": 1038.7308411214951,
+              "y": 699.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 723.3646757079614,
+            "y": 649.0014756517462
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1325.0616822429902,
+    "canvasHeight": 893.1401869158877
+  }
+}

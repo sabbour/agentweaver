@@ -1,0 +1,272 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n2",
+    "relationship": "Orchestrator starts workflow factory",
+    "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:960",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        248,
+        166.0
+      ],
+      [
+        248,
+        232
+      ],
+      [
+        546,
+        232
+      ],
+      [
+        546,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Factory resolves and binds effective definition",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1386-1517",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        514,
+        166.0
+      ],
+      [
+        514,
+        141.16
+      ],
+      [
+        556,
+        141.16
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Factory starts checkpointed execution stream",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1386-1439",
+    "result": "clean",
+    "route": [
+      [
+        556,
+        190.84
+      ],
+      [
+        516,
+        190.84
+      ],
+      [
+        516,
+        384
+      ],
+      [
+        248,
+        384
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n0",
+    "target": "n4",
+    "relationship": "Orchestrator supervises the watcher",
+    "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:260-364",
+    "result": "clean",
+    "route": [
+      [
+        131.0,
+        220
+      ],
+      [
+        131.0,
+        240
+      ],
+      [
+        280,
+        240
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        290,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Watcher consumes runtime stream updates",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:313-335",
+    "result": "clean",
+    "route": [
+      [
+        131.0,
+        372
+      ],
+      [
+        131.0,
+        392
+      ],
+      [
+        266,
+        392
+      ],
+      [
+        266,
+        293.16
+      ],
+      [
+        290,
+        293.16
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n5",
+    "relationship": "Review request persists pending state",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:363-377",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        264
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        546,
+        254
+      ],
+      [
+        546,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "Watcher classifies typed terminal output",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:595-700",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        342.84
+      ],
+      [
+        280,
+        342.84
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        238,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Terminal classification updates durable run state",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:595-700",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        445.16
+      ],
+      [
+        248,
+        445.16
+      ],
+      [
+        248,
+        534
+      ],
+      [
+        280,
+        534
+      ],
+      [
+        280,
+        470.0
+      ],
+      [
+        290,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n4",
+    "target": "n8",
+    "relationship": "Watcher exposes workflow progress events",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:313-409",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        546,
+        318.0
+      ],
+      [
+        546,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  }
+]

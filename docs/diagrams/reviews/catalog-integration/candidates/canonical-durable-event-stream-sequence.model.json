@@ -1,0 +1,132 @@
+{
+  "kind": "sequence",
+  "title": "Commit first. Replay by cursor.",
+  "participants": [
+    {
+      "id": "producer",
+      "label": "Producer",
+      "subLabel": "run execution",
+      "meta": "replica A",
+      "shape": "hexagon",
+      "icon": "box",
+      "badge": {
+        "text": "WRITE",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "stream",
+      "label": "EF stream",
+      "subLabel": "append + subscribe",
+      "meta": "service",
+      "shape": "component",
+      "icon": "box",
+      "badge": {
+        "text": "EF",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "store",
+      "label": "Postgres",
+      "subLabel": "RunEvents",
+      "meta": "shared store",
+      "shape": "cylinder3",
+      "icon": "box",
+      "badge": {
+        "text": "DATA",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "sse",
+      "label": "SSE",
+      "subLabel": "run endpoint",
+      "meta": "replica B",
+      "shape": "component",
+      "icon": "box",
+      "badge": {
+        "text": "READ",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "client",
+      "label": "Watcher",
+      "subLabel": "web / MCP",
+      "meta": "cursor",
+      "shape": "umlActor",
+      "icon": "box",
+      "badge": {
+        "text": "CLIENT",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "producer",
+      "to": "stream",
+      "label": "1  append(runId, event)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "stream",
+      "to": "store",
+      "label": "2  lock run · allocate MAX + 1 · save",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "store",
+      "to": "stream",
+      "label": "3  commit succeeds",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "stream",
+      "to": "producer",
+      "label": "4  acknowledge assigned sequence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "client",
+      "to": "sse",
+      "label": "5  reconnect with last delivered cursor",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sse",
+      "to": "store",
+      "label": "6  query Sequence > cursor",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "store",
+      "to": "sse",
+      "label": "7  return ordered durable batch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sse",
+      "to": "client",
+      "label": "8  emit id + event + data; advance cursor",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

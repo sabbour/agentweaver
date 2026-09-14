@@ -1,0 +1,466 @@
+{
+  "title": "One goal, one collective review",
+  "nodes": [
+    {
+      "id": "intent",
+      "label": "Confirm intent",
+      "subLabel": "Draft the OutcomeSpec",
+      "meta": "human confirmation",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "01 · INTENT",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "plan",
+      "label": "Plan the work",
+      "subLabel": "Persist a WorkPlan DAG",
+      "meta": "subtasks + dependencies",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "02 · PLAN",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "dispatch",
+      "label": "Dispatch children",
+      "subLabel": "Run the eligible frontier",
+      "meta": "per-child worktrees",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "03 · EXECUTE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "finish",
+      "label": "Merge + Scribe",
+      "subLabel": "Approved integration path",
+      "meta": "MergeWorktree → Scribe",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "06 · FINISH",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "review",
+      "label": "Collective review",
+      "subLabel": "One human decision",
+      "meta": "approve / revise / decline",
+      "icon": "box",
+      "shape": "rhombus",
+      "badge": {
+        "text": "05 · REVIEW",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "integrate",
+      "label": "Integrate + gates",
+      "subLabel": "Assemble child branches",
+      "meta": "configured checks / review",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "04 · ASSEMBLE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "intent",
+      "to": "plan",
+      "label": "confirmed",
+      "loopback": false
+    },
+    {
+      "from": "plan",
+      "to": "dispatch",
+      "label": "dispatch",
+      "loopback": false
+    },
+    {
+      "from": "dispatch",
+      "to": "integrate",
+      "label": "settled work",
+      "loopback": false
+    },
+    {
+      "from": "integrate",
+      "to": "review",
+      "label": "request review",
+      "loopback": false
+    },
+    {
+      "from": "review",
+      "to": "finish",
+      "label": "approved",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "group0",
+      "label": "Plan and execute"
+    },
+    {
+      "id": "group1",
+      "label": "Integrate, review, finish"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "intent",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "intent",
+          "label": "Confirm intent",
+          "subLabel": "Draft the OutcomeSpec",
+          "meta": "human confirmation",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "01 · INTENT",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "plan",
+        "type": "card",
+        "position": {
+          "x": 569.8728110599079,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "plan",
+          "label": "Plan the work",
+          "subLabel": "Persist a WorkPlan DAG",
+          "meta": "subtasks + dependencies",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "02 · PLAN",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "dispatch",
+        "type": "card",
+        "position": {
+          "x": 1077.072811059908,
+          "y": 293.48387096774195
+        },
+        "data": {
+          "id": "dispatch",
+          "label": "Dispatch children",
+          "subLabel": "Run the eligible frontier",
+          "meta": "per-child worktrees",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "03 · EXECUTE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "finish",
+        "type": "card",
+        "position": {
+          "x": 62.67281105990784,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "finish",
+          "label": "Merge + Scribe",
+          "subLabel": "Approved integration path",
+          "meta": "MergeWorktree → Scribe",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "06 · FINISH",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "review",
+        "type": "card",
+        "position": {
+          "x": 569.8728110599079,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "review",
+          "label": "Collective review",
+          "subLabel": "One human decision",
+          "meta": "approve / revise / decline",
+          "icon": "box",
+          "shape": "rhombus",
+          "badge": {
+            "text": "05 · REVIEW",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "integrate",
+        "type": "card",
+        "position": {
+          "x": 1077.072811059908,
+          "y": 597.447004608295
+        },
+        "data": {
+          "id": "integrate",
+          "label": "Integrate + gates",
+          "subLabel": "Assemble child branches",
+          "meta": "configured checks / review",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "04 · ASSEMBLE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "group-group0",
+        "type": "band",
+        "position": {
+          "x": 30.672811059907843,
+          "y": 229.48387096774195
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 192
+        },
+        "data": {
+          "label": "Plan and execute",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 50.67281105990784,
+          "y": 245.48387096774195
+        },
+        "data": {
+          "label": "Plan and execute",
+          "width": 1378.4
+        }
+      },
+      {
+        "id": "group-group1",
+        "type": "band",
+        "position": {
+          "x": 30.672811059907843,
+          "y": 533.447004608295
+        },
+        "style": {
+          "width": 1418.4,
+          "height": 192
+        },
+        "data": {
+          "label": "Integrate, review, finish",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 50.67281105990784,
+          "y": 549.447004608295
+        },
+        "data": {
+          "label": "Integrate, review, finish",
+          "width": 1378.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "intent",
+        "target": "plan",
+        "label": "confirmed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 402.6728110599079,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 569.8728110599079,
+              "y": 345.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 486.2728110599079,
+            "y": 345.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "plan",
+        "target": "dispatch",
+        "label": "dispatch",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 909.8728110599079,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1077.072811059908,
+              "y": 345.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 993.4728110599079,
+            "y": 345.48387096774195
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "dispatch",
+        "target": "integrate",
+        "label": "settled work",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1417.072811059908,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1445.2755760368666,
+              "y": 345.48387096774195
+            },
+            {
+              "x": 1445.2755760368666,
+              "y": 649.447004608295
+            },
+            {
+              "x": 1417.072811059908,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1445.2755760368666,
+            "y": 497.46543778801845
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "integrate",
+        "target": "review",
+        "label": "request review",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1077.072811059908,
+              "y": 649.447004608295
+            },
+            {
+              "x": 909.8728110599079,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 993.4728110599079,
+            "y": 649.447004608295
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "review",
+        "target": "finish",
+        "label": "approved",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 569.8728110599079,
+              "y": 649.447004608295
+            },
+            {
+              "x": 402.6728110599079,
+              "y": 649.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 486.2728110599079,
+            "y": 649.447004608295
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1479.7456221198156,
+    "canvasHeight": 913.4562211981568
+  }
+}

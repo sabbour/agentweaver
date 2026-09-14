@@ -1,0 +1,528 @@
+{
+  "title": "Identity, control, and execution",
+  "nodes": [
+    {
+      "id": "api",
+      "label": "API + worker",
+      "subLabel": "Control plane services",
+      "meta": "Postgres + CSI mounted data",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "badge": {
+        "text": "CONTROL",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP service",
+      "subLabel": "Authenticated tool surface",
+      "meta": "HTTP API client",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "badge": {
+        "text": "TOOLS",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "sandbox",
+      "label": "AgentHost pod",
+      "subLabel": "Constrained turn execution",
+      "meta": "per-run bearer / sandbox",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "badge": {
+        "text": "EXECUTION",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+      "group": "group0"
+    },
+    {
+      "id": "entra",
+      "label": "Microsoft Entra",
+      "subLabel": "User identity",
+      "meta": "sign-in / sessions / roles",
+      "icon": "box",
+      "shape": "image",
+      "badge": {
+        "text": "IDENTITY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "github",
+      "label": "GitHub",
+      "subLabel": "Purpose-bound capabilities",
+      "meta": "repository authorization",
+      "icon": "box",
+      "shape": "cloud",
+      "badge": {
+        "text": "CAPABILITY",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=cloud;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+      "group": "group1"
+    },
+    {
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "subLabel": "Shared durable state",
+      "meta": "API + worker persistence",
+      "icon": "box",
+      "shape": "cylinder",
+      "badge": {
+        "text": "DATA",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;size=0.15;",
+      "group": "group1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "mcp",
+      "to": "api",
+      "label": "HTTP API",
+      "loopback": false
+    },
+    {
+      "from": "api",
+      "to": "sandbox",
+      "label": "configure / A2A",
+      "loopback": false
+    },
+    {
+      "from": "entra",
+      "to": "api",
+      "label": "identity",
+      "loopback": false
+    },
+    {
+      "from": "github",
+      "to": "api",
+      "label": "capability",
+      "loopback": false
+    },
+    {
+      "from": "api",
+      "to": "postgres",
+      "label": "read / write",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "group0",
+      "label": "AKS · control and execution workloads"
+    },
+    {
+      "id": "group1",
+      "label": "External services"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 222.67281105990784,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "api",
+          "label": "API + worker",
+          "subLabel": "Control plane services",
+          "meta": "Postgres + CSI mounted data",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "badge": {
+            "text": "CONTROL",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 738.6728110599079,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "mcp",
+          "label": "MCP service",
+          "subLabel": "Authenticated tool surface",
+          "meta": "HTTP API client",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "badge": {
+            "text": "TOOLS",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "sandbox",
+        "type": "card",
+        "position": {
+          "x": 1254.6728110599079,
+          "y": 373.48387096774195
+        },
+        "data": {
+          "id": "sandbox",
+          "label": "AgentHost pod",
+          "subLabel": "Constrained turn execution",
+          "meta": "per-run bearer / sandbox",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "badge": {
+            "text": "EXECUTION",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;",
+          "group": "group0"
+        }
+      },
+      {
+        "id": "entra",
+        "type": "card",
+        "position": {
+          "x": 222.67281105990784,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "entra",
+          "label": "Microsoft Entra",
+          "subLabel": "User identity",
+          "meta": "sign-in / sessions / roles",
+          "icon": "box",
+          "shape": "image",
+          "badge": {
+            "text": "IDENTITY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "github",
+        "type": "card",
+        "position": {
+          "x": 738.6728110599079,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "github",
+          "label": "GitHub",
+          "subLabel": "Purpose-bound capabilities",
+          "meta": "repository authorization",
+          "icon": "box",
+          "shape": "cloud",
+          "badge": {
+            "text": "CAPABILITY",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=cloud;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "postgres",
+        "type": "card",
+        "position": {
+          "x": 1254.6728110599079,
+          "y": 677.447004608295
+        },
+        "data": {
+          "id": "postgres",
+          "label": "PostgreSQL",
+          "subLabel": "Shared durable state",
+          "meta": "API + worker persistence",
+          "icon": "box",
+          "shape": "cylinder",
+          "badge": {
+            "text": "DATA",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;size=0.15;",
+          "group": "group1"
+        }
+      },
+      {
+        "id": "group-group0",
+        "type": "band",
+        "position": {
+          "x": 190.67281105990784,
+          "y": 303.48387096774195
+        },
+        "style": {
+          "width": 1436,
+          "height": 198
+        },
+        "data": {
+          "label": "AKS · control and execution workloads",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 210.67281105990784,
+          "y": 319.48387096774195
+        },
+        "data": {
+          "label": "AKS · control and execution workloads",
+          "width": 1396
+        }
+      },
+      {
+        "id": "group-group1",
+        "type": "band",
+        "position": {
+          "x": 190.67281105990784,
+          "y": 613.447004608295
+        },
+        "style": {
+          "width": 1436,
+          "height": 192
+        },
+        "data": {
+          "label": "External services",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-group1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 210.67281105990784,
+          "y": 629.447004608295
+        },
+        "data": {
+          "label": "External services",
+          "width": 1396
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "mcp",
+        "target": "api",
+        "label": "HTTP API",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 738.6728110599079,
+              "y": 425.48387096774195
+            },
+            {
+              "x": 706.6728110599079,
+              "y": 425.48387096774195
+            },
+            {
+              "x": 706.6728110599079,
+              "y": 412.81720430107526
+            },
+            {
+              "x": 562.6728110599079,
+              "y": 412.81720430107526
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 634.6728110599079,
+            "y": 412.81720430107526
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "api",
+        "target": "sandbox",
+        "label": "configure / A2A",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 562.6728110599079,
+              "y": 438.15053763440864
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 438.15053763440864
+            },
+            {
+              "x": 594.6728110599079,
+              "y": 498.49387096774194
+            },
+            {
+              "x": 1222.6728110599079,
+              "y": 498.49387096774194
+            },
+            {
+              "x": 1222.6728110599079,
+              "y": 425.48387096774195
+            },
+            {
+              "x": 1254.6728110599079,
+              "y": 425.48387096774195
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelLeader": {
+            "from": {
+              "x": 657.4728110599078,
+              "y": 498.49387096774194
+            },
+            "to": {
+              "x": 657.4728110599078,
+              "y": 490.49387096774194
+            }
+          },
+          "labelPos": {
+            "x": 657.4728110599078,
+            "y": 475.29387096774195
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "entra",
+        "target": "api",
+        "label": "identity",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 222.67281105990784,
+              "y": 729.447004608295
+            },
+            {
+              "x": 166.67281105990784,
+              "y": 729.447004608295
+            },
+            {
+              "x": 166.67281105990784,
+              "y": 412.81720430107526
+            },
+            {
+              "x": 222.67281105990784,
+              "y": 412.81720430107526
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 172.27281105990784,
+            "y": 729.447004608295
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "github",
+        "target": "api",
+        "label": "capability",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 738.6728110599079,
+              "y": 729.447004608295
+            },
+            {
+              "x": 706.6728110599079,
+              "y": 729.447004608295
+            },
+            {
+              "x": 706.6728110599079,
+              "y": 529.483870967742
+            },
+            {
+              "x": 190.67281105990784,
+              "y": 529.483870967742
+            },
+            {
+              "x": 190.67281105990784,
+              "y": 438.15053763440864
+            },
+            {
+              "x": 222.67281105990784,
+              "y": 438.15053763440864
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 448.6728110599079,
+            "y": 529.483870967742
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "api",
+        "target": "postgres",
+        "label": "read / write",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 392.6728110599079,
+              "y": 477.48387096774195
+            },
+            {
+              "x": 392.6728110599079,
+              "y": 509.48387096774195
+            },
+            {
+              "x": 1626.6728110599079,
+              "y": 509.48387096774195
+            },
+            {
+              "x": 1626.6728110599079,
+              "y": 729.447004608295
+            },
+            {
+              "x": 1594.6728110599079,
+              "y": 729.447004608295
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1288.6728110599079,
+            "y": 509.48387096774195
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1817.345622119816,
+    "canvasHeight": 1073.4562211981568
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "diagram": "sandbox-browser-preview-fig2",
+  "orientation": "A5-landscape",
+  "pitch": {
+    "drawio": "sandbox-browser-preview-fig2-pitch.drawio",
+    "png": "sandbox-browser-preview-fig2-pitch.png",
+    "change_record": "sandbox-browser-preview-fig2-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "sandbox-browser-preview-fig2-pass-01.drawio",
+      "png": "sandbox-browser-preview-fig2-pass-01.png",
+      "change_record": "sandbox-browser-preview-fig2-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "all_arrows_traced": false,
+      "baseline_meaningful_xml": 5094,
+      "result_meaningful_xml": 18636,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "growth_ratio": 3.658422
+    }
+  ],
+  "final_pass": null
+}

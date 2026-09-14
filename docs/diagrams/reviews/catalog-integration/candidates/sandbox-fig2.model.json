@@ -1,0 +1,666 @@
+{
+  "title": "Choose Kubernetes before local probing",
+  "nodes": [
+    {
+      "id": "router",
+      "label": "API executor router",
+      "subLabel": "Backend override / cluster detect",
+      "meta": "Explicit local bypasses cluster",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "cluster",
+      "label": "Kubernetes selected",
+      "subLabel": "Initialize claim executor",
+      "meta": "Failure throws; no local fallback",
+      "icon": "box",
+      "shape": "mxgraph.kubernetes.pod",
+      "library": "kubernetes",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "claim",
+      "label": "Claim backend",
+      "subLabel": "Bound pod command contract",
+      "meta": "Not the in-pod PodExec client",
+      "icon": "box",
+      "shape": "rectangle",
+      "badge": {
+        "text": "Component",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+    },
+    {
+      "id": "factory",
+      "label": "Local factory",
+      "subLabel": "Only when router selects local",
+      "meta": "Probe host-supported backends",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "windows",
+      "label": "Windows ladder",
+      "subLabel": "processcontainer -> WSL",
+      "meta": "wsl-bwrap real; unshare not real",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "linux",
+      "label": "Linux ladder",
+      "subLabel": "bubblewrap -> LXC",
+      "meta": "Host tools must be available",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "fallback",
+      "label": "No usable isolation",
+      "subLabel": "Automatic local fallback",
+      "meta": "Also explicit direct option",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "direct",
+      "label": "Direct passthrough",
+      "subLabel": "IsRealIsolation = false",
+      "meta": "Trusted/disposable host only",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    },
+    {
+      "id": "shell",
+      "label": "Command registration",
+      "subLabel": "ShellEnabled AND real or direct",
+      "meta": "wsl-unshare: no controlled shell",
+      "icon": "box",
+      "shape": "process",
+      "library": "flowchart",
+      "badge": {
+        "text": "Component",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+    }
+  ],
+  "edges": [
+    {
+      "from": "router",
+      "to": "cluster",
+      "label": "select",
+      "loopback": false
+    },
+    {
+      "from": "cluster",
+      "to": "claim",
+      "label": "ready",
+      "loopback": false
+    },
+    {
+      "from": "router",
+      "to": "factory",
+      "label": "local",
+      "loopback": false
+    },
+    {
+      "from": "factory",
+      "to": "windows",
+      "label": "Windows",
+      "loopback": false
+    },
+    {
+      "from": "factory",
+      "to": "linux",
+      "label": "Linux",
+      "loopback": false
+    },
+    {
+      "from": "windows",
+      "to": "fallback",
+      "label": "unavailable",
+      "loopback": false
+    },
+    {
+      "from": "linux",
+      "to": "fallback",
+      "label": "unavailable",
+      "loopback": false
+    },
+    {
+      "from": "fallback",
+      "to": "direct",
+      "label": "warn",
+      "loopback": false
+    },
+    {
+      "from": "direct",
+      "to": "shell",
+      "label": "gate",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "router",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 240.66666666666666
+        },
+        "data": {
+          "id": "router",
+          "label": "API executor router",
+          "subLabel": "Backend override / cluster detect",
+          "meta": "Explicit local bypasses cluster",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "cluster",
+        "type": "card",
+        "position": {
+          "x": 676.5894736842106,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "cluster",
+          "label": "Kubernetes selected",
+          "subLabel": "Initialize claim executor",
+          "meta": "Failure throws; no local fallback",
+          "icon": "box",
+          "shape": "mxgraph.kubernetes.pod",
+          "library": "kubernetes",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=mxgraph.kubernetes.pod;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "claim",
+        "type": "card",
+        "position": {
+          "x": 1157.3894736842105,
+          "y": 254.66666666666666
+        },
+        "data": {
+          "id": "claim",
+          "label": "Claim backend",
+          "subLabel": "Bound pod command contract",
+          "meta": "Not the in-pod PodExec client",
+          "icon": "box",
+          "shape": "rectangle",
+          "badge": {
+            "text": "Component",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=rectangle;html=1;aspect=fixed;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "factory",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 484.66666666666663
+        },
+        "data": {
+          "id": "factory",
+          "label": "Local factory",
+          "subLabel": "Only when router selects local",
+          "meta": "Probe host-supported backends",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "windows",
+        "type": "card",
+        "position": {
+          "x": 676.5894736842106,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "windows",
+          "label": "Windows ladder",
+          "subLabel": "processcontainer -> WSL",
+          "meta": "wsl-bwrap real; unshare not real",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "linux",
+        "type": "card",
+        "position": {
+          "x": 1157.3894736842105,
+          "y": 498.66666666666663
+        },
+        "data": {
+          "id": "linux",
+          "label": "Linux ladder",
+          "subLabel": "bubblewrap -> LXC",
+          "meta": "Host tools must be available",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "fallback",
+        "type": "card",
+        "position": {
+          "x": 195.78947368421052,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "fallback",
+          "label": "No usable isolation",
+          "subLabel": "Automatic local fallback",
+          "meta": "Also explicit direct option",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "direct",
+        "type": "card",
+        "position": {
+          "x": 676.5894736842106,
+          "y": 742.6666666666666
+        },
+        "data": {
+          "id": "direct",
+          "label": "Direct passthrough",
+          "subLabel": "IsRealIsolation = false",
+          "meta": "Trusted/disposable host only",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      },
+      {
+        "id": "shell",
+        "type": "card",
+        "position": {
+          "x": 1157.3894736842105,
+          "y": 728.6666666666666
+        },
+        "data": {
+          "id": "shell",
+          "label": "Command registration",
+          "subLabel": "ShellEnabled AND real or direct",
+          "meta": "wsl-unshare: no controlled shell",
+          "icon": "box",
+          "shape": "process",
+          "library": "flowchart",
+          "badge": {
+            "text": "Component",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;html=1;aspect=fixed;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "router",
+        "target": "cluster",
+        "label": "select",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 676.5894736842106,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 606.1894736842105,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "cluster",
+        "target": "claim",
+        "label": "ready",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1016.5894736842106,
+              "y": 306.66666666666663
+            },
+            {
+              "x": 1157.3894736842105,
+              "y": 306.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1086.9894736842107,
+            "y": 306.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "router",
+        "target": "factory",
+        "label": "local",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 365.7894736842105,
+              "y": 372.66666666666663
+            },
+            {
+              "x": 365.7894736842105,
+              "y": 484.66666666666663
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 365.7894736842105,
+            "y": 428.66666666666663
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "factory",
+        "target": "windows",
+        "label": "Windows",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 533.3333333333333
+            },
+            {
+              "x": 644.5894736842106,
+              "y": 533.3333333333333
+            },
+            {
+              "x": 644.5894736842106,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 676.5894736842106,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.1894736842105,
+            "y": 533.3333333333333
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "factory",
+        "target": "linux",
+        "label": "Linux",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 568
+            },
+            {
+              "x": 567.7894736842105,
+              "y": 568
+            },
+            {
+              "x": 567.7894736842105,
+              "y": 653.6766666666666
+            },
+            {
+              "x": 1125.3894736842105,
+              "y": 653.6766666666666
+            },
+            {
+              "x": 1125.3894736842105,
+              "y": 550.6666666666666
+            },
+            {
+              "x": 1157.3894736842105,
+              "y": 550.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 846.5894736842106,
+            "y": 653.6766666666666
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "windows",
+        "target": "fallback",
+        "label": "unavailable",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 846.5894736842106,
+              "y": 602.6666666666666
+            },
+            {
+              "x": 846.5894736842106,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 331.7894736842105,
+              "y": 634.6666666666666
+            },
+            {
+              "x": 331.7894736842105,
+              "y": 742.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 630.5894736842106,
+            "y": 634.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "linux",
+        "target": "fallback",
+        "label": "unavailable",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1327.3894736842105,
+              "y": 602.6666666666666
+            },
+            {
+              "x": 1327.3894736842105,
+              "y": 710.6666666666666
+            },
+            {
+              "x": 399.7894736842105,
+              "y": 710.6666666666666
+            },
+            {
+              "x": 399.7894736842105,
+              "y": 742.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 863.5894736842106,
+            "y": 710.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "fallback",
+        "target": "direct",
+        "label": "warn",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 535.7894736842105,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 676.5894736842106,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 606.1894736842105,
+            "y": 794.6666666666666
+          }
+        }
+      },
+      {
+        "id": "e8",
+        "source": "direct",
+        "target": "shell",
+        "label": "gate",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1016.5894736842106,
+              "y": 794.6666666666666
+            },
+            {
+              "x": 1157.3894736842105,
+              "y": 794.6666666666666
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1086.9894736842107,
+            "y": 794.6666666666666
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1692.7315789473687,
+    "canvasHeight": 1100.3938596491228
+  }
+}

@@ -1,0 +1,281 @@
+{
+  "diagram": "workflow-engine-fig2",
+  "source_sha256": "66354a84b902fc348734ea1c14a506ed8d0efc2d30ed7b3d924aae052bdeb288",
+  "png_sha256": "b95410d1252580a4d7abcf6f91f46419cabe6429120167706602cc41adfa489e",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Declarative data is not an executor"
+    },
+    {
+      "cell": "takeaway",
+      "text": "A parsed workflow still needs structural and runtime-bindability validation."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "DECLARATIVE SHAPE"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "STRUCTURE AND SEMANTIC CLASSIFICATION"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "BINDABILITY AND RESULT"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "SOURCE"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Workflow YAML"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Authored graph document"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "start + nodes + edges"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "NODES"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Start + typed nodes"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Stable node identity"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "type / gate contracts"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "EDGES"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Edges + metadata"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Transitions and render fields"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "role / kind: visual"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "VALIDATE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Structural checks"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "References and graph shape"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "loader-valid definition"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "CLASSIFY"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Runtime classifier"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Known node execution kinds"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "publish -> agent kind"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "BIND"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Executor bindings"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Concrete execution contracts"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "not metadata inference"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "CHECK"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Start/edge compatibility"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Typed transitions must fit"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "dry-run bindability"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "SUCCESS"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Executable graph"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Valid concrete MAF graph"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "ready to execute"
+    },
+    {
+      "cell": "n8-badge",
+      "text": "FAIL"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Binding error"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Unsupported node/start/edge"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "WorkflowBindException"
+    },
+    {
+      "cell": "e0",
+      "text": "parse"
+    },
+    {
+      "cell": "e1",
+      "text": "parse"
+    },
+    {
+      "cell": "e2",
+      "text": "validate"
+    },
+    {
+      "cell": "e3",
+      "text": "validate"
+    },
+    {
+      "cell": "e4",
+      "text": "classify"
+    },
+    {
+      "cell": "e5",
+      "text": "bind"
+    },
+    {
+      "cell": "e6",
+      "text": "check"
+    },
+    {
+      "cell": "e7",
+      "text": "valid"
+    },
+    {
+      "cell": "e8",
+      "text": "invalid"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/workflow-engine.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "parse",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n0",
+      "to": "n2",
+      "label": "parse",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n3",
+      "label": "validate",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n3",
+      "label": "validate",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n4",
+      "label": "classify",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n4",
+      "to": "n5",
+      "label": "bind",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n5",
+      "to": "n6",
+      "label": "check",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n6",
+      "to": "n7",
+      "label": "valid",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n6",
+      "to": "n8",
+      "label": "invalid",
+      "result": "clean"
+    }
+  ]
+}

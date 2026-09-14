@@ -1,0 +1,237 @@
+{
+  "diagram": "sandbox-fig3",
+  "source_sha256": "d4dc263d0ee961a28a05a733e8b985202770229d2bdaf2ab425e5dd04ba3a034",
+  "png_sha256": "6ec0648fc846d69435b4f3ee51c4ca31899eae32d824851edb0ade8219784e92",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Retained utility-command claim lifecycle"
+    },
+    {
+      "cell": "takeaway",
+      "text": "This API path is not the AgentHost model-controlled command loop."
+    },
+    {
+      "cell": "command-title",
+      "text": "Utility command"
+    },
+    {
+      "cell": "command-subtitle",
+      "text": "Workspace and bounded timeout"
+    },
+    {
+      "cell": "command-metadata",
+      "text": "Optional Agentweaver run ID"
+    },
+    {
+      "cell": "command-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "executor-title",
+      "text": "Kubernetes executor"
+    },
+    {
+      "cell": "executor-subtitle",
+      "text": "Create or reuse claim"
+    },
+    {
+      "cell": "executor-metadata",
+      "text": "Stable name for run-scoped work"
+    },
+    {
+      "cell": "executor-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "controller-title",
+      "text": "Sandbox controller"
+    },
+    {
+      "cell": "controller-subtitle",
+      "text": "Bind warm-pool pod"
+    },
+    {
+      "cell": "controller-metadata",
+      "text": "Ready condition + sandbox name"
+    },
+    {
+      "cell": "controller-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "result-title",
+      "text": "Command result"
+    },
+    {
+      "cell": "result-subtitle",
+      "text": "stdout / stderr / exit status"
+    },
+    {
+      "cell": "result-metadata",
+      "text": "Timeout and output flags"
+    },
+    {
+      "cell": "result-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "exec-title",
+      "text": "Kubernetes pod exec"
+    },
+    {
+      "cell": "exec-subtitle",
+      "text": "Execute retained API command"
+    },
+    {
+      "cell": "exec-metadata",
+      "text": "No generic sleep pool implied"
+    },
+    {
+      "cell": "exec-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "pod-title",
+      "text": "Bound pod"
+    },
+    {
+      "cell": "pod-subtitle",
+      "text": "Current template is AgentHost"
+    },
+    {
+      "cell": "pod-metadata",
+      "text": "Not a separate generic deployment"
+    },
+    {
+      "cell": "pod-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "adhoc-title",
+      "text": "New ad-hoc claim"
+    },
+    {
+      "cell": "adhoc-subtitle",
+      "text": "Delete in command finally"
+    },
+    {
+      "cell": "adhoc-metadata",
+      "text": "No run-scoped retention needed"
+    },
+    {
+      "cell": "adhoc-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "retained-title",
+      "text": "Run-scoped claim"
+    },
+    {
+      "cell": "retained-subtitle",
+      "text": "Keep for cleanup / TTL"
+    },
+    {
+      "cell": "retained-metadata",
+      "text": "Not deleted after every command"
+    },
+    {
+      "cell": "retained-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "preview-title",
+      "text": "Production preview lookup"
+    },
+    {
+      "cell": "preview-subtitle",
+      "text": "Uses cluster claim/route state"
+    },
+    {
+      "cell": "preview-metadata",
+      "text": "Not replica-local registry"
+    },
+    {
+      "cell": "preview-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "submit"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "claim"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "bind"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "exec"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "return"
+    },
+    {
+      "cell": "note-0",
+      "text": "Cleanup cards distinguish newly created ad-hoc and run-scoped claims."
+    },
+    {
+      "cell": "note-1",
+      "text": "AgentHost controlled tools instead use authenticated pod-private PodExec."
+    },
+    {
+      "cell": "note-2",
+      "text": "SQL run ownership leases are separate from this Kubernetes claim lifecycle."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/sandbox.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "command",
+      "to": "executor",
+      "label": "submit",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "executor",
+      "to": "controller",
+      "label": "claim",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "controller",
+      "to": "pod",
+      "label": "bind",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "pod",
+      "to": "exec",
+      "label": "exec",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "exec",
+      "to": "result",
+      "label": "return",
+      "result": "clean"
+    }
+  ]
+}

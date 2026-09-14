@@ -4,226 +4,273 @@ title: AKS Architecture
 
 # AKS Architecture
 
-This document describes the architecture of the Agentweaver AKS deployment: its components, networking topology, security model, and storage design.
+This page describes the checked-in AKS deployment, not an attestation of a live cluster.
+For provisioning and deployment commands, see [Deploy to AKS](/guide/deployment-aks).
 
-For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-aks).
+## Deployed components
 
----
+The application Gateway routes to Frontend, API, and MCP Services. Worker is a
+background control-plane workload, not another public Gateway backend. Its configured
+floor is two replicas; the HPA permits two to three using CPU 70% and memory 80%.
+API and Worker both read and write the same EF-backed PostgreSQL stores and use the
+shared workspace PVC. API/Worker use the privileged control-plane identity; AgentHost
+has a separate identity without Key Vault roles, and MCP mounts no secrets.
 
-## Component diagram
+Preview browser traffic uses a **separate preview Gateway**, not the application
+Gateway or an API reverse proxy. The [network diagram](#inbound-request-path) and
+[credential diagram](#secrets-management) below show these boundaries.
 
-![Agentweaver AKS components: Browser and AI clients connect through the Gateway to the Frontend, API, Worker, and MCP services; the services use PostgreSQL, workspaces, Key Vault, ACR, GitHub, and the AgentHost warm pool](../diagrams/canonical-aks-components.png)
-
-<!--
-  Pre-rendered as a static PNG from ../diagrams/src/canonical-aks-components.json
-  by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
-  it matches the same card/icon/badge look used live in the product UI.
-  To edit: change the
-  graph-spec JSON, run `npm run docs:render-diagrams`, and commit the
-  regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts
-  from the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
--->
-
----
-
+<!-- canonical-aks-components is shared-owned. Its legacy image is withheld until
+     its owner corrects Worker, persistence, preview, and credential authority.
+     Guide ownership does not authorize modifying that shared asset. -->
 
 ## AgentHost warm-pool lifecycle
 
-The Worker now runs in `pod-per-run`, so coordinator child agents execute in AgentHost pods via this warm pool rather than in-process on the Worker:
+Worker runs in `pod-per-run`: coordinator children execute in AgentHost pods rather
+than in-process on Worker. The shared `agentweaver-agent-host` warm pool keeps two
+pods pre-warmed (`k8s/base/sandbox-warmpool-agenthost.yaml`).
 
-- **AgentHost pool** — `agentweaver-agent-host`, `k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
+Warm pods boot without a `RunId` and enter standby. The executor creates a claim,
+persists its identity, and waits for pod binding. It probes `/healthz` for **HTTP
+reachability**: standby also returns 200. One-time `POST /configure` supplies run
+identity, bounded credentials, purpose, and the workspace contract. Successful
+configuration completes setup and marks `IsReady` before returning. A2A traffic is
+gated by that ready state; there is no second post-configuration health poll.
 
-Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with run identity, credentials, purpose, and a shared/local workspace descriptor, then waits for `/healthz` to become ready before sending the first `message:stream` turn. Normal runs use `ExecutionWorkspaceMode.Shared`. Assembly Build/Test uses `LocalReadOnly`, sends an immutable source ref/base SHA/tree contract, and executes from a verified checkout created inside the disk-backed `/local-workspace` emptyDir; its preview maps the API-resolved relative cwd into that same checkout. `LocalWritable` and `ImplementationTurn` define the reuse seam for #253 without enabling implementation write-back in this path.
+Shared execution uses `/workspace`. Assembly Build/Test uses `LocalReadOnly`: fetch
+an immutable source ref, verify base commit and tree, and check out detached into
+the disk-backed `/local-workspace` emptyDir. Its preview uses the same verified
+checkout. This mode forbids **write-back**, not local build output. Current Worker
+configuration also enables pod-local implementation work; it is not just a future
+seam. Assistant-purpose setup skips project checkout and ordinary agent setup.
 
-![AgentHost warm-pool lifecycle: Standby, Configuring, Ready, Serving, Released](../diagrams/guide-architecture-aks-fig1.png)
+![AgentHost lifecycle: bind a warm claim, establish reachability, configure once, complete purpose-specific setup, serve authenticated turns, then retain or release as appropriate](../diagrams/guide-architecture-aks-fig1.png)
 
-<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Canonical editable source: ../diagrams/src/guide-architecture-aks-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using
+     npm run docs:render-diagrams -- --spec guide-architecture-aks-fig1.
+     Preserve the PNG, hash, and pitch/pass artifacts together. -->
 
-`/configure` has one-time semantics (`409` after the first successful configuration). It is not protected by the turn bearer token because it delivers that token; the NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+The first valid `/configure` atomically binds the pod **before** setup finishes.
+Later valid attempts return `409`, including after setup failure. Configuration
+cannot require the turn bearer it delivers; subsequent streamed turns require that
+per-run bearer. Network reachability and production mTLS are separate controls:
+the preview Gateway's allowed port range also includes 8088.
 
-The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoolRef`, default `agentweaver-agent-host`) and delivers per-run context through `/configure`; it does not create per-run templates or per-run warm pools for AgentHost. Source: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:40`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:332`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:480`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:497`, `k8s/base/sandbox-template-agenthost.yaml:36`, `k8s/base/sandbox-warmpool-agenthost.yaml:19`.
+A successful Assistant turn retains its configured pod and renews MCP authorization
+separately for later turns. Failure/cancellation releases it. Ordinary release deletes
+the claim and revokes/unregisters run capabilities; an active preview can defer cleanup.
+Turn completion therefore does not always mean claim deletion.
 
----
+The executor uses `AgentHostWarmPoolRef` (default `agentweaver-agent-host`), not per-run
+templates or warm pools. Grounding: `KubernetesSandboxExecutor.cs` claim/configuration
+and release paths, `AgentHostReadinessProbe.cs`, `AgentHostStartupService.cs`, and
+`RemoteOperatorAssistantAgent.cs`; detailed citations accompany the diagram review.
 
 ## Networking flow
 
 ### Inbound request path
 
-![Inbound request path: 🌐 Client, Public LoadBalancer IP, Gateway: agentweaver-gateway, Service: agentweaver-api, Service: agentweaver-mcp, Service: agentweaver-frontend, API Pod :8080, MCP Pod :8080, Frontend Pod :8080](../diagrams/canonical-aks-network.png)
+![AKS network: application and preview Gateways route through HTTPRoutes and Services to pods; AgentHost has selector-based API/MCP access, DNS, and public-address HTTPS egress with explicit exclusions](../diagrams/canonical-aks-network.png)
 
-<!-- Rendered from ../diagrams/src/canonical-aks-network.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Canonical editable source: ../diagrams/src/canonical-aks-network.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using
+     npm run docs:render-diagrams -- --spec canonical-aks-network.
+     Preserve the PNG, hash, and pitch/pass artifacts together. -->
 
-Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no conflict.
+Both TLS Gateways listen on 443 using `approuting-istio`. Each **Gateway → HTTPRoute →
+Service → pod** chain is explicit. API manages preview resources but is not a browser
+traffic hop. Exact paths and longer prefixes win over the frontend `/` catch-all.
 
-### Gateway API resource relationships
+| Route | Matches | Service → pod |
+| --- | --- | --- |
+| API | Prefix `/api`, `/auth`, `/openapi`; exact `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/resume`, `/oauth/revoke`, `/oauth/jwks` | `agentweaver-api:8080` → API:8080 |
+| MCP | Prefix `/mcp`; exact `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` | `agentweaver-mcp:8080` → MCP:8080 |
+| MCP health | Exact `/mcp/health`, rewritten to `/healthz` | `agentweaver-mcp:8080` → MCP:8080 |
+| Frontend | Prefix `/` | `agentweaver-frontend:80` → Frontend:8080 |
+| Preview | Dynamic `{token}-preview.{zone}` hostname on the separate Gateway; upstream hostname rewritten to `localhost` | `preview-{token}:80` → run-labeled AgentHost target port |
 
----
+There is no blanket `/oauth` prefix route. The same diagram covers the effective
+policy boundaries below; a second traffic diagram is unnecessary.
 
 ## Security model
 
 ### Network security — Cilium NetworkPolicy
 
-The cluster is provisioned with `--network-dataplane cilium` (Azure CNI Overlay + Cilium). Cilium enforces all `NetworkPolicy` resources and also exposes `CiliumNetworkPolicy` for FQDN-based egress control when needed.
-
-The `approuting-istio` gateway class means the Application Routing add-on uses an Istio-based data plane for the **gateway only** — no Istio service mesh, sidecars, or ambient mode runs on workload pods.
-
-### Security policies
-
-#### Network traffic diagram
+The cluster uses Azure CNI Overlay and Cilium (`--network-dataplane cilium`).
+Application Routing uses an Istio-based **gateway** data plane; this does not mean
+workload pods have Istio sidecars or an ambient service mesh.
 
 #### NetworkPolicy rules
 
-| Policy | Selector | Effect |
-|--------|----------|--------|
-| `default-deny-ingress` | all `app.kubernetes.io/part-of: agentweaver` pods (gateway excluded) | Denies all inbound by default |
-| `allow-gateway-to-api` | `app: agentweaver-api` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
-| `allow-gateway-to-frontend` | `app: agentweaver-frontend` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
-| `allow-gateway-to-mcp` | `app: agentweaver-mcp` | Ingress on :8080 from gateway pods or `aks-istio-ingress` namespace |
-| `default-deny-egress-apps` | api, mcp, frontend | Denies all egress by default |
-| `allow-app-dns-egress` | api, mcp, frontend | UDP/TCP :53 to `kube-dns` |
-| `allow-app-internal-egress` | api, mcp, frontend | TCP :8080 to other `app.kubernetes.io/part-of: agentweaver` pods |
-| `allow-app-external-https-egress` | api, mcp only | TCP :443 to any external host |
-| `sandbox-deny-ingress` | `app: agentweaver-sandbox` | Denies all ingress by default |
-| `allow-worker-to-agenthost-a2a` | `app: agentweaver-sandbox` | Opens TCP :8088 only from worker/API pods for AgentHost A2A turns |
-| `sandbox-egress-allowlist` | `app: agentweaver-sandbox` | DNS + TCP :443 to `140.82.112.0/20` (GitHub) |
-
-Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentweaver-gateway`, set automatically by the approuting-istio controller.
+| Boundary | Selector / permitted source | Effect |
+| --- | --- | --- |
+| Application ingress | Application Gateway pods or `aks-istio-ingress` namespace | API, MCP, Frontend pod TCP 8080 |
+| Application egress | API, MCP, Frontend | Deny by default, with explicit DNS/internal/external rules |
+| AgentHost default | `app=agentweaver-agent-host` | Deny ingress except additive allows |
+| A2A ingress | Same-namespace API or Worker pods | TCP 8088 to AgentHost |
+| Preview ingress | Same-namespace pods labeled `gateway.networking.k8s.io/gateway-name=agentweaver-preview-gateway` | TCP 3000–9000 inclusive to AgentHost |
+| AgentHost internal egress | Destination `app=agentweaver-api` or `app=agentweaver-mcp` | TCP 8080 using pod selectors |
+| AgentHost DNS | `kube-system` + `k8s-app=kube-dns`, or `10.0.0.10/32` | UDP/TCP 53 |
+| AgentHost public-address HTTPS | IPv4/IPv6 CIDR rules below | TCP 443, not a GitHub-only CIDR |
 
 #### Sandbox isolation
 
-Sandbox pods (`k8s/base/networkpolicy-sandbox.yaml` plus `k8s/base/networkpolicy-agenthost.yaml`) have a deny-by-default posture with one turn-path exception:
-- **Ingress deny-all by default** — command execution still uses pod-exec through the kube-apiserver.
-- **A2A ingress exception** — `allow-worker-to-agenthost-a2a` opens only TCP `8088` from worker/API pods to AgentHost pods. `POST /configure` is intentionally not protected by the turn bearer token because it delivers that token; NetworkPolicy is the guard. `POST /a2a/agent/v1/message:stream` still requires `Authorization: Bearer {per-run token}`, delivered by `/configure` and unique per run.
-- **Egress allow-list** — DNS (`kube-dns`) + public HTTPS on port 443 for package registries and GitHub/Copilot/Azure APIs. Broad cluster-internal (RFC1918) egress stays denied, so ordinary sandbox pods cannot reach arbitrary workload pods. **AgentHost** pods are the one exception: `agenthost-egress-allowlist` (`k8s/base/networkpolicy-agenthost-egress.yaml`) adds narrow, identity-based (`podSelector`) egress to `agentweaver-api` and `agentweaver-mcp` on TCP `8080` so native agent tools and the operator-assistant MCP can reach those two services east-west. These must be `podSelector` rules, not CIDR/`ipBlock` rules: under Cilium an in-cluster ClusterIP resolves to the destination pod's security identity, and a CIDR allow (even `0.0.0.0/0`) matches only the "world" entity, never a cluster-managed pod identity — so a CIDR rule silently black-holes API/MCP traffic (#424).
+The selected policies are **additive allows**, not intersecting restrictions.
+The preview range includes **8088**, so network policy does not make API/Worker the
+only sources able to reach the A2A listener. Production mTLS/client-certificate
+authentication is a separate control.
 
-The FQDN-based `CiliumNetworkPolicy` in `k8s/base/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
+API ingress requires both `app=agentweaver-agent-host` and
+`agentweaver.dev/sandbox=true`; MCP ingress requires
+`app.kubernetes.io/component=agent-host`. The template carries these labels.
+Destination pod selectors permit API/MCP access without granting broad private
+network access. Under the documented Cilium path, CIDR/world permission does not
+replace cluster-pod identity permission.
+
+Public-address HTTPS permits `0.0.0.0/0` except `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `169.254.0.0/16`, and `::/0` except `fc00::/7`, `fe80::/10`.
+These are the actual exclusions, not every nonpublic range: `100.64.0.0/10` is not
+listed. The manifests document the Kata DNS-hook limitation and explicit IP/port
+fallback. A narrower-looking FQDN policy does **not** make this effective union
+FQDN-only. HTTPS reachability does not grant Key Vault authorization.
+
+Agent execution uses Kata VM-isolated pods (`runtimeClassName: kata-vm-isolation`)
+claimed through `SandboxClaim` (`extensions.agents.x-k8s.io/v1beta1`). The in-cluster
+API selects `KubernetesSandboxExecutor` when `KUBERNETES_SERVICE_HOST` is present.
+See [Sandbox verification](/guide/deployment-aks#verify).
 
 ### Non-root containers
 
-Both the API and Frontend containers run as UID 1000 (`runAsNonRoot: true`, `runAsUser: 1000`). Capabilities are dropped (`capabilities.drop: [ALL]`). The API pod additionally sets `allowPrivilegeEscalation: false`.
-
-### Sandbox isolation
-
-Agent runs execute shell commands in per-run Kata VM isolated sandbox pods
-(`runtimeClassName: kata-vm-isolation`), claimed from a pre-warmed `SandboxWarmPool`
-via a `SandboxClaim` (`extensions.agents.x-k8s.io/v1beta1`). This provides VM-grade
-isolation. The API selects the `KubernetesSandboxExecutor` automatically when it detects
-the in-cluster environment (`KUBERNETES_SERVICE_HOST` is set).
-See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
+API and Frontend run as UID 1000 with `runAsNonRoot: true` and dropped capabilities.
+API also sets `allowPrivilegeEscalation: false`.
 
 ### Secrets management
 
-Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are resolved on the API side and brokered to the sandbox pod in the one-time `/configure` call (`gitHubAccessToken`), because the sandbox identity has no Key Vault access (issue #471). There are no static credentials in any manifest.
+**Azure Workload Identity** lets API/Worker use Key Vault without embedded Azure
+credentials. The trusted control-plane broker redeems a run's purpose-bound capability
+snapshot and fences authority before and after retrieval. It supplies `copilotCredential`
+through one-time `/configure`, or supplies the selected BYOK configuration.
+Repository credentials, A2A turn tokens, and Assistant MCP tokens remain separate.
+AgentHost does not resolve an ambient user's token or read Key Vault.
 
-![Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod](../diagrams/guide-architecture-aks-fig5.png)
+![Credential authority: API and Worker federate to the privileged identity; AgentHost has a separate identity without vault roles; CSI app secrets and API runtime OAuth certificates are distinct from run-bound configuration and MCP broker JWTs](../diagrams/guide-architecture-aks-fig5.png)
 
-<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Canonical editable source: ../diagrams/src/guide-architecture-aks-fig5.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using
+     npm run docs:render-diagrams -- --spec guide-architecture-aks-fig5.
+     Preserve the PNG, hash, and pitch/pass artifacts together. -->
 
-The API's and worker's `ServiceAccount`s (`agentweaver-api`, `agentweaver-worker`) are federated to the shared, Key-Vault-privileged user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions. The `agentweaver-agent-host` ServiceAccount is federated to a **separate, dedicated managed identity (`agentweaver-agenthost-identity`) that has no Key Vault role assignments** (issue #471) via its own federated credential (`agentweaver-agenthost-fedcred`). Because the sandbox runs untrusted shell/tool code, it must not be able to read Key Vault; the run owner's GitHub token is instead brokered per-run by the API in the `/configure` call.
+API and Worker ServiceAccounts federate through AKS OIDC to `agentweaver-api-identity`,
+which has Key Vault **Secrets User and Secrets Officer** grants. Their Kubernetes RBAC
+remains distinct; Worker does not inherit API preview-management permissions.
+`agentweaver-agent-host` federates to **`agentweaver-agenthost-identity`, with no Key
+Vault roles**. Provisioning removes its legacy federation to the privileged identity.
+The broker is trusted API/Worker application code, not a separate public service.
 
-One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
+One static `SecretProviderClass`, **`agentweaver-secrets`**, configures CSI app-secret
+delivery for **API and Worker**. It is not the vault itself. It mounts files and syncs
+a Kubernetes Secret. The manifest includes the internal API key, provider-key signing
+key, telemetry connection string, and Repo/Copilot App configuration.
 
-**`agentweaver-secrets`** (used by API pod, `k8s/base/secret-provider-class.yaml`):
+| Value | Consumption |
+| --- | --- |
+| `mcp-api-key` | Startup wrapper reads `/mnt/secrets-store/mcp-api-key` for internal API authentication; not a hosted MCP bearer key |
+| `ai-execution-provider-key-signing-key` | Synchronized Kubernetes `secretKeyRef` supplies `AiExecution__ProviderKeySigningKey` |
+| OAuth signing/encryption certificate families | API runtime `SecretClient` loads usable Key Vault versions with active/previous overlap; not CSI delivery |
 
-| Key Vault secret | File in `/mnt/secrets-store/` | Used for |
-|-----------------|------------------------------|----------|
-| `mcp-api-key` | `mcp-api-key` | API authentication and worker loopback calls → `Auth__ApiKey` |
-| `ai-execution-provider-key-signing-key` | synced Kubernetes Secret only | Shared API-replica signing key for short-lived AI execution contexts → `AiExecution__ProviderKeySigningKey` |
+The CSI mount triggers synchronization; do not describe all values as file-only.
+MCP mounts **no secrets** and accepts only Agentweaver-minted broker JWTs for the exact
+`/mcp` audience and `mcp:invoke` scope. Worker does not host the API OAuth certificate
+loading path.
 
-The MCP pod mounts no secrets; MCP auth accepts only Agentweaver-minted broker JWTs with
-the exact `/mcp` audience and `mcp:invoke` scope.
-
-Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
-
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Create `ai-execution-provider-key-signing-key` once with high-entropy material and rotate it only during a coordinated API rollout: all serving API replicas must read the same value, and a rotation intentionally invalidates already prepared execution contexts. GitHub capability credentials are brokered per run after platform authorization; AgentHost pods do not receive an OAuth client secret mount.
-
----
+CSI app-secret rotation polling is two minutes. Create the provider-key signing key
+once with high-entropy material and rotate only with a coordinated API rollout:
+serving replicas must agree, and rotation invalidates prepared execution contexts.
+AgentHost receives no OAuth-client-secret mount. See [Configuration](./configuration)
+for credential import, migration, and recovery procedures.
 
 ## Authentication
 
-Agentweaver uses **Microsoft Entra ID** for browser authentication. There are no API keys issued to end users.
+**Microsoft Entra ID** provides browser identity; end users are not issued API keys.
 
-### Login flow
+1. The user selects **Sign in with Microsoft Entra ID**.
+2. API redirects to the configured Entra application.
+3. Entra returns to `https://<host>/auth/entra/callback`; API establishes platform identity and roles.
+4. Repository discovery and GitHub project creation use a separate Repo App handoff and opaque selection code.
+5. Model access follows the [project versus personal provider hierarchy](./authentication#provider-hierarchy).
 
-1. User visits the frontend and clicks **Sign in with Microsoft Entra ID**.
-2. The API redirects the browser to the configured Entra application.
-3. Entra returns to `https://<host>/auth/entra/callback`; the API establishes the platform session from the Entra identity and app roles.
-4. Repository discovery and project creation use a distinct Repo App browser handoff with an opaque, short-lived selection code.
-5. Copilot-backed work uses a distinct project-scoped Copilot App browser handoff.
-
-For a production deployment, the deploy renderer derives both
-`Auth__Entra__RedirectUri` (`https://<host>/auth/entra/callback`) and
-`Auth__Entra__FrontendUrl` (`https://<host>`) from the public deployment host. Both
-values are required: the API does not fall back to localhost when either is absent.
-Register the public callback URI under the app's `publicClient` platform before enabling
-Entra sign-in; use `npm run azure:setup-entra-app -- --redirect-uri
-https://<host>/auth/entra/callback` to prepare a registration. Do not change an existing
-production app registration without the identity owner's approval.
+The renderer derives `Auth__Entra__RedirectUri` and `Auth__Entra__FrontendUrl` from the
+public host, without localhost fallback. Register the exact callback under the Entra
+app's `publicClient` platform; `npm run azure:setup-entra-app -- --redirect-uri
+https://<host>/auth/entra/callback` prepares registration. Do not change a production
+identity registration without its owner's approval.
 
 ### MCP authentication
 
-The MCP server (`agentweaver-mcp`) forwards the authenticated caller context to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). Platform authorization is based on Entra identity; repository and Copilot capabilities continue through the Repo App and Copilot App handoffs. There is no static MCP bearer key.
+MCP forwards authorized caller context to API at `http://agentweaver-api:8080`.
+MCP OAuth, repository authorization, and model capabilities are separate boundaries.
+See [MCP connection](./mcp-cli) and [Authentication](./authentication).
 
 ### External dependencies
 
-| Service | Purpose | Allowed by |
-|---------|---------|-----------|
-| `api.github.com` | GitHub App capability operations | `CiliumNetworkPolicy` FQDN allowlist |
-| `github.com` | Repo App and Copilot App browser handoffs | `CiliumNetworkPolicy` FQDN allowlist |
-| Azure Key Vault (`*.vault.azure.net`) | Secret fetch via CSI driver | HTTPS egress + workload identity |
-| Azure Container Registry (`agentweaverregistry.azurecr.io`) | Image pull (kubelet, not pod) | ACR attachment on cluster |
-| OpenTelemetry collector (`otel-collector.observability.svc.cluster.local:4317`) | Telemetry export (gRPC) | `CiliumNetworkPolicy` FQDN allowlist |
+| Service | Purpose | Boundary |
+| --- | --- | --- |
+| GitHub APIs | App capability and permitted repository operations | Control-plane HTTPS; AgentHost public-address HTTPS is not FQDN-only |
+| GitHub browser origin | Repo/Copilot consent handoffs | Browser connectivity, not pod network authorization |
+| Azure Key Vault | CSI and trusted runtime credentials/certificates | Reachability plus privileged workload identity; no AgentHost vault grant |
+| Azure Container Registry | Image pulls | Kubelet/cluster ACR authorization, not pod credential delivery |
+| PostgreSQL | Durable application state | TCP 5432; private subnet or rendered public-access FQDN policy according to deployment |
+| Telemetry endpoint | Monitoring export | Deployment-specific telemetry configuration; see [Operations](./operations) |
 
----
 ## Storage model
 
 ### PostgreSQL (primary data store)
 
-The API uses **Azure Database for PostgreSQL Flexible Server** for all application state. The connection string is provisioned by `scripts/azure/steps/17-provision-postgres.mjs`, stored in the `agentweaver-postgres` Kubernetes Secret, and injected as environment variables at pod startup.
+API and Worker use **EF-backed application stores** via `MemoryDbContext`, including
+projects, runs, revisions, workflow state, memory, decisions, OAuth state, and durable
+events. This is neither an API-read/Worker-write split nor a production Dapper/EF partition.
+Provisioning stores connection configuration in `agentweaver-postgres`, not in images.
 
-Both the `SqliteDb` (projects, runs, backlog, revisions) and the `MemoryDbContext` (decisions, agent memory, OAuth state, checkpoints) are wired to the same Postgres instance in production via `Database__Provider=Postgres`:
+| Connection string key | Precedence | Used by |
+| --- | --- | --- |
+| `ConnectionStrings__Postgres` | First | Shared EF stores |
+| `ConnectionStrings__MemoryDb` | Fallback | Same EF stores |
+| `Database__ConnectionString` | Final fallback | Same EF stores |
 
-| Connection string key | Used by | Contents |
-|-----------------------|---------|----------|
-| `ConnectionStrings__Postgres` | `SqliteDb` (Dapper) | Projects, runs, backlog tasks, revisions, run events |
-| `ConnectionStrings__MemoryDb` | `MemoryDbContext` (EF Core) | Decisions, agent memory, steering, OAuth state, checkpoints |
-
-With Postgres as the data store, the API can run two replicas with `RollingUpdate` — no single-writer constraint.
+PostgreSQL supports multiple API replicas with `RollingUpdate`, without SQLite's
+single-writer deployment constraint.
 
 ### Workspace volume
 
-One PersistentVolumeClaim handles all filesystem-backed state:
+The shared `agentweaver-workspace` PVC is **50 GiB RWX Azure Files**, with StorageClass
+`azurefile-csi-premium-uid1000`, mounted at `/workspace`. AgentHost separately mounts
+an **8 GiB disk-backed `execution-scratch` emptyDir** at `/local-workspace`; it is not
+durable shared state.
 
-- `agentweaver-workspace` — Azure Files (`azurefile-csi-premium`, RWX), mounted at `/workspace`. Shared across all replicas and the worker pod.
-
-```
+```text
 PVC: agentweaver-workspace (Azure Files, RWX)
-  storageClass: azurefile-csi-premium
+  storageClass: azurefile-csi-premium-uid1000
   mountPath: /workspace
-  │
-  ├── .home/                   (shared HOME dir — app/runtime state; no GitHub token mirror)
-  ├── worktrees/               (git worktrees per run)
-  └── <project workspaces>     (project working directories)
+  |
+  +-- .home/                (shared app/runtime state; no GitHub token mirror)
+  +-- worktrees/            (git worktrees per run)
+  +-- <project workspaces>  (project working directories)
 ```
 
 ### EF Core migrations
 
-On startup, the API and worker run schema migrations via their **init containers** (`migrate-memory-db`). They execute the EF bundle as `/app/efbundle --verbose -- --postgres-migrations`, which selects the Postgres migrations assembly and reads the production connection string from the injected configuration. This runs before the main container starts, ensuring the schema is always current before the application accepts traffic.
-
-The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and reads `ConnectionStrings__MemoryDb` + `ConnectionStrings__Postgres` from the `agentweaver-postgres` Secret. No connection string is embedded in the image or manifest. Local design-time commands remain SQLite by default; use `--postgres-migrations` only when a Postgres connection string is supplied through configuration, environment variables, or Development user secrets.
+API and Worker init containers (`migrate-memory-db`) run
+`/app/efbundle --verbose -- --postgres-migrations` before their main containers start.
+They use the API image and injected `ConnectionStrings__MemoryDb` /
+`ConnectionStrings__Postgres` from `agentweaver-postgres`. No connection string is
+embedded in the image or manifest. Local design-time commands default to SQLite;
+use `--postgres-migrations` only with configured PostgreSQL credentials.
 
 ### Ephemeral storage for testing
 
-For throwaway testing without Postgres, set `Database__Provider=Sqlite` in the API environment and replace the workspace `persistentVolumeClaim` volume with `emptyDir`:
+For throwaway SQLite testing, set `Database__Provider=Sqlite` and replace the shared
+workspace volume with:
 
 ```yaml
 volumes:
@@ -231,4 +278,169 @@ volumes:
     emptyDir: {}
 ```
 
-Data will be lost on pod restart, but the stack is fully functional for validation. SQLite mode enforces `replicas: 1` + `strategy: Recreate` to prevent write contention.
+Data is lost on pod restart. SQLite requires one replica and `Recreate` strategy to
+avoid write contention; this is not a production storage migration procedure.
+
+<!-- diagram-context:canonical-aks-network:start -->
+<details id="diagram-context-canonical-aks-network" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>AKS network: two ingress planes</td></tr>
+<tr><td>takeaway</td><td>Routes select Services; additive policies bound AgentHost access, not a vault credential path.</td></tr>
+<tr><td>n-app-title</td><td>APPLICATION ORIGIN • EXACT MATCHES / LONGER PREFIXES BEAT /</td></tr>
+<tr><td>n-preview-title</td><td>PREVIEW ORIGIN • API MANAGES RESOURCES, NOT BROWSER TRAFFIC</td></tr>
+<tr><td>n-egress-title</td><td>EFFECTIVE AGENTHOST POLICY UNION</td></tr>
+<tr><td>Client</td><td>Client</td></tr>
+<tr><td>Client</td><td>Browser / MCP</td></tr>
+<tr><td>Client</td><td>Public app origin</td></tr>
+<tr><td>App Gateway</td><td>App Gateway</td></tr>
+<tr><td>App Gateway</td><td>agentweaver-gateway</td></tr>
+<tr><td>App Gateway</td><td>TLS :443</td></tr>
+<tr><td>HTTPRoutes</td><td>HTTPRoutes</td></tr>
+<tr><td>HTTPRoutes</td><td>API / MCP / /</td></tr>
+<tr><td>HTTPRoutes</td><td>Exact OAuth routes below</td></tr>
+<tr><td>Services</td><td>Services</td></tr>
+<tr><td>Services</td><td>API/MCP :8080</td></tr>
+<tr><td>Services</td><td>Frontend :80</td></tr>
+<tr><td>App pods</td><td>App pods</td></tr>
+<tr><td>App pods</td><td>API / MCP / web</td></tr>
+<tr><td>App pods</td><td>All target :8080</td></tr>
+<tr><td>Browser</td><td>Browser</td></tr>
+<tr><td>Browser</td><td>{token}-preview</td></tr>
+<tr><td>Browser</td><td>Separate hostname</td></tr>
+<tr><td>Preview GW</td><td>Preview GW</td></tr>
+<tr><td>Preview GW</td><td>preview-gateway</td></tr>
+<tr><td>HTTPRoute</td><td>HTTPRoute</td></tr>
+<tr><td>HTTPRoute</td><td>preview-{token}</td></tr>
+<tr><td>HTTPRoute</td><td>Host rewrite: localhost</td></tr>
+<tr><td>Service</td><td>Service</td></tr>
+<tr><td>Service</td><td>preview-{token}:80</td></tr>
+<tr><td>Service</td><td>Run-label selector</td></tr>
+<tr><td>AgentHost</td><td>AgentHost</td></tr>
+<tr><td>AgentHost</td><td>Preview target port</td></tr>
+<tr><td>AgentHost</td><td>Gateway: 3000–9000</td></tr>
+<tr><td>API / MCP</td><td>API / MCP</td></tr>
+<tr><td>API / MCP</td><td>Selector-based TCP 8080</td></tr>
+<tr><td>API / MCP</td><td>DNS: UDP/TCP 53 separately</td></tr>
+<tr><td>Public HTTPS</td><td>Public HTTPS</td></tr>
+<tr><td>Public HTTPS</td><td>TCP 443, IPv4 + IPv6</td></tr>
+<tr><td>Public HTTPS</td><td>Private/link-local exclusions</td></tr>
+<tr><td>Additive allows</td><td>Additive allows</td></tr>
+<tr><td>Additive allows</td><td>API/Worker → A2A :8088</td></tr>
+<tr><td>Additive allows</td><td>Preview range includes 8088</td></tr>
+<tr><td>n-internal</td><td>TCP 8080</td></tr>
+<tr><td>n-public</td><td>TCP 443</td></tr>
+<tr><td>n-routes-heading</td><td>APP ROUTES</td></tr>
+<tr><td>n-routes-body</td><td>API: /api, /auth, /openapi + exact OAuth/discovery. MCP: /mcp + resource metadata; /mcp/health → /healthz.</td></tr>
+<tr><td>n-exclusions-heading</td><td>EGRESS EXCLUSIONS</td></tr>
+<tr><td>n-exclusions-body</td><td>10/8, 172.16/12, 192.168/16, 169.254/16; fc00::/7, fe80::/10. Not FQDN-only; no vault authority implied.</td></tr>
+<tr><td>notes</td><td>[object Object]; [object Object]</td></tr>
+<tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-aks-network:end -->
+
+<!-- diagram-context:guide-architecture-aks-fig1:start -->
+<details id="diagram-context-guide-architecture-aks-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>AgentHost: bind once, serve ready</td></tr>
+<tr><td>takeaway</td><td>HTTP reachability is not setup readiness; claim lifetime can span Assistant turns.</td></tr>
+<tr><td>l-launch-title</td><td>01 CONTROL-PLANE LAUNCH</td></tr>
+<tr><td>l-setup-title</td><td>02 PURPOSE-BOUND SETUP</td></tr>
+<tr><td>l-turns-title</td><td>03 TURN AND CLAIM LIFETIME</td></tr>
+<tr><td>Claim warm pod</td><td>Claim warm pod</td></tr>
+<tr><td>Claim warm pod</td><td>Persist claim; wait for binding</td></tr>
+<tr><td>Claim warm pod</td><td>Shared pool: 2 warm pods</td></tr>
+<tr><td>Probe listener</td><td>Probe listener</td></tr>
+<tr><td>Probe listener</td><td>/healthz success: reachable</td></tr>
+<tr><td>Probe listener</td><td>200 can mean standby</td></tr>
+<tr><td>Configure once</td><td>Configure once</td></tr>
+<tr><td>Configure once</td><td>Run, purpose and capabilities</td></tr>
+<tr><td>Configure once</td><td>POST /configure</td></tr>
+<tr><td>Select workspace</td><td>Select workspace</td></tr>
+<tr><td>Select workspace</td><td>Shared or verified local checkout</td></tr>
+<tr><td>Select workspace</td><td>LocalReadOnly: no write-back</td></tr>
+<tr><td>Finish setup</td><td>Finish setup</td></tr>
+<tr><td>Finish setup</td><td>Assistant skips project checkout</td></tr>
+<tr><td>Finish setup</td><td>Accepted binding stays consumed</td></tr>
+<tr><td>Ready for A2A</td><td>Ready for A2A</td></tr>
+<tr><td>Ready for A2A</td><td>Setup finished before response</td></tr>
+<tr><td>Ready for A2A</td><td>IsReady gates traffic</td></tr>
+<tr><td>Stream a turn</td><td>Stream a turn</td></tr>
+<tr><td>Stream a turn</td><td>Run-bound bearer authentication</td></tr>
+<tr><td>Stream a turn</td><td>message:stream</td></tr>
+<tr><td>Retain Assistant</td><td>Retain Assistant</td></tr>
+<tr><td>Retain Assistant</td><td>Successful turn keeps its pod</td></tr>
+<tr><td>Retain Assistant</td><td>Renew MCP token, not configure</td></tr>
+<tr><td>Release claim</td><td>Release claim</td></tr>
+<tr><td>Release claim</td><td>Unregister and revoke capabilities</td></tr>
+<tr><td>Release claim</td><td>Active preview defers cleanup</td></tr>
+<tr><td>l1</td><td>bound</td></tr>
+<tr><td>l2</td><td>reachable</td></tr>
+<tr><td>l3</td><td>accepted</td></tr>
+<tr><td>l4</td><td>prepare</td></tr>
+<tr><td>l5</td><td>complete</td></tr>
+<tr><td>l6</td><td>dispatch</td></tr>
+<tr><td>l7</td><td>success</td></tr>
+<tr><td>l8</td><td>next turn</td></tr>
+<tr><td>l9</td><td>run ends / failure</td></tr>
+<tr><td>l-409-heading</td><td>CONFIGURATION BOUNDARY</td></tr>
+<tr><td>l-409-body</td><td>Later valid configure attempts return 409, even after accepted setup fails.</td></tr>
+<tr><td>notes</td><td>[object Object]</td></tr>
+<tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:guide-architecture-aks-fig1:end -->
+
+<!-- diagram-context:guide-architecture-aks-fig5:start -->
+<details id="diagram-context-guide-architecture-aks-fig5" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Credentials: authority stays in the control plane</td></tr>
+<tr><td>takeaway</td><td>Separate Azure identities; separate Copilot, repository, turn and MCP capabilities.</td></tr>
+<tr><td>s-control-title</td><td>TRUSTED CONTROL PLANE</td></tr>
+<tr><td>s-host-title</td><td>ISOLATED AGENTHOST</td></tr>
+<tr><td>s-delivery-title</td><td>DISTINCT DELIVERY CHANNELS</td></tr>
+<tr><td>API + Worker SAs</td><td>API + Worker SAs</td></tr>
+<tr><td>API + Worker SAs</td><td>Separate Kubernetes RBAC</td></tr>
+<tr><td>API + Worker SAs</td><td>AKS OIDC federation</td></tr>
+<tr><td>API managed identity</td><td>API managed identity</td></tr>
+<tr><td>API managed identity</td><td>Secrets User + Secrets Officer</td></tr>
+<tr><td>API managed identity</td><td>agentweaver-api-identity</td></tr>
+<tr><td>Azure Key Vault</td><td>Azure Key Vault</td></tr>
+<tr><td>Azure Key Vault</td><td>Credential and app-secret authority</td></tr>
+<tr><td>Azure Key Vault</td><td>Runtime and CSI consumers</td></tr>
+<tr><td>Capability broker</td><td>Capability broker</td></tr>
+<tr><td>Capability broker</td><td>Fence run + purpose before/after read</td></tr>
+<tr><td>Capability broker</td><td>No ambient user-token lookup</td></tr>
+<tr><td>AgentHost identity</td><td>AgentHost identity</td></tr>
+<tr><td>AgentHost identity</td><td>Separate ServiceAccount federation</td></tr>
+<tr><td>AgentHost identity</td><td>No Key Vault role assignments</td></tr>
+<tr><td>AgentHost runtime</td><td>AgentHost runtime</td></tr>
+<tr><td>AgentHost runtime</td><td>One-time /configure delivery</td></tr>
+<tr><td>AgentHost runtime</td><td>Copilot or BYOK; repo separate</td></tr>
+<tr><td>CSI app secrets</td><td>CSI app secrets</td></tr>
+<tr><td>CSI app secrets</td><td>SecretProviderClass configuration</td></tr>
+<tr><td>CSI app secrets</td><td>Files + synced secretKeyRef</td></tr>
+<tr><td>OAuth certificates</td><td>OAuth certificates</td></tr>
+<tr><td>OAuth certificates</td><td>API runtime SecretClient</td></tr>
+<tr><td>OAuth certificates</td><td>Usable active / previous versions</td></tr>
+<tr><td>MCP resource server</td><td>MCP resource server</td></tr>
+<tr><td>MCP resource server</td><td>Agentweaver broker JWT only</td></tr>
+<tr><td>MCP resource server</td><td>Exact /mcp + mcp:invoke</td></tr>
+<tr><td>s1</td><td>federate</td></tr>
+<tr><td>s2</td><td>authorize</td></tr>
+<tr><td>s3</td><td>credential</td></tr>
+<tr><td>s4</td><td>configure</td></tr>
+<tr><td>s5</td><td>pod identity</td></tr>
+<tr><td>s6</td><td>app secrets</td></tr>
+<tr><td>s7</td><td>cert versions</td></tr>
+<tr><td>s8</td><td>Assistant JWT</td></tr>
+<tr><td>s-separation-heading</td><td>NO AGENTHOST → VAULT EDGE</td></tr>
+<tr><td>s-separation-body</td><td>Network reachability is not authorization. Repository, A2A and MCP tokens are not Copilot credentials.</td></tr>
+<tr><td>notes</td><td>[object Object]</td></tr>
+<tr><td>groups</td><td>[object Object]; [object Object]; [object Object]</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:guide-architecture-aks-fig5:end -->

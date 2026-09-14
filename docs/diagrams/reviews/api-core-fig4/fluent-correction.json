@@ -1,0 +1,275 @@
+{
+  "diagram": "api-core-fig4",
+  "source_sha256": "bb77b45859b4d0d0b9a43caa6f90d837d331e48ab12bb1f34cf5c6e8bc6fbf62",
+  "png_sha256": "202f594b2dc356548593b598aebfe0309523259e3bf6e74c4d237870e82dba84",
+  "prior_model": "docs\\diagrams\\reviews\\api-core-fig4\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "API middleware · endpoint metadata is authority"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The request pipeline classifies endpoints before authentication; handlers enforce resource roles."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "TRANSPORT / CLASSIFICATION"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "IDENTITY / RESOURCE"
+    },
+    {
+      "cell": "transport-title",
+      "text": "Forwarded headers"
+    },
+    {
+      "cell": "transport-subtitle",
+      "text": "Then exception handler"
+    },
+    {
+      "cell": "transport-detail",
+      "text": "Normalize proxy context; map unhandled errors"
+    },
+    {
+      "cell": "transport-metadata",
+      "text": "Program.cs:1266–1273"
+    },
+    {
+      "cell": "transport-badge",
+      "text": "TRANSPORT"
+    },
+    {
+      "cell": "routing-title",
+      "text": "Routing → CORS"
+    },
+    {
+      "cell": "routing-subtitle",
+      "text": "Then rate limiter"
+    },
+    {
+      "cell": "routing-detail",
+      "text": "Route selection precedes endpoint metadata checks"
+    },
+    {
+      "cell": "routing-metadata",
+      "text": "Program.cs:1274–1276"
+    },
+    {
+      "cell": "routing-badge",
+      "text": "ROUTE"
+    },
+    {
+      "cell": "integrity-title",
+      "text": "Endpoint integrity"
+    },
+    {
+      "cell": "integrity-subtitle",
+      "text": "Classified authorization metadata"
+    },
+    {
+      "cell": "integrity-detail",
+      "text": "Unclassified application endpoint fails closed"
+    },
+    {
+      "cell": "integrity-metadata",
+      "text": "EndpointAuthorization:139–174"
+    },
+    {
+      "cell": "integrity-badge",
+      "text": "CLASSIFY"
+    },
+    {
+      "cell": "authentication-title",
+      "text": "Authentication"
+    },
+    {
+      "cell": "authentication-subtitle",
+      "text": "Validate selected credential"
+    },
+    {
+      "cell": "authentication-detail",
+      "text": "Entra tenant check lives inside token validation"
+    },
+    {
+      "cell": "authentication-metadata",
+      "text": "Program.cs:1278"
+    },
+    {
+      "cell": "authentication-badge",
+      "text": "IDENTITY"
+    },
+    {
+      "cell": "unmatched-title",
+      "text": "Unmatched endpoint"
+    },
+    {
+      "cell": "unmatched-subtitle",
+      "text": "Explicit unmatched-route handling"
+    },
+    {
+      "cell": "unmatched-detail",
+      "text": "Runs after authentication, before authorization"
+    },
+    {
+      "cell": "unmatched-metadata",
+      "text": "Program.cs:1279"
+    },
+    {
+      "cell": "unmatched-badge",
+      "text": "NOT FOUND"
+    },
+    {
+      "cell": "authorization-title",
+      "text": "Authorization"
+    },
+    {
+      "cell": "authorization-subtitle",
+      "text": "Endpoint policy evaluation"
+    },
+    {
+      "cell": "authorization-detail",
+      "text": "Anonymous operational endpoints are classified"
+    },
+    {
+      "cell": "authorization-metadata",
+      "text": "Program.cs:1280"
+    },
+    {
+      "cell": "authorization-badge",
+      "text": "POLICY"
+    },
+    {
+      "cell": "handler-title",
+      "text": "Endpoint handler"
+    },
+    {
+      "cell": "handler-subtitle",
+      "text": "Bind, validate, load resource"
+    },
+    {
+      "cell": "handler-detail",
+      "text": "Ordering varies; apply project / resource role"
+    },
+    {
+      "cell": "handler-metadata",
+      "text": "RunEndpoints:429–445"
+    },
+    {
+      "cell": "handler-badge",
+      "text": "RESOURCE"
+    },
+    {
+      "cell": "result-title",
+      "text": "Service → DTO / result"
+    },
+    {
+      "cell": "result-subtitle",
+      "text": "Delegate governed work"
+    },
+    {
+      "cell": "result-detail",
+      "text": "Return the handler result to caller"
+    },
+    {
+      "cell": "result-metadata",
+      "text": "Program.cs:1282–1295"
+    },
+    {
+      "cell": "result-badge",
+      "text": "RESPONSE"
+    },
+    {
+      "cell": "transport-to-routing",
+      "text": "next"
+    },
+    {
+      "cell": "routing-to-integrity",
+      "text": "endpoint"
+    },
+    {
+      "cell": "integrity-to-authentication",
+      "text": "valid"
+    },
+    {
+      "cell": "authentication-to-unmatched",
+      "text": "next"
+    },
+    {
+      "cell": "unmatched-to-authorization",
+      "text": "matched"
+    },
+    {
+      "cell": "authorization-to-handler",
+      "text": "allowed"
+    },
+    {
+      "cell": "handler-to-result",
+      "text": "map"
+    },
+    {
+      "cell": "scope",
+      "text": "Request lane only: startup migration/recovery is separate. Worker role exposes probes, not this app surface."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/api-core.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "transport",
+      "to": "routing",
+      "label": "next",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "routing",
+      "to": "integrity",
+      "label": "selected endpoint",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "integrity",
+      "to": "authentication",
+      "label": "metadata valid",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "authentication",
+      "to": "unmatched",
+      "label": "next",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "unmatched",
+      "to": "authorization",
+      "label": "matched route",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "authorization",
+      "to": "handler",
+      "label": "policy satisfied",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "handler",
+      "to": "result",
+      "label": "delegate / map",
+      "result": "clean"
+    }
+  ]
+}

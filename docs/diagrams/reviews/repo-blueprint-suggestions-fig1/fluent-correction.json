@@ -1,0 +1,275 @@
+{
+  "diagram": "repo-blueprint-suggestions-fig1",
+  "source_sha256": "b0ff48e17c6db30373097a17cd61142c187d6ba252899fac38b91a9c5b09eb0f",
+  "png_sha256": "d27cfff592e45d3225445b79384e4ad92d8f7c45183f26634f7036980288d51f",
+  "prior_model": "docs\\diagrams\\reviews\\repo-blueprint-suggestions-fig1\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Repository suggestions are heuristic"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Anonymous metadata feeds deterministic matching; suggestions never invoke a model."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "INPUT + CURRENT CREDENTIAL BOUNDARY"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "METADATA · MATCHING · OUTCOMES"
+    },
+    {
+      "cell": "picker-title",
+      "text": "Blueprint picker: Suggested"
+    },
+    {
+      "cell": "picker-subtitle",
+      "text": "Repository string or GitHub URL"
+    },
+    {
+      "cell": "picker-detail",
+      "text": "Generate is a separate tab and model path"
+    },
+    {
+      "cell": "picker-meta",
+      "text": "BlueprintPicker.tsx:487-517"
+    },
+    {
+      "cell": "picker-pill",
+      "text": "UI"
+    },
+    {
+      "cell": "metadata-title",
+      "text": "GitHub metadata requests"
+    },
+    {
+      "cell": "metadata-subtitle",
+      "text": "Repository · languages · root contents"
+    },
+    {
+      "cell": "metadata-detail",
+      "text": "No bearer when boundary returns null"
+    },
+    {
+      "cell": "metadata-meta",
+      "text": "SuggestionService.cs:55-68"
+    },
+    {
+      "cell": "metadata-pill",
+      "text": "ANONYMOUS"
+    },
+    {
+      "cell": "parse-title",
+      "text": "Suggestion service"
+    },
+    {
+      "cell": "parse-subtitle",
+      "text": "Parse owner / repository"
+    },
+    {
+      "cell": "parse-detail",
+      "text": "Invalid input returns fallback response"
+    },
+    {
+      "cell": "parse-meta",
+      "text": "SuggestionService.cs:40-48"
+    },
+    {
+      "cell": "parse-pill",
+      "text": "PARSE"
+    },
+    {
+      "cell": "match-title",
+      "text": "Deterministic catalog matching"
+    },
+    {
+      "cell": "match-subtitle",
+      "text": "Signals + ordered heuristic rules"
+    },
+    {
+      "cell": "match-detail",
+      "text": "No model invocation or repository clone"
+    },
+    {
+      "cell": "match-meta",
+      "text": "SuggestionService.cs:70-84"
+    },
+    {
+      "cell": "match-pill",
+      "text": "HEURISTIC"
+    },
+    {
+      "cell": "boundary-title",
+      "text": "Ambient credential boundary"
+    },
+    {
+      "cell": "boundary-subtitle",
+      "text": "Current registration returns null"
+    },
+    {
+      "cell": "boundary-detail",
+      "text": "Not a forwarded caller GitHub token"
+    },
+    {
+      "cell": "boundary-meta",
+      "text": "EntraOnlyGitHubCredentialBoundary"
+    },
+    {
+      "cell": "boundary-pill",
+      "text": "NULL"
+    },
+    {
+      "cell": "response-title",
+      "text": "Suggested blueprint response"
+    },
+    {
+      "cell": "response-subtitle",
+      "text": "Blueprint + rationale + confidence"
+    },
+    {
+      "cell": "response-detail",
+      "text": "Signals explain the recommendation"
+    },
+    {
+      "cell": "response-meta",
+      "text": "SuggestionService.cs:78-88"
+    },
+    {
+      "cell": "response-pill",
+      "text": "RESULT"
+    },
+    {
+      "cell": "fallback-title",
+      "text": "Recoverable failure"
+    },
+    {
+      "cell": "fallback-subtitle",
+      "text": "Unavailable metadata / transport"
+    },
+    {
+      "cell": "fallback-detail",
+      "text": "Fallback response offers Templates option"
+    },
+    {
+      "cell": "fallback-meta",
+      "text": "SuggestionService.cs:90-108"
+    },
+    {
+      "cell": "fallback-pill",
+      "text": "FALLBACK"
+    },
+    {
+      "cell": "cancel-title",
+      "text": "Caller cancellation"
+    },
+    {
+      "cell": "cancel-subtitle",
+      "text": "Propagate OperationCanceledException"
+    },
+    {
+      "cell": "cancel-detail",
+      "text": "Not converted into fallback suggestions"
+    },
+    {
+      "cell": "cancel-meta",
+      "text": "SuggestionService.cs:90-94"
+    },
+    {
+      "cell": "cancel-pill",
+      "text": "CANCEL"
+    },
+    {
+      "cell": "picker-to-parse",
+      "text": "suggest"
+    },
+    {
+      "cell": "parse-to-boundary",
+      "text": "resolve"
+    },
+    {
+      "cell": "boundary-to-metadata",
+      "text": "null token"
+    },
+    {
+      "cell": "metadata-to-match",
+      "text": "signals"
+    },
+    {
+      "cell": "match-to-response",
+      "text": "recommend"
+    },
+    {
+      "cell": "parse-to-fallback",
+      "text": "invalid"
+    },
+    {
+      "cell": "metadata-to-cancel",
+      "text": "cancel"
+    },
+    {
+      "cell": "scope",
+      "text": "Cancellation propagates; recoverable failures fall back. Current ambient token source is explicitly null."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/repo-blueprint-suggestions.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "picker",
+      "to": "parse",
+      "label": "suggest",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "parse",
+      "to": "boundary",
+      "label": "resolve",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "boundary",
+      "to": "metadata",
+      "label": "null token",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "metadata",
+      "to": "match",
+      "label": "signals",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "match",
+      "to": "response",
+      "label": "recommend",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "parse",
+      "to": "fallback",
+      "label": "invalid",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "metadata",
+      "to": "cancel",
+      "label": "cancel",
+      "result": "clean"
+    }
+  ]
+}

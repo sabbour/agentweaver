@@ -1,0 +1,35 @@
+✔ detects missing, stale, and current generated draw.io artifacts (65.118ms)
+✔ cannot accept a mismatched renderer as canonical provenance (10.3982ms)
+✔ assigns stable paths and independent docs areas (1.7354ms)
+✔ preserves reviewed dispositions while refreshing source-derived entries (9.1783ms)
+✔ filters inventory by name, area, and disposition and rejects invalid records (1.2045ms)
+✔ loads and writes area-sharded inventory files (17.5253ms)
+✔ parses inventory list and update commands (0.4451ms)
+✔ discovers JSON and draw.io sources while excluding schemas (11.966ms)
+✔ rejects duplicate source names and missing requested diagrams (3.2919ms)
+✔ hashes JSON semantically and draw.io XML with normalized newlines (24.3362ms)
+✔ builds deterministic draw.io export arguments (0.4384ms)
+✔ respects explicit draw.io command and wraps headless Linux exports (0.9444ms)
+✔ validates editable XML and enforces the pinned draw.io Desktop version (1.4096ms)
+✔ requires actual renderer provenance when creating stamps (5.5589ms)
+✔ design-system manifest matches generator tokens and reusable library (9.4962ms)
+✔ selects draw.io native libraries semantically and explicitly (0.6432ms)
+✔ generates editable graph XML with the full visual and connector contract (8.9423ms)
+✔ generates native UML-style sequence XML with messages, notes, fragments, and activation bars (1.2255ms)
+✔ preserves nested group parentage and relative geometry (1.9154ms)
+✔ rejects ambiguous graph and sequence references (0.2658ms)
+✔ converts calls, returns, self messages, activations, notes, and fragments (3.9929ms)
+✔ parses dashed cross messages without inventing participants (0.5681ms)
+✔ parses draw.io source names, extra formats, and CLI override (1.8593ms)
+✔ keeps check mode browser-free and validates option values (0.4055ms)
+✔ parses embedding and deterministic-version overrides (0.1118ms)
+✔ parses repeatable area and disposition filters for parallel bulk work (0.1195ms)
+✔ workflow graph specs mark revision edges as semantic loopbacks (5.2492ms)
+ℹ tests 27
+ℹ suites 0
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 507.7843

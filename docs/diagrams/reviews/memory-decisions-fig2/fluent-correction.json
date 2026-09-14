@@ -1,0 +1,303 @@
+{
+  "diagram": "memory-decisions-fig2",
+  "source_sha256": "3194ac6e1dba9b6d51a9ed24dd48b1692c4b450cdefea9e3b1c6248024d1ff52",
+  "png_sha256": "e8cbc5bfffae9003eb20effda8dc23ab8ffbca97b61518c26b6d36759a086969",
+  "prior_model": "docs\\diagrams\\reviews\\coordinator-internals-fig4\\owned-models-v2.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Allocate an inbox slug safely"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Update only a matching pending author; numbered candidates must be checked again."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "REQUESTED IDENTITY"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "UPDATE OR ALLOCATE"
+    },
+    {
+      "cell": "group-title-2",
+      "text": "AVAILABILITY LOOP AND INSERT"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "INPUT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Verified submission"
+    },
+    {
+      "cell": "n0-sub",
+      "text": "Project + requested slug"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "authorized author"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "LOOKUP"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Requested slug exists?"
+    },
+    {
+      "cell": "n1-sub",
+      "text": "Look up within project"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "project / slug"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "REPLAY"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Same-agent terminal?"
+    },
+    {
+      "cell": "n2-sub",
+      "text": "Merged or rejected replay"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "explicit conflict"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "MATCH"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Pending match?"
+    },
+    {
+      "cell": "n3-sub",
+      "text": "Same agent, kind, identity"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "SourceKind + identity"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "UPDATE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Update existing"
+    },
+    {
+      "cell": "n4-sub",
+      "text": "Preserve proposal identity"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "idempotent pending edit"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "ALLOCATE"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Allocate candidate"
+    },
+    {
+      "cell": "n5-sub",
+      "text": "Slug plus agent segment"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "slug--agent"
+    },
+    {
+      "cell": "n6-badge",
+      "text": "CHECK"
+    },
+    {
+      "cell": "n6-title",
+      "text": "Candidate available?"
+    },
+    {
+      "cell": "n6-sub",
+      "text": "Check every numbered slug"
+    },
+    {
+      "cell": "n6-meta",
+      "text": "repeat the lookup"
+    },
+    {
+      "cell": "n7-badge",
+      "text": "RETRY"
+    },
+    {
+      "cell": "n7-title",
+      "text": "Increment suffix"
+    },
+    {
+      "cell": "n7-sub",
+      "text": "Try the next candidate"
+    },
+    {
+      "cell": "n7-meta",
+      "text": "--2, --3, ..."
+    },
+    {
+      "cell": "n8-badge",
+      "text": "CREATE"
+    },
+    {
+      "cell": "n8-title",
+      "text": "Insert pending"
+    },
+    {
+      "cell": "n8-sub",
+      "text": "Unique project/slug backstop"
+    },
+    {
+      "cell": "n8-meta",
+      "text": "racing insert may fail"
+    },
+    {
+      "cell": "e0",
+      "text": "lookup"
+    },
+    {
+      "cell": "e1",
+      "text": "absent"
+    },
+    {
+      "cell": "e2",
+      "text": "exists"
+    },
+    {
+      "cell": "e3",
+      "text": "pending"
+    },
+    {
+      "cell": "e4",
+      "text": "match"
+    },
+    {
+      "cell": "e5",
+      "text": "different"
+    },
+    {
+      "cell": "e6",
+      "text": "other"
+    },
+    {
+      "cell": "e7",
+      "text": "test"
+    },
+    {
+      "cell": "e8",
+      "text": "occupied"
+    },
+    {
+      "cell": "e9",
+      "text": "recheck"
+    },
+    {
+      "cell": "e10",
+      "text": "free"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/memory-decisions.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "lookup",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n8",
+      "label": "absent",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n1",
+      "to": "n2",
+      "label": "exists",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n3",
+      "label": "pending",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n3",
+      "to": "n4",
+      "label": "match",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "n3",
+      "to": "n5",
+      "label": "different",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "n2",
+      "to": "n5",
+      "label": "other",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "n5",
+      "to": "n6",
+      "label": "test",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "n6",
+      "to": "n7",
+      "label": "occupied",
+      "result": "clean"
+    },
+    {
+      "id": "e9",
+      "from": "n7",
+      "to": "n6",
+      "label": "recheck",
+      "result": "clean"
+    },
+    {
+      "id": "e10",
+      "from": "n6",
+      "to": "n8",
+      "label": "free",
+      "result": "clean"
+    }
+  ]
+}

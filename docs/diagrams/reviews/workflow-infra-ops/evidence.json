@@ -1,0 +1,238 @@
+{
+  "owner": "astra-workflow-assets",
+  "disposition": "retain",
+  "scope": "Only assigned source/raster/hash/generated cleanup/review artifacts; no inventory writes.",
+  "model": {
+    "title": "Infrastructure & Operations workflow",
+    "nodes": [
+      {
+        "id": "plan",
+        "type": "prompt",
+        "label": "Plan",
+        "role": "agent",
+        "kind": "live",
+        "prompt": "Scope the infrastructure/operations change - the environments and systems affected, the blast radius, rollback plan, and the validation approach (e.g. terraform plan, dry-run, policy-as-code checks) before any change is made.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:20",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "implement",
+        "type": "prompt",
+        "label": "Implement",
+        "role": "agent",
+        "kind": "live",
+        "prompt": "Implement the infrastructure-as-code, pipeline, or observability/monitoring change per the plan. Prefer declarative, reviewable diffs (IaC, pipeline YAML, alert/dashboard config) over manual/imperative changes.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:27",
+        "detail": "Agent task",
+        "metadata": "agent"
+      },
+      {
+        "id": "validate-gate",
+        "type": "peer_review",
+        "label": "Validate",
+        "role": "review",
+        "kind": "live",
+        "agent": "devops-engineer",
+        "prompt": "Act as the validation gate for this infrastructure/operations change. Run and inspect the dry-run/plan output (e.g. terraform plan, pipeline lint/dry-run, policy-as-code checks) and confirm the change matches the stated intent with no unexpected resource drift, deletions, or policy violations. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a validation report file into the workspace.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:34",
+        "detail": "Independent peer review",
+        "metadata": "devops-engineer"
+      },
+      {
+        "id": "rai-check",
+        "type": "check",
+        "label": "RAI Check",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "rai",
+        "branches": [
+          "revise",
+          "safety-failed",
+          "no-changes",
+          "review"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:42",
+        "detail": "Verdict routing",
+        "metadata": "rai"
+      },
+      {
+        "id": "infra-review",
+        "type": "peer_review",
+        "label": "Infra & Config Review",
+        "role": "review",
+        "kind": "live",
+        "agent": "security-engineer",
+        "prompt": "Review the infrastructure-as-code/pipeline/monitoring diff for security posture, least-privilege access, blast radius, and operational risk (e.g. availability, cost, rollback safety). This is a config/IaC review, not a code-quality critique - focus on what changes in the running environment, not code style. Provide your verdict (approved, request-changes, or declined) and findings inline through your review decision.",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:54",
+        "detail": "Independent peer review",
+        "metadata": "security-engineer"
+      },
+      {
+        "id": "human-review",
+        "type": "check",
+        "label": "Human Review",
+        "role": "review",
+        "kind": "gate",
+        "gate_kind": "human-review",
+        "branches": [
+          "approved",
+          "request-changes",
+          "declined"
+        ],
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:62",
+        "detail": "Verdict routing",
+        "metadata": "human-review"
+      },
+      {
+        "id": "terminal-safety-failed",
+        "type": "terminal",
+        "label": "Safety Failed",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:73",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "terminal-declined",
+        "type": "terminal",
+        "label": "Declined",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:79",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      },
+      {
+        "id": "done",
+        "type": "terminal",
+        "label": "Done",
+        "role": "plumbing",
+        "kind": "terminal",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:85",
+        "detail": "Workflow endpoint",
+        "metadata": "plumbing"
+      }
+    ],
+    "edges": [
+      {
+        "source": "plan",
+        "target": "implement",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:92\u201393"
+      },
+      {
+        "source": "implement",
+        "target": "validate-gate",
+        "label": "",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:95\u201396"
+      },
+      {
+        "source": "validate-gate",
+        "target": "rai-check",
+        "label": "pass",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:99\u2013101"
+      },
+      {
+        "source": "validate-gate",
+        "target": "implement",
+        "label": "fail",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:103\u2013105"
+      },
+      {
+        "source": "rai-check",
+        "target": "implement",
+        "label": "revise",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:108\u2013110"
+      },
+      {
+        "source": "rai-check",
+        "target": "terminal-safety-failed",
+        "label": "safety-failed",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:112\u2013114"
+      },
+      {
+        "source": "rai-check",
+        "target": "done",
+        "label": "no-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:116\u2013118"
+      },
+      {
+        "source": "rai-check",
+        "target": "infra-review",
+        "label": "review",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:120\u2013122"
+      },
+      {
+        "source": "infra-review",
+        "target": "human-review",
+        "label": "approved",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:125\u2013127"
+      },
+      {
+        "source": "infra-review",
+        "target": "implement",
+        "label": "request-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:129\u2013131"
+      },
+      {
+        "source": "infra-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:133\u2013135"
+      },
+      {
+        "source": "human-review",
+        "target": "done",
+        "label": "approved",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:138\u2013140"
+      },
+      {
+        "source": "human-review",
+        "target": "implement",
+        "label": "request-changes",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:142\u2013144"
+      },
+      {
+        "source": "human-review",
+        "target": "terminal-declined",
+        "label": "declined",
+        "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/infra_ops.yaml:146\u2013148"
+      }
+    ],
+    "main": [
+      "plan",
+      "implement",
+      "validate-gate",
+      "rai-check",
+      "infra-review",
+      "human-review"
+    ],
+    "note": "Authored graph \u2022 all YAML branches retained",
+    "footer": "Solid: advance / outcome    Dashed marigold: revision / return"
+  },
+  "supplied_research": {
+    "component_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "flow_thread": "Completed independently by parent; original output is in a prohibited temporary directory, not read here.",
+    "assurance": "Parent reports independent YAML tuple equality: 8/15/11/7/14/6/17 edges. CatalogWorkflowBindingTests gate theory includes evaluation; bindability theory does not.",
+    "reconciled_facts": "Catalog graphs retained, not legacy visuals. No authored merge/PR/Scribe in seven catalogs. Default has explicit merge -> PR -> Scribe. Selection is trigger agnostic; overrides precede singleton, 2 parse attempts, exception fallback immediate."
+  },
+  "visual_sources": [
+    "docs/diagrams/drawio/fluent-template.drawio",
+    "docs/diagrams/drawio/fluent-library.xml",
+    "apps/web/src/components/WorkflowGraphPanel.tsx:1\u201390"
+  ],
+  "assets": "Native diagrams.net flowchart process, decision, document and terminal shapes. No external logos. Native shape implementations distributed with pinned draw.io Desktop 31.4.5 (Apache-2.0 diagrams.net); repository Fluent chrome.",
+  "classifications": {
+    "plan": "native:flowchart",
+    "implement": "native:flowchart",
+    "validate-gate": "native:flowchart",
+    "rai-check": "native:flowchart",
+    "infra-review": "native:flowchart",
+    "human-review": "native:flowchart",
+    "terminal-safety-failed": "native:flowchart",
+    "terminal-declined": "native:flowchart",
+    "done": "native:flowchart"
+  }
+}

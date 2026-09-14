@@ -29,7 +29,9 @@ The project name is user-facing and renameable. The project id is internal and s
 
 ### Ownership is the project authorization boundary
 
-The project owner is the authenticated caller that created the project. Project-scoped APIs use that owner as the authorization boundary for the project itself and for teams, backlog tasks, runs, workflows, workspace browsing, and memory under the project. The endpoint layer should enforce this with `caller.Owns(...)` or an equivalent owner comparison; membership in the allowed GitHub org admits a caller to the deployment but does not grant access to another caller's projects.
+Creation bootstraps Entra project ownership. Project-scoped operations enforce Viewer,
+Contributor, or Owner according to the operation, not a universal owner-string comparison.
+GitHub repository/Copilot capability authorization is separate and grants no platform/project role.
 
 There is no built-in superuser derived from a GitHub username. A login named `admin` is just another project owner when it creates its own projects, and it cannot bypass ownership checks for someone else's project.
 
@@ -56,31 +58,13 @@ This prevents stale availability from becoming authoritative. The database says,
 
 ## Lifecycle
 
-```mermaid
-stateDiagram-v2
-  [*] --> ValidatingCreate: create request
-
-  ValidatingCreate --> ResolvingWorkspace: request is well formed
-  ValidatingCreate --> Rejected: bad name, origin, path, model, or repository
-
-  ResolvingWorkspace --> EnsuringWorkspace: choose local path or project-id PVC path
-  EnsuringWorkspace --> MaterializingRepository: directory exists and is writable
-  EnsuringWorkspace --> RolledBack: mount/path unavailable
-
-  MaterializingRepository --> PersistingProject: git init or clone succeeds
-  MaterializingRepository --> RolledBack: git init/clone fails
-
-  PersistingProject --> Active: database insert succeeds
-  PersistingProject --> RolledBack: database insert fails; created files are removed
-
-  Active --> Active: rename, update defaults
-  Active --> RunBlocked: workspace unavailable or project deleting
-  RunBlocked --> Active: workspace becomes available again
-
-  Active --> Deleting: confirmed delete
-  Deleting --> Deleted: active runs cancelled, workspace released, record removed
-  Deleted --> [*]
-```
+| Kind | Meaning |
+| --- | --- |
+| Creation phases | Validate, resolve storage, materialize repository, persist metadata and bootstrap ownership. These are operations, not stored project states. |
+| `Active` | Persisted project state permitting work subject to authorization and live availability. |
+| `Deleting` | Persisted state entered by compare-and-swap before cancellation/release and record removal. It is not a temporary unavailable state. |
+| `available` | Computed workspace health; recovery of storage does not reverse `Deleting`. |
+| Deleted / rollback | Outcomes of removal or failed creation, not additional stored lifecycle enum values. |
 
 A project creation request moves through four conceptual phases:
 
@@ -91,7 +75,9 @@ A project creation request moves through four conceptual phases:
 
 This order is deliberate. It avoids a database row that points at a repository that was never successfully created. When failure happens after files have been created but before the project is fully persisted, Agentweaver compensates by deleting the newly-created directory. This is not a full distributed transaction, but it gives the user the behavior they expect: failed creation should not leave half-created projects behind.
 
-Deletion is intentionally conservative. Agentweaver first marks the project as deleting, which blocks new runs. Then it cancels non-terminal runs, releases the workspace handle, and removes the project record. Project files are preserved rather than recursively destroyed as part of normal delete. That choice protects user code from accidental data loss and keeps infrastructure cleanup separate from application record cleanup.
+Deletion first marks the project as deleting, blocking new runs. It sweeps the explicit active-status
+set in `ProjectService.DeleteAsync`, releases the workspace handle, and removes metadata while
+preserving project files. Do not interpret that status list as every possible future nonterminal state.
 
 ## Creating a blank project
 
@@ -120,9 +106,11 @@ A GitHub project is a project whose base workspace is cloned from GitHub. Concep
 
 The API does not accept a repository URL, numeric identifier, owner/name, installation ID, token, or permission map for GitHub-origin creation. The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
 
-The web picker now exposes the caller's personal GitHub account as a first-class repository source before organizations. `GET /api/github/accounts` fetches `https://api.github.com/user`, returns that account first with `type: "user"`, then appends orgs from `/user/orgs`. `GET /api/github/repos?account=<login>` treats the signed-in user's own login as personal scope and calls `/user/repos?affiliation=owner`; other account values call `/orgs/{org}/repos?type=all` (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, `:333`). This changes repository discovery only; project creation still records the selected GitHub URL and goes through the same clone path.
-
-Project creation requires the API input to be a full `https://github.com/...` URL. Although the lower-level Git initializer can normalize `owner/repo` into a GitHub URL, service-level validation happens first, so `owner/repo` fails validation rather than cloning.
+The current picker uses metadata-only repository selections and issues a caller-bound selection
+code through `GitHubRepositorySelectionEndpoints`. The retired account/repository endpoints and
+direct URL input are not the public creation contract. The API resolves repository metadata and
+credentials server-side when consuming the code, then seeds project ownership; ownership-bootstrap
+failure rolls creation back (`ProjectEndpoints.cs:1232-1283`).
 
 Failure during clone rolls back the workspace directory created for that attempt. Failure after clone but before database insert also removes the newly-created checkout. The intended user-facing invariant is simple: after a failed create, there should be no usable project record and no misleading partial project workspace.
 
@@ -136,12 +124,11 @@ The workspace provider owns the filesystem boundary for project creation and run
 - **Check mount health**: is the provider's root storage healthy enough for this pod/process to serve requests?
 - **Release**: what should happen to provider-owned runtime resources when the project is deleted?
 
-![Workspace provisioning: Create project request, Workspace provider, Use caller-supplied path, Create directory if absent, Check writable, Use project id as storage identity, MountRoot / projectId, Create per-project directory, Write/delete probe, Workspace ready, Initialize or clone Git repository](../diagrams/projects-fig1.png)
+![Local caller-path and persistent project-ID workspace provisioning with real write probes](../diagrams/projects-fig1.png)
 
-<!-- Rendered from ../diagrams/src/projects-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/projects-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec projects-fig1.
+     Review lineage: ../diagrams/reviews/projects-fig1/iteration-manifest.json. -->
 
 ### Local filesystem provider
 
@@ -189,16 +176,17 @@ The trade-off is storage complexity. Agentweaver must manage base repositories, 
 
 ## Relationship between projects, runs, workspaces, teams, and sandboxes
 
-![Relationship between projects, runs, workspaces, teams, and sandboxes: Project record, Provider, model, workflow, review, sandbox defaults, Base workspace / Git checkout, Project-scoped runs, Coordinator orchestrations, .squad agents, charters, decisions, .agentweaver review policies, Per-run Git worktrees, Selected agent/team member, Sandbox execution, Workspace file/ref browser](../diagrams/projects-fig2.png)
+![Project defaults and base files relate to independent run worktrees, team context and sandbox execution](../diagrams/projects-fig2.png)
 
-<!-- Rendered from ../diagrams/src/projects-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/projects-fig2.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec projects-fig2.
+     Review lineage: ../diagrams/reviews/projects-fig2/iteration-manifest.json. -->
 
 ### Runs
 
-A run is always scoped to a project. When a run starts, Agentweaver uses the project to decide the repository path, default branch, provider/model defaults, and workflow defaults. The run then receives its own working context, typically a worktree and branch, so it can modify files without making the project base checkout itself the only mutable surface.
+A repository run is project-scoped and derives repository/defaults from the project. It receives its
+own working context, usually a worktree and branch. Operator conversations reuse the run store but
+need not be project- or repository-backed.
 
 Starting a run should be rejected if the project is deleting or if the workspace is unavailable. This is a guardrail: an agent should not begin work against a repository it cannot read/write or a project that is being removed.
 
@@ -255,9 +243,10 @@ Cloning private and user-scoped repositories requires a valid GitHub token. Agen
 
 Reasoning model: authentication is a precondition of materializing a GitHub-origin workspace.
 
-### GitHub URL shape mismatch
+### Invalid repository selection
 
-Creation validation expects a full HTTPS GitHub URL beginning with `https://github.com/`. Although lower-level clone logic can understand `owner/repo`, service-level validation happens first. A UI or client that submits `owner/repo` should expect request validation failure.
+Creation requires a valid, unexpired, caller-bound selection code with live Repo App authorization.
+Supplying `owner/repo` or even a full HTTPS URL directly does not satisfy that capability contract.
 
 Reasoning model: normalize client behavior to the API contract rather than relying on deeper Git-helper normalization.
 
@@ -309,3 +298,101 @@ If you were rebuilding this subsystem from scratch, implement these pieces in th
 ## See also
 
 - [Agent definition — Deep Dive](./agent-definition.md) — the GitHub Copilot agent file materialized into each new project at creation time.
+
+<!-- diagram-context:projects-fig1:start -->
+<details id="diagram-context-projects-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Project workspace provisioning</td></tr>
+<tr><td>takeaway</td><td>Provider paths differ; only a healthy, initialized workspace becomes a persisted project.</td></tr>
+<tr><td>group-title-0</td><td>REQUEST + PROVIDER POLICY</td></tr>
+<tr><td>group-title-1</td><td>PROVISION · INITIALIZE · PERSIST</td></tr>
+<tr><td>Create project request</td><td>Create project request</td></tr>
+<tr><td>Create project request</td><td>Allocate stable project ID</td></tr>
+<tr><td>Create project request</td><td>GitHub origin consumes selection capability</td></tr>
+<tr><td>Create project request</td><td>ProjectEndpoints.cs:1232-1283</td></tr>
+<tr><td>Create directory + probe</td><td>Create directory + probe</td></tr>
+<tr><td>Create directory + probe</td><td>Write / delete confirms workspace health</td></tr>
+<tr><td>Create directory + probe</td><td>Provider returns the resolved handle</td></tr>
+<tr><td>Create directory + probe</td><td>WorkspaceProvider implementations</td></tr>
+<tr><td>Configured workspace provider</td><td>Configured workspace provider</td></tr>
+<tr><td>Configured workspace provider</td><td>Resolve a project-specific path</td></tr>
+<tr><td>Configured workspace provider</td><td>Local and persistent-volume policies differ</td></tr>
+<tr><td>Configured workspace provider</td><td>ProjectService.cs:47-111</td></tr>
+<tr><td>Initialize or clone Git</td><td>Initialize or clone Git</td></tr>
+<tr><td>Initialize or clone Git</td><td>Use the healthy workspace handle</td></tr>
+<tr><td>Initialize or clone Git</td><td>Server resolves repository capability</td></tr>
+<tr><td>Local filesystem policy</td><td>Local filesystem policy</td></tr>
+<tr><td>Local filesystem policy</td><td>Supplied absolute path is accepted</td></tr>
+<tr><td>Local filesystem policy</td><td>Otherwise workspace root / project ID</td></tr>
+<tr><td>Local filesystem policy</td><td>LocalFilesystemWorkspaceProvider</td></tr>
+<tr><td>Scaffold and persist project</td><td>Scaffold and persist project</td></tr>
+<tr><td>Scaffold and persist project</td><td>Project ownership is bootstrapped</td></tr>
+<tr><td>Scaffold and persist project</td><td>Record stable project and workspace data</td></tr>
+<tr><td>Persistent-volume policy</td><td>Persistent-volume policy</td></tr>
+<tr><td>Persistent-volume policy</td><td>Mount root / project ID</td></tr>
+<tr><td>Persistent-volume policy</td><td>Ignore a caller-supplied workspace path</td></tr>
+<tr><td>Persistent-volume policy</td><td>PersistentVolumeWorkspaceProvider</td></tr>
+<tr><td>Provisioning failure</td><td>Provisioning failure</td></tr>
+<tr><td>Provisioning failure</td><td>Error / rollback path</td></tr>
+<tr><td>Provisioning failure</td><td>Do not report an active healthy project</td></tr>
+<tr><td>Create project request</td><td>create</td></tr>
+<tr><td>Configured workspace provider</td><td>local</td></tr>
+<tr><td>Configured workspace provider</td><td>volume</td></tr>
+<tr><td>Local filesystem policy</td><td>local path</td></tr>
+<tr><td>Persistent-volume policy</td><td>PV path</td></tr>
+<tr><td>Create directory + probe</td><td>healthy</td></tr>
+<tr><td>Initialize or clone Git</td><td>scaffold</td></tr>
+<tr><td>Scaffold and persist project</td><td>if create fails</td></tr>
+<tr><td>scope</td><td>GitHub creation uses a caller-bound single-use selection code, not a caller-supplied credential.</td></tr>
+<tr><td>groups</td><td>REQUEST + PROVIDER POLICY; PROVISION · INITIALIZE · PERSIST</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:projects-fig1:end -->
+
+<!-- diagram-context:projects-fig2:start -->
+<details id="diagram-context-projects-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Project, run and execution ownership</td></tr>
+<tr><td>takeaway</td><td>A project base checkout is not a run worktree, shared Git index or sandbox.</td></tr>
+<tr><td>group-title-0</td><td>PROJECT-OWNED CONFIGURATION</td></tr>
+<tr><td>group-title-1</td><td>RUN-OWNED EXECUTION</td></tr>
+<tr><td>Project</td><td>Project</td></tr>
+<tr><td>Project</td><td>Stable identity + defaults</td></tr>
+<tr><td>Project</td><td>Owns base checkout and project settings</td></tr>
+<tr><td>Project</td><td>ProjectService.cs:47-111</td></tr>
+<tr><td>Run</td><td>Run</td></tr>
+<tr><td>Run</td><td>Belongs to one project</td></tr>
+<tr><td>Run</td><td>Worktree and branch are run-specific</td></tr>
+<tr><td>Run</td><td>RunOrchestrator.cs:194-245</td></tr>
+<tr><td>Stable base checkout</td><td>Stable base checkout</td></tr>
+<tr><td>Stable base checkout</td><td>Provider provisions project path</td></tr>
+<tr><td>Stable base checkout</td><td>Shared volume ≠ shared Git index</td></tr>
+<tr><td>Stable base checkout</td><td>WorkspaceProvider implementations</td></tr>
+<tr><td>Run worktree + branch</td><td>Run worktree + branch</td></tr>
+<tr><td>Run worktree + branch</td><td>Isolated execution changes</td></tr>
+<tr><td>Run worktree + branch</td><td>Not the stable project base checkout</td></tr>
+<tr><td>Run worktree + branch</td><td>RunOrchestrator.cs:277-317</td></tr>
+<tr><td>Team + workflow files</td><td>Team + workflow files</td></tr>
+<tr><td>Team + workflow files</td><td>Project-scoped definitions</td></tr>
+<tr><td>Team + workflow files</td><td>Defaults configure subsequent execution</td></tr>
+<tr><td>Sandbox / AgentHost</td><td>Sandbox / AgentHost</td></tr>
+<tr><td>Sandbox / AgentHost</td><td>Executes against run workspace</td></tr>
+<tr><td>Sandbox / AgentHost</td><td>Execution host is not workspace provider</td></tr>
+<tr><td>Workspace provider</td><td>Workspace provider</td></tr>
+<tr><td>Workspace provider</td><td>Provisions the project checkout</td></tr>
+<tr><td>Workspace provider</td><td>Local or persistent-volume path policy</td></tr>
+<tr><td>Child run contribution</td><td>Child run contribution</td></tr>
+<tr><td>Child run contribution</td><td>Own branch + worktree + tree hash</td></tr>
+<tr><td>Child run contribution</td><td>Contributes artifact to collective assembly</td></tr>
+<tr><td>Run</td><td>belongs to</td></tr>
+<tr><td>Project</td><td>owns</td></tr>
+<tr><td>Project</td><td>configures</td></tr>
+<tr><td>Workspace provider</td><td>path</td></tr>
+<tr><td>Sandbox / AgentHost</td><td>executes in</td></tr>
+<tr><td>scope</td><td>Ownership relationships, not a lifecycle chain. Child worktrees contribute artifacts, not a shared index.</td></tr>
+<tr><td>groups</td><td>PROJECT-OWNED CONFIGURATION; RUN-OWNED EXECUTION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:projects-fig2:end -->

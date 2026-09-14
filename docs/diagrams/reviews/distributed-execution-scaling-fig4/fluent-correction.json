@@ -1,0 +1,272 @@
+{
+  "diagram": "distributed-execution-scaling-fig4",
+  "source_sha256": "7f51557e7a60d4c172da9570316ff1471b743937a40b29abb2b381d020f41cd0",
+  "png_sha256": "7cbe10695089710f12a51e02c7205b1708e15f6e04e887e577d3524c4afe4470",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Durable allocation, then cursor replay"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Cross-replica delivery polls shared rows; local notifications are not a distributed bus."
+    },
+    {
+      "cell": "entry-title",
+      "text": "RecordNext"
+    },
+    {
+      "cell": "entry-subtitle",
+      "text": "Request sequence allocation"
+    },
+    {
+      "cell": "entry-metadata",
+      "text": "Append with Sequence = 0"
+    },
+    {
+      "cell": "entry-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "ef-title",
+      "text": "EF append"
+    },
+    {
+      "cell": "ef-subtitle",
+      "text": "ReadCommitted + advisory lock"
+    },
+    {
+      "cell": "ef-metadata",
+      "text": "Serialize allocation per run"
+    },
+    {
+      "cell": "ef-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "sql-title",
+      "text": "RunEvents"
+    },
+    {
+      "cell": "sql-subtitle",
+      "text": "MAX+1 / insert / commit"
+    },
+    {
+      "cell": "sql-metadata",
+      "text": "Return assigned sequence"
+    },
+    {
+      "cell": "sql-badge",
+      "text": "DATA"
+    },
+    {
+      "cell": "local-title",
+      "text": "Local history"
+    },
+    {
+      "cell": "local-subtitle",
+      "text": "Updated after durable ack"
+    },
+    {
+      "cell": "local-metadata",
+      "text": "Notify only local waiters"
+    },
+    {
+      "cell": "local-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "webA-title",
+      "text": "Web replica A"
+    },
+    {
+      "cell": "webA-subtitle",
+      "text": "Read Sequence > lastSeen"
+    },
+    {
+      "cell": "webA-metadata",
+      "text": "250 ms delay only when empty"
+    },
+    {
+      "cell": "webA-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "browser-title",
+      "text": "Browser watcher"
+    },
+    {
+      "cell": "browser-subtitle",
+      "text": "SSE sequence IDs"
+    },
+    {
+      "cell": "browser-metadata",
+      "text": "Remember last event cursor"
+    },
+    {
+      "cell": "browser-badge",
+      "text": "USER"
+    },
+    {
+      "cell": "cursor-title",
+      "text": "Reconnect cursor"
+    },
+    {
+      "cell": "cursor-subtitle",
+      "text": "Last-Event-ID"
+    },
+    {
+      "cell": "cursor-metadata",
+      "text": "Not tied to original web pod"
+    },
+    {
+      "cell": "cursor-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "webB-title",
+      "text": "Web replica B"
+    },
+    {
+      "cell": "webB-subtitle",
+      "text": "Ordered replay and live tail"
+    },
+    {
+      "cell": "webB-metadata",
+      "text": "Read same shared RunEvents"
+    },
+    {
+      "cell": "webB-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "resume-title",
+      "text": "Resumed watcher"
+    },
+    {
+      "cell": "resume-subtitle",
+      "text": "Receive rows after cursor"
+    },
+    {
+      "cell": "resume-metadata",
+      "text": "No PostgreSQL NOTIFY required"
+    },
+    {
+      "cell": "resume-badge",
+      "text": "USER"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "append"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "commit"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "ack"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "poll"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "SSE"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "resume"
+    },
+    {
+      "cell": "arrow-7",
+      "text": "poll"
+    },
+    {
+      "cell": "arrow-8",
+      "text": "SSE"
+    },
+    {
+      "cell": "note-0",
+      "text": "Rows: write-through / live delivery / reconnect on another replica."
+    },
+    {
+      "cell": "note-1",
+      "text": "Explicit historic sequence: identical content is idempotent; conflicts fail."
+    },
+    {
+      "cell": "note-2",
+      "text": "SQL commits before local history update; polling reads the shared table."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/agent-runtime.md",
+    "docs/deep-dive/distributed-execution-scaling.md",
+    "docs/deep-dive/events-observability.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "entry",
+      "to": "ef",
+      "label": "append",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "ef",
+      "to": "sql",
+      "label": "commit",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "ef",
+      "to": "local",
+      "label": "ack",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "webA",
+      "to": "sql",
+      "label": "poll",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "webA",
+      "to": "browser",
+      "label": "SSE",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "cursor",
+      "to": "webB",
+      "label": "resume",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "webB",
+      "to": "sql",
+      "label": "poll",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "webB",
+      "to": "resume",
+      "label": "SSE",
+      "result": "clean"
+    }
+  ]
+}

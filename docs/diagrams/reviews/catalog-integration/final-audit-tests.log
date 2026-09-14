@@ -1,0 +1,12 @@
+test_counts_readme_and_export_provenance_but_not_historical_reviews (test_diagram_audit.DiagramAuditTests.test_counts_readme_and_export_provenance_but_not_historical_reviews) ... ok
+test_discovers_complete_triplet_and_reference (test_diagram_audit.DiagramAuditTests.test_discovers_complete_triplet_and_reference) ... ok
+test_final_validation_requires_both_downstream_skills (test_diagram_audit.DiagramAuditTests.test_final_validation_requires_both_downstream_skills) ... ok
+test_refresh_preserves_removed_and_merged_tombstones (test_diagram_audit.DiagramAuditTests.test_refresh_preserves_removed_and_merged_tombstones) ... ok
+test_reports_orphans_and_broken_links (test_diagram_audit.DiagramAuditTests.test_reports_orphans_and_broken_links) ... ok
+test_summary_includes_dispositions_and_integrity (test_diagram_audit.DiagramAuditTests.test_summary_includes_dispositions_and_integrity) ... ok
+test_validation_rejects_invalid_historical_target_and_path_change (test_diagram_audit.DiagramAuditTests.test_validation_rejects_invalid_historical_target_and_path_change) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.043s
+
+OK

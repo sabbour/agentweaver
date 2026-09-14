@@ -5,6 +5,16 @@ as the upstream human identity provider. Copilot CLI, GitHub Copilot desktop, an
 VS Code may use a configured static public client or the restricted RFC 7591
 registration endpoint.
 
+The shared [authentication and security overview](deep-dive/auth-security.md)
+owns the OAuth trust-boundary visual. This page retains the protocol and key/session
+operating contract rather than defining another authentication diagram.
+
+![Shared OAuth trust boundary: Entra-backed consent and PKCE produce a broker token, MCP validates it, and the API independently validates forwarded credentials and resource access](diagrams/auth-security-fig4.png)
+
+<!-- Editable canonical source: diagrams/src/auth-security-fig4.drawio.
+     Export with draw.io Desktop 31.4.5 and --spec auth-security-fig4.
+     Review lineage: diagrams/reviews/auth-security-fig4/. -->
+
 Discovery is served from `/.well-known/oauth-authorization-server`. The canonical
 issuer is `Auth:OAuth:PublicOrigin`; the MCP audience is always that exact origin
 plus `/mcp`. Authorization and token requests must each carry that one exact
@@ -115,8 +125,9 @@ expire after 30 days by default; maintenance disables the corresponding
 OpenIddict application and reclaims active quota.
 
 The API resource server validates these broker access tokens through the named
-`BrokerBearer` scheme only for endpoints classified `PlatformOrMcp`. The same
-credential is rejected by self-only, platform-only, internal-service, and
+`BrokerBearer` scheme for endpoints classified `PlatformOrMcp` or
+`AuthenticatedSelfOrMcp` (including execution-context preparation). The same
+credential is rejected by plain self-only, platform-only, internal-service, and
 run-capability endpoints. Issuer and audience remain pinned to the configured
 canonical origin and `/mcp` resource, so `Host` and forwarded-host input cannot
 steer validation.
@@ -125,4 +136,69 @@ The MCP process uses ASP.NET/OpenIddict remote discovery and JWKS validation. It
 accepts only broker JWTs with the exact issuer and audience, a keyed RS256
 signature, valid lifetime, subject, and `mcp:invoke` scope. It forwards only that
 validated token to the API. The API accepts broker credentials only on
-`PlatformOrMcp` endpoints and continues to enforce project authorization.
+`PlatformOrMcp` or `AuthenticatedSelfOrMcp` endpoints and continues to enforce
+endpoint and persisted-resource authorization.
+
+<!-- diagram-context:auth-security-fig4:start -->
+<details id="diagram-context-auth-security-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>MCP trusts the broker, not GitHub</td></tr>
+<tr><td>takeaway</td><td>OAuth and assistant turns obtain Agentweaver broker tokens; MCP and API validate independently.</td></tr>
+<tr><td>group-title0</td><td>BROKER ISSUANCE</td></tr>
+<tr><td>group-title1</td><td>VALIDATION AND RESOURCE ACCESS</td></tr>
+<tr><td>External MCP client</td><td>External MCP client</td></tr>
+<tr><td>External MCP client</td><td>OAuth 2.1 + PKCE S256</td></tr>
+<tr><td>External MCP client</td><td>Discovery and authorization</td></tr>
+<tr><td>External MCP client</td><td>Code exchange / token refresh</td></tr>
+<tr><td>External MCP client</td><td>Entra user sign-in</td></tr>
+<tr><td>Authorization server</td><td>Authorization server</td></tr>
+<tr><td>Authorization server</td><td>Agentweaver-issued broker</td></tr>
+<tr><td>Authorization server</td><td>Entra-backed user consent</td></tr>
+<tr><td>Authorization server</td><td>Sign scoped access token</td></tr>
+<tr><td>Authorization server</td><td>Revocable refresh family</td></tr>
+<tr><td>Assistant API</td><td>Assistant API</td></tr>
+<tr><td>Assistant API</td><td>Separate internal issuance</td></tr>
+<tr><td>Assistant API</td><td>5-minute broker + renewal</td></tr>
+<tr><td>Assistant API</td><td>Not the browser bearer</td></tr>
+<tr><td>Assistant API</td><td>Held pod gets refreshed</td></tr>
+<tr><td>MCP validation</td><td>MCP validation</td></tr>
+<tr><td>MCP validation</td><td>OpenIddict + strict checks</td></tr>
+<tr><td>MCP validation</td><td>Key id + RS256 signature</td></tr>
+<tr><td>MCP validation</td><td>Exact issuer / audience</td></tr>
+<tr><td>MCP validation</td><td>subject • TTL • scope</td></tr>
+<tr><td>API broker handler</td><td>API broker handler</td></tr>
+<tr><td>API broker handler</td><td>Revalidate forwarded token</td></tr>
+<tr><td>API broker handler</td><td>PlatformOrMcp endpoints</td></tr>
+<tr><td>API broker handler</td><td>AuthenticatedSelfOrMcp too</td></tr>
+<tr><td>API broker handler</td><td>Same broker, not GitHub</td></tr>
+<tr><td>Resource authorization</td><td>Resource authorization</td></tr>
+<tr><td>Resource authorization</td><td>Persisted access checks</td></tr>
+<tr><td>Resource authorization</td><td>Project roles still enforced</td></tr>
+<tr><td>Resource authorization</td><td>Revoked access fails closed</td></tr>
+<tr><td>Resource authorization</td><td>No implicit project grant</td></tr>
+<tr><td>relation-0</td><td>1 OAuth exchange</td></tr>
+<tr><td>relation-1</td><td>2 broker token</td></tr>
+<tr><td>relation-2</td><td>3 turn broker</td></tr>
+<tr><td>relation-3</td><td>4 forward broker</td></tr>
+<tr><td>relation-4</td><td>5 authorize</td></tr>
+<tr><td>assurance</td><td>Exact issuer + one resource audience + keyed RS256 + lifetime + subject + mcp:invoke. No raw GitHub bearer.</td></tr>
+<tr><td>assurance-0-label</td><td>Exact MCP resource</td></tr>
+<tr><td>assurance-0-fact</td><td>One audience; mcp:invoke scope.</td></tr>
+<tr><td>assurance-0-source</td><td>OAuthServerConfiguration.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Keyed signature</td></tr>
+<tr><td>assurance-1-fact</td><td>RS256 and nonempty key id required.</td></tr>
+<tr><td>assurance-1-source</td><td>McpBrokerAuthenticationHandler.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Same broker forwarded</td></tr>
+<tr><td>assurance-2-fact</td><td>API revalidates and authorizes.</td></tr>
+<tr><td>assurance-2-source</td><td>AgentweaverApiClient.cs</td></tr>
+<tr><td>n0</td><td>Discovery and authorization; Code exchange / token refresh</td></tr>
+<tr><td>n1</td><td>Entra-backed user consent; Sign scoped access token</td></tr>
+<tr><td>n2</td><td>5-minute broker + renewal; Not the browser bearer</td></tr>
+<tr><td>n3</td><td>Key id + RS256 signature; Exact issuer / audience</td></tr>
+<tr><td>n4</td><td>PlatformOrMcp endpoints; AuthenticatedSelfOrMcp too</td></tr>
+<tr><td>n5</td><td>Project roles still enforced; Revoked access fails closed</td></tr>
+<tr><td>groups</td><td>BROKER ISSUANCE; VALIDATION AND RESOURCE ACCESS</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:auth-security-fig4:end -->

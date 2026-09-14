@@ -1,0 +1,295 @@
+{
+  "diagram": "canonical-sandbox-boundary",
+  "source_sha256": "601693b77189ca8696b00d24d0da44c67a316b45483715dd30c891216343a80a",
+  "png_sha256": "f26653ad1110f020c851ee6e0a6ed4b35a05eaceb1613dc92ea312f5e1e570ad",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-sandbox-boundary\\content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Several checks contain each action"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Native shell is denied; governed tools combine AGT policy, direct containment and execution isolation."
+    },
+    {
+      "cell": "group-title0",
+      "text": "TOOL SELECTION / POLICY"
+    },
+    {
+      "cell": "group-title1",
+      "text": "POINT-OF-USE CONTAINMENT"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Model tool request"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Permission dispatch"
+    },
+    {
+      "cell": "n0-fact0",
+      "text": "Native shell: always denied"
+    },
+    {
+      "cell": "n0-fact1",
+      "text": "URL approvals handled apart"
+    },
+    {
+      "cell": "n0-metadata",
+      "text": "Custom reporting bypass"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "DISPATCH"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Governance"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Deny-by-default policy"
+    },
+    {
+      "cell": "n1-fact0",
+      "text": "AGT policy must allow"
+    },
+    {
+      "cell": "n1-fact1",
+      "text": "Direct backend must allow"
+    },
+    {
+      "cell": "n1-metadata",
+      "text": "Both checks, not either"
+    },
+    {
+      "cell": "n1-badge",
+      "text": "POLICY"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Registered tools"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Explicit capability surface"
+    },
+    {
+      "cell": "n2-fact0",
+      "text": "Files revalidate at use"
+    },
+    {
+      "cell": "n2-fact1",
+      "text": "run_command gates shell"
+    },
+    {
+      "cell": "n2-metadata",
+      "text": "Unknown tools denied"
+    },
+    {
+      "cell": "n2-badge",
+      "text": "TOOLS"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Workspace boundary"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Sandbox filesystem"
+    },
+    {
+      "cell": "n3-fact0",
+      "text": "Lexical + real-path checks"
+    },
+    {
+      "cell": "n3-fact1",
+      "text": "Reject symlink escapes"
+    },
+    {
+      "cell": "n3-metadata",
+      "text": "Bounded / redacted output"
+    },
+    {
+      "cell": "n3-badge",
+      "text": "FILES"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Execution boundary"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Selected isolation backend"
+    },
+    {
+      "cell": "n4-fact0",
+      "text": "Shell policy + approval"
+    },
+    {
+      "cell": "n4-fact1",
+      "text": "Kata pod in AKS"
+    },
+    {
+      "cell": "n4-metadata",
+      "text": "Direct mode is opt-in"
+    },
+    {
+      "cell": "n4-badge",
+      "text": "PROCESS"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Credential handling"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Current implementation"
+    },
+    {
+      "cell": "n5-fact0",
+      "text": "Host + tool options hold token"
+    },
+    {
+      "cell": "n5-fact1",
+      "text": "Direct git status / allowed gh"
+    },
+    {
+      "cell": "n5-metadata",
+      "text": "No blanket shell injection"
+    },
+    {
+      "cell": "n5-badge",
+      "text": "CURRENT"
+    },
+    {
+      "cell": "e0",
+      "text": "1"
+    },
+    {
+      "cell": "relation-0",
+      "text": "1 governed calls"
+    },
+    {
+      "cell": "e1",
+      "text": "2"
+    },
+    {
+      "cell": "relation-1",
+      "text": "2 both allow"
+    },
+    {
+      "cell": "e2",
+      "text": "3"
+    },
+    {
+      "cell": "relation-2",
+      "text": "3 file operation"
+    },
+    {
+      "cell": "e3",
+      "text": "4"
+    },
+    {
+      "cell": "relation-3",
+      "text": "4 run_command"
+    },
+    {
+      "cell": "e4",
+      "text": "5"
+    },
+    {
+      "cell": "relation-4",
+      "text": "5 eligible git / gh"
+    },
+    {
+      "cell": "assurance",
+      "text": "Current code delivers repository credentials into Host/tool options; the normative no-credential contract is NOT met."
+    },
+    {
+      "cell": "assurance-0-label",
+      "text": "Dispatch exceptions"
+    },
+    {
+      "cell": "assurance-0-fact",
+      "text": "Native shell denied; URL path separate."
+    },
+    {
+      "cell": "assurance-0-source",
+      "text": "CopilotAIAgent.cs"
+    },
+    {
+      "cell": "assurance-1-label",
+      "text": "Execution isolation"
+    },
+    {
+      "cell": "assurance-1-fact",
+      "text": "Sidecar: separate PID namespace."
+    },
+    {
+      "cell": "assurance-1-source",
+      "text": "sandbox-template-agenthost.yaml"
+    },
+    {
+      "cell": "assurance-2-label",
+      "text": "Credential reality"
+    },
+    {
+      "cell": "assurance-2-fact",
+      "text": "No blanket shell credential inheritance."
+    },
+    {
+      "cell": "assurance-2-source",
+      "text": "RunCommandTool.cs"
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/00-system-overview.md",
+    "docs/deep-dive/sandbox.md",
+    "docs/deep-dive/sandboxed-execution.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "governed calls",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "both allow",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n3",
+      "label": "file operation",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n2",
+      "to": "n4",
+      "label": "run_command",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "eligible git / gh",
+      "result": "clean"
+    }
+  ]
+}

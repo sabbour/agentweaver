@@ -1,0 +1,283 @@
+{
+  "diagram": "sandbox-fig2",
+  "source_sha256": "7f07aa5ffff1e5a1a0ebf7990f68815411e1494e370254de871ef8c4b9ef0170",
+  "png_sha256": "9ce1f7407cf6f0769f0bd14f3e4af8b115701d488d034fb01378f71b918c98d1",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Choose Kubernetes before local probing"
+    },
+    {
+      "cell": "takeaway",
+      "text": "The API router owns cluster selection; the local factory can fall back to direct."
+    },
+    {
+      "cell": "router-title",
+      "text": "API executor router"
+    },
+    {
+      "cell": "router-subtitle",
+      "text": "Backend override / cluster detect"
+    },
+    {
+      "cell": "router-metadata",
+      "text": "Explicit local bypasses cluster"
+    },
+    {
+      "cell": "router-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "cluster-title",
+      "text": "Kubernetes selected"
+    },
+    {
+      "cell": "cluster-subtitle",
+      "text": "Initialize claim executor"
+    },
+    {
+      "cell": "cluster-metadata",
+      "text": "Failure throws; no local fallback"
+    },
+    {
+      "cell": "cluster-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "claim-title",
+      "text": "Claim backend"
+    },
+    {
+      "cell": "claim-subtitle",
+      "text": "Bound pod command contract"
+    },
+    {
+      "cell": "claim-metadata",
+      "text": "Not the in-pod PodExec client"
+    },
+    {
+      "cell": "claim-badge",
+      "text": "AW"
+    },
+    {
+      "cell": "factory-title",
+      "text": "Local factory"
+    },
+    {
+      "cell": "factory-subtitle",
+      "text": "Only when router selects local"
+    },
+    {
+      "cell": "factory-metadata",
+      "text": "Probe host-supported backends"
+    },
+    {
+      "cell": "factory-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "windows-title",
+      "text": "Windows ladder"
+    },
+    {
+      "cell": "windows-subtitle",
+      "text": "processcontainer -> WSL"
+    },
+    {
+      "cell": "windows-metadata",
+      "text": "wsl-bwrap real; unshare not real"
+    },
+    {
+      "cell": "windows-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "linux-title",
+      "text": "Linux ladder"
+    },
+    {
+      "cell": "linux-subtitle",
+      "text": "bubblewrap -> LXC"
+    },
+    {
+      "cell": "linux-metadata",
+      "text": "Host tools must be available"
+    },
+    {
+      "cell": "linux-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "fallback-title",
+      "text": "No usable isolation"
+    },
+    {
+      "cell": "fallback-subtitle",
+      "text": "Automatic local fallback"
+    },
+    {
+      "cell": "fallback-metadata",
+      "text": "Also explicit direct option"
+    },
+    {
+      "cell": "fallback-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "direct-title",
+      "text": "Direct passthrough"
+    },
+    {
+      "cell": "direct-subtitle",
+      "text": "IsRealIsolation = false"
+    },
+    {
+      "cell": "direct-metadata",
+      "text": "Trusted/disposable host only"
+    },
+    {
+      "cell": "direct-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "shell-title",
+      "text": "Command registration"
+    },
+    {
+      "cell": "shell-subtitle",
+      "text": "ShellEnabled AND real or direct"
+    },
+    {
+      "cell": "shell-metadata",
+      "text": "wsl-unshare: no controlled shell"
+    },
+    {
+      "cell": "shell-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "select"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "ready"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "local"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "Windows"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "Linux"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "unavailable"
+    },
+    {
+      "cell": "arrow-7",
+      "text": "unavailable"
+    },
+    {
+      "cell": "arrow-8",
+      "text": "warn"
+    },
+    {
+      "cell": "arrow-9",
+      "text": "gate"
+    },
+    {
+      "cell": "note-0",
+      "text": "The local platform ladders are alternatives, not a Windows-to-Linux chain."
+    },
+    {
+      "cell": "note-1",
+      "text": "Kubernetes failure never silently descends into the local ladder."
+    },
+    {
+      "cell": "note-2",
+      "text": "Runtime emits sandbox.selected; factory choice is not an isolation guarantee."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/sandbox-pod-execution.md",
+    "docs/deep-dive/sandbox.md",
+    "docs/deep-dive/sandboxed-execution.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "router",
+      "to": "cluster",
+      "label": "select",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "cluster",
+      "to": "claim",
+      "label": "ready",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "router",
+      "to": "factory",
+      "label": "local",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "factory",
+      "to": "windows",
+      "label": "Windows",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "factory",
+      "to": "linux",
+      "label": "Linux",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "windows",
+      "to": "fallback",
+      "label": "unavailable",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "linux",
+      "to": "fallback",
+      "label": "unavailable",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "fallback",
+      "to": "direct",
+      "label": "warn",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "direct",
+      "to": "shell",
+      "label": "gate",
+      "result": "clean"
+    }
+  ]
+}

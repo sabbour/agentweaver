@@ -1,0 +1,242 @@
+[
+  {
+    "document": "sandbox.md",
+    "pattern": "The key production invariant is .*?production\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "\\| WSL2 with bubblewrap/unshare .*?\\|",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "## Kubernetes sandbox lifecycle: claims over pods",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "Production command execution is built around .*?lifecycle control:",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "3\\. For pod-per-run AgentHost pods, .*?endpoint .*?\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "Run-scoped commands may need preview/debug support\\..*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "AgentHost claims now bind .*?`AgentHost__KeyVaultUri`\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "`AgentHostRuntimeState\\.TryConfigure\\(\\.\\.\\.\\)`.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "\\| `workingDirectory` \\|.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "- \\*\\*Writable workspace and temp only:\\*\\*.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "The standard Kubernetes policies select.*?(?=\\n\\nThe service-CIDR warning)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "9\\. \\*\\*Harden the pod\\.\\*\\*.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "sandbox.md",
+    "pattern": "10\\. \\*\\*Add network policy\\.\\*\\*.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "The general principle:.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "When the API runs \\*\\*inside a Kubernetes cluster\\*\\*.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "The GitHub Copilot SDK runner registers custom.*?15 or 16 available tools\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "Yes \u2014 only when `IsRealIsolation && ShellEnabled`",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "If either check fails, the call is denied.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "Approvals are scoped to the run\\..*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "The same `SandboxExecutorFactory` runs on all targets\\..*?:",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "PATH is never consulted for `lxc-exec`\\..*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandboxed-execution.md",
+    "pattern": "which is an explicit opt-out",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "`SandboxExecutorFactory` selects exactly.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "!\\[One executor per host, chosen at run start:.*?\\]\\(\\.\\./diagrams/sandbox-pod-execution-fig3\\.png\\)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "\\.\\./diagrams/src/sandbox-pod-execution-fig3\\.json",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "`IsRealIsolation` is `true` for every real backend and `false` for `direct`\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "namespace \\(so preview ports stay reachable\\) and the two workspace volumes\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "After `/configure`, `AgentHostStartupService\\.ConfigureAsync`.*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "The run's existing GitHub token remains available through the\\nAgentHost token store.*?mechanism\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "cluster-autoscaler scales `katapool` when demand grows \u2014 pods are \\*\\*never stranded\\*\\*\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "```mermaid\\nstateDiagram-v2.*?```",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "back to the warm pool\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "For this to be correct, the checkpoint must carry enough.*?Two facts make rehydration cheap and safe:",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "Egress is \\*\\*default-deny\\*\\* with a narrow allowlist:.*?database\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "stored in `AgentHostRuntimeState`, and persisted under the\\nreplica-safe key",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "back through the API on demand",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "admits TCP 3000\u20139000 exclusively from\\n`agentweaver-preview-gateway` pods \u2014 no other source can reach those ports\\.",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "6\\. \\*\\*Give the pod run-scoped context\\*\\*.*?(?=\\n7\\.)",
+    "matches": 1
+  },
+  {
+    "document": "sandbox-pod-execution.md",
+    "pattern": "7\\. \\*\\*Default deny egress\\*\\*.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "The AKS scripts do not include this retag-unchanged optimization\\..*?(?=\\n\\n)",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "Services, Gateway, HTTPRoutes, and backup job\\.",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "7\\. Deployments last\\.",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "Re-applying the static SecretProviderClass is safe because.*?per run\\.",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "5\\. Build or retag all required images.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "7\\. Apply prerequisites before deployments:.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "10\\. Close the backup gap.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": "- \\*\\*API rollout hangs on volume attach:\\*\\*.*?\\n",
+    "matches": 1
+  },
+  {
+    "document": "infra-deployment.md",
+    "pattern": " The sandbox base image has a narrower context because it is self-contained\\.",
+    "matches": 1
+  }
+]

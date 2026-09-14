@@ -8,10 +8,8 @@ Related docs: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md
 
 ![Workflows and backlog experience: Capture task, Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/canonical-board-lifecycle.png)
 
-<!-- Rendered from ../diagrams/src/canonical-board-lifecycle.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Diagram source: ../diagrams/src/canonical-board-lifecycle.drawio.
+     Shared canonical; changes belong to its owner. -->
 
 ## The mental model
 
@@ -24,19 +22,13 @@ Agentweaver separates **process definition** from **work intake**.
 - A **default** workflow is the project fallback for new work when no better or explicit workflow is selected.
 - A **backlog task** is work that has not been claimed yet. It sits in **Backlog** or **Ready**.
 - A **pickup** is the coordinator heartbeat claiming a Ready task and turning it into an unattended coordinator run.
-- The **board** is the shared visual state: Backlog, Ready, Problems, Human Review, Active, and Done.
+- The **board** has six logical buckets: Backlog, Ready, Problems, Human Review, Active, and Done. The UI renders Backlog → Ready → Active → Done as four main lanes, with Human Review and Problems in a separate **Needs attention / review** section.
 
 The user-facing promise is simple: workflows answer **how should this run?** Backlog answers **what should run next?** The heartbeat connects them.
 
 ## Workflows in the web UI
 
 The project **Workflows** page is reached from a project at **Workflows**. It is titled **Workflows** with the subtitle **Reusable pipeline definitions.** It shows discovered workflow definitions, validation status, source, trigger, and the effective default.
-
-![Workflows page with Active, Available, and Invalid workflow cards](/screenshots/workflows-list.png)
-
-> 📸 **Screenshot — `workflows-list.png`**
-> *Shows:* the **Workflows** page titled "Workflows" / "Reusable pipeline definitions." with the **Active workflow**, **Available workflows**, and **Invalid workflows** sections; cards carrying **Active** / **Valid** / **Invalid** / **Built-in** badges plus **Trigger** and **Source**; and the **New workflow**, **Generate workflow**, **Set as default**, and **Sync** actions.
-> *Path:* open a project → click **Workflows** in the left rail → `/projects/:projectId/workflows`.
 
 The page groups cards into three sections:
 
@@ -104,10 +96,8 @@ Workflow generation is draft-first. The user clicks **Generate workflow**, descr
 
 ![Generating and saving workflows: Describe the workflow you need, workflow_generate, YAML draft, Review in editor, workflow_save, Registry refresh, Workflow appears on Workflows page](../diagrams/canonical-workflow-authoring.png)
 
-<!-- Rendered from ../diagrams/src/canonical-workflow-authoring.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Shared stable figure: ../diagrams/canonical-workflow-authoring.png.
+     Source migration and publication belong to its owner; no local fork. -->
 
 ### Web UI generation flow
 
@@ -151,23 +141,15 @@ The coordinator selection model is process-fit oriented. It selects the workflow
 
 The Workflows page can expand any valid workflow card with **View graph**. This is a definition graph, not a live run graph: it shows the reusable pipeline structure before the coordinator applies it to a specific run. Live status-carrying topology remains on the coordinator orchestration page.
 
-![Workflow definition graph expanded inside a workflow card](/screenshots/workflow-definition-graph.png)
-
-> 📸 **Screenshot — `workflow-definition-graph.png`**
-> *Shows:* the inline workflow definition graph expanded inside a workflow card after **View graph**, with workflow nodes and edges for the selected definition.
-> *Path:* `/projects/:projectId/workflows` → click **View graph** on a valid workflow.
+Open `/projects/:projectId/workflows` and choose **View graph** on a valid definition. Use YAML or visual editing for project-authored definitions, then save explicitly; inspecting a graph does not execute it.
 
 ## The backlog board experience
 
 The board is the user's work queue. It presents intake tasks and run cards in one place.
 
-![Backlog board showing draggable Backlog and Ready task cards](/screenshots/backlog-ready.png)
+Open a project → **Board** to capture and rank intake tasks. Dragging is limited to Backlog and Ready; the coordinator owns progression after pickup.
 
-> 📸 **Screenshot — `backlog-ready.png`**
-> *Shows:* the board's intake columns **Backlog** ("Captured but not yet committed to.") and **Ready** ("Committed work that the coordinator and Ralph monitor may pick up next.") with draggable task cards, the **Capture a task into Backlog** capture bar and its **Add** button, and a task being dragged from Backlog into Ready.
-> *Path:* open a project → click **Board** → `/projects/:projectId/board`.
-
-| Column | Stage kind | Description shown in the UI | Who moves work there |
+| Logical bucket | Stage kind | Description shown in the UI | Who moves work there |
 |---|---|---|---|
 | **Backlog** | intake | **Captured but not yet committed to. Things you're considering.** | User or MCP client. |
 | **Ready** | intake | **Committed work that the coordinator and Ralph monitor may pick up next.** | User or MCP client, then heartbeat. |
@@ -220,20 +202,20 @@ Run cards are read-only from a workflow-position perspective. They show title, s
 3. **Active**
 4. **Done**
 
-These are board buckets, not necessarily workflow nodes. Failed, blocked, declined, or merge-failed work maps to Problems. Awaiting review maps to Human Review. In-progress planning, dispatch, and assembly maps to Active. Completed, merged, or terminal work maps to Done.
+These are board buckets, not necessarily workflow nodes. Failed, blocked, declined, or merge-failed work maps to Problems. Awaiting review maps to Human Review. In-progress planning, dispatch, and assembly maps to Active. Completed, merged, or assemble-ready runs map to Done. Terminal does not automatically mean Done: declined and failed runs still need attention.
 
 ## Pickup and automation
 
-Pickup turns Ready tasks into coordinator runs. The coordinator heartbeat scans eligible projects, reads top Ready tasks, claims them atomically, reserves a coordinator run, and starts that run unattended.
+Pickup turns Ready tasks into coordinator runs. The heartbeat scans eligible projects and reads their top Ready candidates. **Task claim, coordinator run reservation, and approval-policy snapshot persist in one transaction**; only a won claim activates the reserved run unattended.
 
-![Pickup and automation: User, Board, Heartbeat, Pickup, Coordinator](../diagrams/experience-workflows-backlog-fig3.png)
+![Ready pickup: heartbeat selects candidates, atomic claim and reservation either wins, loses, or finds the project unavailable; only a winner starts unattended](../diagrams/experience-workflows-backlog-fig3.png)
 
-<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Diagram source: ../diagrams/src/experience-workflows-backlog-fig3.drawio.
+     Published PNG path is stable; edit the draw.io source, not the raster. -->
 
-A project is eligible when it is active and its workspace is available. If the workspace is unavailable, Ready tasks remain untouched and preserve priority for a later heartbeat. Atomic claim means two ticks or instances cannot create duplicate runs for the same Ready task.
+A project is eligible when it is active and its workspace is available. Unavailable projects leave Ready tasks untouched with priority preserved. A lost claim (another claimant won or the task moved back to Backlog) makes no new reservation. A won claim prevents duplicate task-to-run reservations; it is not a blanket exactly-once guarantee for every later agent action.
+
+After reservation commits, activation starts the coordinator and schedules unattended confirmation attributed to `CapturedBy`. If activation fails, the service attempts to terminalize the reserved run as **Failed** with `coordinator_start_failed`; the task remains **Claimed**, not silently requeued. Missing/invalid teams or unavailable model-provider authorization can also produce a claimed failed run before activation. Inspect Problems and the recorded reason rather than expecting another heartbeat to retry it automatically.
 
 ### Pickup settings
 
@@ -257,7 +239,7 @@ The UX contract is:
 - It auto-answers clarifying questions using the coordinator model.
 - It does not silently grant tool or permission approvals.
 - Every auto-answer is visible in the run timeline.
-- If **Auto-approve tools** is also enabled, normal tool approvals can proceed automatically, but sandbox-blocked destructive shell or network actions still require explicit approval.
+- If **Auto-approve tools** is also enabled, only repository-defined safe tools may be auto-approved. Destructive, privileged, preview, secret, and other network approvals remain gated.
 
 Use autopilot when Ready tasks are well-scoped and the user wants queue throughput. Leave it off when tasks require human judgment at the first clarification gate.
 
@@ -269,11 +251,7 @@ Spec decomposition turns a markdown document in the project workspace into propo
 
 The board toolbar has **Import from workspace**. The user selects a workspace file and clicks **Preview tasks**. Agentweaver analyzes the markdown file and opens **Preview proposed backlog items**.
 
-![Preview proposed backlog items dialog from spec decomposition](/screenshots/decompose-preview-dialog.png)
-
-> 📸 **Screenshot — `decompose-preview-dialog.png`**
-> *Shows:* the **Preview proposed backlog items** dialog from spec decomposition, listing proposed task titles and descriptions, **Already exists** badges for duplicates, the empty-state "No actionable items found in this file.", and the **Create tasks** confirmation button.
-> *Path:* on `/projects/:projectId/workspace`, select a Markdown spec → **Import to backlog** (or board toolbar **Import from workspace** → **Preview tasks**).
+The same preview is reachable from **Workspace** by selecting a Markdown spec and choosing **Import to backlog**. Review proposed tasks before choosing **Create tasks**; merely opening the preview does not create intake items.
 
 The preview dialog shows task titles, optional descriptions, **Already exists** badges for duplicates, a cap notice when extraction returns more than the cap, **No actionable items found in this file.** when empty, and **Create tasks** to confirm persistence.
 
@@ -337,3 +315,211 @@ Results are capped at 50 items. Duplicate detection is scoped to the same projec
 - **Invalid state is visible**: invalid workflows, failed runs, blocked approvals, and problem cards are surfaced where users can act.
 
 Workflows and backlog make Agentweaver predictable: define the process, queue the work, choose what is Ready, let the heartbeat pick up only committed tasks, and watch every run move through visible stages.
+
+<!-- diagram-context:canonical-board-lifecycle:start -->
+<details id="diagram-context-canonical-board-lifecycle" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>The board is a projection</td></tr>
+<tr><td>subtitle</td><td>Columns reflect persisted task and run state—not a separate workflow engine.</td></tr>
+<tr><td>group-title0</td><td>Before and during execution</td></tr>
+<tr><td>group-title1</td><td>Review / terminal outcomes</td></tr>
+<tr><td>Backlog</td><td>Backlog</td></tr>
+<tr><td>Backlog</td><td>Captured task; not queued</td></tr>
+<tr><td>Backlog</td><td>task: backlog</td></tr>
+<tr><td>Ready</td><td>Ready</td></tr>
+<tr><td>Ready</td><td>Queued task</td></tr>
+<tr><td>Ready</td><td>task: ready</td></tr>
+<tr><td>Active</td><td>Active</td></tr>
+<tr><td>Active</td><td>Work is in progress</td></tr>
+<tr><td>Active</td><td>default non-review bucket</td></tr>
+<tr><td>Problems</td><td>Problems</td></tr>
+<tr><td>Problems</td><td>Failed / declined / merge failed</td></tr>
+<tr><td>Problems</td><td>or assembly blocked / failed</td></tr>
+<tr><td>Human Review</td><td>Human Review</td></tr>
+<tr><td>Human Review</td><td>AwaitingReview / InReview</td></tr>
+<tr><td>Human Review</td><td>or assembly stage: Review</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>Done</td><td>Completed / Merged / AssembleReady</td></tr>
+<tr><td>Done</td><td>or plan Complete / stage Done</td></tr>
+<tr><td>e1</td><td>queue</td></tr>
+<tr><td>e2</td><td>claim + start</td></tr>
+<tr><td>e3</td><td>await review</td></tr>
+<tr><td>e4</td><td>finish</td></tr>
+<tr><td>e5</td><td>problem</td></tr>
+<tr><td>assurance-title</td><td>DEFAULT BUCKETS · NOT A NEW STATE MACHINE</td></tr>
+<tr><td>assurance-line1</td><td>Configured workflow stages may replace the default run columns. Arrows summarize typical changes, not every path.</td></tr>
+<tr><td>assurance-line2</td><td>The board polls persisted state. Ready tasks with unmet dependencies stay Ready; blocked is a flag.</td></tr>
+<tr><td>Backlog</td><td>Entity</td></tr>
+<tr><td>Backlog</td><td>BacklogTask</td></tr>
+<tr><td>Backlog</td><td>State</td></tr>
+<tr><td>Backlog</td><td>Run</td></tr>
+<tr><td>Backlog</td><td>Not required</td></tr>
+<tr><td>Backlog</td><td>Action</td></tr>
+<tr><td>Backlog</td><td>Move to Ready</td></tr>
+<tr><td>Ready</td><td>Blocked</td></tr>
+<tr><td>Ready</td><td>Dependency metadata</td></tr>
+<tr><td>Ready</td><td>Pickup</td></tr>
+<tr><td>Ready</td><td>Atomic claim</td></tr>
+<tr><td>Active</td><td>Input</td></tr>
+<tr><td>Active</td><td>Coordinator run</td></tr>
+<tr><td>Active</td><td>Status</td></tr>
+<tr><td>Active</td><td>Non-review default</td></tr>
+<tr><td>Active</td><td>Plan</td></tr>
+<tr><td>Active</td><td>Dispatch / assembly</td></tr>
+<tr><td>Active</td><td>Approval</td></tr>
+<tr><td>Active</td><td>Separate pending flag</td></tr>
+<tr><td>Problems</td><td>Failed / Declined</td></tr>
+<tr><td>Problems</td><td>Merge</td></tr>
+<tr><td>Problems</td><td>MergeFailed</td></tr>
+<tr><td>Problems</td><td>Assembly</td></tr>
+<tr><td>Problems</td><td>Blocked / Failed</td></tr>
+<tr><td>Problems</td><td>Also</td></tr>
+<tr><td>Problems</td><td>AssemblyDeclined</td></tr>
+<tr><td>Human Review</td><td>AwaitingReview</td></tr>
+<tr><td>Human Review</td><td>InReview</td></tr>
+<tr><td>Human Review</td><td>Review stage</td></tr>
+<tr><td>Human Review</td><td>Approve</td></tr>
+<tr><td>Human Review</td><td>Resumes execution</td></tr>
+<tr><td>Done</td><td>Completed / Merged</td></tr>
+<tr><td>Done</td><td>AssembleReady</td></tr>
+<tr><td>Done</td><td>Complete</td></tr>
+<tr><td>Done</td><td>Done stage</td></tr>
+<tr><td>backlog</td><td>No run is required yet; Move to Ready to queue work</td></tr>
+<tr><td>ready</td><td>Unresolved dependencies stay here; Blocked is a flag, not a column</td></tr>
+<tr><td>progress</td><td>Claimed tasks link to their run; Pending approval is a separate flag</td></tr>
+<tr><td>failed</td><td>Blocked assembly is recoverable; Not every problem is terminal</td></tr>
+<tr><td>review</td><td>Approval resumes the workflow; Approval alone is not Done</td></tr>
+<tr><td>done</td><td>Persisted-state mapping; Not merely a clicked approval</td></tr>
+<tr><td>notes</td><td>DEFAULT BUCKETS · NOT A NEW STATE MACHINE; Configured workflow stages may replace the default run columns. Arrows summarize typical changes, not every path.; The board polls persisted state. Ready tasks with unmet dependencies stay Ready; blocked is a flag.</td></tr>
+<tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-board-lifecycle:end -->
+
+<!-- diagram-context:canonical-workflow-authoring:start -->
+<details id="diagram-context-canonical-workflow-authoring" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Workflow authoring</td></tr>
+<tr><td>takeaway</td><td>Generate a draft. Review it. Save deliberately.</td></tr>
+<tr><td>generation-boundary</td><td>1 GENERATE + REVIEW / No workflow file is saved</td></tr>
+<tr><td>persistence-boundary</td><td>2 EXPLICIT SAVE / Project workspace + registry</td></tr>
+<tr><td>Authorize request</td><td>Authorize request</td></tr>
+<tr><td>Authorize request</td><td>Project ownership + AI execution plan</td></tr>
+<tr><td>Authorize request</td><td>POST …/workflows/generate</td></tr>
+<tr><td>Authorize request</td><td>Description required</td></tr>
+<tr><td>Prompt context</td><td>Prompt context</td></tr>
+<tr><td>Prompt context</td><td>Roles, schema, examples</td></tr>
+<tr><td>Prompt context</td><td>Project model override</td></tr>
+<tr><td>Prompt context</td><td>Catalog fallback</td></tr>
+<tr><td>Generate candidate</td><td>Generate candidate</td></tr>
+<tr><td>Generate candidate</td><td>CopilotWorkflowGenerator</td></tr>
+<tr><td>Generate candidate</td><td>Model returns YAML, not a saved file</td></tr>
+<tr><td>Generate candidate</td><td>Create or edit</td></tr>
+<tr><td>Validate candidate</td><td>Validate candidate</td></tr>
+<tr><td>Validate candidate</td><td>WorkflowDefinitionLoader + binder dry-run</td></tr>
+<tr><td>Validate candidate</td><td>Structure AND runtime bindability</td></tr>
+<tr><td>Validate candidate</td><td>Strip fences; ensure id</td></tr>
+<tr><td>One correction</td><td>One correction</td></tr>
+<tr><td>One correction</td><td>Failed YAML + error</td></tr>
+<tr><td>One correction</td><td>Re-run same checks</td></tr>
+<tr><td>One correction</td><td>No third attempt</td></tr>
+<tr><td>Explicit error</td><td>Explicit error</td></tr>
+<tr><td>Explicit error</td><td>Second invalid result</td></tr>
+<tr><td>Explicit error</td><td>400 · not persisted</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Review &amp; edit draft</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Human edits YAML or the visual graph</td></tr>
+<tr><td>Review &amp; edit draft</td><td>Valid draft stays unsaved</td></tr>
+<tr><td>Save: validate again</td><td>Save: validate again</td></tr>
+<tr><td>Save: validate again</td><td>Parse + structure + route id + binder</td></tr>
+<tr><td>Save: validate again</td><td>PUT …/workflows/{workflowId}</td></tr>
+<tr><td>Save: validate again</td><td>Ownership required</td></tr>
+<tr><td>Reject save</td><td>Reject save</td></tr>
+<tr><td>Reject save</td><td>Parse / id / bind error</td></tr>
+<tr><td>Reject save</td><td>400 or 422 · no write</td></tr>
+<tr><td>Reject save</td><td>Fix the draft</td></tr>
+<tr><td>Write project YAML</td><td>Write project YAML</td></tr>
+<tr><td>Write project YAML</td><td>Resolve the path inside the workspace</td></tr>
+<tr><td>Write project YAML</td><td>.agentweaver/workflows/{id}.yaml</td></tr>
+<tr><td>Write project YAML</td><td>Contained-path guard</td></tr>
+<tr><td>Write can fail</td><td>Write can fail</td></tr>
+<tr><td>Write can fail</td><td>Path guard or file I/O</td></tr>
+<tr><td>Write can fail</td><td>400 / 500 · stop here</td></tr>
+<tr><td>Write can fail</td><td>No success response</td></tr>
+<tr><td>Sync → definition</td><td>Sync → definition</td></tr>
+<tr><td>Sync → definition</td><td>Extend allowed set if needed; reload</td></tr>
+<tr><td>Sync → definition</td><td>Return saved detail on success</td></tr>
+<tr><td>Reload failure</td><td>Reload failure</td></tr>
+<tr><td>Reload failure</td><td>Written, not available</td></tr>
+<tr><td>Reload failure</td><td>422 / 500 · file may exist</td></tr>
+<tr><td>e01</td><td>permitted</td></tr>
+<tr><td>e02</td><td>grounds prompt</td></tr>
+<tr><td>e03</td><td>candidate YAML</td></tr>
+<tr><td>e04</td><td>valid; unsaved</td></tr>
+<tr><td>e05</td><td>first invalid</td></tr>
+<tr><td>e06</td><td>one repair</td></tr>
+<tr><td>e07</td><td>invalid again</td></tr>
+<tr><td>e08</td><td>explicit Save</td></tr>
+<tr><td>e09</td><td>invalid</td></tr>
+<tr><td>e10</td><td>checks pass</td></tr>
+<tr><td>e11</td><td>failure</td></tr>
+<tr><td>e12</td><td>write succeeded</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-workflow-authoring:end -->
+
+<!-- diagram-context:experience-workflows-backlog-fig3:start -->
+<details id="diagram-context-experience-workflows-backlog-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One won claim, one reserved run</td></tr>
+<tr><td>takeaway</td><td>Ready pickup commits claim and reservation before activation; other outcomes do not launch.</td></tr>
+<tr><td>group-title-0</td><td>SELECTION AND ATOMIC RESERVATION</td></tr>
+<tr><td>group-title-1</td><td>POST-CLAIM OUTCOMES</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Ranked Ready tasks</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Heartbeat candidates</td></tr>
+<tr><td>Ranked Ready tasks</td><td>eligible project + workspace</td></tr>
+<tr><td>Ranked Ready tasks</td><td>Top-N limits candidates per tick, not total concurrency.</td></tr>
+<tr><td>Atomic transaction</td><td>Atomic transaction</td></tr>
+<tr><td>Atomic transaction</td><td>Claim + run + policy</td></tr>
+<tr><td>Atomic transaction</td><td>task-scoped reservation</td></tr>
+<tr><td>Atomic transaction</td><td>Commit all together; no orphan losing run.</td></tr>
+<tr><td>Activate winner</td><td>Activate winner</td></tr>
+<tr><td>Activate winner</td><td>Use reserved run ID</td></tr>
+<tr><td>Activate winner</td><td>post-commit activation</td></tr>
+<tr><td>Activate winner</td><td>Schedule unattended confirm attributed to CapturedBy.</td></tr>
+<tr><td>Lost / unavailable</td><td>Lost / unavailable</td></tr>
+<tr><td>Lost / unavailable</td><td>No launch by this pickup</td></tr>
+<tr><td>Lost / unavailable</td><td>rollback / preserve rank</td></tr>
+<tr><td>Lost / unavailable</td><td>A winner may own a lost claim; unavailable leaves Ready.</td></tr>
+<tr><td>Claimed failed run</td><td>Claimed failed run</td></tr>
+<tr><td>Claimed failed run</td><td>Visible failure reason</td></tr>
+<tr><td>Claimed failed run</td><td>preflight / activation failure</td></tr>
+<tr><td>Claimed failed run</td><td>Do not silently requeue. Terminalization may log failure.</td></tr>
+<tr><td>Coordinator work</td><td>Coordinator work</td></tr>
+<tr><td>Coordinator work</td><td>Unattended execution</td></tr>
+<tr><td>Coordinator work</td><td>claim-time policy snapshot</td></tr>
+<tr><td>Coordinator work</td><td>No second manual start for the same captured goal.</td></tr>
+<tr><td>e0</td><td>attempt</td></tr>
+<tr><td>e1</td><td>won</td></tr>
+<tr><td>e2</td><td>not won</td></tr>
+<tr><td>e3</td><td>activate</td></tr>
+<tr><td>e4</td><td>failure</td></tr>
+<tr><td>note</td><td>A won preflight-failure reservation also stays Claimed/Failed. Claim-once is not tool-execution-once.</td></tr>
+<tr><td>n0</td><td>Top-N limits candidates per
+tick, not total concurrency.</td></tr>
+<tr><td>n1</td><td>Commit all together;
+no orphan losing run.</td></tr>
+<tr><td>n2</td><td>Schedule unattended confirm
+attributed to CapturedBy.</td></tr>
+<tr><td>n3</td><td>A winner may own a lost claim;
+unavailable leaves Ready.</td></tr>
+<tr><td>n4</td><td>Do not silently requeue.
+Terminalization may log failure.</td></tr>
+<tr><td>n5</td><td>No second manual start for
+the same captured goal.</td></tr>
+<tr><td>groups</td><td>SELECTION AND ATOMIC RESERVATION; POST-CLAIM OUTCOMES</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:experience-workflows-backlog-fig3:end -->

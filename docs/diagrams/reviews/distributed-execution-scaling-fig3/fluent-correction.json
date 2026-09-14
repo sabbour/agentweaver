@@ -1,0 +1,189 @@
+{
+  "diagram": "distributed-execution-scaling-fig3",
+  "source_sha256": "373a730c22ca74bb750d41b887c5a895dcd854a7a6d02c66f95d4849d73abae6",
+  "png_sha256": "339fafe228387b32b63636456070b54163c1c4e8847e3d9551df12ed6824f276",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Logical roles and the shipped autoscaler"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Separate public traffic and orchestration responsibility without claiming hard role isolation."
+    },
+    {
+      "cell": "clients-title",
+      "text": "Clients"
+    },
+    {
+      "cell": "clients-subtitle",
+      "text": "HTTP and SSE"
+    },
+    {
+      "cell": "clients-metadata",
+      "text": "Reconnect with event cursor"
+    },
+    {
+      "cell": "clients-badge",
+      "text": "USER"
+    },
+    {
+      "cell": "web-title",
+      "text": "Web/API deployment"
+    },
+    {
+      "cell": "web-subtitle",
+      "text": "Public REST/auth/event surface"
+    },
+    {
+      "cell": "web-metadata",
+      "text": "Background pickup independent"
+    },
+    {
+      "cell": "web-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "sql-title",
+      "text": "PostgreSQL"
+    },
+    {
+      "cell": "sql-subtitle",
+      "text": "Shared state and event cursors"
+    },
+    {
+      "cell": "sql-metadata",
+      "text": "Both roles can write"
+    },
+    {
+      "cell": "sql-badge",
+      "text": "DATA"
+    },
+    {
+      "cell": "hpa-title",
+      "text": "Worker HPA"
+    },
+    {
+      "cell": "hpa-subtitle",
+      "text": "CPU 70% + memory 80%"
+    },
+    {
+      "cell": "hpa-metadata",
+      "text": "Shipped range: 2-3 replicas"
+    },
+    {
+      "cell": "hpa-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "worker-title",
+      "text": "Worker deployment"
+    },
+    {
+      "cell": "worker-subtitle",
+      "text": "Owns in-process graphs"
+    },
+    {
+      "cell": "worker-metadata",
+      "text": "Run leases / checkpoints / events"
+    },
+    {
+      "cell": "worker-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "pod-title",
+      "text": "AgentHost pods"
+    },
+    {
+      "cell": "pod-subtitle",
+      "text": "Heavy per-run leaf execution"
+    },
+    {
+      "cell": "pod-metadata",
+      "text": "A2A output returns to host"
+    },
+    {
+      "cell": "pod-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "HTTP"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "state"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "persist"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "scale"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "A2A"
+    },
+    {
+      "cell": "note-0",
+      "text": "App:Role does not alone disable CoordinatorHeartbeatService pickup."
+    },
+    {
+      "cell": "note-1",
+      "text": "Backlog-driven KEDA is a proposed alternative, not the active HPA."
+    },
+    {
+      "cell": "note-2",
+      "text": "SQL run leases and Kubernetes SandboxClaims are different mechanisms."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/distributed-execution-scaling.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "clients",
+      "to": "web",
+      "label": "HTTP",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "web",
+      "to": "sql",
+      "label": "state",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "worker",
+      "to": "sql",
+      "label": "persist",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "hpa",
+      "to": "worker",
+      "label": "scale",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "worker",
+      "to": "pod",
+      "label": "A2A",
+      "result": "clean"
+    }
+  ]
+}

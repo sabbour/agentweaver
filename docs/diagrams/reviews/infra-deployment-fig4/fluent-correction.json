@@ -1,0 +1,189 @@
+{
+  "diagram": "infra-deployment-fig4",
+  "source_sha256": "07d5189e3e40650e5fd7ce9416b4d498718f104b7639c20f7aa60ef634f7bca7",
+  "png_sha256": "fcb58be136f4afaac361186e0c9e057d0b7dca1f7b3a716fa420bd9f3f97d4cc",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Specific routes before frontend fallback"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Gateway TLS termination and HTTPRoute selection keep public backends explicit."
+    },
+    {
+      "cell": "client-title",
+      "text": "Public client"
+    },
+    {
+      "cell": "client-subtitle",
+      "text": "Browser / API / MCP"
+    },
+    {
+      "cell": "client-metadata",
+      "text": "One HTTPS entry point"
+    },
+    {
+      "cell": "client-badge",
+      "text": "USER"
+    },
+    {
+      "cell": "gateway-title",
+      "text": "Gateway listener"
+    },
+    {
+      "cell": "gateway-subtitle",
+      "text": "Terminate TLS"
+    },
+    {
+      "cell": "gateway-metadata",
+      "text": "Gateway API routing"
+    },
+    {
+      "cell": "gateway-badge",
+      "text": "NET"
+    },
+    {
+      "cell": "match-title",
+      "text": "HTTPRoute match"
+    },
+    {
+      "cell": "match-subtitle",
+      "text": "Prefix and exact rules"
+    },
+    {
+      "cell": "match-metadata",
+      "text": "Not every /oauth path"
+    },
+    {
+      "cell": "match-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "api-title",
+      "text": "API backend"
+    },
+    {
+      "cell": "api-subtitle",
+      "text": "/api /auth /openapi prefixes"
+    },
+    {
+      "cell": "api-metadata",
+      "text": "Exact OAuth + AS/OIDC discovery"
+    },
+    {
+      "cell": "api-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "mcp-title",
+      "text": "MCP backend"
+    },
+    {
+      "cell": "mcp-subtitle",
+      "text": "/mcp + protected discovery"
+    },
+    {
+      "cell": "mcp-metadata",
+      "text": "/mcp/health rewrites /healthz"
+    },
+    {
+      "cell": "mcp-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "frontend-title",
+      "text": "Frontend fallback"
+    },
+    {
+      "cell": "frontend-subtitle",
+      "text": "/ catches remaining traffic"
+    },
+    {
+      "cell": "frontend-metadata",
+      "text": "Service :80 -> pod :8080"
+    },
+    {
+      "cell": "frontend-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "HTTPS"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "select"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "API"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "MCP"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "fallback"
+    },
+    {
+      "cell": "note-0",
+      "text": "API and MCP Services use :8080; worker has no public route."
+    },
+    {
+      "cell": "note-1",
+      "text": "Backend cards list mutually selected destinations, not a serial pipeline."
+    },
+    {
+      "cell": "note-2",
+      "text": "Exact OAuth endpoints and discovery variants remain listed in the page."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/infra-deployment.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "client",
+      "to": "gateway",
+      "label": "HTTPS",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "gateway",
+      "to": "match",
+      "label": "select",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "match",
+      "to": "api",
+      "label": "API",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "match",
+      "to": "mcp",
+      "label": "MCP",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "match",
+      "to": "frontend",
+      "label": "fallback",
+      "result": "clean"
+    }
+  ]
+}

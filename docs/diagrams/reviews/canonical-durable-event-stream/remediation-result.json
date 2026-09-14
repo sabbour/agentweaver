@@ -1,0 +1,24 @@
+{
+  "diagram": "canonical-durable-event-stream",
+  "status": "completed",
+  "lineage": "fluent-pitch-remediation",
+  "final_pass": 4,
+  "supersedes": "Old root pitch was a sparse generic concept strip without the complete Fluent/native initial-pitch contract. Its mechanical stamps and previous pass ratios did not establish compliant pitch provenance.",
+  "superseded_root_manifest": "iteration-manifest.pre-fluent-remediation.json",
+  "prior_pitch_and_pass_files_preserved": true,
+  "new_initial_pitch": "Source-backed compact responsibility model with native notation and full Fluent hierarchy; not a reapproval of the old pitch.",
+  "research": "Three preserved independent Astra threads reused by explicit user instruction; no nested/research agents launched.",
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 3223,
+  "result_meaningful_xml": 36459,
+  "growth_ratio": 11.312132,
+  "final_arrow_count": 5,
+  "validation": "fluent-pitch-remediation/validation-evidence.json",
+  "print_and_enlarged_inspections_per_stage": true,
+  "residual_defects": [],
+  "parent_owned_remaining": [
+    "documentation build",
+    "inventory/consumer updates"
+  ],
+  "scope": "Only eight exclusive asset families; no pages, plans, global inventory, product changes, staging or commits."
+}

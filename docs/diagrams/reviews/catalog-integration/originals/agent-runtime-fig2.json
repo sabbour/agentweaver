@@ -1,0 +1,166 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Human-in-the-loop tools",
+  "alt": "Human-in-the-loop tools: Model requests capability, Runtime classification, Permission handler, Function invocation, Loopback API call, Governance evaluation, Project API authorization/scope, Execute, Return denial + emit tool.error, String result, Normalized run events",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "M",
+      "label": "Model requests capability",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "R",
+      "label": "Runtime classification",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Permission handler",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Function invocation",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "A",
+      "label": "Loopback API call",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Governance evaluation",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "S",
+      "label": "Project API authorization/scope",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "X",
+      "label": "Execute",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Return denial + emit tool.error",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "O",
+      "label": "String result",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Normalized run events",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "M",
+      "to": "R"
+    },
+    {
+      "from": "R",
+      "to": "P",
+      "label": "Native file/shell/fetch"
+    },
+    {
+      "from": "R",
+      "to": "F",
+      "label": "Registered AIFunction"
+    },
+    {
+      "from": "R",
+      "to": "A",
+      "label": "Agentweaver API tool"
+    },
+    {
+      "from": "P",
+      "to": "G"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "A",
+      "to": "S"
+    },
+    {
+      "from": "G",
+      "to": "X",
+      "label": "Allowed"
+    },
+    {
+      "from": "G",
+      "to": "D",
+      "label": "Denied"
+    },
+    {
+      "from": "X",
+      "to": "O"
+    },
+    {
+      "from": "D",
+      "to": "O"
+    },
+    {
+      "from": "O",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "M"
+    }
+  ]
+}

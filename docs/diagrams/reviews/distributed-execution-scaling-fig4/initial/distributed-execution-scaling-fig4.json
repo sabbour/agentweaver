@@ -1,0 +1,205 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Durable write-through and cross-replica cursor polling",
+  "alt": "Sequence showing a worker mirroring a run event into the shared RunEvents table, one web replica streaming it live, and another replica resuming after the browser reconnects with a cursor",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "Worker",
+      "label": "Worker replica",
+      "subLabel": "owns run",
+      "icon": "bot",
+      "badge": { "text": "Runtime", "tone": "green" }
+    },
+    {
+      "id": "Local",
+      "label": "RunStreamEntry",
+      "subLabel": "local history",
+      "icon": "box",
+      "badge": { "text": "Events", "tone": "teal" }
+    },
+    {
+      "id": "Stream",
+      "label": "EF event stream",
+      "subLabel": "EfRunEventStream · durable",
+      "icon": "server",
+      "badge": { "text": "Service", "tone": "green" }
+    },
+    {
+      "id": "Store",
+      "label": "Shared RunEvents",
+      "subLabel": "ordered table",
+      "icon": "database",
+      "badge": { "text": "Data", "tone": "teal" }
+    },
+    {
+      "id": "ReplicaA",
+      "label": "Web replica A",
+      "subLabel": "SSE endpoint",
+      "icon": "window",
+      "badge": { "text": "Service", "tone": "teal" }
+    },
+    {
+      "id": "ReplicaB",
+      "label": "Web replica B",
+      "subLabel": "SSE endpoint",
+      "icon": "window",
+      "badge": { "text": "Service", "tone": "teal" }
+    },
+    {
+      "id": "Watcher",
+      "label": "Browser / MCP watcher",
+      "icon": "globe",
+      "badge": { "text": "Client", "tone": "lavender" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Worker",
+      "to": "Local",
+      "label": "RecordNext / Record(event)"
+    },
+    {
+      "type": "activation",
+      "participant": "Local",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Local",
+      "to": "Stream",
+      "label": "AppendAsync mirror"
+    },
+    {
+      "type": "activation",
+      "participant": "Stream",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Store",
+      "label": "INSERT RunEvents"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Stream",
+      "label": "durable commit",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Local",
+      "label": "append acknowledged",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "Stream",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "Local",
+      "to": "Worker",
+      "label": "record acknowledged",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "Local",
+      "action": "end"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "watcher connection",
+      "sections": [
+        {
+          "label": "connected to replica A",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Watcher",
+              "to": "ReplicaA",
+              "label": "GET run stream"
+            },
+            {
+              "type": "fragment",
+              "operator": "loop",
+              "label": "cursor poll; sleep 250 ms only when empty",
+              "sections": [
+                {
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "ReplicaA",
+                      "to": "Store",
+                      "label": "SubscribeAsync after cursor"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Store",
+                      "to": "ReplicaA",
+                      "label": "ordered rows",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "ReplicaA",
+                      "to": "Watcher",
+                      "label": "SSE frames",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "reconnect lands on replica B",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Watcher",
+              "to": "ReplicaB",
+              "label": "GET run stream + Last-Event-ID"
+            },
+            {
+              "type": "message",
+              "from": "ReplicaB",
+              "to": "Store",
+              "label": "SubscribeAsync after last seen sequence"
+            },
+            {
+              "type": "message",
+              "from": "Store",
+              "to": "ReplicaB",
+              "label": "replay and new ordered rows",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "ReplicaB",
+              "to": "Watcher",
+              "label": "resumed SSE frames",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

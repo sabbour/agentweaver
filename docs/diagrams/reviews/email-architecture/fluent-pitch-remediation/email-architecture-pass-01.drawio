@@ -1,0 +1,428 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Agentweaver" agent="Agentweaver draw.io generator" version="31.4.5" type="device" compressed="false">
+  <diagram id="fluent-template" name="Identity, control, and execution">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="583" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Identity, control, and execution" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=26;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="19" width="770" height="33" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Entra authenticates people; GitHub capabilities authorize purpose-bound repository access." style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=14;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="58" width="770" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="notation" value="DEPLOYMENT / TRUST BOUNDARIES" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="91" width="750" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="group0" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;fillColor=#f8f4f1;strokeColor=#e2ddd9;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="28" y="118" width="771" height="183" as="geometry" />
+        </mxCell>
+        <mxCell id="group-title0" value="AKS · control and execution workloads" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="126" width="740" height="19" as="geometry" />
+        </mxCell>
+        <mxCell id="group1" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;fillColor=#f8f4f1;strokeColor=#e2ddd9;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="28" y="312" width="771" height="183" as="geometry" />
+        </mxCell>
+        <mxCell id="group-title1" value="External services" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="740" height="19" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="151" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="api-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="api">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="api-icon" value="" style="shape=mxgraph.kubernetes.pod;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="api">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="api-title" value="API + worker" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="api-sub" value="Control plane services" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="api-meta" value="Postgres + CSI mounted data" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="api">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="api-pill" value="CONTROL" style="rounded=1;arcSize=100;html=1;fillColor=#d2ccf8;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="api">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="305" y="151" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-icon" value="" style="shape=mxgraph.kubernetes.pod;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;" vertex="1" parent="mcp">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-title" value="MCP service" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-sub" value="Authenticated tool surface" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-meta" value="HTTP API client" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="mcp">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-pill" value="TOOLS" style="rounded=1;arcSize=100;html=1;fillColor=#a6e9ed;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#00666d;" vertex="1" parent="mcp">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="570" y="151" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="sandbox">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-icon" value="" style="shape=mxgraph.kubernetes.pod;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.4;" vertex="1" parent="sandbox">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-title" value="AgentHost pod" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-sub" value="Constrained turn execution" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-meta" value="per-run bearer / sandbox" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="sandbox">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-pill" value="EXECUTION" style="rounded=1;arcSize=100;html=1;fillColor=#9fd89f;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#0e700e;" vertex="1" parent="sandbox">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="entra" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="345" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="entra">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-icon" value="" style="shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;" vertex="1" parent="entra">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-title" value="Microsoft Entra" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-sub" value="User identity" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-meta" value="sign-in / sessions / roles" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="entra">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-pill" value="IDENTITY" style="rounded=1;arcSize=100;html=1;fillColor=#a6e9ed;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#00666d;" vertex="1" parent="entra">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="github" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="305" y="345" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="github-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="github">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="github-icon" value="" style="shape=cloud;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.4;" vertex="1" parent="github">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="github-title" value="GitHub" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="github-sub" value="Purpose-bound capabilities" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="github-meta" value="repository authorization" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="github">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="github-pill" value="CAPABILITY" style="rounded=1;arcSize=100;html=1;fillColor=#d2ccf8;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="github">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;whiteSpace=wrap;html=1;fillColor=#fdfbf8;strokeColor=#e2ddd9;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="570" y="345" width="217" height="139" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="postgres">
+          <mxGeometry x="0" y="10" width="5" height="119" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-icon" value="" style="shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.4;size=0.15;" vertex="1" parent="postgres">
+          <mxGeometry x="14" y="8" width="24" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-title" value="PostgreSQL" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=16;fontColor=#272320;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="49" y="8" width="158" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-sub" value="Shared durable state" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="14" y="34" width="191" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-meta" value="API + worker persistence" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#746d68;fontStyle=0;align=left;verticalAlign=middle;spacing=0;fontSize=8;fontFamily=Cascadia Code;" vertex="1" parent="postgres">
+          <mxGeometry x="14" y="51" width="191" height="12" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-pill" value="DATA" style="rounded=1;arcSize=100;html=1;fillColor=#a6e9ed;strokeColor=none;fontFamily=Segoe UI;fontSize=9;fontStyle=1;fontColor=#00666d;" vertex="1" parent="postgres">
+          <mxGeometry x="14" y="123" width="189" height="13" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="HTTP" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0;orthogonalLoop=1;jettySize=12;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;exitX=0;exitY=0.5;entryX=1;entryY=0.5;fontSize=10;exitX=0;exitY=0.2;entryX=1;entryY=0.2;" source="mcp" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="configure / A2A" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0;orthogonalLoop=1;jettySize=12;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.35;entryX=1;entryY=0.35;fontSize=10;" source="api" target="sandbox">
+          <mxGeometry relative="1" as="geometry" x="-0.35">
+            <Array as="points">
+              <mxPoint x="275" y="200" />
+              <mxPoint x="275" y="298" />
+              <mxPoint x="805" y="298" />
+              <mxPoint x="805" y="200" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="identity" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0;orthogonalLoop=1;jettySize=12;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;exitX=0;exitY=0.5;entryX=0;entryY=0.5;fontSize=10;" source="entra" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="18" y="414" />
+              <mxPoint x="18" y="220" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="capability" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0;orthogonalLoop=1;jettySize=12;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;exitX=0;exitY=0.5;entryX=1;entryY=0.6;fontSize=10;" source="github" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="283" y="414" />
+              <mxPoint x="283" y="235" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="read / write" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0;orthogonalLoop=1;jettySize=12;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=12;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.75;entryX=1;entryY=0.6;fontSize=10;" source="api" target="postgres">
+          <mxGeometry relative="1" as="geometry" x="0.35">
+            <Array as="points">
+              <mxPoint x="267" y="255" />
+              <mxPoint x="267" y="306" />
+              <mxPoint x="797" y="306" />
+              <mxPoint x="797" y="430" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="assurance" value="" style="rounded=1;arcSize=16;absoluteArcSize=1;fillColor=#f8f4f1;strokeColor=#e2ddd9;" vertex="1" parent="1">
+          <mxGeometry x="28" y="507" width="771" height="59" as="geometry" />
+        </mxCell>
+        <mxCell id="assurance-accent" value="" style="fillColor=#d39300;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="28" y="516" width="5" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="assurance-title" value="TRUST FLOWS ARE DELIBERATELY DISTINCT" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#835b00;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="43" y="511" width="739" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="assurance-line1" value="GitHub authorization constrains repository credentials used during execution; Entra establishes user identity." style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="43" y="529" width="739" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="assurance-line2" value="API and worker use PostgreSQL and CSI-mounted storage. MCP is an API client, not another database owner." style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="43" y="546" width="739" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="api-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="api">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="api-key0" value="Services" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-value0" value="API + worker" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="api">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="api-key1" value="Data" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-value1" value="Postgres persistence" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="api">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="api-key2" value="Files" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-value2" value="CSI-mounted storage" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="api">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="api-key3" value="Control" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="api-value3" value="Configure + A2A" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="api">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-key0" value="Surface" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-value0" value="Authenticated tools" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-key1" value="Credential" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-value1" value="Validated broker token" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-key2" value="Downstream" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-value2" value="HTTP API" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-key3" value="Storage" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-value3" value="No database connector" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="mcp">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-key0" value="Host" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-value0" value="AgentHost workload" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-key1" value="Transport" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-value1" value="Authenticated A2A" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-key2" value="Credential" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-value2" value="Constrained repo access" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-key3" value="Scope" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-value3" value="Bound to execution" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="sandbox">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-key0" value="Role" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-value0" value="User authentication" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-key1" value="Methods" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-value1" value="Sign-in / sessions" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-key2" value="Access" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-value2" value="Role authorization" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-key3" value="Not" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-value3" value="Repository authority" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="entra">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="github">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="github-key0" value="Role" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-value0" value="Repository capability" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="github">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="github-key1" value="Grant" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-value1" value="Purpose-bound access" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="github">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="github-key2" value="Delivery" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-value2" value="Constrained credentials" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="github">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="github-key3" value="Not" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="github-value3" value="Product sign-in" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="github">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-rule0" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="67" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-key0" value="Role" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="68" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-value0" value="Durable persistence" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="65" y="68" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-rule1" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="80" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-key1" value="Writers" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="81" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-value1" value="API + worker" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="65" y="81" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-rule2" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="93" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-key2" value="Stores" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="94" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-value2" value="Runs / events / projects" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="65" y="94" width="140" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-rule3" value="" style="fillColor=#ece7e3;strokeColor=none;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="106" width="193" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-key3" value="Separate" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8;fontColor=#746d68;fontStyle=1;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="12" y="107" width="51" height="11" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres-value3" value="CSI-mounted files" style="text;html=1;whiteSpace=wrap;fillColor=none;strokeColor=none;fontFamily=Segoe UI;fontSize=8.5;fontColor=#3f3935;fontStyle=0;align=left;verticalAlign=middle;spacing=0;" vertex="1" parent="postgres">
+          <mxGeometry x="65" y="107" width="140" height="11" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

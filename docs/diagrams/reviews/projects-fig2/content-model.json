@@ -1,0 +1,189 @@
+{
+  "name": "projects-fig2",
+  "title": "Project, run and execution ownership",
+  "takeaway": "A project base checkout is not a run worktree, shared Git index or sandbox.",
+  "groups": [
+    "PROJECT-OWNED CONFIGURATION",
+    "RUN-OWNED EXECUTION"
+  ],
+  "nodes": [
+    {
+      "id": "project",
+      "title": "Project",
+      "subtitle": "Stable identity + defaults",
+      "detail": "Owns base checkout and project settings",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "OWNER",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "run",
+      "title": "Run",
+      "subtitle": "Belongs to one project",
+      "detail": "Worktree and branch are run-specific",
+      "meta": "RunOrchestrator.cs:194-245",
+      "badge": "RUN",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:194-245",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "checkout",
+      "title": "Stable base checkout",
+      "subtitle": "Provider provisions project path",
+      "detail": "Shared volume ≠ shared Git index",
+      "meta": "WorkspaceProvider implementations",
+      "badge": "BASE",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-75",
+      "shape": "folder",
+      "box": {
+        "x": 36,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "worktree",
+      "title": "Run worktree + branch",
+      "subtitle": "Isolated execution changes",
+      "detail": "Not the stable project base checkout",
+      "meta": "RunOrchestrator.cs:277-317",
+      "badge": "ISOLATED",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+      "shape": "folder",
+      "box": {
+        "x": 467,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "team",
+      "title": "Team + workflow files",
+      "subtitle": "Project-scoped definitions",
+      "detail": "Defaults configure subsequent execution",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "CONFIG",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "folder",
+      "box": {
+        "x": 36,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "sandbox",
+      "title": "Sandbox / AgentHost",
+      "subtitle": "Executes against run workspace",
+      "detail": "Execution host is not workspace provider",
+      "meta": "RunOrchestrator.cs:277-317",
+      "badge": "EXECUTE",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "provider",
+      "title": "Workspace provider",
+      "subtitle": "Provisions the project checkout",
+      "detail": "Local or persistent-volume path policy",
+      "meta": "WorkspaceProvider implementations",
+      "badge": "PROVISION",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+      "shape": "process",
+      "box": {
+        "x": 36,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "child",
+      "title": "Child run contribution",
+      "subtitle": "Own branch + worktree + tree hash",
+      "detail": "Contributes artifact to collective assembly",
+      "meta": "RunOrchestrator.cs:277-317",
+      "badge": "CHILD",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "run-to-project",
+      "source": "run",
+      "target": "project",
+      "label": "belongs to",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:194-245"
+    },
+    {
+      "id": "project-to-checkout",
+      "source": "project",
+      "target": "checkout",
+      "label": "owns",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111"
+    },
+    {
+      "id": "project-to-team",
+      "source": "project",
+      "target": "team",
+      "label": "configures",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "route": "outer",
+      "side": "right",
+      "lane": 397
+    },
+    {
+      "id": "provider-to-checkout",
+      "source": "provider",
+      "target": "checkout",
+      "label": "path",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+      "route": "outer",
+      "lane": 18
+    },
+    {
+      "id": "run-to-worktree",
+      "source": "run",
+      "target": "worktree",
+      "label": "owns",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317"
+    },
+    {
+      "id": "sandbox-to-worktree",
+      "source": "sandbox",
+      "target": "worktree",
+      "label": "executes in",
+      "evidence": "apps/Agentweaver.Api/Runs/RunOrchestrator.cs:277-317"
+    }
+  ],
+  "scope": "Ownership relationships, not a lifecycle chain. Child worktrees contribute artifacts, not a shared index."
+}

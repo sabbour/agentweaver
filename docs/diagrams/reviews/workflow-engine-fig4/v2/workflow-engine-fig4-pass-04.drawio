@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mxfile host="Agentweaver" agent="GPT-6 Astra evidence-grounded v2" version="31.4.5" type="device" compressed="false">
+  <diagram id="workflow-engine-fig4" name="Visual role versus runtime context">
+    <mxGraphModel dx="794" dy="559" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="794" pageHeight="559" math="0" shadow="0" background="#efeae7" lineJumps="1">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Visual role versus runtime context" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=24;fontColor=#272320;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="24" y="14" width="746" height="32" />
+        </mxCell>
+        <mxCell id="takeaway" value="Node fields feed different executors; role/kind never becomes an executing catalog identity." style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=13;fontColor=#635c57;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="24" y="49" width="746" height="23" />
+        </mxCell>
+        <mxCell id="outer-boundary" value="" style="rounded=1;arcSize=16;fillColor=#f8f4f1;strokeColor=#e2ddd9;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="18" y="91" width="758" height="439" />
+        </mxCell>
+        <mxCell id="group-0" value="" style="rounded=1;arcSize=12;fillColor=#efeae7;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="94" width="754" height="132" />
+        </mxCell>
+        <mxCell id="group-title-0" value="AUTHORED FIELD FAMILIES" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="32" y="95" width="726" height="16" />
+        </mxCell>
+        <mxCell id="group-1" value="" style="rounded=1;arcSize=12;fillColor=#efeae7;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="246" width="754" height="132" />
+        </mxCell>
+        <mxCell id="group-title-1" value="PRESENTATION AND WORKER CONTEXT" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="32" y="247" width="726" height="16" />
+        </mxCell>
+        <mxCell id="group-2" value="" style="rounded=1;arcSize=12;fillColor=#efeae7;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="398" width="754" height="132" />
+        </mxCell>
+        <mxCell id="group-title-2" value="SPECIALIZED EXECUTOR CONTEXT" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=10;fontColor=#635c57;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="32" y="399" width="726" height="16" />
+        </mxCell>
+        <mxCell id="n0" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="24" y="112" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n0-accent" value="" style="rounded=1;arcSize=100;fillColor=#635c57;strokeColor=none;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n0-icon" value="" style="shape=document;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n0-badge" value="INPUT" style="rounded=1;arcSize=100;fillColor=#e7e1dc;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#635c57;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n0-title" value="Authored node" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n0-sub" value="Fields are not interchangeable" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n0-meta" value="node declaration" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n0">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n1" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="290" y="112" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n1-accent" value="" style="rounded=1;arcSize=100;fillColor=#00666d;strokeColor=none;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n1-icon" value="" style="shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n1-badge" value="VISUAL" style="rounded=1;arcSize=100;fillColor=#a6e9ed;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#00666d;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n1-title" value="role / kind" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n1-sub" value="Rendering metadata" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n1-meta" value="not executing identity" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n1">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n2" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="556" y="112" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n2-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n2-icon" value="" style="shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n2-badge" value="CONTEXT" style="rounded=1;arcSize=100;fillColor=#d2ccf8;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n2-title" value="prompt / charter" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n2-sub" value="Generic worker context" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n2-meta" value="prompt or publish node" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n2">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n3" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="24" y="264" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n3-accent" value="" style="rounded=1;arcSize=100;fillColor=#635c57;strokeColor=none;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n3-icon" value="" style="shape=process;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n3-badge" value="RENDER" style="rounded=1;arcSize=100;fillColor=#e7e1dc;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#635c57;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n3-title" value="Diagram presentation" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n3-sub" value="Visual role and grouping" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n3-meta" value="no agent assignment" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n3">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n4" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="290" y="264" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n4-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n4-icon" value="" style="shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n4-badge" value="WORKER" style="rounded=1;arcSize=100;fillColor=#d2ccf8;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n4-title" value="AgentTurnExecutor" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n4-sub" value="Receives prompt + charter" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n4-meta" value="not node.Agent" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n4">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n5" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="556" y="264" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n5-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n5-icon" value="" style="shape=document;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n5-badge" value="REVIEW" style="rounded=1;arcSize=100;fillColor=#d2ccf8;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n5-title" value="Peer-review fields" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n5-sub" value="agent + charter" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n5-meta" value="reviewer-specific contract" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n5">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n6" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="24" y="416" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n6-accent" value="" style="rounded=1;arcSize=100;fillColor=#3f3682;strokeColor=none;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n6-icon" value="" style="shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n6-badge" value="PEER" style="rounded=1;arcSize=100;fillColor=#d2ccf8;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#3f3682;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n6-title" value="Rubberduck executor" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n6-sub" value="Receives agent + charter" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n6-meta" value="peer-review context" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n6">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n7" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="290" y="416" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n7-accent" value="" style="rounded=1;arcSize=100;fillColor=#835b00;strokeColor=none;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n7-icon" value="" style="shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n7-badge" value="BUILD" style="rounded=1;arcSize=100;fillColor=#f9e2ae;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#835b00;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n7-title" value="Build &amp; Test field" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n7-sub" value="agent" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n7-meta" value="platform executor context" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n7">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="n8" value="" style="rounded=1;absoluteArcSize=1;arcSize=16;fillColor=#fdfbf8;strokeColor=#ece7e3;strokeWidth=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="556" y="416" width="214" height="108" />
+        </mxCell>
+        <mxCell id="n8-accent" value="" style="rounded=1;arcSize=100;fillColor=#0e700e;strokeColor=none;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="0" y="0" width="5" height="108" />
+        </mxCell>
+        <mxCell id="n8-icon" value="" style="shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="14" y="12" width="24" height="24" />
+        </mxCell>
+        <mxCell id="n8-badge" value="PLATFORM" style="rounded=1;arcSize=100;fillColor=#9fd89f;strokeColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Segoe UI;fontSize=10;fontStyle=1;fontColor=#0e700e;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="128" y="12" width="73" height="21" />
+        </mxCell>
+        <mxCell id="n8-title" value="Build &amp; Test executor" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=15;fontColor=#272320;fontStyle=1;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="14" y="40" width="187" height="21" />
+        </mxCell>
+        <mxCell id="n8-sub" value="Receives agent context" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Segoe UI;fontSize=12;fontColor=#635c57;fontStyle=0;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="14" y="63" width="187" height="20" />
+        </mxCell>
+        <mxCell id="n8-meta" value="not role/kind mapping" style="text;html=0;whiteSpace=wrap;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontFamily=Cascadia Code;fontSize=10.5;fontColor=#746d68;fontStyle=0;" vertex="1" parent="n8">
+          <mxGeometry as="geometry" x="14" y="86" width="187" height="16" />
+        </mxCell>
+        <mxCell id="e0" value="visual" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=1;exitY=0.5;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n0" target="n1">
+          <mxGeometry as="geometry" relative="1" x="0.0" y="9">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="worker" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=1;exitY=0.27;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n0" target="n2">
+          <mxGeometry as="geometry" relative="1" x="-0.05482" y="-9">
+            <Array as="points">
+              <mxPoint x="248" y="141.16" />
+              <mxPoint x="248" y="86" />
+              <mxPoint x="546" y="86" />
+              <mxPoint x="546" y="166.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="render" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=0.5;exitY=1;exitPerimeter=0;entryX=1;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n1" target="n3">
+          <mxGeometry as="geometry" relative="1" x="-0.34241" y="9">
+            <Array as="points">
+              <mxPoint x="397.0" y="230" />
+              <mxPoint x="248" y="230" />
+              <mxPoint x="248" y="318.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="bind" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=0;exitY=0.27;exitPerimeter=0;entryX=1;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n2" target="n4">
+          <mxGeometry as="geometry" relative="1" x="0.13984" y="19.0">
+            <Array as="points">
+              <mxPoint x="514" y="141.16" />
+              <mxPoint x="514" y="318.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="peer" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=0;exitY=0.5;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n0" target="n5">
+          <mxGeometry as="geometry" relative="1" x="-0.80397" y="19.0">
+            <Array as="points">
+              <mxPoint x="14" y="166.0" />
+              <mxPoint x="14" y="384" />
+              <mxPoint x="546" y="384" />
+              <mxPoint x="546" y="318.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="bind" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=0;exitY=0.27;exitPerimeter=0;entryX=1;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n6">
+          <mxGeometry as="geometry" relative="1" x="0.81812" y="19.0">
+            <Array as="points">
+              <mxPoint x="532" y="293.16" />
+              <mxPoint x="532" y="400" />
+              <mxPoint x="248" y="400" />
+              <mxPoint x="248" y="470.0" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="build" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=1;exitY=0.73;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n0" target="n7">
+          <mxGeometry as="geometry" relative="1" x="0.04606" y="-21.75">
+            <Array as="points">
+              <mxPoint x="278" y="190.84" />
+              <mxPoint x="278" y="392" />
+              <mxPoint x="397.0" y="392" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="bind" style="edgeStyle=segmentEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=0;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.5;fontFamily=Segoe UI;fontSize=10;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=6;exitX=1;exitY=0.5;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n7" target="n8">
+          <mxGeometry as="geometry" relative="1" x="0.0" y="9">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

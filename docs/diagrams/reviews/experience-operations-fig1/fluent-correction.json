@@ -1,0 +1,157 @@
+{
+  "diagram": "experience-operations-fig1",
+  "source_sha256": "3c7590b1acd0130a0ebf2d59f715d19cf5e4d4a6128389aaef1d0ba526d796ae",
+  "png_sha256": "808faff3c642e70be33da4c90dc66133ea0ba0fc545fa84d725a7b50371f205e",
+  "prior_model": "docs\\diagrams\\reviews\\experience-00-overview-fig1\\experience-content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Choose the right operations surface"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Inspection and configuration have different scopes; MCP parity is intentionally partial."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "INSPECT CURRENT STATE"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "CONFIGURE WITH THE RIGHT AUTHORITY"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "HEALTH"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Diagnostics"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Health and checks"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "diagnostics_get"
+    },
+    {
+      "cell": "n0-detail",
+      "text": "Inspect explicit failures and unknown timed-out checks."
+    },
+    {
+      "cell": "n1-badge",
+      "text": "WORK"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Heartbeat + Flow"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Pickup and orchestration"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "heartbeat_status"
+    },
+    {
+      "cell": "n1-detail",
+      "text": "Automation reports pickup; Flow shows ongoing work."
+    },
+    {
+      "cell": "n2-badge",
+      "text": "INSPECT"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Cluster + traces"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Capacity and observability"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "REST-backed UI views"
+    },
+    {
+      "cell": "n2-detail",
+      "text": "No dedicated Cluster or Observability MCP tools."
+    },
+    {
+      "cell": "n3-badge",
+      "text": "PERSONAL"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Account settings"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Authentication / AI access"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "GitHub / MCP clients"
+    },
+    {
+      "cell": "n3-detail",
+      "text": "Not a repository-path sandbox-policy editor."
+    },
+    {
+      "cell": "n4-badge",
+      "text": "PLATFORM"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Platform settings"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Model provider controls"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "platform administrator"
+    },
+    {
+      "cell": "n4-detail",
+      "text": "Global provider configuration requires admin authority."
+    },
+    {
+      "cell": "n5-badge",
+      "text": "PROJECT"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Project settings"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Repository / sandbox"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "project-scoped policy"
+    },
+    {
+      "cell": "n5-detail",
+      "text": "Preview approval and lifetime; MCP setter is narrower."
+    },
+    {
+      "cell": "note",
+      "text": "All surfaces use authorized API operations. sandbox_policy_set changes repository shell_enabled only."
+    }
+  ],
+  "context_pages": [
+    "docs/experience/operations.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": []
+}

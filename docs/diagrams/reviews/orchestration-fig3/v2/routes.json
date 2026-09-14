@@ -1,0 +1,294 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Compute dependency-satisfied frontier",
+    "evidence": "apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs:63-85",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n1",
+    "target": "n2",
+    "relationship": "Ready subtask launches isolated child",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:906-929",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n2",
+    "target": "n3",
+    "relationship": "Trimmed child graph consumes typed agent result",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:788-814",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n3",
+    "target": "n4",
+    "relationship": "Successful output is assemble-ready",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:788-814",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        293.16
+      ],
+      [
+        278,
+        293.16
+      ],
+      [
+        278,
+        254
+      ],
+      [
+        397.0,
+        254
+      ],
+      [
+        397.0,
+        264
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n3",
+    "target": "n5",
+    "relationship": "Typed failure follows child failure terminal",
+    "evidence": "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:788-814",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        342.84
+      ],
+      [
+        248,
+        342.84
+      ],
+      [
+        248,
+        384
+      ],
+      [
+        546,
+        384
+      ],
+      [
+        546,
+        318.0
+      ],
+      [
+        556,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n4",
+    "target": "n6",
+    "relationship": "Successful child publishes authoritative branch content",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:2715-2731",
+    "result": "clean",
+    "route": [
+      [
+        290,
+        318.0
+      ],
+      [
+        280,
+        318.0
+      ],
+      [
+        280,
+        392
+      ],
+      [
+        14,
+        392
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        24,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n6",
+    "target": "n7",
+    "relationship": "Prerequisite branches form dependent starting content",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1327-1435",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        470.0
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        248,
+        534
+      ],
+      [
+        397.0,
+        534
+      ],
+      [
+        397.0,
+        524
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n7",
+    "target": "n1",
+    "relationship": "Satisfied prerequisites unlock additional frontier work",
+    "evidence": "apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs:34-85",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        470.0
+      ],
+      [
+        514,
+        470.0
+      ],
+      [
+        514,
+        240
+      ],
+      [
+        778,
+        240
+      ],
+      [
+        778,
+        86
+      ],
+      [
+        514,
+        86
+      ],
+      [
+        514,
+        141.16
+      ],
+      [
+        504,
+        141.16
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n4",
+    "target": "n8",
+    "relationship": "Successful children contribute to aggregate eligibility",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:873-908",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        318.0
+      ],
+      [
+        532,
+        318.0
+      ],
+      [
+        532,
+        406
+      ],
+      [
+        663.0,
+        406
+      ],
+      [
+        663.0,
+        416
+      ]
+    ]
+  },
+  {
+    "id": "e9",
+    "source": "n5",
+    "target": "n8",
+    "relationship": "Terminal failed children can block aggregate eligibility",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:873-908",
+    "result": "clean",
+    "route": [
+      [
+        770,
+        318.0
+      ],
+      [
+        780,
+        318.0
+      ],
+      [
+        780,
+        470.0
+      ],
+      [
+        770,
+        470.0
+      ]
+    ]
+  }
+]

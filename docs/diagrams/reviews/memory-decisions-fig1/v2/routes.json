@@ -1,0 +1,276 @@
+[
+  {
+    "id": "e0",
+    "source": "n0",
+    "target": "n1",
+    "relationship": "Verified authorship is persisted on inbox proposals",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:49-152",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        166.0
+      ],
+      [
+        290,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e1",
+    "source": "n0",
+    "target": "n2",
+    "relationship": "Verified authorship accompanies pending memory",
+    "evidence": "apps/Agentweaver.Api/Endpoints/MemoryEndpoints.cs:125-160",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        141.16
+      ],
+      [
+        248,
+        141.16
+      ],
+      [
+        248,
+        86
+      ],
+      [
+        546,
+        86
+      ],
+      [
+        546,
+        166.0
+      ],
+      [
+        556,
+        166.0
+      ]
+    ]
+  },
+  {
+    "id": "e2",
+    "source": "n1",
+    "target": "n3",
+    "relationship": "Authorized decision promotion is transactional",
+    "evidence": "apps/Agentweaver.Api/Memory/DecisionPromotion.cs:22-55",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        220
+      ],
+      [
+        397.0,
+        230
+      ],
+      [
+        248,
+        230
+      ],
+      [
+        248,
+        318.0
+      ],
+      [
+        238,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e3",
+    "source": "n1",
+    "target": "n4",
+    "relationship": "Authorized rejection preserves the row",
+    "evidence": "apps/Agentweaver.Api/Endpoints/DecisionsEndpoints.cs:285-301",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        166.0
+      ],
+      [
+        514,
+        166.0
+      ],
+      [
+        514,
+        318.0
+      ],
+      [
+        504,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e4",
+    "source": "n1",
+    "target": "n5",
+    "relationship": "Only scoped low-risk inbox entries reach Scribe",
+    "evidence": "apps/Agentweaver.Api/Runs/PostRunScribeService.cs:42-104",
+    "result": "clean",
+    "route": [
+      [
+        504,
+        141.16
+      ],
+      [
+        514,
+        141.16
+      ],
+      [
+        514,
+        78
+      ],
+      [
+        780,
+        78
+      ],
+      [
+        780,
+        318.0
+      ],
+      [
+        770,
+        318.0
+      ]
+    ]
+  },
+  {
+    "id": "e5",
+    "source": "n3",
+    "target": "n6",
+    "relationship": "Compiler selects approved active architecture/scope decisions",
+    "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:58-65",
+    "result": "clean",
+    "route": [
+      [
+        131.0,
+        372
+      ],
+      [
+        131.0,
+        382
+      ],
+      [
+        14,
+        382
+      ],
+      [
+        14,
+        470.0
+      ],
+      [
+        24,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e6",
+    "source": "n2",
+    "target": "n7",
+    "relationship": "Memory must pass ownership, trust and budget filters",
+    "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:68-140",
+    "result": "clean",
+    "route": [
+      [
+        663.0,
+        220
+      ],
+      [
+        663.0,
+        248
+      ],
+      [
+        778,
+        248
+      ],
+      [
+        778,
+        400
+      ],
+      [
+        514,
+        400
+      ],
+      [
+        514,
+        470.0
+      ],
+      [
+        504,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e7",
+    "source": "n6",
+    "target": "n8",
+    "relationship": "Selected decisions become untrusted JSON data",
+    "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:175-217",
+    "result": "clean",
+    "route": [
+      [
+        238,
+        470.0
+      ],
+      [
+        248,
+        470.0
+      ],
+      [
+        248,
+        534
+      ],
+      [
+        546,
+        534
+      ],
+      [
+        546,
+        470.0
+      ],
+      [
+        556,
+        470.0
+      ]
+    ]
+  },
+  {
+    "id": "e8",
+    "source": "n7",
+    "target": "n8",
+    "relationship": "Selected memories and current session become untrusted data",
+    "evidence": "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:175-217",
+    "result": "clean",
+    "route": [
+      [
+        397.0,
+        416
+      ],
+      [
+        397.0,
+        392
+      ],
+      [
+        546,
+        392
+      ],
+      [
+        546,
+        445.16
+      ],
+      [
+        556,
+        445.16
+      ]
+    ]
+  }
+]

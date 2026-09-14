@@ -1,0 +1,1119 @@
+{
+  "area": "reference",
+  "model": "gpt-6-astra",
+  "documents": [
+    {
+      "path": "docs/reference/a2a.md",
+      "concepts": [
+        {
+          "id": "reference-a2a-message-transport",
+          "title": "A2A remotes one leaf turn, not team coordination",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-agent-communication-a2a",
+          "canonical_diagram": "canonical-agent-communication-a2a",
+          "rationale": "Keep endpoint/package and message-mode tables; use the existing single-turn sequence instead of another transport overview. The host registers A2ATurnBridgeAgent with a purpose-routing runner, not CopilotAIAgent directly. Distinguish ordered text/RunEvent DataParts from worker-owned workflow/checkpoint state. Consumer action: docs/reference/a2a.md:51 add a link to ../diagrams/canonical-agent-communication-a2a.png rather than a new sequence.",
+          "evidence": ["docs/reference/a2a.md:27", "docs/reference/a2a.md:51", "apps/Agentweaver.AgentHost/Program.cs:145", "apps/Agentweaver.AgentHost/Program.cs:154", "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181"],
+          "references": [{"line": 9, "target": "../deep-dive/a2a-bridge.md"}]
+        },
+        {
+          "id": "reference-a2a-security-boundaries",
+          "title": "A2A transport, authorization and checkpoint boundaries",
+          "representation": "diagram",
+          "disposition": "redesign",
+          "target": null,
+          "canonical_diagram": "reference-a2a-fig1",
+          "rationale": "Preserve the PNG identity, but move the checkpoint edge from the in-pod agent to the worker checkpoint manager. Draw NetworkPolicy and TLS as controls on the transport, not gateway services. Ingress includes API and worker callers. Separate configured mTLS policy from base manifests that explicitly set RequireMtls=false, separate card and turn tokens, and show the bridge before the agent. No PNG inspection or publication approval performed.",
+          "evidence": ["docs/reference/a2a.md:78", "docs/reference/a2a.md:92", "docs/diagrams/src/reference-a2a-fig1.json:143", "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181", "apps/Agentweaver.AgentHost/Program.cs:372", "apps/Agentweaver.AgentHost/Program.cs:386", "k8s/base/networkpolicy-agenthost.yaml:37", "k8s/base/api-deployment.yaml:149"],
+          "references": [{"line": 92, "target": "../diagrams/reference-a2a-fig1.png"}, {"line": 94, "target": "../diagrams/src/reference-a2a-fig1.json"}]
+        },
+        {
+          "id": "reference-a2a-mode-and-credential-reference",
+          "title": "Execution-mode rollback and one-time run capability configuration",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Configuration and rollback belong in a table, not another image. Correct stale KeyVaultUri/KvTokenMountPath/UseSharedTokenStore fallback descriptions: current AgentHost receives a live run-scoped copilotCredential through configure and supports a separate BYOK boundary. Explicitly distinguish code defaults from AKS pod-per-run overrides and describe flag rollback as configuration deployment behavior, not proven hot reload.",
+          "evidence": ["docs/reference/a2a.md:113", "docs/reference/a2a.md:126", "apps/Agentweaver.AgentHost/Program.cs:263", "apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs:123", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:511", "k8s/base/api-deployment.yaml:143"],
+          "references": [{"line": 145, "target": "../experience/a2a-distributed-agents.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/agent-communication.md",
+      "concepts": [
+        {
+          "id": "reference-communication-shared-state",
+          "title": "Decision inbox, ledger, memory and curation",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "canonical-agent-communication-shared",
+          "canonical_diagram": "canonical-agent-communication-shared",
+          "rationale": "Retain the useful MCP-to-REST mapping beside the shared-state canonical. Correct inbox_* to decision_inbox_* and memory_add to memory_record. Add approval/provenance constraints: cross-team tags alone do not make data compile into another agent's prompt; active decisions must also be approved. Consumer action: docs/reference/agent-communication.md:35 link ../diagrams/canonical-agent-communication-shared.png; preserve the mapping table.",
+          "evidence": ["docs/reference/agent-communication.md:35", "docs/reference/agent-communication.md:74", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:71", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:209", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:57", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:83"],
+          "references": [{"line": 30, "target": "../deep-dive/memory-decisions.md"}, {"line": 111, "target": "./memory.md"}]
+        },
+        {
+          "id": "reference-communication-handoff",
+          "title": "Coordinator-mediated dispatch, observations and steering",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-agent-communication-handoff",
+          "canonical_diagram": "canonical-agent-communication-handoff",
+          "rationale": "Reuse the DAG/handoff model and retain surface tables. Do not present universal manual confirmation as an invariant: direct mode skips that gate and defineOutcome autopilot can confirm unattended. Child output travels to coordinator assembly, not through a peer-chat transport. Consumer action: docs/reference/agent-communication.md:115 link ../diagrams/canonical-agent-communication-handoff.png after the canonical owner reconciles launch modes.",
+          "evidence": ["docs/reference/agent-communication.md:115", "docs/reference/agent-communication.md:132", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:205", "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:2981"],
+          "references": [{"line": 120, "target": "./coordinator.md"}]
+        },
+        {
+          "id": "reference-communication-a2a",
+          "title": "Execution transport is below team coordination",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-agent-communication-a2a",
+          "canonical_diagram": "canonical-agent-communication-a2a",
+          "rationale": "The channel distinction is useful and supported by the bridge implementation. Link the existing single-turn sequence; retain the channel-to-surface summary as a table. Consumer action: docs/reference/agent-communication.md:182 link ../diagrams/canonical-agent-communication-a2a.png instead of authoring a transport duplicate.",
+          "evidence": ["docs/reference/agent-communication.md:182", "docs/reference/agent-communication.md:208", "apps/Agentweaver.AgentHost/Program.cs:145"],
+          "references": [{"line": 195, "target": "../deep-dive/a2a-bridge.md"}, {"line": 197, "target": "../reference/a2a.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/agent-definition.md",
+      "concepts": [
+        {
+          "id": "reference-agent-definition-generation",
+          "title": "Source-generated tool map and embedded/downloadable agent definitions",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "agent-definition-fig1",
+          "canonical_diagram": "agent-definition-fig1",
+          "rationale": "Reuse the generation/materialization canonical and keep marker/CLI examples verbatim as examples. The page's three-target model is incomplete: gen-docs also emits the docs public download and web-host download, making five targets. Update the canonical owner and prose together rather than editing any generated output. Consumer action: docs/reference/agent-definition.md:11 link ../diagrams/agent-definition-fig1.png after its owner adds all five outputs.",
+          "evidence": ["docs/reference/agent-definition.md:11", "docs/reference/agent-definition.md:47", "scripts/gen-docs.mjs:5", "scripts/gen-docs.mjs:13", "scripts/gen-docs.mjs:15", "scripts/gen-docs.mjs:228"],
+          "references": [{"line": 98, "target": "../deep-dive/agent-definition.md"}]
+        },
+        {
+          "id": "reference-agent-definition-file-tree",
+          "title": "Non-clobbering project agent-file destination",
+          "representation": "ascii",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "The three-level text tree is clearer and more searchable than an image. The destination, create-both-paths behavior and best-effort non-clobber semantics match implementation. No conversion to PNG is needed.",
+          "evidence": ["docs/reference/agent-definition.md:60", "docs/reference/agent-definition.md:75", "apps/Agentweaver.Api/Projects/AgentDefinitionTemplate.cs:23", "apps/Agentweaver.Api/Projects/AgentDefinitionTemplate.cs:49", "apps/Agentweaver.Api/Projects/ProjectService.cs:89", "apps/Agentweaver.Api/Projects/ProjectService.cs:182"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/agent-executor.md",
+      "concepts": [
+        {
+          "id": "reference-ax-comparison",
+          "title": "Runtime substrate versus full project orchestration",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Comparison dimensions and mapping tables are appropriate; no deployed AX diagram should be invented. Re-ground the Agentweaver column: warm standby replicas are not total run capacity, implementation uses pod-local execution with verified Git writeback, and BYOK exists. External AX roadmap, oversubscription and isolation comparisons were not independently verified in this bounded repository audit and must remain attributed, dated claims rather than architecture facts.",
+          "evidence": ["docs/reference/agent-executor.md:9", "docs/reference/agent-executor.md:30", "k8s/base/sandbox-warmpool-agenthost.yaml:32", "k8s/base/worker-hpa.yaml:65", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:233", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:511"],
+          "references": [{"line": 20, "target": "https://github.com/google/ax"}, {"line": 20, "target": "https://cloud.google.com/blog/products/ai-machine-learning/agent-executor-googles-distributed-agent-runtime"}]
+        },
+        {
+          "id": "reference-ax-integration-proposal",
+          "title": "Hypothetical AX adapter responsibilities and remaining platform ownership",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep this explicitly hypothetical. Coordinator DAG, assembly, checkpoint/event persistence and review remain independent concerns; an AX deployment does not exist in the researched configuration. Replace the old gitHubAccessToken/Key Vault fallback assumption with capability-snapshot delivery and avoid asserting shared writable worktrees are the required future substrate.",
+          "evidence": ["docs/reference/agent-executor.md:53", "docs/reference/agent-executor.md:71", "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:213", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1051", "apps/Agentweaver.AgentHost/Program.cs:263", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:422"],
+          "references": [{"line": 28, "target": "https://github.com/google/ax"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/api.md",
+      "concepts": [
+        {
+          "id": "reference-api-authority",
+          "title": "Project roles, personal sessions and purpose-bound GitHub capabilities",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Preserve route/role tables and repository-selection examples as reference data. Consolidate contradictory later owner-only descriptions against persisted-project Viewer/Contributor/Owner checks. The caller-bound, expiring, single-use selection code is repository authority; arbitrary URLs are not. Keep Entra product identity separate from Repo/Copilot App capability handoffs.",
+          "evidence": ["docs/reference/api.md:33", "docs/reference/api.md:122", "docs/reference/api.md:243", "docs/reference/api.md:559", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:43", "apps/Agentweaver.Api/Auth/GitHubRepositorySelectionBroker.cs:71", "apps/Agentweaver.Api/Auth/GitHubRepositorySelectionBroker.cs:219", "apps/Agentweaver.Api/Endpoints/GitHubRepositorySelectionEndpoints.cs:96"],
+          "references": []
+        },
+        {
+          "id": "reference-provider-context-lifecycle",
+          "title": "Prepared action context, accepted provider snapshot and fenced model invocation",
+          "representation": "proposed-diagram",
+          "disposition": "redesign",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "A genuinely missing cross-surface sequence can distinguish execution_key authority from the display-only provider fingerprint and from run-scoped capability credentials: prepare an operation/scope, forward If-Model-Provider-Key, accept a run provider snapshot, revalidate before model use, and show redacted failure/retry. It should serve API and MCP, not create one graphic per client. Coordinator should reconcile shared ownership before assigning a canonical name; this is only a planning placeholder.",
+          "evidence": ["docs/reference/api.md:105", "docs/reference/mcp.md:126", "docs/reference/mcp.md:180", "apps/Agentweaver.Api/Endpoints/AiExecutionContextEndpoints.cs:100", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:395", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:453", "apps/Agentweaver.Api/Auth/RunModelProviderSnapshotStore.cs:168", "apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:87"],
+          "references": []
+        },
+        {
+          "id": "reference-api-stream-replay",
+          "title": "Durable event ordering, SSE replay and terminal draining",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-durable-event-stream",
+          "canonical_diagram": "canonical-durable-event-stream",
+          "rationale": "Keep the literal SSE frame example as text and reuse the durable stream canonical. Replace in-memory-only reconnect and restart-loss claims at lines 643-645 and 2189: both configured database paths register durable event streams, and subscribers can tail another producer then drain terminal diagnostics. Consumer action: docs/reference/api.md:624 link ../diagrams/canonical-durable-event-stream.png and remove the conflicting restart-loss explanation.",
+          "evidence": ["docs/reference/api.md:624", "docs/reference/api.md:628", "docs/reference/api.md:643", "docs/reference/api.md:2189", "apps/Agentweaver.Api/Program.cs:1044", "apps/Agentweaver.Api/Program.cs:1053", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:142", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:28", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:74"],
+          "references": [{"line": 1211, "target": "events.md"}]
+        },
+        {
+          "id": "reference-api-run-controls",
+          "title": "Run state, review, commit, cancellation, retry and child approval ownership",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Status/response examples are more useful than a giant endpoint diagram. Group review versus retry, cancel versus delete, owning-child approval forwarding, and automation toggles as separate contracts. Existing run-role authorization supersedes old blanket owner-only wording; safe preview auto-approval is an explicit audited policy, not arbitrary tool approval.",
+          "evidence": ["docs/reference/api.md:592", "docs/reference/api.md:653", "docs/reference/api.md:826", "docs/reference/api.md:859", "docs/reference/api.md:920", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:43", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:205"],
+          "references": [{"line": 718, "target": "events.md"}]
+        },
+        {
+          "id": "reference-api-workflow-graph-contract",
+          "title": "Graph descriptors, child references and assembly stage projection",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep JSON examples and node/edge contracts as searchable text. Correct 'shape-only' and fixed planned-assembly claims: current descriptors include status/reason/terminal-stage and accept workflow-specific gates whose nodes become live. Do not author a fixed RAI-review-only graph for all workflows.",
+          "evidence": ["docs/reference/api.md:752", "docs/reference/api.md:777", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:76", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:165", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:199"],
+          "references": [{"line": 801, "target": "events.md"}]
+        },
+        {
+          "id": "reference-api-project-casting-memory",
+          "title": "Project creation, blueprint generation, casting confirmation, memory and sync",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain route families, generated shapes and confirm-before-materialize examples. They explain data contracts rather than needing another overview. Use current repository-selection authority and generation precedence; memory is untrusted data with approval gates. The deprecated project run route must remain clearly 410 rather than a supported standalone flow.",
+          "evidence": ["docs/reference/api.md:188", "docs/reference/api.md:1128", "docs/reference/api.md:1328", "docs/reference/api.md:1485", "docs/reference/api.md:1816", "docs/reference/api.md:2139", "apps/Agentweaver.Api/Projects/ProjectService.cs:124", "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:37", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:209"],
+          "references": [{"line": 297, "target": "./repo-blueprint-suggestions.md"}]
+        },
+        {
+          "id": "reference-api-automation",
+          "title": "Backlog, schedule/event triggers and validated predicates",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep trigger JSON and predicate tables, distinguishing automation admission from process selection. Current workflows support a triggers array and schedule/event types; automation publishes backlog work. Do not import the obsolete manual/heartbeat trigger-filter model from coordinator.md.",
+          "evidence": ["docs/reference/api.md:299", "docs/reference/api.md:329", "docs/reference/api.md:384", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:139", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:315", "apps/Agentweaver.Api/Workflows/WorkflowDefinitionEndpoints.cs:122", "apps/Agentweaver.Api/Workflows/WorkflowTriggerBacklogFactory.cs:209", "apps/Agentweaver.Api/Workflows/WorkflowTriggerRegexPolicy.cs:11"],
+          "references": []
+        },
+        {
+          "id": "reference-api-coordinator-lifecycle",
+          "title": "Direct or confirmed launch, DAG dispatch, collective assembly and recovery",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-coordinator-journey",
+          "canonical_diagram": "canonical-coordinator-journey",
+          "rationale": "Use the shared coordinator journey with direct/defineOutcome and autopilot branches, not an endpoint-sized diagram. Keep work-plan/children/steering response samples and collective-review decision table. Recovery and review are persisted across replicas; the journey must not stop after outcome confirmation. Consumer action: docs/reference/api.md:1489 link ../diagrams/canonical-coordinator-journey.png after cross-owner launch-mode reconciliation.",
+          "evidence": ["docs/reference/api.md:1489", "docs/reference/api.md:1621", "docs/reference/api.md:1755", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:205", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1051", "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:586"],
+          "references": []
+        },
+        {
+          "id": "reference-api-preview-and-sandbox",
+          "title": "Gateway preview versus local port-forward fallback and sandbox policy",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "sandbox-browser-preview-fig1",
+          "canonical_diagram": "sandbox-browser-preview-fig1",
+          "rationale": "Replace the universal kubectl explanation at 1023 with the current Gateway path and link the canonical browser-preview diagram. Keep kubectl explicitly as disabled-preview fallback and retain shell-policy/event JSON as text. The API provisions a public URL in cluster; it is not always a random loopback port. Consumer action: docs/reference/api.md:1023 link ../diagrams/sandbox-browser-preview-fig1.png and keep the fallback's distinct contract in text.",
+          "evidence": ["docs/reference/api.md:1023", "docs/reference/api.md:1065", "docs/reference/api.md:1217", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:16", "apps/Agentweaver.Api/Sandbox/PortForwardService.cs:72", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:34"],
+          "references": [{"line": 1067, "target": "sandbox-setup.md"}]
+        },
+        {
+          "id": "reference-api-assistant-and-observability",
+          "title": "Personal assistant sessions and bounded diagnostics/metrics",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep session continuation and inspection contracts alongside dedicated reference links. Snapshot health checks, bounded topology discovery and usage projections are distinct read models; no extra screenshot or overview image is needed in this catalog.",
+          "evidence": ["docs/reference/api.md:473", "docs/reference/api.md:492", "docs/reference/api.md:948", "apps/Agentweaver.AgentHost/Program.cs:154", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:11", "apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:34"],
+          "references": [{"line": 531, "target": "./cluster-diagnostics.md"}, {"line": 950, "target": "/deep-dive/assistant-runtime"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/cluster-diagnostics.md",
+      "concepts": [
+        {
+          "id": "reference-cluster-bounded-snapshot",
+          "title": "Dependency checks and expandable runtime inventory",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep bounded DTO tables and a minimal JSON response. Resource ownership, capacity, runtime and deep-link fields are reference contracts; they do not need a static copy of the live Cluster canvas.",
+          "evidence": ["docs/reference/cluster-diagnostics.md:9", "docs/reference/cluster-diagnostics.md:50", "docs/reference/cluster-diagnostics.md:76", "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs:108", "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs:137"],
+          "references": []
+        },
+        {
+          "id": "reference-cluster-topology-layers",
+          "title": "Opt-in topology layers with bounded partial discovery",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain the six-layer table and endpoint examples. Actual discovery caps 100 objects per type, 250 nodes and 500 edges, and reports available/partial/unavailable plus not_requested. No inline Mermaid, SVG, HTML canvas or screenshot is embedded on this page.",
+          "evidence": ["docs/reference/cluster-diagnostics.md:101", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:11", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:73", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:128"],
+          "references": []
+        },
+        {
+          "id": "reference-cluster-obsolete-resource-graph",
+          "title": "Unshipped resource_graph compatibility contract",
+          "representation": "table",
+          "disposition": "remove",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Remove or explicitly archive the competing resource_graph root example and old traffic/security/scaling layer schema. Current ClusterDiagnosticsDto ends its runtime snapshot with optional details, while the separate KubernetesTopologyDto supplies requested_layers, layers and nodes/edges. Combining both as current contracts misleads consumers.",
+          "evidence": ["docs/reference/cluster-diagnostics.md:29", "docs/reference/cluster-diagnostics.md:142", "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs:108", "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs:129", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:65"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/coordinator.md",
+      "concepts": [
+        {
+          "id": "reference-coordinator-launch-contract",
+          "title": "Roster guard and direct versus defineOutcome launch",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-coordinator-journey",
+          "canonical_diagram": "canonical-coordinator-journey",
+          "rationale": "Retain roster/error tables but replace Phase-1-only and unconditional human-confirmation statements with the shipped direct/defineOutcome/autopilot branches. A confirmed outcome is not itself the terminal orchestration result. Consumer action: docs/reference/coordinator.md:34 link ../diagrams/canonical-coordinator-journey.png after its shared owner reconciles those branches.",
+          "evidence": ["docs/reference/coordinator.md:9", "docs/reference/coordinator.md:34", "docs/reference/coordinator.md:57", "docs/reference/coordinator.md:254", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:205"],
+          "references": [{"line": 61, "target": "./web.md#coordinator-run-and-outcome-spec-gate"}]
+        },
+        {
+          "id": "reference-coordinator-workflow-selection",
+          "title": "Trigger-agnostic workflow choice and overrides",
+          "representation": "diagram",
+          "disposition": "reuse",
+          "target": "canonical-workflow-selection",
+          "canonical_diagram": "canonical-workflow-selection",
+          "rationale": "Retain the shared image identity and reconcile its owner centrally; the reference's surrounding algorithm and alt text are stale. Current selection considers every valid available workflow, honors explicit then conversational overrides, and only uses the default as ordered fallback. Remove ResolveInvocationKind/trigger eligibility and the obsolete Manual/Heartbeat trigger taxonomy; current automation types are Schedule and Event.",
+          "evidence": ["docs/reference/coordinator.md:72", "docs/reference/coordinator.md:90", "docs/reference/coordinator.md:130", "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:297", "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:331", "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:351", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:139"],
+          "references": [{"line": 130, "target": "../diagrams/canonical-workflow-selection.png"}, {"line": 132, "target": "../diagrams/src/canonical-workflow-selection.json"}]
+        },
+        {
+          "id": "reference-coordinator-plan-and-child-status",
+          "title": "WorkPlan DAG, model/charter selection and child execution",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep subtask status/dependency and model-precedence tables. Advisory isolation does not authorize shared writable execution; code configures pod-local implementation. Child context contains approved decisions only, serialized as untrusted JSON, so the old Boundaries and Decisions heading should not be documented as the wire format.",
+          "evidence": ["docs/reference/coordinator.md:139", "docs/reference/coordinator.md:185", "docs/reference/coordinator.md:199", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:156", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:209", "k8s/base/worker-deployment.yaml:138", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:180"],
+          "references": [{"line": 193, "target": "./memory.md#coordinator-child-workers--decisions-only"}]
+        },
+        {
+          "id": "reference-coordinator-steering-and-assembly",
+          "title": "Observation, automation, shared review and recoverable orchestration",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "resilient-assembly-review-fig1",
+          "canonical_diagram": "resilient-assembly-review-fig1",
+          "rationale": "Reuse the resilient loop rather than drawing another full graph. Retain topology/steering field tables, but distinguish retryable assembly_blocked parking from terminal failure and distinguish workflow-specific automated gates from the human gate. Recovery ownership is already leased and fenced across replicas. Consumer action: docs/reference/coordinator.md:265 link ../diagrams/resilient-assembly-review-fig1.png; retain endpoint/state tables.",
+          "evidence": ["docs/reference/coordinator.md:215", "docs/reference/coordinator.md:230", "docs/reference/coordinator.md:265", "docs/reference/coordinator.md:288", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2384", "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:586", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:120"],
+          "references": [{"line": 243, "target": "./resilient-assembly-review.md#operator-steering-at-the-review-gate-226"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/events.md",
+      "concepts": [
+        {
+          "id": "reference-events-envelope-and-taxonomy",
+          "title": "Ordered event envelopes, call pairing and public failure projection",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep the taxonomy, JSON examples and callId pairing as text. This is a lookup surface, not a candidate for a diagram with every event. Public run.failed is normalized rather than raw exception/commit diagnostics.",
+          "evidence": ["docs/reference/events.md:3", "docs/reference/events.md:16", "docs/reference/events.md:95", "docs/reference/events.md:147", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:68"],
+          "references": [{"line": 149, "target": "../guide/runs.md#terminal-failure-diagnostics"}]
+        },
+        {
+          "id": "reference-events-replay-and-waits",
+          "title": "Durable replay, nonterminal waits and child-human round trips",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-durable-event-stream",
+          "canonical_diagram": "canonical-durable-event-stream",
+          "rationale": "Reuse durable replay canonical and keep approval/provisioning heartbeat payloads and ask_question routing in text. Explicitly distinguish per-run sequence from topology seq and nonterminal gate/assembly parks from actual terminal drain. Consumer action: docs/reference/events.md:227 link ../diagrams/canonical-durable-event-stream.png rather than a separate SSE image.",
+          "evidence": ["docs/reference/events.md:227", "docs/reference/events.md:235", "docs/reference/events.md:380", "docs/reference/events.md:398", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:142", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:74", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:120"],
+          "references": [{"line": 233, "target": "../tool-approval-sse-contract.md#tool-approval-pending-heartbeat-issue-212"}]
+        },
+        {
+          "id": "reference-events-workflow-projection",
+          "title": "Workflow steps, descriptor shape and live coordinator topology",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep sample GraphDescriptor JSON and transition prose, but correct the mutually inconsistent child pipeline lists and the claim descriptors contain no runtime status. The current descriptor accepts selected workflow gates and persists status, reason and terminal stage; planned nodes become live. Do not promote stale examples to canonical diagrams.",
+          "evidence": ["docs/reference/events.md:239", "docs/reference/events.md:261", "docs/reference/events.md:286", "docs/reference/events.md:319", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:76", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:173", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:199"],
+          "references": []
+        },
+        {
+          "id": "reference-events-coordinator-lifecycle",
+          "title": "Outcome, DAG, redispatch and collective assembly event families",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "resilient-assembly-review-fig1",
+          "canonical_diagram": "resilient-assembly-review-fig1",
+          "rationale": "Reuse the stateful review loop and retain per-event fields. Replace the historical statement that outcome confirmation ends the run, the blanket 'shape-only' graph description, and the blanket terminal interpretation of assembly_blocked. Preserve budgeted redispatch and the distinction between automated and human review. Consumer action: docs/reference/events.md:336 link ../diagrams/resilient-assembly-review-fig1.png while retaining event payload definitions.",
+          "evidence": ["docs/reference/events.md:302", "docs/reference/events.md:330", "docs/reference/events.md:336", "docs/reference/events.md:362", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2384", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:39"],
+          "references": [{"line": 360, "target": "./unified-steering.md"}]
+        },
+        {
+          "id": "reference-events-casting-and-preview",
+          "title": "Proposal-only casting and preview event outcomes",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain dedicated event families with reference links. Casting proposals do not themselves materialize a team; preview ready/failed/skipped is independent of Build/Test verdict. These are two separate processes and should not be fused just because both emit run events.",
+          "evidence": ["docs/reference/events.md:46", "docs/reference/events.md:388", "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:80", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1047", "docs/reference/api.md:1975"],
+          "references": [{"line": 259, "target": "./live-preview-provisioning.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/live-preview-provisioning.md",
+      "concepts": [
+        {
+          "id": "reference-live-preview-process",
+          "title": "Resolve command, supervise process, observe port, approve and publish",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "live-preview-provisioning-fig1",
+          "canonical_diagram": "live-preview-provisioning-fig1",
+          "rationale": "Reuse the existing sequence. Current code checks terminal state/idempotency, tries heuristics before a model fallback, maps source cwd into the execution workspace, and runs a supervised process. Retain endpoint/reason/event tables rather than making duplicate diagrams. Consumer action: docs/reference/live-preview-provisioning.md:7 link ../diagrams/live-preview-provisioning-fig1.png; ask its owner to incorporate reference-live-preview-retention.",
+          "evidence": ["docs/reference/live-preview-provisioning.md:7", "docs/reference/live-preview-provisioning.md:113", "docs/reference/live-preview-provisioning.md:126", "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:83", "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:125", "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:143", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1051"],
+          "references": [{"line": 5, "target": "../deep-dive/live-preview-provisioning.md"}]
+        },
+        {
+          "id": "reference-live-preview-retention",
+          "title": "First-class Previewable/PreviewActive retention lifecycle",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep a compact state/side-effect table and update obsolete method names. HasActivePreviewAsync and RenewBackingClaimTtlAsync have been replaced by ReconcilePreviewLifecycleAsync: PreviewActive extends claim TTL and disables eviction; Previewable restores normal TTL and eviction. Release, reaper and keepalive share this state. Recommend integrating this lifecycle into the existing live-preview canonical owner, not introducing another local preview diagram.",
+          "evidence": ["docs/reference/live-preview-provisioning.md:21", "docs/reference/live-preview-provisioning.md:65", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:23", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:76", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:788", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:965", "apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:94"],
+          "references": []
+        },
+        {
+          "id": "reference-live-preview-credentials-and-ui",
+          "title": "Process credential, approval retry and independent UI outcome",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep credential/event-to-UI tables. Separate the durable preview process credential from Copilot capability credentials and the A2A turn bearer. Approval retries create a new request while retaining the private process; update the outdated 30-minute default to current project/fallback 1440 minutes.",
+          "evidence": ["docs/reference/live-preview-provisioning.md:126", "docs/reference/live-preview-provisioning.md:161", "docs/reference/live-preview-provisioning.md:171", "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:161", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:143", "apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:449"],
+          "references": [{"line": 186, "target": "./sandbox-browser-preview.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/mcp-tools.md",
+      "concepts": [
+        {
+          "id": "reference-generated-tool-catalog",
+          "title": "Source-derived MCP categories, tool names and error shape",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "All 14 categories and the 107-tool index were reviewed; preserve this generated document read-only. Its table is the correct representation for acquisition, governance, workflow, run, workspace and capability surfaces. Any correction must originate in tool descriptions or gen-docs. In particular coordinator_start's claim preview remains gated conflicts with the current safe-tool approval policy.",
+          "evidence": ["docs/reference/mcp-tools.md:1", "docs/reference/mcp-tools.md:13", "docs/reference/mcp-tools.md:17", "docs/reference/mcp-tools.md:71", "docs/reference/mcp-tools.md:155", "scripts/gen-docs.mjs:142", "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151"],
+          "references": [{"line": 10, "target": "./mcp.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/mcp.md",
+      "concepts": [
+        {
+          "id": "reference-mcp-transport-auth",
+          "title": "Hosted OAuth/PKCE versus local broker-token stdio",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain setup/config examples, metadata paths and broker-only authentication tables. Hosted discovery and stdio token injection are different entry paths, not two identities. No screenshot or inline diagram is present; another reference-specific OAuth image would duplicate shared auth documentation.",
+          "evidence": ["docs/reference/mcp.md:11", "docs/reference/mcp.md:27", "docs/reference/mcp.md:69", "apps/Agentweaver.Mcp/Program.cs:19", "apps/Agentweaver.Mcp/Program.cs:25", "apps/Agentweaver.Mcp/McpOAuthConfiguration.cs:8", "apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs:83"],
+          "references": [{"line": 17, "target": "../guide/mcp-cli.md"}]
+        },
+        {
+          "id": "reference-mcp-provider-context",
+          "title": "Hidden prepared provider authority and redacted provenance",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "reference-provider-context-lifecycle",
+          "canonical_diagram": null,
+          "rationale": "Share the proposed API/MCP sequence rather than introduce an MCP-only variant. PostAiAsync prepares context internally, rejects unresolved providers, and forwards the execution key without exposing it to the MCP caller; retain the expected/using/used field table and error examples. Consumer action: docs/reference/mcp.md:126 cross-link docs/reference/api.md:105's reference-provider-context-lifecycle explanation; add an image link only after the coordinator assigns and authors a canonical asset.",
+          "evidence": ["docs/reference/mcp.md:126", "docs/reference/mcp.md:180", "docs/reference/mcp.md:220", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:395", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:438", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:453"],
+          "references": []
+        },
+        {
+          "id": "reference-mcp-run-control",
+          "title": "One-call run orchestration, gates, watch and retry",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "canonical-coordinator-journey",
+          "canonical_diagram": "canonical-coordinator-journey",
+          "rationale": "Keep tool parameters and success/gate/timeout response examples. Reuse the coordinator journey with direct and unattended branches. Correct the web_fetch-only auto-approval claim: start_preview can also be auto-granted under the immutable run policy while normal ownership, liveness and publication validation remains enforced. Consumer action: docs/reference/mcp.md:330 link ../diagrams/canonical-coordinator-journey.png instead of an MCP-specific lifecycle.",
+          "evidence": ["docs/reference/mcp.md:330", "docs/reference/mcp.md:348", "docs/reference/mcp.md:482", "docs/reference/mcp.md:502", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151", "apps/Agentweaver.Mcp/Tools/RunTools.cs:305"],
+          "references": [{"line": 601, "target": "#run_watch"}]
+        },
+        {
+          "id": "reference-mcp-catalog-and-capabilities",
+          "title": "Project selection, App handoffs, team/memory, backlog, workflow and workspace tools",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain tool schemas and explicit draft/confirm/save distinctions. The parameter page is not a complete current catalog: generated mcp-tools also contains skills, marketplaces and defaults; link it rather than claim all tools have full parameters here. Correct the backlog prose to distinguish Backlog/Ready task state from Problems/Human Review/Active/Done run buckets and archiving. Current workflow responses include triggers as well as the first-trigger alias.",
+          "evidence": ["docs/reference/mcp.md:271", "docs/reference/mcp.md:619", "docs/reference/mcp.md:677", "docs/reference/mcp.md:812", "docs/reference/mcp.md:1109", "docs/reference/mcp.md:1346", "docs/reference/mcp.md:1427", "apps/Agentweaver.Api/Auth/GitHubRepositorySelectionBroker.cs:219", "apps/Agentweaver.Mcp/Tools/SkillTools.cs:267", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:315", "docs/reference/mcp-tools.md:155"],
+          "references": [{"line": 9, "target": "./mcp-tools.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/memory.md",
+      "concepts": [
+        {
+          "id": "reference-memory-layer-selection",
+          "title": "Context layers with bounded memory selection",
+          "representation": "ascii",
+          "disposition": "reuse",
+          "target": "canonical-memory-context",
+          "canonical_diagram": "canonical-memory-context",
+          "rationale": "The four-line text hierarchy is useful, but its 'strict priority' and always-included core-memory claims overstate implementation. Eligible core memories and learnings are pooled, sorted by importance then recency, and limited by item/token budget; decisions and session are separate. Reconcile the shared canonical with those actual selection rules instead of reproducing an unconditional layer stack. Consumer action: docs/reference/memory.md:12 correct the text hierarchy and link ../diagrams/canonical-memory-context.png after owner reconciliation.",
+          "evidence": ["docs/reference/memory.md:8", "docs/reference/memory.md:12", "docs/reference/memory.md:39", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:45", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:113", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:126"],
+          "references": []
+        },
+        {
+          "id": "reference-memory-provenance-and-envelope",
+          "title": "Approval, provenance, untrusted serialization and decisions-only children",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain trust/entity tables and the literal JSON-envelope code block; it is a wire-format example, not an image. Tests confirm cross-team approval and legacy exclusion. Children compile approved architectural/scope decisions only. This corrects older communication-page descriptions without adding a duplicate diagram.",
+          "evidence": ["docs/reference/memory.md:64", "docs/reference/memory.md:152", "docs/reference/memory.md:170", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:156", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:209", "tests/Agentweaver.Tests/Memory/MemoryContextCompilerSecurityTests.cs:72", "tests/Agentweaver.Tests/Memory/MemoryContextCompilerSecurityTests.cs:106"],
+          "references": []
+        },
+        {
+          "id": "reference-memory-scribe-export",
+          "title": "Run-attributed inbox curation and explicit repository export",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep the concise Scribe/export checklist and entity state table, but qualify 'after every completed run': child runs finish at assemble-ready and collective assembly owns one Scribe pass. Do not confuse internal record_memory/submit_inbox_entry names with external memory_record/decision_inbox_submit MCP identifiers.",
+          "evidence": ["docs/reference/memory.md:84", "docs/reference/memory.md:112", "docs/reference/memory.md:137", "docs/reference/events.md:378", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:71", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:209", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:29"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/project-generation-model-settings.md",
+      "concepts": [
+        {
+          "id": "reference-generation-model-precedence",
+          "title": "Per-project generation model overrides and fallback",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep nullable settings, persistence, consumers and validation tables. The core precedence is project override, per-flow default, shared Generation.Model, then gpt-5.6-sol; this is distinct from execution model pinning. A compact ordered expression suffices, with the existing deep-dive link for a visual.",
+          "evidence": ["docs/reference/project-generation-model-settings.md:13", "docs/reference/project-generation-model-settings.md:30", "docs/reference/project-generation-model-settings.md:51", "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:13", "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:37", "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:69"],
+          "references": [{"line": 3, "target": "../deep-dive/project-generation-model-settings.md"}]
+        },
+        {
+          "id": "reference-generation-provider-errors",
+          "title": "Model-id validation versus provider availability",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain the distinction between permissive identifier validation and runtime provider failure. Do not turn the model-name examples into a visual allowlist; an accepted prefix is not proof a model is available.",
+          "evidence": ["docs/reference/project-generation-model-settings.md:40", "docs/reference/project-generation-model-settings.md:59", "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs:23", "apps/Agentweaver.Mcp/AgentweaverApiClient.cs:408"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/project-skills.md",
+      "concepts": [
+        {
+          "id": "reference-skills-acquisition-assignment",
+          "title": "Catalog acquisition, idempotent content and progressive disclosure",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "project-skills-fig1",
+          "canonical_diagram": "project-skills-fig1",
+          "rationale": "Reuse the acquisition/catalog/assignment canonical and keep DTO/route tables. Current code supports content-hash idempotency, missing-source state, explicit assignments and digest-guarded bundled defaults; the reference should add defaults preview/apply and project marketplace-source surfaces rather than imply its short MCP list is exhaustive. Consumer action: docs/reference/project-skills.md:10 link ../diagrams/project-skills-fig1.png; reconcile defaults/source additions with its owner.",
+          "evidence": ["docs/reference/project-skills.md:10", "docs/reference/project-skills.md:42", "docs/reference/project-skills.md:73", "apps/Agentweaver.Api/Skills/SkillCatalogService.cs:309", "apps/Agentweaver.Api/Skills/SkillCatalogService.cs:1139", "apps/Agentweaver.Api/Skills/SkillDefaultsService.cs:198", "apps/Agentweaver.Mcp/Tools/SkillTools.cs:267"],
+          "references": [{"line": 91, "target": "./mcp-tools.md"}]
+        },
+        {
+          "id": "reference-skills-source-boundary",
+          "title": "Allowed import sources and curated/project marketplaces",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep host/scheme restrictions and acquisition outcomes as text. Correct generic Git/raw wording to the actual HTTPS github.com/raw.githubusercontent.com allowlist. Marketplace source management is additive to curated configuration and does not require another architecture graphic.",
+          "evidence": ["docs/reference/project-skills.md:32", "docs/reference/project-skills.md:102", "apps/Agentweaver.Api/Skills/SkillCatalogService.cs:1492", "apps/Agentweaver.Api/Skills/SkillCatalogService.cs:1516", "apps/Agentweaver.Api/Skills/MarketplaceSourceService.cs:47"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/repo-blueprint-suggestions.md",
+      "concepts": [
+        {
+          "id": "reference-blueprint-signal-mapping",
+          "title": "Deterministic repository signals and ordered blueprint selection",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "The ordered rules/confidences and signal table are the best reference representation. Source reads metadata, languages and contents and uses substring heuristics, not an LLM. Keep failure-to-template fallback explicit.",
+          "evidence": ["docs/reference/repo-blueprint-suggestions.md:45", "docs/reference/repo-blueprint-suggestions.md:55", "docs/reference/repo-blueprint-suggestions.md:67", "apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs:55", "apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs:142", "apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs:94"],
+          "references": [{"line": 96, "target": "../deep-dive/repo-blueprint-suggestions.md"}]
+        },
+        {
+          "id": "reference-blueprint-selection-authority",
+          "title": "Suggestion metadata is not authority to clone a repository",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Clarify the related-picker section against the new Repo App browse/selection-code flow. Suggestion heuristics may inspect an owner/repo string, but project creation consumes a caller-bound selection code. Do not draw a direct suggest-response-to-clone authority edge.",
+          "evidence": ["docs/reference/repo-blueprint-suggestions.md:83", "docs/reference/api.md:122", "docs/reference/api.md:180", "apps/Agentweaver.Api/Auth/GitHubRepositorySelectionBroker.cs:219", "apps/Agentweaver.Api/Endpoints/GitHubRepositorySelectionEndpoints.cs:96"],
+          "references": [{"line": 99, "target": "./api.md#blueprints"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/resilient-assembly-review.md",
+      "concepts": [
+        {
+          "id": "reference-resilient-review-loop",
+          "title": "Autonomous budget exhaustion escalates to human review",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "resilient-assembly-review-fig1",
+          "canonical_diagram": "resilient-assembly-review-fig1",
+          "rationale": "Reuse the existing resilient-loop canonical. Retain transition and event tables: autonomous budgets remain bounded while supervised human request-changes resets the mandate without a round-trip cap. This is the current correction for the stale budget-to-terminal statement in unified-steering.md. Consumer action: docs/reference/resilient-assembly-review.md:14 link ../diagrams/resilient-assembly-review-fig1.png; preserve the transition table.",
+          "evidence": ["docs/reference/resilient-assembly-review.md:14", "docs/reference/resilient-assembly-review.md:31", "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:447", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2384", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2890"],
+          "references": [{"line": 5, "target": "../deep-dive/resilient-assembly-review.md"}]
+        },
+        {
+          "id": "reference-resilient-scoping-lockout",
+          "title": "Implicated authors, transitive dependents and context-carrying fallback",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep set and lockout tables rather than a separate branching diagram. Distinguish implicated author rotation from dependent rebuilds; same-author fresh dispatch with accumulated context is explicitly supported, while no-context fallback escalates to a human. Repository contribution-policy rejection terminology should not be silently conflated with runtime gate semantics.",
+          "evidence": ["docs/reference/resilient-assembly-review.md:62", "docs/reference/resilient-assembly-review.md:120", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2558", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2574"],
+          "references": []
+        },
+        {
+          "id": "reference-resilient-verdict-diagnostics",
+          "title": "RAI sentinel decisions and bounded public diagnostics",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain verdict/lock-diagnostic tables as protocol reference; do not reproduce emoji icons in a new flowchart. Correct the assertion that raw child commit evidence is the public run.failed payload: current event persistence normalizes that event into the bounded public failure contract, while detailed authorized diagnostics are separate.",
+          "evidence": ["docs/reference/resilient-assembly-review.md:52", "docs/reference/resilient-assembly-review.md:81", "docs/reference/resilient-assembly-review.md:148", "docs/reference/events.md:147", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:68"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/sandbox-browser-preview.md",
+      "concepts": [
+        {
+          "id": "reference-browser-preview-routing",
+          "title": "Gateway-direct HTTPS capability URL and separate control plane",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "sandbox-browser-preview-fig1",
+          "canonical_diagram": "sandbox-browser-preview-fig1",
+          "rationale": "Use the existing Browser/Gateway/HTTPRoute/Service/forwarder/app canonical. Keep start/list/keepalive/stop DTOs and URL examples as text. API orchestration does not proxy browser traffic or probe the protected pod app port; publication verifies the public Gateway URL. Consumer action: docs/reference/sandbox-browser-preview.md:7 link ../diagrams/sandbox-browser-preview-fig1.png; consolidate the old sandbox-pods image consumer onto this same asset.",
+          "evidence": ["docs/reference/sandbox-browser-preview.md:7", "docs/reference/sandbox-browser-preview.md:29", "docs/reference/sandbox-browser-preview.md:120", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:34", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:53", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:132"],
+          "references": [{"line": 228, "target": "../deep-dive/sandbox-browser-preview.md"}]
+        },
+        {
+          "id": "reference-browser-preview-approval-and-expiry",
+          "title": "Approval, retry, DNS convergence and bounded preview lifetime",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain policy/default/status tables. Correct conflicting 30-minute approval prose to current 1440-minute settings, timeout HTTP status to 408, and owner-only wording to project Contributor/Owner authorization. Keep auto-approve distinct from bypassing process, port, ownership or publication checks.",
+          "evidence": ["docs/reference/sandbox-browser-preview.md:48", "docs/reference/sandbox-browser-preview.md:88", "docs/reference/sandbox-browser-preview.md:134", "docs/reference/sandbox-browser-preview.md:158", "apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:449", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:43", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:134", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151"],
+          "references": [{"line": 175, "target": "./live-preview-provisioning.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/sandbox-pods.md",
+      "concepts": [
+        {
+          "id": "reference-sandbox-pod-lifecycle",
+          "title": "Warm claim, configuration, local execution and preview-aware release",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep flag, identity, quota and local-workspace tables. Correct 'released back to the warm pool' to deletion/replenishment and 'never persist past the run' to preview-aware retention. The shared mount is not the implementation working directory: LocalWritable uses pod-local scratch and verified writeback; LocalReadOnly covers assembly/preview purposes.",
+          "evidence": ["docs/reference/sandbox-pods.md:14", "docs/reference/sandbox-pods.md:41", "docs/reference/sandbox-pods.md:59", "docs/reference/sandbox-setup.md:37", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:233", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:422", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:965"],
+          "references": [{"line": 6, "target": "../deep-dive/sandbox-pod-execution.md"}]
+        },
+        {
+          "id": "reference-sandbox-capability-boundary",
+          "title": "Run-scoped GitHub capabilities, turn tokens and approval return path",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep the separate capability/turn/preview credential contracts and internal approval response table. Correct the contradictory security-table claim that there is no central token broker: GitHubCapabilityBroker now fences and redeems snapshot-bound purpose credentials. AgentHost has no ambient Key Vault/user-token fallback.",
+          "evidence": ["docs/reference/sandbox-pods.md:70", "docs/reference/sandbox-pods.md:85", "docs/reference/sandbox-pods.md:97", "docs/reference/sandbox-pods.md:243", "apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:15", "apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:87", "apps/Agentweaver.AgentHost/Program.cs:263", "apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs:123"],
+          "references": [{"line": 259, "target": "../tool-approval-sse-contract.md"}]
+        },
+        {
+          "id": "reference-sandbox-pod-attribution",
+          "title": "Per-node execution pod identity without fabricated fallback",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep field mapping as a table, but remove the global API-pod fallback claim for child graph nodes. Current coordinator UI uses topology executionPodName or null; a pending/unbound child must not appear to execute on the API pod.",
+          "evidence": ["docs/reference/sandbox-pods.md:140", "docs/reference/sandbox-pods.md:153", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:195", "apps/web/src/pages/CoordinatorRunPage.tsx:3076", "apps/web/src/pages/CoordinatorRunPage.tsx:3100"],
+          "references": [{"line": 156, "target": "../experience/sandbox-pod-execution.md#what-the-pod-pill-is"}]
+        },
+        {
+          "id": "reference-sandbox-preview-consolidation",
+          "title": "Consolidate obsolete primary kubectl sequence into browser preview",
+          "representation": "diagram",
+          "disposition": "merge",
+          "target": "sandbox-browser-preview-fig1",
+          "canonical_diagram": "sandbox-browser-preview-fig1",
+          "rationale": "The old sequence represents only a still-supported disabled-preview fallback, not the current cluster preview. Replace its consumer with the canonical Gateway diagram/link and retain the fallback as a short table with its caps and API-host-only loopback scope. The old User→API 'open 127.0.0.1' message is misleading for a remote browser. Cross-owner reconciliation is required; do not modify the target here.",
+          "evidence": ["docs/reference/sandbox-pods.md:169", "docs/reference/sandbox-pods.md:199", "docs/reference/sandbox-pods.md:230", "docs/diagrams/src/reference-sandbox-pods-fig1.json:171", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:19", "apps/Agentweaver.Api/Sandbox/PortForwardService.cs:72", "apps/Agentweaver.Api/Sandbox/PortForwardService.cs:112", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:34"],
+          "references": [{"line": 230, "target": "../diagrams/reference-sandbox-pods-fig1.png"}, {"line": 232, "target": "../diagrams/src/reference-sandbox-pods-fig1.json"}, {"line": 171, "target": "./sandbox-browser-preview.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/sandbox-setup.md",
+      "concepts": [
+        {
+          "id": "reference-sandbox-install-order",
+          "title": "Controller, template, warm pool and claim installation order",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain component/verification tables and the expected-resource text block. The six-step lifecycle is sufficient without an image: claim a warm pod, configure once, execute, delete and replenish. It must not imply used run credentials survive by returning a pod to standby.",
+          "evidence": ["docs/reference/sandbox-setup.md:5", "docs/reference/sandbox-setup.md:30", "docs/reference/sandbox-setup.md:59", "k8s/base/sandbox-warmpool-agenthost.yaml:32", "k8s/base/sandbox-template-agenthost.yaml:95", "apps/Agentweaver.AgentHost/Program.cs:283"],
+          "references": [{"line": 27, "target": "../guide/deployment-aks.md#running-an-individual-step"}]
+        },
+        {
+          "id": "reference-sandbox-config-troubleshooting",
+          "title": "Deployment settings and capability-delivery troubleshooting",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep actionable resource checks, but remove Key Vault URI as an AgentHost credential requirement and replace gitHubAccessToken troubleshooting with current copilotCredential/repositoryAccessToken snapshot redemption. Dedicated identity is not permission to read user secrets.",
+          "evidence": ["docs/reference/sandbox-setup.md:44", "docs/reference/sandbox-setup.md:84", "apps/Agentweaver.AgentHost/Program.cs:263", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:511", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:1275"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/scaling-data-layer.md",
+      "concepts": [
+        {
+          "id": "reference-scaling-store-provider",
+          "title": "SQLite split stores versus unified PostgreSQL operational/memory state",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep provider/store/SQL mapping tables, but separate historical migration design from shipped provider registrations. PostgreSQL operational stores, run events and checkpoints already share the database; rollback by provider flag alone is not data migration.",
+          "evidence": ["docs/reference/scaling-data-layer.md:7", "docs/reference/scaling-data-layer.md:51", "docs/reference/scaling-data-layer.md:183", "apps/Agentweaver.Api/Program.cs:1035", "apps/Agentweaver.Api/Program.cs:1044", "apps/Agentweaver.Api/Program.cs:1063"],
+          "references": []
+        },
+        {
+          "id": "reference-scaling-lease-schema",
+          "title": "Run leases, coordinator ownership and remaining idempotency design",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep concrete run-lease fields and label the proposed dispatch-idempotency SQL as design, not executable instructions. Correct the broad claim coordinator ownership is unimplemented: WorkPlan CoordinatorPodId/UpdatedAt CAS, heartbeat renewal and loss-of-lease fencing already ship. Do not claim the proposed per-subtask fencing schema exists merely because plan-level ownership does.",
+          "evidence": ["docs/reference/scaling-data-layer.md:80", "docs/reference/scaling-data-layer.md:94", "docs/reference/scaling-data-layer.md:98", "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs:9", "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:586", "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:607", "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:628"],
+          "references": []
+        },
+        {
+          "id": "reference-scaling-event-store",
+          "title": "Cross-replica cursor polling and authoritative sequence allocation",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "canonical-durable-event-stream",
+          "canonical_diagram": "canonical-durable-event-stream",
+          "rationale": "Reuse the durable stream canonical and keep the operational table. Update serializable/MAX+1/three-attempt wording to current per-run PostgreSQL advisory transaction locking and MaxWriteAttempts=4; keep 250ms idle polling and full terminal-batch draining. Consumer action: docs/reference/scaling-data-layer.md:118 link ../diagrams/canonical-durable-event-stream.png and reconcile its owner to the current append algorithm.",
+          "evidence": ["docs/reference/scaling-data-layer.md:118", "docs/reference/scaling-data-layer.md:127", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:29", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:35", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:142", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:28"],
+          "references": []
+        },
+        {
+          "id": "reference-scaling-deployment-topology",
+          "title": "Actual API/worker/storage/execution topology",
+          "representation": "diagram",
+          "disposition": "redesign",
+          "target": null,
+          "canonical_diagram": "reference-scaling-data-layer-fig1",
+          "rationale": "Preserve the PNG path but redraw from manifests: actual API deployment is agentweaver-api; worker currently uses CPU/memory HPA, not KEDA queue scaling; pod-local execution scratch and Git writeback are separate from the shared PVC. Replace the literal x node with a clear denied database boundary. Show sandbox callbacks to API as well as worker-to-AgentHost transport; the API retains sandbox/preview responsibilities.",
+          "evidence": ["docs/reference/scaling-data-layer.md:140", "docs/reference/scaling-data-layer.md:164", "docs/diagrams/src/reference-scaling-data-layer-fig1.json:32", "docs/diagrams/src/reference-scaling-data-layer-fig1.json:71", "k8s/base/api-deployment.yaml:4", "k8s/base/worker-hpa.yaml:50", "k8s/base/worker-hpa.yaml:67", "k8s/base/worker-deployment.yaml:138", "k8s/base/networkpolicy-agenthost.yaml:51", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:233"],
+          "references": [{"line": 164, "target": "../diagrams/reference-scaling-data-layer-fig1.png"}, {"line": 166, "target": "../diagrams/src/reference-scaling-data-layer-fig1.json"}]
+        },
+        {
+          "id": "reference-scaling-rollout-and-connectivity",
+          "title": "Provisioning, database credentials, disruption and rollback sequencing",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep rollout/checklist prose and clearly label recommendations versus actual deployment. The current manifests already use multiple replicas, PostgreSQL and HPA; do not present KEDA, passwordless credentials or dropping mounts as accomplished facts without verifying the selected deployment configuration. A database-provider flip alone cannot restore migrated state.",
+          "evidence": ["docs/reference/scaling-data-layer.md:156", "docs/reference/scaling-data-layer.md:173", "docs/reference/scaling-data-layer.md:195", "k8s/base/api-deployment.yaml:13", "k8s/base/worker-deployment.yaml:149", "k8s/base/worker-deployment.yaml:151", "k8s/base/worker-hpa.yaml:50"],
+          "references": [{"line": 213, "target": "../architecture-aks.md"}, {"line": 213, "target": "../guide/deployment-aks.md"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/token-usage.md",
+      "concepts": [
+        {
+          "id": "reference-token-metrics-projection",
+          "title": "Telemetry-first usage with durable fallback and bounded viewer access",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Endpoint, DTO and status tables are sufficient; keep project metrics, run spans and per-agent breakdown distinct from dashboard counters. Code merges durable fallback usage with telemetry and authorizes project viewers. No new per-reference metrics diagram is needed.",
+          "evidence": ["docs/reference/token-usage.md:5", "docs/reference/token-usage.md:15", "docs/reference/token-usage.md:32", "apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:34", "apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:55", "apps/Agentweaver.Api/Metrics/MetricsDtos.cs:98"],
+          "references": []
+        },
+        {
+          "id": "reference-token-credit-unit",
+          "title": "AI-credit unit conversion",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep the two-line text formula; a graphic would reduce precision and searchability. The API stores/exposes integer nano-AIU totals rather than a display-rounded currency amount.",
+          "evidence": ["docs/reference/token-usage.md:38", "apps/Agentweaver.Api/Metrics/MetricsDtos.cs:98", "apps/Agentweaver.Api/Metrics/DashboardReadService.cs:601"],
+          "references": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/unified-steering.md",
+      "concepts": [
+        {
+          "id": "reference-steering-signal-decision",
+          "title": "Persisted feedback, explicit decision and confirmed effect",
+          "representation": "table",
+          "disposition": "reuse",
+          "target": "unified-steering-fig1",
+          "canonical_diagram": "unified-steering-fig1",
+          "rationale": "Reuse the source-agnostic steering sequence and retain signal/decision/event tables. In-place versus fresh dispatch must reflect actual resumability and retained effect markers, not assume every child session can resume after its pod is released. Consumer action: docs/reference/unified-steering.md:16 link ../diagrams/unified-steering-fig1.png; retain the typed signal/decision tables.",
+          "evidence": ["docs/reference/unified-steering.md:16", "docs/reference/unified-steering.md:32", "docs/reference/unified-steering.md:53", "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:704", "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:726", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:3383"],
+          "references": [{"line": 5, "target": "../deep-dive/unified-steering.md"}]
+        },
+        {
+          "id": "reference-steering-budget-recovery",
+          "title": "Bounded autonomy, same-author context fallback and human escalation",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "resilient-assembly-review-fig1",
+          "canonical_diagram": "resilient-assembly-review-fig1",
+          "rationale": "Correct two stale claims before reusing the canonical: budget exhaustion routes to human review, not a terminal steering_budget_exhausted park; a single eligible author with accumulated context can receive a fresh same-author dispatch, while no-context fallback escalates. Keep public failure examples consistent with normalized run.failed. Consumer action: docs/reference/unified-steering.md:64 link ../diagrams/resilient-assembly-review-fig1.png and replace the stale budget paragraph.",
+          "evidence": ["docs/reference/unified-steering.md:41", "docs/reference/unified-steering.md:64", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2384", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2558", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2574", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:68"],
+          "references": [{"line": 83, "target": "./resilient-assembly-review.md#operator-steering-at-the-review-gate-226"}]
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/web.md",
+      "concepts": [
+        {
+          "id": "reference-web-navigation-auth",
+          "title": "Current SPA routes, product sign-in and project entry points",
+          "representation": "table",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain routing/configuration tables, but remove the obsolete GitHubSignIn device-flow/header model and standalone run submission. Current App routes include Sessions, Settings, Skills, Cluster and observability; product identity is Entra and GitHub App connections are capabilities. A route table is better than a screenshot that would age quickly.",
+          "evidence": ["docs/reference/web.md:5", "docs/reference/web.md:34", "docs/reference/web.md:96", "docs/reference/web.md:104", "apps/web/src/App.tsx:85", "apps/web/src/App.tsx:117", "apps/web/src/App.tsx:124", "apps/web/src/App.tsx:354", "docs/reference/api.md:1485"],
+          "references": []
+        },
+        {
+          "id": "reference-web-run-journey",
+          "title": "Coordinator entry, outcome gate, embedded child inspection and review",
+          "representation": "prose",
+          "disposition": "reuse",
+          "target": "canonical-coordinator-journey",
+          "canonical_diagram": "canonical-coordinator-journey",
+          "rationale": "Reuse the shared journey with current direct/defineOutcome behavior. Keep observable loading/confirm-race/review states in text; retire New Run instructions that invoke the removed project-runs route. Child inspection remains embedded in coordinator context, not a standalone watch screen. Consumer action: docs/reference/web.md:112 link ../diagrams/canonical-coordinator-journey.png after launch-mode reconciliation; remove the conflicting legacy walkthrough at line 326.",
+          "evidence": ["docs/reference/web.md:108", "docs/reference/web.md:112", "docs/reference/web.md:247", "docs/reference/web.md:326", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/web/src/App.tsx:125", "docs/reference/api.md:1485"],
+          "references": []
+        },
+        {
+          "id": "reference-web-live-graph",
+          "title": "Descriptor/topology projection, child expansion, sessions and graph affordances",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "This describes shipped UI visuals but embeds no screenshot or SVG. Retain text, updating fixed planned-stage and bezier-junction claims: current assembly nodes become live, gate sets are dynamic, and SpineEdge is a stepped connector. Never copy stale renderer descriptions into documentation diagram requirements or modify shipped UI as part of this audit.",
+          "evidence": ["docs/reference/web.md:131", "docs/reference/web.md:144", "docs/reference/web.md:180", "docs/reference/web.md:191", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:199", "apps/web/src/pages/CoordinatorRunPage.tsx:3161", "apps/web/src/components/WorkflowGraphPanel.tsx:1356", "apps/web/src/components/WorkflowGraphPanel.tsx:1386"],
+          "references": []
+        },
+        {
+          "id": "reference-web-human-actions",
+          "title": "Automation controls, child questions and assembly steering",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep interaction and event-to-action descriptions as text with current run/child ownership. Differentiate autopilot questions/launch confirmation from safe-tool auto-approval and genuine permission bypass. Preview failure remains independently visible without blocking human review.",
+          "evidence": ["docs/reference/web.md:172", "docs/reference/web.md:204", "docs/reference/web.md:222", "docs/reference/web.md:230", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1047", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:205"],
+          "references": [{"line": 178, "target": "./live-preview-provisioning.md"}]
+        },
+        {
+          "id": "reference-web-team-memory-and-casting",
+          "title": "Team proposals, confirmation, memory trust and repository sync",
+          "representation": "prose",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Retain the proposal/confirm and memory-trust distinctions. Listing a memory is not proof it compiles; existing cards may omit provenance. These reference details should link to canonical feature flows rather than spawn redundant screenshots.",
+          "evidence": ["docs/reference/web.md:256", "docs/reference/web.md:278", "docs/reference/web.md:306", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:60", "tests/Agentweaver.Tests/Memory/MemoryContextCompilerSecurityTests.cs:72", "docs/reference/api.md:1975"],
+          "references": []
+        },
+        {
+          "id": "reference-web-source-tree",
+          "title": "Frontend source layout text tree",
+          "representation": "ascii",
+          "disposition": "retain",
+          "target": null,
+          "canonical_diagram": null,
+          "rationale": "Keep a short source-directory tree rather than an image, but refresh it from current routed files. The legacy list says Settings is unrouted and names retired submission/sign-in components; actual App routes Settings, Sessions, Skills, Cluster and observability.",
+          "evidence": ["docs/reference/web.md:347", "docs/reference/web.md:391", "apps/web/src/App.tsx:85", "apps/web/src/App.tsx:86", "apps/web/src/App.tsx:117", "apps/web/src/App.tsx:124"],
+          "references": []
+        }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "name": "reference-a2a-fig1",
+      "disposition": "redesign",
+      "target": null,
+      "rationale": "Preserve docs/diagrams/reference-a2a-fig1.png. Correct the in-pod Agent→DB checkpoint arrow to worker-owned persistence, include A2ATurnBridgeAgent, distinguish transport controls from gateway services, show API and worker ingress, and label mTLS as configuration-dependent rather than universally deployed. Keep card authorization distinct from the configured per-run turn bearer. JSON inspected structurally; PNG not inspected.",
+      "evidence": ["docs/reference/a2a.md:74", "docs/reference/a2a.md:83", "docs/reference/a2a.md:92", "docs/diagrams/src/reference-a2a-fig1.json:143", "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181", "apps/Agentweaver.AgentHost/Program.cs:145", "apps/Agentweaver.AgentHost/Program.cs:372", "k8s/base/networkpolicy-agenthost.yaml:37", "k8s/base/api-deployment.yaml:149"],
+      "consumer_changes": ["docs/reference/a2a.md:92 retain ../diagrams/reference-a2a-fig1.png; update alt text for the corrected worker/pod and configuration boundaries.", "docs/reference/a2a.md:94 replace legacy JSON-edit provenance with the future canonical draw.io provenance only after authoring."]
+    },
+    {
+      "name": "reference-sandbox-pods-fig1",
+      "disposition": "merge",
+      "target": "sandbox-browser-preview-fig1",
+      "rationale": "The sequence is a duplicate historical preview entry path. Current in-cluster behavior is Gateway-direct and already has a canonical diagram. Preserve still-valid kubectl fallback details in prose/table, explicitly scoped to Sandbox:Preview:Enabled=false and API-host loopback. The user-to-API localhost step is not a valid remote-browser route. Reconcile with the deep-dive-execution owner; retire the old source/image/hash only after consumer updates, with a merge tombstone. No target asset was modified.",
+      "evidence": ["docs/reference/sandbox-pods.md:169", "docs/reference/sandbox-pods.md:199", "docs/reference/sandbox-pods.md:230", "docs/diagrams/src/reference-sandbox-pods-fig1.json:171", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:19", "apps/Agentweaver.Api/Sandbox/PortForwardService.cs:112", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:34"],
+      "consumer_changes": ["docs/reference/sandbox-pods.md:230 ../diagrams/reference-sandbox-pods-fig1.png -> ../diagrams/sandbox-browser-preview-fig1.png; replace alt text with the Gateway/HTTPRoute/Service/pod model.", "docs/reference/sandbox-pods.md:232 remove the obsolete reference-sandbox-pods-fig1.json provenance and use the target's future canonical source provenance.", "docs/reference/sandbox-pods.md:176-228 replace universal kubectl/no-public-URL claims with a Gateway-primary summary and a compact explicitly disabled-preview fallback table; preserve the existing ./sandbox-browser-preview.md link."]
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "disposition": "redesign",
+      "target": null,
+      "rationale": "Preserve docs/diagrams/reference-scaling-data-layer-fig1.png. Replace hypothetical web/KEDA labels with agentweaver-api and actual worker CPU/memory HPA; separate shared workspace/artifacts from pod-local checkout/writeback; remove the meaningless x node in favor of a denied DB boundary; distinguish worker A2A execution and sandbox API callbacks. Keep prospective KEDA/passwordless/rollout recommendations outside the current-state picture. JSON inspected structurally; PNG not inspected.",
+      "evidence": ["docs/reference/scaling-data-layer.md:164", "docs/diagrams/src/reference-scaling-data-layer-fig1.json:32", "docs/diagrams/src/reference-scaling-data-layer-fig1.json:71", "k8s/base/api-deployment.yaml:4", "k8s/base/worker-hpa.yaml:50", "k8s/base/worker-hpa.yaml:67", "k8s/base/worker-deployment.yaml:138", "k8s/base/networkpolicy-agenthost.yaml:51", "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:233"],
+      "consumer_changes": ["docs/reference/scaling-data-layer.md:164 retain ../diagrams/reference-scaling-data-layer-fig1.png; update alt text to actual component names and remove literal x.", "docs/reference/scaling-data-layer.md:166 replace legacy JSON-edit provenance with future canonical draw.io provenance after authoring.", "docs/reference/scaling-data-layer.md:140-171 distinguish shipped API/worker/HPA/local-checkout topology from proposed KEDA rollout."]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "warning",
+      "subject": "Shared workflow-selection diagram consumer contradicts current implementation",
+      "detail": "coordinator.md still describes trigger filtering and Manual/Heartbeat taxonomy. Current SelectWorkflowAsync explicitly uses all valid workflows regardless of invocation; WorkflowTriggerType contains Schedule and Event and workflows may carry multiple triggers. Reconcile canonical-workflow-selection with its shared owner, fixing consumer prose/alt/provenance without another local canonical.",
+      "evidence": ["docs/reference/coordinator.md:72", "docs/reference/coordinator.md:90", "docs/reference/coordinator.md:130", "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:297", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:139", "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs:315"]
+    },
+    {
+      "severity": "warning",
+      "subject": "A2A legacy graphic crosses the wrong persistence boundary",
+      "detail": "The legacy JSON points the in-pod agent at the DB checkpoint store while the page itself says checkpoints stay out of band and the worker owns the checkpoint manager. Its worker-only ingress and universal deployed-mTLS framing also disagree with manifests allowing API ingress and explicitly disabling RequireMtls in the base API/worker configuration. This is documentation/configuration reconciliation, not a live deployment security assessment.",
+      "evidence": ["docs/diagrams/src/reference-a2a-fig1.json:143", "docs/reference/a2a.md:74", "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:181", "k8s/base/networkpolicy-agenthost.yaml:37", "k8s/base/api-deployment.yaml:149", "k8s/base/worker-deployment.yaml:144"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Preview references mix historical kubectl and current Gateway behavior",
+      "detail": "Merge the sole old sequence consumer into sandbox-browser-preview-fig1, retaining disabled-preview kubectl behavior in text. api.md and sandbox-pods.md still say no public URL; current cluster implementation returns a Gateway URL. Browser localhost is not API-host localhost. The target is foreign-owned and requires coordinator reconciliation before authoring/removal.",
+      "evidence": ["docs/reference/api.md:1023", "docs/reference/sandbox-pods.md:199", "docs/reference/sandbox-pods.md:230", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:19", "apps/Agentweaver.Api/Sandbox/PortForwardService.cs:112", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:34"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Current preview retention is a two-state reconciliation contract",
+      "detail": "live-preview-provisioning.md documents methods that no longer exist. ReconcilePreviewLifecycleAsync now applies or reverses all TTL/eviction effects for PreviewActive/Previewable, including release and orphan-reaper paths. Existing canonical preview flow should absorb this model; do not create a separate TTL diagram. Several reference pages still advertise 30-minute approval defaults and 403 timeout, while current default is 1440 minutes and timeout responds 408.",
+      "evidence": ["docs/reference/live-preview-provisioning.md:31", "docs/reference/live-preview-provisioning.md:82", "docs/reference/sandbox-browser-preview.md:80", "docs/reference/sandbox-browser-preview.md:158", "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:76", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:965", "apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:94", "apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs:449", "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:134"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Reference API restart-loss model is obsolete",
+      "detail": "api.md's in-memory-only replay and persistence sections contradict its own persisted-events endpoint and both database registrations. PostgreSQL allocates under a per-run advisory transaction lock, not the older serializable/three-attempt description in scaling-data-layer.md. Existing tests prove cross-instance live tail, post-terminal diagnostic drain and nonterminal assembly-blocked behavior.",
+      "evidence": ["docs/reference/api.md:643", "docs/reference/api.md:645", "docs/reference/api.md:2189", "docs/reference/scaling-data-layer.md:127", "apps/Agentweaver.Api/Program.cs:1044", "apps/Agentweaver.Api/Program.cs:1053", "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:29", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:28", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:74", "tests/Agentweaver.Tests/EfRunEventStreamTests.cs:120"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Scaling diagram depicts recommendations as current resources",
+      "detail": "The deployed base API is agentweaver-api, worker scaling is CPU/memory HPA (2-3), and implementation uses pod-local scratch with writeback. KEDA is a commented upgrade proposal, not the current worker scaler. Plan-level coordinator leases and fencing already exist; the separate proposed per-subtask idempotency schema must remain clearly marked design-only.",
+      "evidence": ["docs/reference/scaling-data-layer.md:80", "docs/diagrams/src/reference-scaling-data-layer-fig1.json:32", "k8s/base/api-deployment.yaml:4", "k8s/base/worker-hpa.yaml:50", "k8s/base/worker-hpa.yaml:65", "k8s/base/worker-deployment.yaml:138", "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:586", "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:607"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Confirmation, planned graphs and steering terminal states are overstated",
+      "detail": "Direct runs omit the outcome gate; defineOutcome autopilot can confirm unattended. Current graph descriptors include status/reason/terminal stage and workflow-defined assembly gates whose nodes become live. Budget exhaustion escalates to human review; same-author fresh dispatch with context is supported. Update API/coordinator/events/web/unified-steering references together rather than turning historical phase descriptions into new diagrams.",
+      "evidence": ["docs/reference/coordinator.md:57", "docs/reference/events.md:302", "docs/reference/api.md:777", "docs/reference/web.md:149", "docs/reference/unified-steering.md:41", "docs/reference/unified-steering.md:71", "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:189", "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs:173", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2384", "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2558"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Memory hierarchy needs actual budget and trust semantics",
+      "detail": "Core memories are not unconditionally included before learnings: candidates are pooled and sorted by importance/recency under item/token bounds. Cross-team memory requires approval and children receive only approved decisions in an untrusted JSON envelope. Communication tool names also lag actual MCP identifiers. Reconcile canonical-memory-context with its shared owner.",
+      "evidence": ["docs/reference/memory.md:10", "docs/reference/memory.md:44", "docs/reference/agent-communication.md:42", "docs/reference/agent-communication.md:83", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:113", "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:156", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:71", "apps/Agentweaver.Mcp/Tools/MemoryTools.cs:209", "tests/Agentweaver.Tests/Memory/MemoryContextCompilerSecurityTests.cs:72"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Generated agent model omits two output targets; generated catalog has stale source wording",
+      "detail": "gen-docs produces five outputs, not the three documented in agent-definition.md. The generated tool index correctly reflects source descriptions but coordinator_start's source claims preview can never auto-approve, contrary to AgentPreviewGate. Correct producer descriptions/generator documentation in a later task, then regenerate; generated documents were not edited here.",
+      "evidence": ["docs/reference/agent-definition.md:13", "scripts/gen-docs.mjs:13", "scripts/gen-docs.mjs:15", "docs/reference/mcp-tools.md:71", "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs:14", "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:151"]
+    },
+    {
+      "severity": "warning",
+      "subject": "GitHub credential and browser navigation descriptions span incompatible generations",
+      "detail": "a2a.md/sandbox-setup.md retain Key Vault/shared-token/gitHubAccessToken fallback descriptions, while current AgentHost requires snapshot-bound copilotCredential or BYOK configuration. sandbox-pods.md contradicts its own new section by saying no broker exists. web.md still documents GitHub device sign-in, unrouted Settings and a deprecated direct project-run submission. Keep Entra identity, GitHub capabilities and project roles separate.",
+      "evidence": ["docs/reference/a2a.md:137", "docs/reference/sandbox-setup.md:84", "docs/reference/sandbox-pods.md:243", "docs/reference/web.md:96", "docs/reference/web.md:326", "apps/Agentweaver.AgentHost/Program.cs:263", "apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs:15", "apps/web/src/App.tsx:86", "docs/reference/api.md:1485"]
+    },
+    {
+      "severity": "warning",
+      "subject": "Cluster page documents two incompatible discovery contracts",
+      "detail": "The optional resource_graph schema with traffic/security/scaling layers is not on current ClusterDiagnosticsDto. The separate topology endpoint returns six discovery layers and KubernetesTopologyDto. Remove/archive the old root example and schema, retaining current bounded topology tables.",
+      "evidence": ["docs/reference/cluster-diagnostics.md:29", "docs/reference/cluster-diagnostics.md:142", "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs:129", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:65", "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs:73"]
+    },
+    {
+      "severity": "warning",
+      "subject": "AX comparison is not verified current external evidence",
+      "detail": "Repository-side warm-pool ceiling, shared-worktree and Copilot-only assumptions need correction. AX roadmap, ~30x oversubscription, gVisor and effort judgments require dated primary-source verification before being used in any diagram. This is not a blocker to recording a retain-as-hypothesis disposition.",
+      "evidence": ["docs/reference/agent-executor.md:30", "docs/reference/agent-executor.md:53", "k8s/base/sandbox-warmpool-agenthost.yaml:32", "k8s/base/worker-hpa.yaml:65", "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:511"]
+    },
+    {
+      "severity": "info",
+      "subject": "Complete bounded visual inventory and publication limits",
+      "detail": "All 23 assigned pages reviewed, including selective full conceptual reads of API/MCP catalogs, all 14 generated MCP categories, all three owned legacy JSON structures and the foreign-owned workflow-selection consumer. Four PNG embeds exist in these pages; no non-PNG image, screenshot, inline Mermaid/HTML/SVG/video/canvas was found. Text visuals include the agent-file tree, frontend source tree, four context layers, SQL/JSON/SSE examples and AI-credit formula; retain searchable text except identified corrections. Legacy JSON provenance does not establish a canonical .drawio exists. No image inspection, authoring, build, live verification, final audit certification or foreign writes were performed.",
+      "evidence": ["docs/reference/a2a.md:92", "docs/reference/coordinator.md:130", "docs/reference/sandbox-pods.md:230", "docs/reference/scaling-data-layer.md:164", "docs/reference/agent-definition.md:75", "docs/reference/web.md:347", "docs/reference/memory.md:12", "docs/reference/token-usage.md:38", "docs/reference/api.md:628", "docs/reference/mcp-tools.md:13"]
+    }
+  ],
+  "repository_sources": [
+    "scripts/gen-docs.mjs",
+    "apps/Agentweaver.Api/Projects/AgentDefinitionTemplate.cs",
+    "apps/Agentweaver.Api/Projects/ProjectService.cs",
+    "apps/Agentweaver.Api/Generation/GenerationModelOptions.cs",
+    "apps/Agentweaver.Api/Blueprints/GitHubRepoBlueprintSuggestionService.cs",
+    "apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs",
+    "apps/Agentweaver.Api/Skills/SkillCatalogService.cs",
+    "apps/Agentweaver.Api/Skills/SkillDefaultsService.cs",
+    "apps/Agentweaver.Api/Skills/MarketplaceSourceService.cs",
+    "apps/Agentweaver.Api/Diagnostics/SystemDiagnosticsDto.cs",
+    "apps/Agentweaver.Api/Diagnostics/KubernetesTopologyService.cs",
+    "apps/Agentweaver.Api/Endpoints/AiExecutionContextEndpoints.cs",
+    "apps/Agentweaver.Api/Endpoints/GitHubRepositorySelectionEndpoints.cs",
+    "apps/Agentweaver.Api/Auth/GitHubRepositorySelectionBroker.cs",
+    "apps/Agentweaver.Api/Auth/GitHubCapabilityBroker.cs",
+    "apps/Agentweaver.Api/Auth/RunModelProviderSnapshotStore.cs",
+    "apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs",
+    "apps/Agentweaver.Api/Sandbox/PortForwardService.cs",
+    "apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs",
+    "apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs",
+    "apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs",
+    "apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs",
+    "apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorGraphDescriptor.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs",
+    "apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs",
+    "apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs",
+    "apps/Agentweaver.Api/Workflows/WorkflowDefinitionEndpoints.cs",
+    "apps/Agentweaver.Api/Workflows/WorkflowTriggerBacklogFactory.cs",
+    "apps/Agentweaver.Api/Workflows/WorkflowTriggerRegexPolicy.cs",
+    "apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs",
+    "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs",
+    "apps/Agentweaver.Api/Infrastructure/Ef/PostgresRunLeaseStore.cs",
+    "apps/Agentweaver.Api/Infrastructure/SqliteProjectStore.cs",
+    "apps/Agentweaver.Api/Program.cs",
+    "apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs",
+    "apps/Agentweaver.Api/Metrics/MetricsDtos.cs",
+    "apps/Agentweaver.Api/Metrics/DashboardReadService.cs",
+    "apps/Agentweaver.AgentHost/Program.cs",
+    "apps/Agentweaver.AgentHost/AgentHostOptions.cs",
+    "apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs",
+    "apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs",
+    "apps/Agentweaver.Mcp/Program.cs",
+    "apps/Agentweaver.Mcp/McpOAuthConfiguration.cs",
+    "apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs",
+    "apps/Agentweaver.Mcp/AgentweaverApiClient.cs",
+    "apps/Agentweaver.Mcp/Tools/CoordinatorTools.cs",
+    "apps/Agentweaver.Mcp/Tools/MemoryTools.cs",
+    "apps/Agentweaver.Mcp/Tools/RunTools.cs",
+    "apps/Agentweaver.Mcp/Tools/SkillTools.cs",
+    "apps/web/src/App.tsx",
+    "apps/web/src/pages/CoordinatorRunPage.tsx",
+    "apps/web/src/components/WorkflowGraphPanel.tsx",
+    "k8s/base/api-deployment.yaml",
+    "k8s/base/worker-deployment.yaml",
+    "k8s/base/worker-hpa.yaml",
+    "k8s/base/sandbox-template-agenthost.yaml",
+    "k8s/base/sandbox-warmpool-agenthost.yaml",
+    "k8s/base/networkpolicy-agenthost.yaml",
+    "tests/Agentweaver.Tests/EfRunEventStreamTests.cs",
+    "tests/Agentweaver.Tests/Memory/MemoryContextCompilerSecurityTests.cs"
+  ]
+}

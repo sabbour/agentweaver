@@ -1,1 +1,22 @@
-bbfed6693d02e98a9d4198019965d389f60eb215b2a4038dca9867b9b25e56c2
+{
+  "version": 2,
+  "source": {
+    "file": "git-integration-fig1.drawio",
+    "sha256": "a729d7a655d5c04c4c354b70e6452bc3aacbb211baac6a3d497ebd53e1fda535"
+  },
+  "drawio": {
+    "file": "git-integration-fig1.drawio",
+    "sha256": "4ca04eb13990eb8a2a30c296c6005fb53bb0c5383b8039a2de5b1a4b8c7a9a22"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "git-integration-fig1.png",
+    "sha256": "79b77982bc1e89acfb0243d3d13e62fc148c712e9b1847ed7aa8fbf79abeb16b"
+  }
+}

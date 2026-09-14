@@ -1,0 +1,213 @@
+{
+  "name": "projects-fig1",
+  "title": "Project workspace provisioning",
+  "takeaway": "Provider paths differ; only a healthy, initialized workspace becomes a persisted project.",
+  "groups": [
+    "REQUEST + PROVIDER POLICY",
+    "PROVISION · INITIALIZE · PERSIST"
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "title": "Create project request",
+      "subtitle": "Allocate stable project ID",
+      "detail": "GitHub origin consumes selection capability",
+      "meta": "ProjectEndpoints.cs:1232-1283",
+      "badge": "REQUEST",
+      "evidence": "apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:1232-1283",
+      "shape": "umlActor",
+      "box": {
+        "x": 36,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "probe",
+      "title": "Create directory + probe",
+      "subtitle": "Write / delete confirms workspace health",
+      "detail": "Provider returns the resolved handle",
+      "meta": "WorkspaceProvider implementations",
+      "badge": "PROBE",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+      "shape": "process",
+      "box": {
+        "x": 467,
+        "y": 98,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "provider",
+      "title": "Configured workspace provider",
+      "subtitle": "Resolve a project-specific path",
+      "detail": "Local and persistent-volume policies differ",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "SELECT",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "hexagon",
+      "box": {
+        "x": 36,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "git",
+      "title": "Initialize or clone Git",
+      "subtitle": "Use the healthy workspace handle",
+      "detail": "Server resolves repository capability",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "GIT",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "folder",
+      "box": {
+        "x": 467,
+        "y": 208,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "local",
+      "title": "Local filesystem policy",
+      "subtitle": "Supplied absolute path is accepted",
+      "detail": "Otherwise workspace root / project ID",
+      "meta": "LocalFilesystemWorkspaceProvider",
+      "badge": "LOCAL",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+      "shape": "folder",
+      "box": {
+        "x": 36,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "persist",
+      "title": "Scaffold and persist project",
+      "subtitle": "Project ownership is bootstrapped",
+      "detail": "Record stable project and workspace data",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "PERSIST",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "cylinder3",
+      "box": {
+        "x": 467,
+        "y": 318,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "volume",
+      "title": "Persistent-volume policy",
+      "subtitle": "Mount root / project ID",
+      "detail": "Ignore a caller-supplied workspace path",
+      "meta": "PersistentVolumeWorkspaceProvider",
+      "badge": "VOLUME",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-75",
+      "shape": "folder",
+      "box": {
+        "x": 36,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    },
+    {
+      "id": "failure",
+      "title": "Provisioning failure",
+      "subtitle": "Error / rollback path",
+      "detail": "Do not report an active healthy project",
+      "meta": "ProjectService.cs:47-111",
+      "badge": "FAILURE",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111",
+      "shape": "hexagon",
+      "box": {
+        "x": 467,
+        "y": 428,
+        "w": 324,
+        "h": 92
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "create-to-provider",
+      "source": "create",
+      "target": "provider",
+      "label": "create",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111"
+    },
+    {
+      "id": "provider-to-local",
+      "source": "provider",
+      "target": "local",
+      "label": "local",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62"
+    },
+    {
+      "id": "provider-to-volume",
+      "source": "provider",
+      "target": "volume",
+      "label": "volume",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-75",
+      "route": "outer"
+    },
+    {
+      "id": "local-to-probe",
+      "source": "local",
+      "target": "probe",
+      "label": "local path",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/LocalFilesystemWorkspaceProvider.cs:33-62",
+      "route": "middle",
+      "lane": 395,
+      "entryY": 0.3,
+      "labelOffset": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "volume-to-probe",
+      "source": "volume",
+      "target": "probe",
+      "label": "PV path",
+      "evidence": "apps/Agentweaver.Api/Infrastructure/PersistentVolumeWorkspaceProvider.cs:29-75",
+      "route": "middle",
+      "lane": 433,
+      "entryY": 0.7,
+      "labelOffset": [
+        0,
+        18
+      ]
+    },
+    {
+      "id": "probe-to-git",
+      "source": "probe",
+      "target": "git",
+      "label": "healthy",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111"
+    },
+    {
+      "id": "git-to-persist",
+      "source": "git",
+      "target": "persist",
+      "label": "scaffold",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111"
+    },
+    {
+      "id": "persist-to-failure",
+      "source": "persist",
+      "target": "failure",
+      "label": "if create fails",
+      "evidence": "apps/Agentweaver.Api/Projects/ProjectService.cs:47-111"
+    }
+  ],
+  "scope": "GitHub creation uses a caller-bound single-use selection code, not a caller-supplied credential."
+}

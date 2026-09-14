@@ -1,0 +1,442 @@
+{
+  "timestamp": "2026-09-13T14:33:26.568-07:00",
+  "status": "paused-user-visual-rejection",
+  "approval_required": "Explicit user approval of revised shared visual calibration/template before any resumed authoring, export or promotion.",
+  "feedback": [
+    "Oversized title/type",
+    "Excessive prose on canvas",
+    "Weak information density",
+    "Flat/oversized group boxes",
+    "Insufficient hierarchy and whitespace discipline",
+    "Generic draw.io feel",
+    "Loss of the React renderer's compact polished card rhythm"
+  ],
+  "research_and_audit": "preserved",
+  "public_assets": "frozen in place; no rollback or further overwrite",
+  "canonical_families_already_promoted": 27,
+  "canonical_files_already_promoted": 81,
+  "derived_email_pngs_already_promoted": 3,
+  "files": [
+    {
+      "diagram": "assistant-runtime-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\assistant-runtime-fig1.drawio",
+      "sha256": "2c8b5582fa63c3c528f27ad0f8916c4da7842a16109beea690324036c084aaae"
+    },
+    {
+      "diagram": "assistant-runtime-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\assistant-runtime-fig1.png",
+      "sha256": "e51b3991f532d9c27edb45aa102572f9786d4b38e4ae1a028535941ef606dbe4"
+    },
+    {
+      "diagram": "assistant-runtime-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\assistant-runtime-fig1.hash.txt",
+      "sha256": "23f5e57feadd3bd8c4318fd11932ca8f981cda4fdd32228936badb54f4ad19be"
+    },
+    {
+      "diagram": "auth-security-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\auth-security-fig1.drawio",
+      "sha256": "d71f4865a7bfd2ea994896ec0fe8d8b5ac16537c70b97a2291988d09839b465c"
+    },
+    {
+      "diagram": "auth-security-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\auth-security-fig1.png",
+      "sha256": "2ce9289e5b2c29d17bf7dbca6e41b6f0f34b3f786bc45b129ce2ae480c3ed14f"
+    },
+    {
+      "diagram": "auth-security-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\auth-security-fig1.hash.txt",
+      "sha256": "8ab06a744e8c8b5172c7ef5d40d3cb50e2b688a23b1985a8dd4425077b222537"
+    },
+    {
+      "diagram": "auth-security-fig4",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\auth-security-fig4.drawio",
+      "sha256": "1a1db7838885d446c111896450274c8d2c5f43d9904d4a9a3284e31b12144993"
+    },
+    {
+      "diagram": "auth-security-fig4",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\auth-security-fig4.png",
+      "sha256": "c0becdf61a576ae80b2629b7321a15a85221523de7ddc83c6d106488fed28194"
+    },
+    {
+      "diagram": "auth-security-fig4",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\auth-security-fig4.hash.txt",
+      "sha256": "ab80a1c72937cf6d72204876f719ae33f5872af1231ef63ebbaf35403bfff4ba"
+    },
+    {
+      "diagram": "canonical-agent-communication-handoff",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-agent-communication-handoff.drawio",
+      "sha256": "fc304930017928b70b0af3ec2b0fa82d424ac9acb11ef8276ff147d3b5106d4a"
+    },
+    {
+      "diagram": "canonical-agent-communication-handoff",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-agent-communication-handoff.png",
+      "sha256": "9bf0c86b017945b5e74fac68995dc02462230e3fdeeaffc196ece4cad9f18970"
+    },
+    {
+      "diagram": "canonical-agent-communication-handoff",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-agent-communication-handoff.hash.txt",
+      "sha256": "fcd7cdc95d027451a8f36fe7e5ec9b51cdea1bece6acc879e28a5d5815059743"
+    },
+    {
+      "diagram": "canonical-aks-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-aks-components.drawio",
+      "sha256": "e571904c5a4e6707fcf0f032421ea82d250b40484f75ee0acf5de80d20befba6"
+    },
+    {
+      "diagram": "canonical-aks-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-aks-components.png",
+      "sha256": "817f47b4839c946af67091dade11ad3e38c82013d3808d870ec5a93269445526"
+    },
+    {
+      "diagram": "canonical-aks-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-aks-components.hash.txt",
+      "sha256": "0c6e44b51e05de985e5be21859087e2dd34ebc0d52124402920f60b433f88708"
+    },
+    {
+      "diagram": "canonical-board-lifecycle",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-board-lifecycle.drawio",
+      "sha256": "fb4f5de9437f85d178e0fec67f469333bc852c774f6ddd64597445c120fabcd5"
+    },
+    {
+      "diagram": "canonical-board-lifecycle",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-board-lifecycle.png",
+      "sha256": "c7194520270db60ebb0ac4f9d4641fd821fdff222bac3dec6cfdac808b6b57f5"
+    },
+    {
+      "diagram": "canonical-board-lifecycle",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-board-lifecycle.hash.txt",
+      "sha256": "feb5978b707f2b79eb9f004716585f56d39180c80f5b3dd01839b65cd8bf0ede"
+    },
+    {
+      "diagram": "canonical-coordinator-journey",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-coordinator-journey.drawio",
+      "sha256": "33211be13767af8e93d02dd611707399711251b430e5a2249ca4b23f3f51aaaf"
+    },
+    {
+      "diagram": "canonical-coordinator-journey",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-coordinator-journey.png",
+      "sha256": "6878d0d5da2f47bdf385b072177c431191f18b3bf1624b00c9339ce0fe9af54c"
+    },
+    {
+      "diagram": "canonical-coordinator-journey",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-coordinator-journey.hash.txt",
+      "sha256": "1475db4179cbb4433f19c97f511e71fd0bd841d3eccf9b142898f4eaa1cc362e"
+    },
+    {
+      "diagram": "canonical-default-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-default-workflow.drawio",
+      "sha256": "6431eef35f6ef666db31715c9e406830b7f9a6864835472164a603802f8a161e"
+    },
+    {
+      "diagram": "canonical-default-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-default-workflow.png",
+      "sha256": "4b8914eaa5327c8f661f0c5811b4ef5a179c6b86a60323a868440121832edd62"
+    },
+    {
+      "diagram": "canonical-default-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-default-workflow.hash.txt",
+      "sha256": "39790fbd48e5feca382fefb59a57bf7c73c4db2585b9ccbb2213c798ba1263ef"
+    },
+    {
+      "diagram": "canonical-durable-event-stream",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-durable-event-stream.drawio",
+      "sha256": "b158b440a1918384a5fcd3cbb6a1b11b04d497d7d4e076c2cfe56441444baeae"
+    },
+    {
+      "diagram": "canonical-durable-event-stream",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-durable-event-stream.png",
+      "sha256": "e7e07f2531954fe2f33681ff5d0cfad8995765d8d8401cea0837670c1ec51fc8"
+    },
+    {
+      "diagram": "canonical-durable-event-stream",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-durable-event-stream.hash.txt",
+      "sha256": "1cf692f35238079b017cba4aed5f185cf88b51af007c7af1ea53af45fb62b29b"
+    },
+    {
+      "diagram": "canonical-durable-event-stream-sequence",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-durable-event-stream-sequence.drawio",
+      "sha256": "495c788768e89a21b8864b8435b5a05f81749539bd57452027e94940792ff2e1"
+    },
+    {
+      "diagram": "canonical-durable-event-stream-sequence",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-durable-event-stream-sequence.png",
+      "sha256": "063e1e2296427cfcbd4817d4fa2839d159cfdc81c1b2d529e7c28081e30242eb"
+    },
+    {
+      "diagram": "canonical-durable-event-stream-sequence",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-durable-event-stream-sequence.hash.txt",
+      "sha256": "df3fe483c8262e8349188e54f614c0b070a3db5337dc111772cb9475199599b8"
+    },
+    {
+      "diagram": "canonical-memory-context",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-memory-context.drawio",
+      "sha256": "f840e23828211aeb00e316d9dce826555e2b9fda4c70a894507c6766289a0b31"
+    },
+    {
+      "diagram": "canonical-memory-context",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-memory-context.png",
+      "sha256": "e60fdbad1969d2fa7ec412b822615e84227c7a0f8240b0fc7c5aef4cc7472c31"
+    },
+    {
+      "diagram": "canonical-memory-context",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-memory-context.hash.txt",
+      "sha256": "504d12daab92e94d24b6bd2ae754eadce56d94963ae85a7dfd627661293cf865"
+    },
+    {
+      "diagram": "canonical-sandbox-boundary",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-sandbox-boundary.drawio",
+      "sha256": "950819cb08cd931ceb7e8e11e224565f1f2898b912abc5632c79d4db22e58c98"
+    },
+    {
+      "diagram": "canonical-sandbox-boundary",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-sandbox-boundary.png",
+      "sha256": "0ca45b9cb2fa18828488326deea8b256fa90beaa403284d210cd4aab854307ed"
+    },
+    {
+      "diagram": "canonical-sandbox-boundary",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-sandbox-boundary.hash.txt",
+      "sha256": "0c996ce9558682360bfd09484f28fed847a2793f531e3a6c2e8d5ddc214604b6"
+    },
+    {
+      "diagram": "canonical-sandbox-experience",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-sandbox-experience.drawio",
+      "sha256": "95de604ef98dc5f737de64d42a61dcc64485dd17b46345597652313f7b728049"
+    },
+    {
+      "diagram": "canonical-sandbox-experience",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-sandbox-experience.png",
+      "sha256": "493bbb0dca02f89e4b5fe68abbb751c8d000ab107f945eb6cccc1fad8aa330e1"
+    },
+    {
+      "diagram": "canonical-sandbox-experience",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-sandbox-experience.hash.txt",
+      "sha256": "df956c178e2a5b5a24be9654dc66a13f7e48ec52f5ed3793472d4af5f23bcccd"
+    },
+    {
+      "diagram": "canonical-workflow-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-workflow-authoring.drawio",
+      "sha256": "d8ddace238d61fe1879510c2c8e4b89c7447e3165671c625d27e0172405f99ed"
+    },
+    {
+      "diagram": "canonical-workflow-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-workflow-authoring.png",
+      "sha256": "8aa61dcca03409996deddc4d182a5e39e6d49f1c0df8d354a80c025f1e7190e9"
+    },
+    {
+      "diagram": "canonical-workflow-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-workflow-authoring.hash.txt",
+      "sha256": "93c870585c02975ce76e62697cc340f4fb1e2cb24f6894b563b24bfb8bdf5200"
+    },
+    {
+      "diagram": "canonical-workflow-selection",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-workflow-selection.drawio",
+      "sha256": "b096390c68567b8bf87472c8f70bd009a53b13ec7f4e8fd55ee9291e91632b5d"
+    },
+    {
+      "diagram": "canonical-workflow-selection",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-workflow-selection.png",
+      "sha256": "ab8fcb2294a39165124c819347119a25507f62f752f81566b7f46d342c73bff5"
+    },
+    {
+      "diagram": "canonical-workflow-selection",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-workflow-selection.hash.txt",
+      "sha256": "57f6acb24650f27913fc8576bfe59dffc482fe3591a8f30fca0e1ac212182568"
+    },
+    {
+      "diagram": "email-architecture",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\email-architecture.drawio",
+      "sha256": "8a7b919b03909eeb536f08152f6097f9880031662b14aeb06e0138f6e32e3987"
+    },
+    {
+      "diagram": "email-architecture",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-architecture.png",
+      "sha256": "1f2bf8b00b4dcb300630addfadadfbf14bcead00959b2e016a9ef589c165d08a"
+    },
+    {
+      "diagram": "email-architecture",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-architecture.hash.txt",
+      "sha256": "017ec1e0f36b4bbb5ca661237ec7dc56fd4d044eb6ee91bfb7ec436b5fe21daf"
+    },
+    {
+      "diagram": "email-architecture",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-exports\\email-architecture.png",
+      "sha256": "1f2bf8b00b4dcb300630addfadadfbf14bcead00959b2e016a9ef589c165d08a"
+    },
+    {
+      "diagram": "email-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\email-components.drawio",
+      "sha256": "ddf2bd36aa583573d6cfad95d3799606755033fe85868391c8d86fe24f3de9b7"
+    },
+    {
+      "diagram": "email-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-components.png",
+      "sha256": "025d72d50ae6862bc51d9fe5e44f8ae2454662ae1d64a101cdd1d8313bc5548d"
+    },
+    {
+      "diagram": "email-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-components.hash.txt",
+      "sha256": "50d324b68380a5a7de9a0180a4f09bfe06147f46705bc4d8d11df36ed4db579a"
+    },
+    {
+      "diagram": "email-components",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-exports\\email-components.png",
+      "sha256": "025d72d50ae6862bc51d9fe5e44f8ae2454662ae1d64a101cdd1d8313bc5548d"
+    },
+    {
+      "diagram": "email-coordinator-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\email-coordinator-workflow.drawio",
+      "sha256": "2c6155bfafb768cf23401e7d5392d12c10d34aeb542f7db3070c2396edd4bd59"
+    },
+    {
+      "diagram": "email-coordinator-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-coordinator-workflow.png",
+      "sha256": "eec5e6e3924bc06a6cb322b1b0845f99acc322c16259caae848d800e2cd3c5e2"
+    },
+    {
+      "diagram": "email-coordinator-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-coordinator-workflow.hash.txt",
+      "sha256": "0d11d87fd5091a9ab7cd35d353e61a0b0e21a7335fb9ca43f63627e32977f93b"
+    },
+    {
+      "diagram": "email-coordinator-workflow",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\email-exports\\email-coordinator-workflow.png",
+      "sha256": "eec5e6e3924bc06a6cb322b1b0845f99acc322c16259caae848d800e2cd3c5e2"
+    },
+    {
+      "diagram": "sandbox-browser-preview-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\sandbox-browser-preview-fig1.drawio",
+      "sha256": "b3a193231f222ba4f1dba822ac3a17e9a07420f80e5e16fe1fbc23993b2391a8"
+    },
+    {
+      "diagram": "sandbox-browser-preview-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\sandbox-browser-preview-fig1.png",
+      "sha256": "7ad578a5c64c814a9262d522b84c843e8bd13904cbfb00d22ec938a257fbb39a"
+    },
+    {
+      "diagram": "sandbox-browser-preview-fig1",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\sandbox-browser-preview-fig1.hash.txt",
+      "sha256": "861690e474c8f491b1034d228c72eee519ef0246460c2f7c7eec98202b0b9e4a"
+    },
+    {
+      "diagram": "workflow-agent-evaluation",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-agent-evaluation.drawio",
+      "sha256": "f024f52b53807a304b7fbc07831a24c638c4e5e6457d3c7ac755c1702bac39ef"
+    },
+    {
+      "diagram": "workflow-agent-evaluation",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-agent-evaluation.png",
+      "sha256": "40dbd7551140e196073e40b13e845ddef1bede66652248db28af577779b9ef39"
+    },
+    {
+      "diagram": "workflow-agent-evaluation",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-agent-evaluation.hash.txt",
+      "sha256": "f9856e883bebec9f0310859ecbb75df2db134268f641cbe05f14954817dbb07e"
+    },
+    {
+      "diagram": "workflow-bug-fix",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-bug-fix.drawio",
+      "sha256": "8e3e7490be8a5c15a4b11d19625fc5b3a6e5c4982504a0af66455a98b5387ed6"
+    },
+    {
+      "diagram": "workflow-bug-fix",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-bug-fix.png",
+      "sha256": "2273ca82ae5d7ce3fca88345fffa985aeb5d1acba349086128e25180cf96bff3"
+    },
+    {
+      "diagram": "workflow-bug-fix",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-bug-fix.hash.txt",
+      "sha256": "113b733af0d492c3d75118f6fee7ea8c4e512f31a597b6084a6e50c3fffaebfa"
+    },
+    {
+      "diagram": "workflow-content-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-content-authoring.drawio",
+      "sha256": "20478880eed515d8f0e97dd91f7d8352d6848cbf38b4084a689cdbaa124a09b4"
+    },
+    {
+      "diagram": "workflow-content-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-content-authoring.png",
+      "sha256": "54b62a69687360f3c51708bb69ff3e8cbbc0adb3ee0c35051cd56f710652e6bb"
+    },
+    {
+      "diagram": "workflow-content-authoring",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-content-authoring.hash.txt",
+      "sha256": "601d429483352ab48a10d90370287c1e449ac4323eced2dc892df5ebecec003e"
+    },
+    {
+      "diagram": "workflow-incident-response",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-incident-response.drawio",
+      "sha256": "cbb1998ac8818e2c8d5ab34a1efd562062193319d9146a94d84c7b3cc66509ad"
+    },
+    {
+      "diagram": "workflow-incident-response",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-incident-response.png",
+      "sha256": "ebebe19f44e53dbf6b79baf536a43ce0d54b13ed67b99c7421f7cb25d825405a"
+    },
+    {
+      "diagram": "workflow-incident-response",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-incident-response.hash.txt",
+      "sha256": "31af83c48cc14a0dacb5eac7ed05b1ddd99efbbe5be2d37892295202f878b967"
+    },
+    {
+      "diagram": "workflow-infra-ops",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-infra-ops.drawio",
+      "sha256": "03252bf78619f6ba68937b2c3c51a12c4f7be8d293f7c5f76373e28314e9797e"
+    },
+    {
+      "diagram": "workflow-infra-ops",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-infra-ops.png",
+      "sha256": "3d01f3a1bbb25aa84de51852967522726bcaa6a4efd5061464ac48efdac65e8e"
+    },
+    {
+      "diagram": "workflow-infra-ops",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-infra-ops.hash.txt",
+      "sha256": "800e43c4babce3b9bfd140ae1b2e64cf9cd88d54eaa3acb7547f0f823a321034"
+    },
+    {
+      "diagram": "workflow-pm-discovery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-pm-discovery.drawio",
+      "sha256": "b03cc19c28651d3b8ae5d8caa6f5b399bf20d6ffb51287da6bd2282496726388"
+    },
+    {
+      "diagram": "workflow-pm-discovery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-pm-discovery.png",
+      "sha256": "8d8e422af5b435d528228f6f518b7c8d811637d76322191281e5023e0d944ed8"
+    },
+    {
+      "diagram": "workflow-pm-discovery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-pm-discovery.hash.txt",
+      "sha256": "1ffdc791c616ebcddec28a7e801b52816d2c229d85e8409b951dce20b430f363"
+    },
+    {
+      "diagram": "workflow-software-delivery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\workflow-software-delivery.drawio",
+      "sha256": "ed1e2ecc316eba89c49998836992226b7b13dd7d9b359a84fb62a836edcbdb84"
+    },
+    {
+      "diagram": "workflow-software-delivery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-software-delivery.png",
+      "sha256": "87fa0fca9ff7c2e10ef8dfb47fbe1a84cf6bf42808b0283f3ffbc49d86fe455a"
+    },
+    {
+      "diagram": "workflow-software-delivery",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\workflow-software-delivery.hash.txt",
+      "sha256": "5bc6bc366b1271c144b8eb3e7c6a2e246c133ca4f736f0c885c9d25a37fd640c"
+    },
+    {
+      "diagram": "canonical-provider-admission",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\src\\canonical-provider-admission.drawio",
+      "sha256": "c8f4f2d6f13523f8248fcfbcba9a15f05cbac3bc42db33702c22931bcef12943"
+    },
+    {
+      "diagram": "canonical-provider-admission",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-provider-admission.png",
+      "sha256": "71b2ef2fb45b49df2d108e40922f5cee28873ddc125f04cce22840cc401c708c"
+    },
+    {
+      "diagram": "canonical-provider-admission",
+      "path": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\canonical-provider-admission.hash.txt",
+      "sha256": "e701138d301c0ee13203455da44f5c5e0d05522185e5fea4ca4c627ea6d2f608"
+    }
+  ],
+  "execution_state": "All listed child agents idle, synchronous; no running shell sessions found. No new agents launched."
+}

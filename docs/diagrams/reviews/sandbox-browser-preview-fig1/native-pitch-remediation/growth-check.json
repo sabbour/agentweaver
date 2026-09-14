@@ -1,0 +1,16 @@
+{
+  "growth_metric": "visible-semantic-canonical-xml-v1",
+  "baseline_meaningful_xml": 2184,
+  "result_meaningful_xml": 26077,
+  "baseline_visible_structures": 8,
+  "result_visible_structures": 86,
+  "growth_ratio": 11.940018,
+  "minimum_ratio": 9.0,
+  "invisible_cells": [],
+  "off_page_cells": [],
+  "duplicate_cells": [],
+  "metadata_padding": [],
+  "passed": true,
+  "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\sandbox-browser-preview-fig1\\native-pitch-remediation\\sandbox-browser-preview-fig1-pitch.drawio",
+  "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\sandbox-browser-preview-fig1\\native-pitch-remediation\\sandbox-browser-preview-fig1-pass-01.drawio"
+}

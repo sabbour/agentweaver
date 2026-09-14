@@ -27,7 +27,7 @@ See also: `docs/deep-dive/projects.md` and `docs/deep-dive/data-persistence.md`.
 
 ### Project workspace
 
-A project workspace is the long-lived repository checkout. Blank projects are initialized as git repositories with an initial empty commit so the default branch has a real tip. GitHub projects are cloned into the workspace with an ephemeral access token.
+A project workspace is the long-lived repository checkout. Blank projects are initialized with a baseline `.gitignore` and an initial commit so the default branch has a real tip; an empty commit is allowed when the ignore file already exists. GitHub projects are cloned into the workspace with an ephemeral access token.
 
 The workspace is not meant to be the only place agents write. It is the repository home from which run worktrees are derived.
 
@@ -57,14 +57,12 @@ The originating branch is the branch the run started from and eventually merges 
 
 ## Per-run worktree model
 
-![Per-run worktree model: Project record, Base workspace / repository, Run A, Run B, originating branch tip, agentweaver/run-A, agentweaver/run-B, worktrees/run-A, worktrees/run-B, Agent A reads/writes here, Agent B reads/writes here, ReviewA, …](../diagrams/git-integration-fig1.png)
+![Isolated candidates, guarded merge: Runs edit isolated candidates; approval names a tree, not permission to bypass Git guards.](../diagrams/git-integration-fig1.png)
 
-<!-- Rendered from ../diagrams/src/git-integration-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/git-integration-fig1.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/git-integration-fig1/v2/iteration-manifest.json. -->
 
-The important invariant is that the base workspace and the run workspace are different surfaces. A run can be abandoned, revised, inspected, merged, or cleaned up without requiring the project checkout itself to be the mutable scratchpad.
+The important invariant is that the base workspace and the run workspace are different surfaces. Each candidate flows from agent edits to a commit, tree hash, and full diff; approval binds to that tree before a guarded merge advances the originating branch. A run can be abandoned, revised, inspected, merged, or cleaned up without requiring the project checkout itself to be the mutable scratchpad.
 
 ## Repository creation and GitHub cloning
 
@@ -76,11 +74,11 @@ For blank projects, Agentweaver:
 
 1. creates or verifies an empty workspace directory;
 2. initializes a git repository;
-3. creates an empty initial commit;
+3. seeds a baseline `.gitignore` without overwriting an existing one, then creates the initial commit;
 4. renames the initial branch to the configured default branch, normally `main`;
 5. writes the project record only after the repository exists.
 
-The empty initial commit is not cosmetic. Git worktrees and branch operations are much simpler when the default branch is not unborn. A rebuild should preserve that behavior.
+The initial commit is not cosmetic. Git worktrees and branch operations are much simpler when the default branch is not unborn. A rebuild should preserve that behavior.
 
 ### GitHub repository
 
@@ -95,6 +93,10 @@ For GitHub projects, Agentweaver:
 The clone helper can normalize `owner/repo` into a GitHub URL, but the project service currently validates the API request as a full `https://github.com/...` URL before cloning.
 
 ## Run lifecycle: branch, commit, review, merge
+
+This is a conceptual state model. `CommittingCandidate` names the candidate-capture
+operation, not a persisted `RunStatus`; it is distinct from the persisted `committing`
+state used by the explicit commit endpoint.
 
 ```mermaid
 stateDiagram-v2
@@ -163,7 +165,17 @@ The merge algorithm then checks:
 4. the worktree branch is not already contained in the originating branch;
 5. the target branch can be advanced safely.
 
-If the originating branch is checked out in the base workspace and the working tree is clean, Agentweaver updates both the branch ref and the working tree with a hard reset to the merge result. If the base workspace has uncommitted changes, Agentweaver attempts to reconcile them onto the merge result with the same hard reset — but only when doing so is provably lossless (every dirty path's current content already matches the merge result). If any dirty path holds content that diverges from the merge result, Agentweaver refuses the merge (a retriable `Blocked` outcome) instead of silently discarding that content or leaving the branch ref and working tree out of sync.
+For a checked-out originating branch, Agentweaver first attempts to commit modified or
+type-changed tracked content, preserving it in history before recomputing the merge
+base. It skips this step during a sequencer operation or with conflicted index entries.
+If the resulting working tree is clean, a hard reset keeps the branch, index, and files
+aligned with the merge result. Remaining dirty paths must reconcile losslessly with
+that result or the merge returns a retriable `Blocked` outcome. It never advances a
+checked-out branch ref while leaving its index and working tree stale.
+
+Final three-way merges also preserve the originating branch's centrally maintained
+Squad bookkeeping ledgers. This special handling does not suppress genuine conflicts
+in application files (`WorktreeManager.cs:2031`; `SquadStateMergeTests.cs:120`).
 
 Conflicts are terminal for that merge attempt. The run becomes `merge_failed`, conflicting files are stored where available, and the worktree is preserved for inspection.
 
@@ -179,11 +191,14 @@ When the originating branch IS checked out, a ref-only update is never safe: it 
 - modified or deleted tracked files;
 - untracked files that would be overwritten by the merge result.
 
-Sequencer state and conflicted indexes always block the merge outright — the user must resolve them first. For the remaining dirty-working-tree cases, Agentweaver compares each dirty path's current content (working-directory bytes, or the index blob if no working-directory copy exists) against the merge result tree. If every dirty path is byte-identical to the result (or has no content on disk/in the index at all — e.g. a stale staged deletion of a file the run never touched), the working tree is reconciled with a hard reset and the merge proceeds (`merge_mode: working-tree-reconciled`). Otherwise the merge is blocked rather than corrupting the working directory or silently discarding local edits.
+Sequencer state and conflicted indexes always block the merge outright — the user must resolve them first. After the tracked-content auto-commit attempt, Agentweaver compares each remaining dirty path's current content (working-directory bytes, or the index blob if no working-directory copy exists) against the merge result tree. If every affected path is byte-identical to the result (or has no content on disk/in the index at all — e.g. a stale staged deletion of a file the run never touched), the working tree is reconciled with a hard reset and the merge proceeds (`merge_mode: working-tree-reconciled`). Non-colliding untracked files do not prevent reconciliation. Otherwise the merge is blocked rather than corrupting the working directory or silently discarding local edits.
 
 ## Coordinator integration branches
 
-Coordinator workflows intentionally loosen the ordinary per-run isolation rule. Child runs can share the coordinator's orchestration worktree so one child can read files produced by another child. This is a collaboration workspace, not a separate worktree per child.
+Coordinator children use isolated execution checkouts and publish candidate content to
+their authoritative branches. They do not collaborate by editing one shared mutable
+orchestration worktree. Dependent children start from integration content verified to
+contain their prerequisites; collaboration passes through committed content.
 
 For the final assembly, Agentweaver creates an integration branch named:
 
@@ -193,18 +208,32 @@ agentweaver/integration/{coordinatorRunId}
 
 It builds that branch headlessly from the originating branch tip and merges eligible child branches in dependency order. "Headless" means it operates on git trees and refs without checking out the integration branch into a working directory.
 
-![Coordinator integration branches: Originating branch, agentweaver/integration/coordinatorRunId, Child branch A, Child branch B, Child branch C, Aggregate diff + tree hash, Collective RAI, One human review gate, Merge integration branch](../diagrams/git-integration-fig2.png)
+![Child content and integration bases: Published branch content crosses child boundaries; a shared mutable checkout does not.](../diagrams/git-integration-fig2.png)
 
-<!-- Rendered from ../diagrams/src/git-integration-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable A5 source: ../diagrams/src/git-integration-fig2.drawio; exported with draw.io Desktop 31.4.5.
+     Inspections and arrow trace: ../diagrams/reviews/git-integration-fig2/v2/iteration-manifest.json. -->
 
-The coordinator assembly rule is "no partial assembly." If any eligible child branch conflicts while building the integration branch, assembly stops and reports the conflicting branch/files instead of producing a partly assembled result.
+Integration assembly is not the same conflict policy as the final merge. The git helper
+processes the supplied child branches in order, skipping missing or empty branches and
+already-contained tips. It fast-forwards where possible. On a tree conflict with a
+merge base, it overlays the later child's changes onto the accumulated tree and records
+the auto-resolution; without a merge base, it returns a conflict instead of a successful
+aggregate. A successful result includes the aggregate diff, tree hash, and recorded
+auto-resolutions (`WorktreeManager.cs:878–986`).
+
+The aggregate then passes through the gates authored for the selected workflow. This
+git-content view does not prescribe a fixed sequence of RAI or human gates. Final merge
+still verifies the reviewed tree and can return a conflict or retriable repository block.
 
 ## Remote boundary
 
-The current API implements local Git operations only — branch creation, commits, tree/diff inspection, review, and merge. Pushing run branches to a remote and opening pull requests are out of scope. GitHub tokens are used for clone, repository listing, account listing, and user identity, not for publishing candidate branches.
+Local branch creation, commits, tree/diff inspection, review, and merge are separate
+from remote publication. The `open_pull_request` action can create a GitHub pull request
+using a live run-bound repository capability. It skips projects without a connected
+GitHub repository and reports failure when the required capability is unavailable.
+Creating the pull request is not evidence that this action pushes the head branch:
+the executor calls the PR client with the selected head and base, without a git-push
+step (`packages/Agentweaver.AgentRuntime/Workflow/OpenPullRequestTurnExecutor.cs:111–141`).
 
 This boundary keeps candidate-content reasoning local and deterministic: Agentweaver can always explain a run through its branch, tree hash, and diff without depending on remote synchronization state.
 
@@ -277,7 +306,12 @@ Reasoning model: one repository branch update at a time keeps branch-tip reasoni
 
 ### Dirty base checkout
 
-If the originating branch is checked out and dirty, Agentweaver either blocks unsafe states outright (sequencer in progress, conflicted index) or attempts to reconcile the working tree onto the merge result with a hard reset. Reconciliation only proceeds when it is provably lossless — every dirty path's current content already matches the merge result tree. Otherwise the merge is blocked; Agentweaver never advances the branch ref while leaving the checked-out working tree/index unsynced with it, since that desync is what produced staged deletions of committed content in issue #348.
+If the originating branch is checked out and dirty, Agentweaver blocks sequencer or
+index-conflict states, otherwise first attempts to preserve modified/type-changed
+tracked content in a commit. Any remaining dirty state must reconcile losslessly onto
+the merge result or block. Agentweaver never advances the branch ref while leaving the
+checked-out working tree/index unsynced with it, since that desync is what produced
+staged deletions of committed content in issue #348.
 
 Reasoning model: advancing a ref while a branch is checked out is only safe when the index/working tree end up matching that ref exactly — so a ref-only update must never be used for a checked-out branch, only reconcile-then-reset or a hard block.
 
@@ -307,7 +341,7 @@ A rebuild should preserve these rules:
 8. **Repository branch updates are serialized per repository**.
 9. **Successful merges clean up run worktrees and branches**.
 10. **Conflicted merges preserve worktrees** for human inspection.
-11. **Coordinator integration branches are assembled headlessly and all-or-nothing**.
+11. **Coordinator integration branches are assembled headlessly**, with later-child conflict resolutions recorded and unresolved assembly failures kept distinct from final merge conflicts.
 12. **GitHub tokens are credentials, not project metadata**.
 13. **Raw access tokens are not logged or stored in run/project records**.
 14. **Worktree directory deletes are resilient to SMB eventual consistency** and never silently succeed while the directory still exists.
@@ -324,11 +358,15 @@ Agentweaver can complete review and merge locally without requiring a remote. Th
 
 ### Ref-only fallback
 
-Ref-only merge protects dirty base workspaces from destructive resets. The trade-off is operator surprise: the branch ref advances, but files in the checked-out workspace may not visibly change until the user synchronizes.
+Ref-only merge applies when the originating branch is not checked out, including a
+detached base HEAD. It is not a fallback for a dirty checked-out target. Files in a
+checkout of another branch do not change merely because the target ref advances.
 
-### Shared coordinator worktree
+### Committed collaboration between isolated children
 
-Coordinator child runs can collaborate through a shared orchestration worktree. That enables multi-agent decomposition, but it weakens isolation between children. Agentweaver compensates with conservative scheduling and a final integration branch.
+Isolated child checkouts avoid shared mutable working directories. The cost is that
+dependent work must wait for prerequisite content to be published and verified in the
+integration base; another child's uncommitted edits are not a handoff mechanism.
 
 ### SQLite metadata plus git content
 
@@ -351,7 +389,7 @@ If rebuilding the git integration subsystem, implement it in this order:
 11. Implement request-changes by reusing the same worktree and branch for revision.
 12. Implement approval with database CAS transitions and a per-repository merge lock.
 13. Verify the tree hash immediately before merge.
-14. Merge by fast-forward when possible, otherwise create a merge commit; use ref-only update when the base working tree should not be touched.
+14. Merge by fast-forward when possible, otherwise create a merge commit; use ref-only update only when the originating branch is not checked out. For checked-out targets, preserve eligible dirty tracked content first, then reset, reconcile losslessly, or block.
 15. Remove worktree and branch after successful merge; preserve them after conflict.
 16. Recover startup states by failing stranded in-progress runs, reverting interrupted committing/merging states, validating review-ready worktrees, and recreating missing worktrees when branch metadata is sufficient.
 17. Add coordinator assembly as a separate headless integration-branch flow if multi-agent fan-out is required.
@@ -364,6 +402,105 @@ If rebuilding the git integration subsystem, implement it in this order:
 - A missing physical worktree can be recoverable if the database row and git branch still exist.
 - A missing branch is much harder to recover because git has lost the candidate content reference.
 - Dirty checked-out target branches either reconcile onto the merge result via a hard reset (when safe) or block the merge outright — they never merge ref-only while checked out, since that would desync the index/working tree from the advanced ref.
-- Coordinator children are not isolated like normal runs; they intentionally share an orchestration worktree.
+- Coordinator children use isolated checkouts; prerequisite handoffs use published, verified integration content rather than shared uncommitted files.
 - Worktree deletes on Azure Files SMB can transiently fail with `Directory not empty`; `WorktreeManager.DeleteDirectoryResilient` retries with backoff and never silently proceeds while the directory still exists (see [Resilient worktree deletion](#resilient-worktree-deletion-on-azure-files-smb)).
 - The GitHub API usage is raw `HttpClient`, not Octokit.
+
+<!-- diagram-context:git-integration-fig1:start -->
+<details id="diagram-context-git-integration-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Isolated candidates, guarded merge</td></tr>
+<tr><td>takeaway</td><td>Runs edit isolated candidates; approval names a tree, not permission to bypass Git guards.</td></tr>
+<tr><td>group-title-0</td><td>BRANCH AND WORKSPACE</td></tr>
+<tr><td>group-title-1</td><td>CANDIDATE CONTENT</td></tr>
+<tr><td>group-title-2</td><td>REVIEWED IDENTITY AND MERGE</td></tr>
+<tr><td>Originating branch</td><td>Originating branch</td></tr>
+<tr><td>Originating branch</td><td>Resolve starting commit</td></tr>
+<tr><td>Originating branch</td><td>branch tip</td></tr>
+<tr><td>Run branch</td><td>Run branch</td></tr>
+<tr><td>Run branch</td><td>Deterministic branch name</td></tr>
+<tr><td>Run branch</td><td>agentweaver/{runId}</td></tr>
+<tr><td>Isolated worktree</td><td>Isolated worktree</td></tr>
+<tr><td>Isolated worktree</td><td>Agent edits candidate files</td></tr>
+<tr><td>Isolated worktree</td><td>not origin checkout</td></tr>
+<tr><td>Capture changes</td><td>Capture changes</td></tr>
+<tr><td>Capture changes</td><td>Stage non-ignored changes</td></tr>
+<tr><td>Capture changes</td><td>no empty commit</td></tr>
+<tr><td>Candidate tree</td><td>Candidate tree</td></tr>
+<tr><td>Candidate tree</td><td>Committed content identity</td></tr>
+<tr><td>Candidate tree</td><td>tree SHA</td></tr>
+<tr><td>Full diff</td><td>Full diff</td></tr>
+<tr><td>Full diff</td><td>Compare branch-tip trees</td></tr>
+<tr><td>Full diff</td><td>origin vs candidate</td></tr>
+<tr><td>Approved identity</td><td>Approved identity</td></tr>
+<tr><td>Approved identity</td><td>Expected tree must match</td></tr>
+<tr><td>Approved identity</td><td>expectedTreeHash</td></tr>
+<tr><td>Guarded merge</td><td>Guarded merge</td></tr>
+<tr><td>Guarded merge</td><td>Containment + origin safety</td></tr>
+<tr><td>Guarded merge</td><td>checked-out or ref-only</td></tr>
+<tr><td>Merge outcome</td><td>Merge outcome</td></tr>
+<tr><td>Merge outcome</td><td>Advance, block or conflict</td></tr>
+<tr><td>Merge outcome</td><td>dirty origin protected</td></tr>
+<tr><td>e0</td><td>create</td></tr>
+<tr><td>e1</td><td>checkout</td></tr>
+<tr><td>e2</td><td>capture</td></tr>
+<tr><td>e3</td><td>commit</td></tr>
+<tr><td>e4</td><td>compare</td></tr>
+<tr><td>e5</td><td>review</td></tr>
+<tr><td>e6</td><td>match</td></tr>
+<tr><td>e7</td><td>merge</td></tr>
+<tr><td>groups</td><td>BRANCH AND WORKSPACE; CANDIDATE CONTENT; REVIEWED IDENTITY AND MERGE</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:git-integration-fig1:end -->
+
+<!-- diagram-context:git-integration-fig2:start -->
+<details id="diagram-context-git-integration-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Child content and integration bases</td></tr>
+<tr><td>takeaway</td><td>Published branch content crosses child boundaries; a shared mutable checkout does not.</td></tr>
+<tr><td>group-title-0</td><td>AUTHORITATIVE INPUTS</td></tr>
+<tr><td>group-title-1</td><td>ACCUMULATION AND CONFLICT HANDLING</td></tr>
+<tr><td>group-title-2</td><td>DEPENDENT CHILD OR FINAL REVIEW</td></tr>
+<tr><td>Origin tip</td><td>Origin tip</td></tr>
+<tr><td>Origin tip</td><td>Reset integration branch</td></tr>
+<tr><td>Origin tip</td><td>authoritative repository</td></tr>
+<tr><td>Published children</td><td>Published children</td></tr>
+<tr><td>Published children</td><td>Isolated execution checkouts</td></tr>
+<tr><td>Published children</td><td>committed branches</td></tr>
+<tr><td>Ordered accumulator</td><td>Ordered accumulator</td></tr>
+<tr><td>Ordered accumulator</td><td>Skip empty or contained tips</td></tr>
+<tr><td>Ordered accumulator</td><td>caller supplies order</td></tr>
+<tr><td>Merge conflict?</td><td>Merge conflict?</td></tr>
+<tr><td>Merge conflict?</td><td>A merge base is required</td></tr>
+<tr><td>Merge conflict?</td><td>not always terminal</td></tr>
+<tr><td>Later-child overlay</td><td>Later-child overlay</td></tr>
+<tr><td>Later-child overlay</td><td>Apply delta from merge base</td></tr>
+<tr><td>Later-child overlay</td><td>record auto-resolution</td></tr>
+<tr><td>Unresolved conflict</td><td>Unresolved conflict</td></tr>
+<tr><td>Unresolved conflict</td><td>No merge base: fail assembly</td></tr>
+<tr><td>Unresolved conflict</td><td>no partial success</td></tr>
+<tr><td>Integration snapshot</td><td>Integration snapshot</td></tr>
+<tr><td>Integration snapshot</td><td>Ref, tree, diff, resolutions</td></tr>
+<tr><td>Integration snapshot</td><td>content contract</td></tr>
+<tr><td>Dependent-child base</td><td>Dependent-child base</td></tr>
+<tr><td>Dependent-child base</td><td>Verify prerequisite reachability</td></tr>
+<tr><td>Dependent-child base</td><td>isolated new checkout</td></tr>
+<tr><td>Final aggregate review</td><td>Final aggregate review</td></tr>
+<tr><td>Final aggregate review</td><td>Authored checks, reviewed tree</td></tr>
+<tr><td>Final aggregate review</td><td>then guarded merge</td></tr>
+<tr><td>e0</td><td>reset</td></tr>
+<tr><td>e1</td><td>ordered</td></tr>
+<tr><td>e2</td><td>conflict</td></tr>
+<tr><td>e3</td><td>base</td></tr>
+<tr><td>e4</td><td>no base</td></tr>
+<tr><td>e5</td><td>resolved</td></tr>
+<tr><td>e6</td><td>clean</td></tr>
+<tr><td>e7</td><td>dependency</td></tr>
+<tr><td>e8</td><td>final</td></tr>
+<tr><td>groups</td><td>AUTHORITATIVE INPUTS; ACCUMULATION AND CONFLICT HANDLING; DEPENDENT CHILD OR FINAL REVIEW</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:git-integration-fig2:end -->

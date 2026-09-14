@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Agentweaver" agent="GPT-6 Astra | docs-diagram-pitch + docs-diagram-iterate" version="31.4.5" type="device" compressed="false">
+  <diagram id="canonical-coordinator-architecture" name="Coordinator architecture">
+    <mxGraphModel dx="827" dy="583" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="583" math="0" shadow="0" background="#efeae7">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Coordinator architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;overflow=hidden;fontFamily=Segoe UI;fontSize=28;fontColor=#272320;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="28" width="730" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="takeaway" value="Plan intent. Dispatch ready work. Review the combined outcome." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;overflow=hidden;fontFamily=Segoe UI;fontSize=17;fontColor=#635c57;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="78" width="740" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="plan" value="&lt;div style=&quot;font-size:21px;font-weight:600;color:#272320&quot;&gt;Coordinator&lt;/div&gt;&lt;div style=&quot;font-size:15px;margin-top:12px;color:#635c57&quot;&gt;Spec + work plan&lt;/div&gt;&lt;div style=&quot;font-size:12px;margin-top:16px;color:#3f3682&quot;&gt;Model-assisted planning&lt;/div&gt;" style="rounded=1;arcSize=16;absoluteArcSize=1;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#ece7e3;shadow=1;fontFamily=Segoe UI;align=left;verticalAlign=middle;spacingLeft=16;spacingRight=16;" vertex="1" parent="1">
+          <mxGeometry x="28" y="178" width="215" height="202" as="geometry" />
+        </mxCell>
+        <mxCell id="dispatch" value="&lt;div style=&quot;font-size:21px;font-weight:600;color:#272320&quot;&gt;Dispatch + children&lt;/div&gt;&lt;div style=&quot;font-size:15px;margin-top:12px;color:#635c57&quot;&gt;Dependency-ready work&lt;/div&gt;&lt;div style=&quot;font-size:12px;margin-top:16px;color:#00666d&quot;&gt;Service-driven execution&lt;/div&gt;" style="rounded=1;arcSize=16;absoluteArcSize=1;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#ece7e3;shadow=1;fontFamily=Segoe UI;align=left;verticalAlign=middle;spacingLeft=16;spacingRight=16;" vertex="1" parent="1">
+          <mxGeometry x="305" y="178" width="215" height="202" as="geometry" />
+        </mxCell>
+        <mxCell id="assembly" value="&lt;div style=&quot;font-size:21px;font-weight:600;color:#272320&quot;&gt;Collective assembly&lt;/div&gt;&lt;div style=&quot;font-size:15px;margin-top:12px;color:#635c57&quot;&gt;Combined review + merge&lt;/div&gt;&lt;div style=&quot;font-size:12px;margin-top:16px;color:#0e700e&quot;&gt;A terminal outcome, not guaranteed success&lt;/div&gt;" style="rounded=1;arcSize=16;absoluteArcSize=1;html=1;whiteSpace=wrap;fillColor=#fdfbf8;strokeColor=#ece7e3;shadow=1;fontFamily=Segoe UI;align=left;verticalAlign=middle;spacingLeft=16;spacingRight=16;" vertex="1" parent="1">
+          <mxGeometry x="582" y="178" width="215" height="202" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-plan" value="handoff" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.6;fontFamily=Segoe UI;fontSize=11.5;fontStyle=1;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="plan" target="dispatch">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-output" value="outputs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#746d68;strokeWidth=1.6;fontFamily=Segoe UI;fontSize=11.5;fontStyle=1;fontColor=#3f3935;labelBackgroundColor=#fdfbf8;labelBorderColor=none;jumpStyle=arc;jumpSize=8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="dispatch" target="assembly">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="pitch-scope" value="Logical responsibilities | Detail, persistence and revision routes follow in pass 1." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;overflow=hidden;fontFamily=Segoe UI;fontSize=14;fontColor=#635c57;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="28" y="447" width="755" height="38" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

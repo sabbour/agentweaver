@@ -1,0 +1,289 @@
+{
+  "diagram": "agent-framework-fig1",
+  "source_sha256": "89233de4a8d12ee76d58e741faa2018a1cfddc3b8ad1f20a043b0ab4bea2ebda",
+  "png_sha256": "785daba59bc1fd8c417fe6a0d9cbba5958b57587a6c45c870b94b147fd609031",
+  "prior_model": "docs\\diagrams\\reviews\\agent-framework-fig1\\final-content-model.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Typed MAF adapters · state completes the contract"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Review decisions carry approval; saved AgentTurnOutput supplies the merge data."
+    },
+    {
+      "cell": "group-0-title",
+      "text": "REVIEW / STATE"
+    },
+    {
+      "cell": "group-1-title",
+      "text": "RESPONSE / MERGE"
+    },
+    {
+      "cell": "output-title",
+      "text": "AgentTurnOutput"
+    },
+    {
+      "cell": "output-subtitle",
+      "text": "Repository / worktree / tree data"
+    },
+    {
+      "cell": "output-detail",
+      "text": "Successful turn provides the merge contract"
+    },
+    {
+      "cell": "output-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "output-badge",
+      "text": "TYPED"
+    },
+    {
+      "cell": "adapter-title",
+      "text": "Review adapter"
+    },
+    {
+      "cell": "adapter-subtitle",
+      "text": "Save output in workflow state"
+    },
+    {
+      "cell": "adapter-detail",
+      "text": "Emit a WorkflowReviewRequest"
+    },
+    {
+      "cell": "adapter-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "adapter-badge",
+      "text": "ADAPT"
+    },
+    {
+      "cell": "state-title",
+      "text": "Workflow state"
+    },
+    {
+      "cell": "state-subtitle",
+      "text": "Saved AgentTurnOutput"
+    },
+    {
+      "cell": "state-detail",
+      "text": "Decision alone cannot reconstruct merge input"
+    },
+    {
+      "cell": "state-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "state-badge",
+      "text": "STATE"
+    },
+    {
+      "cell": "port-title",
+      "text": "RequestPort"
+    },
+    {
+      "cell": "port-subtitle",
+      "text": "Suspend for external reviewer"
+    },
+    {
+      "cell": "port-detail",
+      "text": "Correlate request with WorkflowReviewDecision"
+    },
+    {
+      "cell": "port-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "port-badge",
+      "text": "GATE"
+    },
+    {
+      "cell": "decision-title",
+      "text": "Approved decision"
+    },
+    {
+      "cell": "decision-subtitle",
+      "text": "WorkflowReviewDecision"
+    },
+    {
+      "cell": "decision-detail",
+      "text": "Approval authorizes merge, not its payload"
+    },
+    {
+      "cell": "decision-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "decision-badge",
+      "text": "RESPONSE"
+    },
+    {
+      "cell": "mergeadapter-title",
+      "text": "Merge adapter"
+    },
+    {
+      "cell": "mergeadapter-subtitle",
+      "text": "Read the saved output"
+    },
+    {
+      "cell": "mergeadapter-detail",
+      "text": "Combine approval + state into MergeInput"
+    },
+    {
+      "cell": "mergeadapter-metadata",
+      "text": "RunWorkflowFactory:409–440"
+    },
+    {
+      "cell": "mergeadapter-badge",
+      "text": "ADAPT"
+    },
+    {
+      "cell": "blocked-title",
+      "text": "Blocked adapter"
+    },
+    {
+      "cell": "blocked-subtitle",
+      "text": "MergeOutput says blocked"
+    },
+    {
+      "cell": "blocked-detail",
+      "text": "Use saved output to request another review"
+    },
+    {
+      "cell": "blocked-metadata",
+      "text": "RunWorkflowFactory:532–545"
+    },
+    {
+      "cell": "blocked-badge",
+      "text": "RETURN"
+    },
+    {
+      "cell": "merge-title",
+      "text": "Merge executor"
+    },
+    {
+      "cell": "merge-subtitle",
+      "text": "Consume typed MergeInput"
+    },
+    {
+      "cell": "merge-detail",
+      "text": "Blocked is retriable, not a completed merge"
+    },
+    {
+      "cell": "merge-metadata",
+      "text": "RunWorkflowFactory:532–545"
+    },
+    {
+      "cell": "merge-badge",
+      "text": "EXECUTE"
+    },
+    {
+      "cell": "output-to-adapter",
+      "text": "turn output"
+    },
+    {
+      "cell": "adapter-to-state",
+      "text": "save output"
+    },
+    {
+      "cell": "port-to-decision",
+      "text": "decision"
+    },
+    {
+      "cell": "state-to-mergeadapter",
+      "text": "read state"
+    },
+    {
+      "cell": "decision-to-mergeadapter",
+      "text": "approved"
+    },
+    {
+      "cell": "mergeadapter-to-merge",
+      "text": "MergeInput"
+    },
+    {
+      "cell": "merge-to-blocked",
+      "text": "blocked"
+    },
+    {
+      "cell": "scope",
+      "text": "Representative full-run adapters only. Collective assembly and Operator conversations are different paths."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/agent-framework.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "output",
+      "to": "adapter",
+      "label": "turn output",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "adapter",
+      "to": "state",
+      "label": "save output",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "adapter",
+      "to": "port",
+      "label": "request",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "port",
+      "to": "decision",
+      "label": "matching response",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "state",
+      "to": "mergeadapter",
+      "label": "read saved output",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "decision",
+      "to": "mergeadapter",
+      "label": "approved",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "mergeadapter",
+      "to": "merge",
+      "label": "MergeInput",
+      "result": "clean"
+    },
+    {
+      "id": "e7",
+      "from": "merge",
+      "to": "blocked",
+      "label": "blocked output",
+      "result": "clean"
+    },
+    {
+      "id": "e8",
+      "from": "blocked",
+      "to": "port",
+      "label": "same review port",
+      "result": "clean"
+    }
+  ]
+}

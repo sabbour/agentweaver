@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabbour.me/agentweaver/schemas/diagram-iteration-manifest.schema.json",
+  "title": "Agentweaver diagram iteration manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["diagram", "orientation", "pitch", "passes", "final_pass"],
+  "properties": {
+    "diagram": { "type": "string", "minLength": 1 },
+    "orientation": { "enum": ["A5-portrait", "A5-landscape"] },
+    "pitch": { "$ref": "#/$defs/artifacts" },
+    "passes": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/pass" },
+            {
+              "properties": {
+                "number": { "const": 1 },
+                "mode": { "const": "visual-upgrade" },
+                "growth_metric": { "const": "visible-semantic-canonical-xml-v1" },
+                "growth_ratio": { "minimum": 9 }
+              },
+              "required": [
+                "baseline_meaningful_xml",
+                "result_meaningful_xml",
+                "growth_metric",
+                "growth_ratio"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/pass" },
+            {
+              "properties": {
+                "number": { "const": 2 },
+                "mode": { "const": "correction-only" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/pass" },
+            {
+              "properties": {
+                "number": { "const": 3 },
+                "mode": { "const": "correction-only" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/pass" },
+            {
+              "properties": {
+                "number": { "const": 4 },
+                "mode": { "const": "correction-only" },
+                "all_arrows_traced": { "const": true }
+              },
+              "required": ["all_arrows_traced", "arrow_trace"]
+            }
+          ]
+        }
+      ],
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/pass" },
+          {
+            "properties": {
+              "number": { "minimum": 5 },
+              "mode": { "const": "correction-only" },
+              "all_arrows_traced": { "const": true }
+            },
+            "required": ["all_arrows_traced", "arrow_trace"]
+          }
+        ]
+      }
+    },
+    "final_pass": { "type": "integer", "minimum": 4 }
+  },
+  "$defs": {
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drawio",
+        "png",
+        "change_record",
+        "png_inspected_print",
+        "png_inspected_enlarged"
+      ],
+      "properties": {
+        "drawio": { "type": "string", "pattern": "\\.drawio$" },
+        "png": { "type": "string", "pattern": "\\.png$" },
+        "change_record": { "type": "string", "pattern": "\\.md$" },
+        "png_inspected_print": { "const": true },
+        "png_inspected_enlarged": { "const": true }
+      }
+    },
+    "arrow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target", "relationship", "evidence", "result"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "relationship": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 },
+        "result": { "enum": ["clean", "corrected"] }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "mode",
+        "drawio",
+        "png",
+        "change_record",
+        "png_inspected_print",
+        "png_inspected_enlarged",
+        "orientation_defects",
+        "overlap_defects",
+        "arrow_defects"
+      ],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "mode": { "enum": ["visual-upgrade", "correction-only"] },
+        "drawio": { "type": "string", "pattern": "\\.drawio$" },
+        "png": { "type": "string", "pattern": "\\.png$" },
+        "change_record": { "type": "string", "pattern": "\\.md$" },
+        "png_inspected_print": { "const": true },
+        "png_inspected_enlarged": { "const": true },
+        "orientation_defects": { "type": "integer", "minimum": 0 },
+        "overlap_defects": { "type": "integer", "minimum": 0 },
+        "arrow_defects": { "type": "integer", "minimum": 0 },
+        "baseline_meaningful_xml": { "type": "integer", "minimum": 1 },
+        "result_meaningful_xml": { "type": "integer", "minimum": 1 },
+        "growth_metric": { "type": "string" },
+        "growth_ratio": { "type": "number", "minimum": 0 },
+        "all_arrows_traced": { "type": "boolean" },
+        "arrow_trace": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/arrow" }
+        }
+      }
+    }
+  }
+}

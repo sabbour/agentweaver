@@ -1,0 +1,64 @@
+{
+  "diagram": "auth-security-fig1",
+  "status": "completed",
+  "promoted": true,
+  "final_pass": 5,
+  "lineage": "docs/diagrams/reviews/auth-security-fig1/native-pitch-remediation",
+  "canonical_source": "docs/diagrams/src/auth-security-fig1.drawio",
+  "canonical_png": "docs/diagrams/auth-security-fig1.png",
+  "canonical_hash": "docs/diagrams/auth-security-fig1.hash.txt",
+  "source_sha256": "d71f4865a7bfd2ea994896ec0fe8d8b5ac16537c70b97a2291988d09839b465c",
+  "png_sha256": "2ce9289e5b2c29d17bf7dbca6e41b6f0f34b3f786bc45b129ce2ae480c3ed14f",
+  "source_final_byte_identity": true,
+  "published_final_pixel_identity": true,
+  "schema": "passed",
+  "skill_crossfields": "passed",
+  "selective_render": "passed",
+  "selective_drift": "passed",
+  "a5": {
+    "width": 827,
+    "height": 583,
+    "pageScale": 1,
+    "logical_units_per_inch": 100
+  },
+  "growth": {
+    "growth_metric": "visible-semantic-canonical-xml-v1",
+    "baseline_meaningful_xml": 2191,
+    "result_meaningful_xml": 26070,
+    "baseline_visible_structures": 8,
+    "result_visible_structures": 86,
+    "growth_ratio": 11.898676,
+    "minimum_ratio": 9.0,
+    "invisible_cells": [],
+    "off_page_cells": [],
+    "duplicate_cells": [],
+    "metadata_padding": [],
+    "passed": true,
+    "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\auth-security-fig1\\native-pitch-remediation\\auth-security-fig1-pitch.drawio",
+    "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\auth-security-fig1\\native-pitch-remediation\\auth-security-fig1-pass-01.drawio"
+  },
+  "inspections": "All pitch/pass PNGs actually opened at print scale and enlarged; final every-arrow trace in final pass MD.",
+  "defects_resolved": [
+    "Sparse generic pitch replaced with native-symbol Fluent responsibility model.",
+    "Long titles fitted without clipping; content hierarchy and 5px accents retained.",
+    "Native Azure AKS / Entra assets and Kubernetes deploy/pod/svc used where applicable; old router-for-Azure mapping superseded.",
+    "Footnote/key overlap and row-transition routing corrected.",
+    "Side-port arrow tangents corrected; final arrows independently traced.",
+    "Windows copy-induced Unicode glyph corruption caught in pass 4 and corrected, not promoted."
+  ],
+  "historical_status": "Older promotion-status/shared-concept-status and old manifests are historical and not authoritative for this remediation.",
+  "archive": "docs/diagrams/reviews/auth-security-fig1/native-pitch-remediation/pre-promotion-archive",
+  "retired_after_clean_promotion": [
+    "docs/diagrams/src/auth-security-fig1.json",
+    "docs/diagrams/drawio/generated/auth-security-fig1.drawio"
+  ],
+  "research": [
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-01.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-02.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-03.md"
+  ],
+  "docs_build": "Not run: parent owns docs build.",
+  "pages_product_pipeline_inventory_plan_changed": false,
+  "commits_or_staging": false,
+  "external_blockers": []
+}

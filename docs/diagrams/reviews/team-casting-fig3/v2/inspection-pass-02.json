@@ -1,0 +1,11 @@
+{
+  "diagram": "team-casting-fig3",
+  "phase": "pass-02",
+  "png_sha256": "3dbad1b458b1c836e0676fbbe4b1ae3807e1a2e2274548616d7a8370019ad0b3",
+  "png_inspected_print": true,
+  "png_inspected_enlarged": true,
+  "review": "Opened all seven print sheets and fourteen original-pixel pairs. The Review API heading collision and resilient budget title wrap are corrected. Existing content and Fluent styling remain intact; residual close-lane issues are recorded per diagram.",
+  "orientation_defects": 0,
+  "overlap_defects": 0,
+  "arrow_defects": 0
+}

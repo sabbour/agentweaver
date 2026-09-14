@@ -1,0 +1,42 @@
+[
+  {
+    "id": "e1",
+    "source": "mcp",
+    "target": "api",
+    "relationship": "HTTP",
+    "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+    "result": "clean"
+  },
+  {
+    "id": "e2",
+    "source": "api",
+    "target": "sandbox",
+    "relationship": "configure / A2A",
+    "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+    "result": "clean"
+  },
+  {
+    "id": "e3",
+    "source": "entra",
+    "target": "api",
+    "relationship": "identity",
+    "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+    "result": "clean"
+  },
+  {
+    "id": "e4",
+    "source": "github",
+    "target": "api",
+    "relationship": "capability",
+    "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+    "result": "clean"
+  },
+  {
+    "id": "e5",
+    "source": "api",
+    "target": "postgres",
+    "relationship": "read / write",
+    "evidence": "k8s/base/api-deployment.yaml:53-76,337-349; k8s/base/worker-deployment.yaml:54-76,146-170; k8s/base/mcp-deployment.yaml:21; apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs:10-36; apps/Agentweaver.Api/Auth/EntraOnlyGitHubCredentialBoundary.cs; coordinator-provided component and assurance findings",
+    "result": "clean"
+  }
+]

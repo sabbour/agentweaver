@@ -1,0 +1,246 @@
+{
+  "title": "Postgres is the event relay",
+  "subtitle": "Any API replica can serve a cursor over durable RunEvents\u2014no sticky session required.",
+  "identity": "DURABLE EVENT ARCHITECTURE",
+  "disposition": "redesign",
+  "evidence": "apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15-36,66-87,145-190,220-320; apps/Agentweaver.Api/Endpoints/RunEndpoints.cs",
+  "groups": [
+    "Write path \u00b7 replica A",
+    "Read path \u00b7 replica B"
+  ],
+  "nodes": [
+    {
+      "id": "producer",
+      "title": "Run producer",
+      "sub": "Append a structured event",
+      "meta": "runId + type + payload",
+      "pill": "PRODUCER",
+      "tone": "green",
+      "shape": "hexagon",
+      "facts": [
+        "Coordinator or run execution",
+        "Acknowledgement follows commit"
+      ]
+    },
+    {
+      "id": "append",
+      "title": "EF event stream",
+      "sub": "Serialize writes per run",
+      "meta": "pg_advisory_xact_lock",
+      "pill": "APPEND",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "Allocate MAX(Sequence) + 1",
+        "Save and commit transaction"
+      ]
+    },
+    {
+      "id": "store",
+      "title": "RunEvents",
+      "sub": "Shared PostgreSQL table",
+      "meta": "(RunId, Sequence)",
+      "pill": "DURABLE",
+      "tone": "teal",
+      "shape": "cylinder3",
+      "facts": [
+        "Cross-replica ordered history",
+        "Explicit duplicates must match payload"
+      ]
+    },
+    {
+      "id": "client",
+      "title": "Web / MCP watcher",
+      "sub": "Consume ordered events",
+      "meta": "last delivered cursor",
+      "pill": "CONSUMER",
+      "tone": "lavender",
+      "shape": "umlActor",
+      "facts": [
+        "Reconnect from the cursor",
+        "No local channel dependency"
+      ]
+    },
+    {
+      "id": "sse",
+      "title": "SSE endpoint",
+      "sub": "Emit id + event + data",
+      "meta": "ordered response frames",
+      "pill": "STREAM",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "Cursor advances after delivery",
+        "Drain batch before terminal close"
+      ]
+    },
+    {
+      "id": "reader",
+      "title": "EF subscriber",
+      "sub": "Read Sequence > cursor",
+      "meta": "idle poll: 250 ms",
+      "pill": "SUBSCRIBE",
+      "tone": "teal",
+      "shape": "component",
+      "facts": [
+        "Query the shared durable table",
+        "Retryable assembly_blocked stays open"
+      ]
+    }
+  ],
+  "edges": [
+    [
+      "producer",
+      "append",
+      "append"
+    ],
+    [
+      "append",
+      "store",
+      "commit"
+    ],
+    [
+      "store",
+      "reader",
+      "ordered batch"
+    ],
+    [
+      "reader",
+      "sse",
+      "yield"
+    ],
+    [
+      "sse",
+      "client",
+      "SSE frames"
+    ]
+  ],
+  "notes": [
+    "POSTGRES LANE ONLY",
+    "SQLite register-channel / replay / tail is a separate implementation\u2014not this architecture.",
+    "Late-delta suppression is process-local; do not read it as a database-wide terminal fence."
+  ],
+  "pitch_responsibilities": [
+    "Durable event log",
+    "Commit ordered RunEvents before acknowledging append.",
+    "PostgreSQL / RunId + Sequence",
+    "PERSISTENCE",
+    "cylinder",
+    "Cursor subscriber",
+    "Read after the cursor on any API replica; emit SSE.",
+    "EF durable query / idle poll 250 ms",
+    "DELIVERY",
+    "component",
+    "ordered durable batch"
+  ],
+  "detail_rows": [
+    [
+      [
+        "Input",
+        "RunStreamEntry"
+      ],
+      [
+        "Identity",
+        "runId + event type"
+      ],
+      [
+        "Body",
+        "Structured payload"
+      ],
+      [
+        "Ack",
+        "After durable commit"
+      ]
+    ],
+    [
+      [
+        "Lock",
+        "Per-run advisory lock"
+      ],
+      [
+        "Next",
+        "MAX(Sequence) + 1"
+      ],
+      [
+        "Write",
+        "Save transaction"
+      ],
+      [
+        "Commit",
+        "Before acknowledgement"
+      ]
+    ],
+    [
+      [
+        "Table",
+        "RunEvents"
+      ],
+      [
+        "Key",
+        "RunId + Sequence"
+      ],
+      [
+        "Order",
+        "Ascending sequence"
+      ],
+      [
+        "Reuse",
+        "Same type / payload"
+      ]
+    ],
+    [
+      [
+        "Client",
+        "Web or MCP"
+      ],
+      [
+        "Resume",
+        "Last delivered cursor"
+      ],
+      [
+        "Replica",
+        "No sticky requirement"
+      ],
+      [
+        "History",
+        "Durable ordered events"
+      ]
+    ],
+    [
+      [
+        "Frame",
+        "id + event + data"
+      ],
+      [
+        "Cursor",
+        "Last-Event-ID"
+      ],
+      [
+        "Delivery",
+        "Yield ordered events"
+      ],
+      [
+        "Close",
+        "After batch is drained"
+      ]
+    ],
+    [
+      [
+        "Query",
+        "Sequence > cursor"
+      ],
+      [
+        "Idle",
+        "Poll after 250 ms"
+      ],
+      [
+        "State",
+        "Shared durable table"
+      ],
+      [
+        "Blocked",
+        "Retryable: keep open"
+      ]
+    ]
+  ]
+}

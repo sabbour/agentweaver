@@ -1,106 +1,113 @@
-# Coordinator Workflow Selection (Feature 015 US5)
+# Coordinator Workflow Selection
 
-A project instantiated from a Blueprint carries a **set of functionally-distinct
-workflows** (e.g. a Software Development project carries `software-delivery`,
-`bug-fix`, and `code-review`). When the coordinator picks up a task it selects the
-**best-fit** workflow for *that* task instead of unconditionally running the
-project default — a quick fix routes to `bug-fix`, a net-new feature to
-`software-delivery`, a pure review request to `code-review`.
-
-## When selection runs
-
-| Project workflows | Behavior |
-|-------------------|----------|
-| Exactly one | Selection is **skipped silently** — no LLM call, no event. That workflow (the project default) is used. |
-| More than one | The coordinator runs an LLM selection and surfaces the result with a rationale and an override hint. |
-
-Selection is an **optimization over the default**, never a hard gate: it always
-resolves to a workflow, and any failure falls back to the project default.
+A blueprint supplies a set of workflows, not one universal pipeline. For example,
+Software Development supplies `software-delivery` and `bug-fix`. The coordinator
+selects for the task's process and outputs, rather than name similarity.
 
 ## The selection flow
 
-1. **Collect candidates.** The coordinator gathers the project's available
-   workflows from the `WorkflowRegistry` (built-in default + catalog library
-   workflows + the project's `.agentweaver/workflows/` files). The project
-   default is ordered first so it is the deterministic fallback.
-2. **Build context.** The task/goal description, the team roles (the project's
-   active roster), and each candidate's `id`/`name`/`description` plus a
-   `[built-in/library]` vs `[project/custom]` source tag.
-3. **LLM call.** `IWorkflowSelector.SelectAsync` issues one completion via
-   `IWorkflowSelectionModel` (production: a grounded `CopilotAIAgent` turn) with
-   this prompt shape:
+![Workflow selection: collect valid trigger-agnostic candidates, honor explicit and conversational overrides, handle zero or one candidate, then select with bounded retries and deterministic fallback](diagrams/canonical-workflow-selection.png)
 
-   ```
-   You are selecting the most appropriate workflow for a task.
+<!-- Editable source: diagrams/src/canonical-workflow-selection.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec canonical-workflow-selection.
+     Review evidence: diagrams/reviews/canonical-workflow-selection/. -->
 
-   Task: {taskDescription}
-   Team roles: {roles}
+1. Collect available, valid definitions from the registry. Selection is trigger-agnostic.
+1. Honor an available explicit request/backlog override, then an available conversational
+   override from the orchestration input's `ReviseFeedback`.
+1. Handle zero or one candidate without a model call. With multiple candidates, supply
+   task, team roles and workflow descriptions/source tags to the selector.
+1. Parse the chosen ID/name against available candidates. Parse failures or unknown
+   choices receive up to two attempts; a model exception falls back immediately.
+1. Persist/surface the selected workflow and rationale, then revalidate compatibility
+   with the decomposition before execution.
 
-   Available workflows:
-   - {id} [built-in/library | project/custom]: {name} — {description}
-   ...
+The fallback prefers `default`/`standard`, then a non-code-review candidate, and only
+then the first entry. It is not universally the project's first listed workflow.
+Selection failure does not waive later binding or compatibility checks.
 
-   Selection rules:
-   - Match on PROCESS FIT: what steps the workflow runs and what outputs it produces.
-   - Do NOT select by name similarity or domain-word overlap. A closest-sounding built-in
-     is a bad choice if its process does not fit.
-   - Prefer project/custom workflows over generic built-in/library workflows when a custom
-     workflow can perform the requested process.
-   - If no workflow is a good process fit, select the first listed workflow (the project
-     default) instead of guessing.
-
-   Reply with JSON: {"selected": "<workflow-id>", "rationale": "<1-2 sentences why>"}
-   Select the workflow whose process best matches the task and team.
-   ```
-
-   Each candidate is tagged `[built-in/library]` or `[project/custom]` so the model can prefer a
-   project-authored workflow over a generic one. Selection is keyed on **process fit** — the steps a
-   workflow runs and the outputs it produces — never on name or domain-word similarity.
-
-4. **Parse + validate.** The first balanced JSON object is extracted; the
-   `selected` id must be one of the available candidates. On a parse failure or an
-   unknown id the selector falls back to the project default and logs a warning.
-5. **Surface.** A `coordinator.workflow_selected` event is emitted on the
-   coordinator run stream:
-
-   ```json
-   {
-     "selectedId": "bug-fix",
-     "selectedName": "Bug Fix",
-     "rationale": "A one-line null check is a fast, contained defect fix.",
-     "wasAutoSelected": true,
-     "overrideHint": "Reply 'use {other-id}' to change (available: software-delivery, bug-fix, code-review).",
-     "available": [ { "id": "software-delivery", "name": "Software Delivery" }, ... ]
-   }
-   ```
-
-   The same selection is surfaced identically via the MCP server and the Web UI.
+Sources: `CoordinatorOrchestratorExecutor.cs:271-372,407-488` and
+`WorkflowSelector.cs:83-218`.
 
 ## User override
 
-The override is a conversational command. Each incoming user message is checked
-for the pattern `use {workflow-id}` (case-insensitive) **before** routing to the
-normal task handler. If the id is one of the available workflows, the run switches
-to it and the coordinator acknowledges the change. An explicit user override
-always wins over the coordinator's pick (consistent with Feature 010's per-task
-override).
+An explicit request/backlog override takes priority over conversational `use {id}`
+selection. The traced orchestration path reads revision feedback; it does **not**
+intercept every user message and switch any already-running workflow in place.
 
-## Result contract
+## Result and event contract
 
-`WorkflowSelectionResult` carries:
-
-- `Selected` — the chosen `WorkflowDefinition`.
-- `Rationale` — a 1–2 sentence explanation (or a fallback explanation).
-- `WasAutoSelected` — `false` only for a single-workflow project (pure
-  pass-through); `true` whenever the multi-workflow path ran, including when it
-  fell back to the default after a model failure.
-
-## Fallback summary
+`WorkflowSelectionResult` contains `Selected`, `Rationale` and `WasAutoSelected`.
+`coordinator.workflow_selected` carries the selected ID/name, rationale, available
+choices and override hint where that path emits the selection. Explicit and
+conversational overrides set `wasAutoSelected: false`; that value does not identify
+only singleton projects.
 
 | Condition | Outcome |
-|-----------|---------|
-| Single workflow | Default returned, `WasAutoSelected = false`, no LLM call |
-| Model unavailable / throws | Project default, warning logged |
-| Malformed JSON | Project default, warning logged |
-| Unknown selected id | Project default, warning logged |
-| Valid selection | The chosen workflow + its rationale |
+| --- | --- |
+| Valid explicit/backlog override | Select it before conversational/model selection; not automatic |
+| Valid conversational override | Select from available definitions; not automatic |
+| One candidate | Return it without a model call |
+| Parse failure or unknown model selection | Retry within the two-attempt bound, then fallback |
+| Model throws | Immediate fallback |
+| Valid automatic choice | Return the matched definition and rationale |
+
+The root workflow library is the canonical
+[blueprint mapping](workflow-library.md#blueprint-workflow-mappings).
+
+<!-- diagram-context:canonical-workflow-selection:start -->
+<details id="diagram-context-canonical-workflow-selection" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Workflow selection</td></tr>
+<tr><td>subtitle</td><td>Trigger-agnostic • explicit choices precede singleton</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Post-decomposition Build &amp; Test compatibility is a separate check (executor:407–494).</td></tr>
+<tr><td>Load candidates</td><td>Load candidates</td></tr>
+<tr><td>Load candidates</td><td>Project default ordered first</td></tr>
+<tr><td>Load candidates</td><td>registry.Available</td></tr>
+<tr><td>Explicit override?</td><td>Explicit override?</td></tr>
+<tr><td>Explicit override?</td><td>Dialog value, else backlog pin</td></tr>
+<tr><td>Explicit override?</td><td>must be available</td></tr>
+<tr><td>Conversational choice?</td><td>Conversational choice?</td></tr>
+<tr><td>Conversational choice?</td><td>Revision feedback: use {id}</td></tr>
+<tr><td>Candidate count</td><td>Candidate count</td></tr>
+<tr><td>Candidate count</td><td>Only automatic selection</td></tr>
+<tr><td>Candidate count</td><td>0 / 1 / multiple</td></tr>
+<tr><td>Ask selection model</td><td>Ask selection model</td></tr>
+<tr><td>Ask selection model</td><td>Goal + roles + process fit</td></tr>
+<tr><td>Ask selection model</td><td>maximum 2 attempts</td></tr>
+<tr><td>Usable candidate?</td><td>Usable candidate?</td></tr>
+<tr><td>Usable candidate?</td><td>Parse / normalize / prose match</td></tr>
+<tr><td>Usable candidate?</td><td>reject unknown choices</td></tr>
+<tr><td>Selected workflow</td><td>Selected workflow</td></tr>
+<tr><td>Selected workflow</td><td>Emit selection + rationale</td></tr>
+<tr><td>Selected workflow</td><td>workflow_selected</td></tr>
+<tr><td>Explicit choice</td><td>Explicit choice</td></tr>
+<tr><td>Explicit choice</td><td>Emit selection</td></tr>
+<tr><td>Explicit choice</td><td>not auto-selected</td></tr>
+<tr><td>Silent choice</td><td>Silent choice</td></tr>
+<tr><td>Silent choice</td><td>One: candidate</td></tr>
+<tr><td>Silent choice</td><td>Zero: project default</td></tr>
+<tr><td>Model fallback</td><td>Model fallback</td></tr>
+<tr><td>Model fallback</td><td>default / standard then non-code-review</td></tr>
+<tr><td>Model fallback</td><td>else first candidate</td></tr>
+<tr><td>Outer fallback</td><td>Outer fallback</td></tr>
+<tr><td>Outer fallback</td><td>Project default</td></tr>
+<tr><td>Outer fallback</td><td>when catch permits</td></tr>
+<tr><td>edge-02-label</td><td>available</td></tr>
+<tr><td>edge-03-label</td><td>absent / invalid</td></tr>
+<tr><td>edge-06-label</td><td>0 or 1</td></tr>
+<tr><td>edge-07-label</td><td>2+</td></tr>
+<tr><td>edge-08-label</td><td>response</td></tr>
+<tr><td>edge-09-label</td><td>exception</td></tr>
+<tr><td>edge-10-label</td><td>accepted</td></tr>
+<tr><td>edge-11-label</td><td>retry once</td></tr>
+<tr><td>edge-12-label</td><td>2 unusable</td></tr>
+<tr><td>edge-13-label</td><td>emit choice</td></tr>
+<tr><td>edge-14-label</td><td>outer catch</td></tr>
+<tr><td>fallback</td><td>default / standard</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-workflow-selection:end -->

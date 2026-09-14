@@ -1,0 +1,610 @@
+{
+  "title": "MCP: discover, consent, invoke",
+  "nodes": [
+    {
+      "id": "client",
+      "label": "MCP client",
+      "subLabel": "/mcp challenge → resource metadata",
+      "meta": "mcp-httproute.yaml:30-46",
+      "icon": "box",
+      "shape": "umlActor",
+      "badge": {
+        "text": "DISCOVER",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "token",
+      "label": "API /oauth/token",
+      "subLabel": "Authorization code + PKCE",
+      "meta": "Program.cs:982-998",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "TOKEN",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "authorize",
+      "label": "API authorization server",
+      "subLabel": "Exact resource + mcp:invoke",
+      "meta": "OAuthAuthorizationServerEndpoints",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "VALIDATE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "refresh",
+      "label": "Refresh grant checks",
+      "subLabel": "Exact resource + grant state",
+      "meta": "OAuthAuthorizationServerEndpoints",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "REFRESH",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "entra",
+      "label": "Microsoft Entra ID",
+      "subLabel": "Sign in when needed",
+      "meta": "OAuthAuthorizationServerEndpoints",
+      "icon": "box",
+      "shape": "image",
+      "badge": {
+        "text": "IDENTITY",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP broker validation",
+      "subLabel": "Validate accepted broker JWT only",
+      "meta": "McpBrokerAuthenticationHandler",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "INVOKE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "consent",
+      "label": "Consent decision",
+      "subLabel": "Approve → authorization code",
+      "meta": "OAuthAuthorizationServerEndpoints",
+      "icon": "box",
+      "shape": "hexagon",
+      "badge": {
+        "text": "CONSENT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=hexagon;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "api",
+      "label": "API resource authorization",
+      "subLabel": "Forwarded broker bearer",
+      "meta": "AgentweaverApiClient.cs:353-391",
+      "icon": "box",
+      "shape": "process",
+      "badge": {
+        "text": "AUTHORIZE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "authorize",
+      "label": "discover issuer",
+      "loopback": false
+    },
+    {
+      "from": "authorize",
+      "to": "entra",
+      "label": "if needed",
+      "loopback": false
+    },
+    {
+      "from": "entra",
+      "to": "consent",
+      "label": "identity",
+      "loopback": false
+    },
+    {
+      "from": "consent",
+      "to": "token",
+      "label": "code + PKCE",
+      "loopback": false
+    },
+    {
+      "from": "token",
+      "to": "refresh",
+      "label": "renewal",
+      "loopback": false
+    },
+    {
+      "from": "token",
+      "to": "mcp",
+      "label": "bearer",
+      "loopback": false
+    },
+    {
+      "from": "mcp",
+      "to": "api",
+      "label": "same bearer",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "DISCOVERY + API AUTHORIZATION"
+    },
+    {
+      "id": "1",
+      "label": "TOKEN USE + INDEPENDENT API CHECK"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "client",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 85.11111111111111
+        },
+        "data": {
+          "id": "client",
+          "label": "MCP client",
+          "subLabel": "/mcp challenge → resource metadata",
+          "meta": "mcp-httproute.yaml:30-46",
+          "icon": "box",
+          "shape": "umlActor",
+          "badge": {
+            "text": "DISCOVER",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "token",
+        "type": "card",
+        "position": {
+          "x": 553.7777777777778,
+          "y": 99.11111111111111
+        },
+        "data": {
+          "id": "token",
+          "label": "API /oauth/token",
+          "subLabel": "Authorization code + PKCE",
+          "meta": "Program.cs:982-998",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "TOKEN",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "authorize",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 329.1111111111111
+        },
+        "data": {
+          "id": "authorize",
+          "label": "API authorization server",
+          "subLabel": "Exact resource + mcp:invoke",
+          "meta": "OAuthAuthorizationServerEndpoints",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "VALIDATE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "refresh",
+        "type": "card",
+        "position": {
+          "x": 553.7777777777778,
+          "y": 343.1111111111111
+        },
+        "data": {
+          "id": "refresh",
+          "label": "Refresh grant checks",
+          "subLabel": "Exact resource + grant state",
+          "meta": "OAuthAuthorizationServerEndpoints",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "REFRESH",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "entra",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 587.1111111111111
+        },
+        "data": {
+          "id": "entra",
+          "label": "Microsoft Entra ID",
+          "subLabel": "Sign in when needed",
+          "meta": "OAuthAuthorizationServerEndpoints",
+          "icon": "box",
+          "shape": "image",
+          "badge": {
+            "text": "IDENTITY",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;imageAspect=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "mcp",
+        "type": "card",
+        "position": {
+          "x": 553.7777777777778,
+          "y": 573.1111111111111
+        },
+        "data": {
+          "id": "mcp",
+          "label": "MCP broker validation",
+          "subLabel": "Validate accepted broker JWT only",
+          "meta": "McpBrokerAuthenticationHandler",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "INVOKE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "consent",
+        "type": "card",
+        "position": {
+          "x": 37.77777777777777,
+          "y": 831.1111111111111
+        },
+        "data": {
+          "id": "consent",
+          "label": "Consent decision",
+          "subLabel": "Approve → authorization code",
+          "meta": "OAuthAuthorizationServerEndpoints",
+          "icon": "box",
+          "shape": "hexagon",
+          "badge": {
+            "text": "CONSENT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=hexagon;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "api",
+        "type": "card",
+        "position": {
+          "x": 553.7777777777778,
+          "y": 817.1111111111111
+        },
+        "data": {
+          "id": "api",
+          "label": "API resource authorization",
+          "subLabel": "Forwarded broker bearer",
+          "meta": "AgentweaverApiClient.cs:353-391",
+          "icon": "box",
+          "shape": "process",
+          "badge": {
+            "text": "AUTHORIZE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 5.7777777777777715,
+          "y": 15.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "DISCOVERY + API AUTHORIZATION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 25.77777777777777,
+          "y": 31.111111111111114
+        },
+        "data": {
+          "label": "DISCOVERY + API AUTHORIZATION",
+          "width": 364
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 521.7777777777778,
+          "y": 29.111111111111114
+        },
+        "style": {
+          "width": 404,
+          "height": 944
+        },
+        "data": {
+          "label": "TOKEN USE + INDEPENDENT API CHECK",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 541.7777777777778,
+          "y": 45.111111111111114
+        },
+        "data": {
+          "label": "TOKEN USE + INDEPENDENT API CHECK",
+          "width": 364
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "client",
+        "target": "authorize",
+        "label": "discover issuer",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 217.11111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 329.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 273.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "authorize",
+        "target": "entra",
+        "label": "if needed",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 461.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 587.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 524.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "entra",
+        "target": "consent",
+        "label": "identity",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 207.77777777777777,
+              "y": 691.1111111111111
+            },
+            {
+              "x": 207.77777777777777,
+              "y": 831.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 207.77777777777777,
+            "y": 761.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "consent",
+        "target": "token",
+        "label": "code + PKCE",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 377.77777777777777,
+              "y": 883.1111111111111
+            },
+            {
+              "x": 465.17916988914664,
+              "y": 883.1111111111111
+            },
+            {
+              "x": 465.17916988914664,
+              "y": 151.11111111111111
+            },
+            {
+              "x": 553.7777777777778,
+              "y": 151.11111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 489.17916988914664,
+            "y": 151.11111111111111
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "token",
+        "target": "refresh",
+        "label": "renewal",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 723.7777777777778,
+              "y": 203.11111111111111
+            },
+            {
+              "x": 723.7777777777778,
+              "y": 343.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 723.7777777777778,
+            "y": 273.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "token",
+        "target": "mcp",
+        "label": "bearer",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 893.7777777777778,
+              "y": 151.11111111111111
+            },
+            {
+              "x": 911.6172839506172,
+              "y": 151.11111111111111
+            },
+            {
+              "x": 911.6172839506172,
+              "y": 639.1111111111111
+            },
+            {
+              "x": 893.7777777777778,
+              "y": 639.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 911.6172839506172,
+            "y": 471.1111111111111
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "mcp",
+        "target": "api",
+        "label": "same bearer",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 723.7777777777778,
+              "y": 705.1111111111111
+            },
+            {
+              "x": 723.7777777777778,
+              "y": 817.1111111111111
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 723.7777777777778,
+            "y": 761.1111111111111
+          }
+        }
+      }
+    ],
+    "canvasWidth": 931.5555555555555,
+    "canvasHeight": 997.4938271604938
+  }
+}

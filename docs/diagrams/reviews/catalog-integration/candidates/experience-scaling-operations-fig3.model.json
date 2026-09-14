@@ -1,0 +1,466 @@
+{
+  "title": "Lease transfer is not turn replay",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Worker A",
+      "subLabel": "Guarded lease claim",
+      "meta": "owner A + token n",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "OWNER",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Lease expires",
+      "subLabel": "Renewals cease",
+      "meta": "free / expired eligibility",
+      "icon": "database",
+      "shape": "cylinder3",
+      "badge": {
+        "text": "EXPIRY",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Worker B",
+      "subLabel": "Win eligible next claim",
+      "meta": "owner B + token n+1",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "NEW OWNER",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Visible failure",
+      "subLabel": "Stranded child / root",
+      "meta": "retryable child vs root",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "FAILURE",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Inspect run state",
+      "subLabel": "Checkpoint or work plan",
+      "meta": "recovery prerequisites",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "DECIDE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Durable recovery",
+      "subLabel": "Eligible saved state",
+      "meta": "checkpoint / coordinator plan",
+      "icon": "database",
+      "shape": "cylinder3",
+      "badge": {
+        "text": "CONTINUE",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "renewals stop",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "next claim",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n4",
+      "label": "inspect",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n3",
+      "label": "stranded turn",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "recoverable",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "LEASE OWNERSHIP"
+    },
+    {
+      "id": "1",
+      "label": "STATE-DEPENDENT RECOVERY"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n0",
+          "label": "Worker A",
+          "subLabel": "Guarded lease claim",
+          "meta": "owner A + token n",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "OWNER",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;fontColor=#3f3682;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 566.7253588516746,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n1",
+          "label": "Lease expires",
+          "subLabel": "Renewals cease",
+          "meta": "free / expired eligibility",
+          "icon": "database",
+          "shape": "cylinder3",
+          "badge": {
+            "text": "EXPIRY",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1065.1253588516747,
+          "y": 276.6124401913876
+        },
+        "data": {
+          "id": "n2",
+          "label": "Worker B",
+          "subLabel": "Win eligible next claim",
+          "meta": "owner B + token n+1",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "NEW OWNER",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 68.32535885167465,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n3",
+          "label": "Visible failure",
+          "subLabel": "Stranded child / root",
+          "meta": "retryable child vs root",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "FAILURE",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;html=1;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;fontColor=#835b00;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 566.7253588516746,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n4",
+          "label": "Inspect run state",
+          "subLabel": "Checkpoint or work plan",
+          "meta": "recovery prerequisites",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "DECIDE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=rhombus;html=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;fontColor=#00666d;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1065.1253588516747,
+          "y": 652.4019138755981
+        },
+        "data": {
+          "id": "n5",
+          "label": "Durable recovery",
+          "subLabel": "Eligible saved state",
+          "meta": "checkpoint / coordinator plan",
+          "icon": "database",
+          "shape": "cylinder3",
+          "badge": {
+            "text": "CONTINUE",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=cylinder3;size=8;html=1;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;fontColor=#0e700e;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 212.61244019138758
+        },
+        "style": {
+          "width": 1400.8000000000002,
+          "height": 192
+        },
+        "data": {
+          "label": "LEASE OWNERSHIP",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 228.61244019138758
+        },
+        "data": {
+          "label": "LEASE OWNERSHIP",
+          "width": 1360.8000000000002
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 36.32535885167465,
+          "y": 588.4019138755981
+        },
+        "style": {
+          "width": 1400.8000000000002,
+          "height": 192
+        },
+        "data": {
+          "label": "STATE-DEPENDENT RECOVERY",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 56.32535885167465,
+          "y": 604.4019138755981
+        },
+        "data": {
+          "label": "STATE-DEPENDENT RECOVERY",
+          "width": 1360.8000000000002
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n1",
+        "label": "renewals stop",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 408.32535885167465,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 566.7253588516746,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 487.52535885167464,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "label": "next claim",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 906.7253588516746,
+              "y": 328.6124401913876
+            },
+            {
+              "x": 1065.1253588516747,
+              "y": 328.6124401913876
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 985.9253588516747,
+            "y": 328.6124401913876
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n4",
+        "label": "inspect",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1235.1253588516747,
+              "y": 380.6124401913876
+            },
+            {
+              "x": 1235.1253588516747,
+              "y": 488.0382775119617
+            },
+            {
+              "x": 736.7253588516746,
+              "y": 488.0382775119617
+            },
+            {
+              "x": 736.7253588516746,
+              "y": 652.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 985.9253588516747,
+            "y": 488.0382775119617
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n4",
+        "target": "n3",
+        "label": "stranded turn",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 566.7253588516746,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 408.32535885167465,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 487.52535885167464,
+            "y": 704.4019138755981
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "recoverable",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 906.7253588516746,
+              "y": 704.4019138755981
+            },
+            {
+              "x": 1065.1253588516747,
+              "y": 704.4019138755981
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 985.9253588516747,
+            "y": 704.4019138755981
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1473.4507177033495,
+    "canvasHeight": 948.4210526315791
+  }
+}

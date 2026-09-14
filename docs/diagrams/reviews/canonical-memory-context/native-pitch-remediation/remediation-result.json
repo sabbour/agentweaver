@@ -1,0 +1,64 @@
+{
+  "diagram": "canonical-memory-context",
+  "status": "completed",
+  "promoted": true,
+  "final_pass": 5,
+  "lineage": "docs/diagrams/reviews/canonical-memory-context/native-pitch-remediation",
+  "canonical_source": "docs/diagrams/src/canonical-memory-context.drawio",
+  "canonical_png": "docs/diagrams/canonical-memory-context.png",
+  "canonical_hash": "docs/diagrams/canonical-memory-context.hash.txt",
+  "source_sha256": "f840e23828211aeb00e316d9dce826555e2b9fda4c70a894507c6766289a0b31",
+  "png_sha256": "e60fdbad1969d2fa7ec412b822615e84227c7a0f8240b0fc7c5aef4cc7472c31",
+  "source_final_byte_identity": true,
+  "published_final_pixel_identity": true,
+  "schema": "passed",
+  "skill_crossfields": "passed",
+  "selective_render": "passed",
+  "selective_drift": "passed",
+  "a5": {
+    "width": 827,
+    "height": 583,
+    "pageScale": 1,
+    "logical_units_per_inch": 100
+  },
+  "growth": {
+    "growth_metric": "visible-semantic-canonical-xml-v1",
+    "baseline_meaningful_xml": 2197,
+    "result_meaningful_xml": 25426,
+    "baseline_visible_structures": 8,
+    "result_visible_structures": 84,
+    "growth_ratio": 11.573054,
+    "minimum_ratio": 9.0,
+    "invisible_cells": [],
+    "off_page_cells": [],
+    "duplicate_cells": [],
+    "metadata_padding": [],
+    "passed": true,
+    "pitch": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-memory-context\\native-pitch-remediation\\canonical-memory-context-pitch.drawio",
+    "pass_one": "C:\\Users\\asabbour\\Git\\agentweaver\\.worktrees\\drawio-diagram-authoring\\docs\\diagrams\\reviews\\canonical-memory-context\\native-pitch-remediation\\canonical-memory-context-pass-01.drawio"
+  },
+  "inspections": "All pitch/pass PNGs actually opened at print scale and enlarged; final every-arrow trace in final pass MD.",
+  "defects_resolved": [
+    "Sparse generic pitch replaced with native-symbol Fluent responsibility model.",
+    "Long titles fitted without clipping; content hierarchy and 5px accents retained.",
+    "Native Azure AKS / Entra assets and Kubernetes deploy/pod/svc used where applicable; old router-for-Azure mapping superseded.",
+    "Footnote/key overlap and row-transition routing corrected.",
+    "Side-port arrow tangents corrected; final arrows independently traced.",
+    "Windows copy-induced Unicode glyph corruption caught in pass 4 and corrected, not promoted."
+  ],
+  "historical_status": "Older promotion-status/shared-concept-status and old manifests are historical and not authoritative for this remediation.",
+  "archive": "docs/diagrams/reviews/canonical-memory-context/native-pitch-remediation/pre-promotion-archive",
+  "retired_after_clean_promotion": [
+    "docs/diagrams/src/canonical-memory-context.json",
+    "docs/diagrams/drawio/generated/canonical-memory-context.drawio"
+  ],
+  "research": [
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-01.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-02.md",
+    "docs/diagrams/reviews/canonical-provider-admission/research-thread-03.md"
+  ],
+  "docs_build": "Not run: parent owns docs build.",
+  "pages_product_pipeline_inventory_plan_changed": false,
+  "commits_or_staging": false,
+  "external_blockers": []
+}

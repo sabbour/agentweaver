@@ -1,0 +1,10 @@
+{
+  "stage": "pass-02",
+  "png_opened": true,
+  "print_opened": true,
+  "observations": "Side labels now end before vertical rail bounds, so unrelated connectors remain visible. All native glyphs and node text fit at print and enlarged sizes. Orthogonal outcome endpoints, packed separate lanes and crossing bridges remain identifiable; revision routes retain their source/target associations. The 2 unusable label auto-wraps across its own horizontal edge. Pass 3 will explicitly use two lines and raise the label; enlarged fallback process glyph and distinct left-side arrowheads are now clean.",
+  "orientation_defects": 0,
+  "overlap_defects": 1,
+  "arrow_defects": 1,
+  "method": "Direct image-view calls on actual exported PNG and print-size PNG in this session"
+}

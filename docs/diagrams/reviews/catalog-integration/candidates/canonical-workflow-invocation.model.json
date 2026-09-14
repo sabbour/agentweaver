@@ -1,0 +1,746 @@
+{
+  "title": "How work enters the coordinator",
+  "nodes": [
+    {
+      "id": "n0",
+      "label": "Manual request",
+      "subLabel": "Start coordinator directly",
+      "meta": "submitting user",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "MANUAL",
+        "tone": "neutral"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n1",
+      "label": "Verified Repo App event",
+      "subLabel": "HMAC before JSON parsing",
+      "meta": "configured signing keys",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "EVENT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n2",
+      "label": "Due schedule",
+      "subLabel": "Claim scheduled occurrence",
+      "meta": "recover outstanding work",
+      "icon": "route",
+      "shape": "ellipse",
+      "badge": {
+        "text": "SCHEDULE",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=ellipse;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "n3",
+      "label": "Trigger + authorization",
+      "subLabel": "Match and claim invocation",
+      "meta": "rejected: no work",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "ADMIT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n4",
+      "label": "Pinned Ready task",
+      "subLabel": "Durable workflow choice",
+      "meta": "automation work item",
+      "icon": "database",
+      "shape": "cylinder",
+      "badge": {
+        "text": "READY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n5",
+      "label": "Atomic pickup",
+      "subLabel": "Claim and reserve a run",
+      "meta": "start reserved coordinator",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "CLAIM",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "n6",
+      "label": "Coordinator run",
+      "subLabel": "Manual or backlog origin",
+      "meta": "RunOrigin recorded",
+      "icon": "window",
+      "shape": "process",
+      "badge": {
+        "text": "START",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n7",
+      "label": "Approval policy",
+      "subLabel": "Autopilot controls unattended",
+      "meta": "not origin alone",
+      "icon": "globe",
+      "shape": "umlActor",
+      "badge": {
+        "text": "CONFIRM",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "2"
+    },
+    {
+      "id": "n8",
+      "label": "Available workflows",
+      "subLabel": "No invocation-kind filter",
+      "meta": "valid supplied candidates",
+      "icon": "branch",
+      "shape": "rhombus",
+      "badge": {
+        "text": "SELECT",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n6",
+      "label": "start",
+      "loopback": false
+    },
+    {
+      "from": "n1",
+      "to": "n3",
+      "label": "match",
+      "loopback": false
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "claim",
+      "loopback": false
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "publish",
+      "loopback": false
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": "pickup",
+      "loopback": false
+    },
+    {
+      "from": "n5",
+      "to": "n6",
+      "label": "start",
+      "loopback": false
+    },
+    {
+      "from": "n6",
+      "to": "n7",
+      "label": "policy",
+      "loopback": false
+    },
+    {
+      "from": "n7",
+      "to": "n8",
+      "label": "select",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "ORIGIN CHANNELS"
+    },
+    {
+      "id": "1",
+      "label": "AUTOMATION ADMISSION AND DURABLE WORK"
+    },
+    {
+      "id": "2",
+      "label": "PICKUP, CONFIRMATION AND SELECTION"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n0",
+          "label": "Manual request",
+          "subLabel": "Start coordinator directly",
+          "meta": "submitting user",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "MANUAL",
+            "tone": "neutral"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#e7e1dc;strokeColor=#635c57;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n1",
+          "label": "Verified Repo App event",
+          "subLabel": "HMAC before JSON parsing",
+          "meta": "configured signing keys",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "EVENT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 291.7383177570093
+        },
+        "data": {
+          "id": "n2",
+          "label": "Due schedule",
+          "subLabel": "Claim scheduled occurrence",
+          "meta": "recover outstanding work",
+          "icon": "route",
+          "shape": "ellipse",
+          "badge": {
+            "text": "SCHEDULE",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=ellipse;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n3",
+          "label": "Trigger + authorization",
+          "subLabel": "Match and claim invocation",
+          "meta": "rejected: no work",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "ADMIT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n4",
+          "label": "Pinned Ready task",
+          "subLabel": "Durable workflow choice",
+          "meta": "automation work item",
+          "icon": "database",
+          "shape": "cylinder",
+          "badge": {
+            "text": "READY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 535.7383177570093
+        },
+        "data": {
+          "id": "n5",
+          "label": "Atomic pickup",
+          "subLabel": "Claim and reserve a run",
+          "meta": "start reserved coordinator",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "CLAIM",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "card",
+        "position": {
+          "x": 198.1308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n6",
+          "label": "Coordinator run",
+          "subLabel": "Manual or backlog origin",
+          "meta": "RunOrigin recorded",
+          "icon": "window",
+          "shape": "process",
+          "badge": {
+            "text": "START",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n7",
+        "type": "card",
+        "position": {
+          "x": 643.7308411214954,
+          "y": 765.7383177570093
+        },
+        "data": {
+          "id": "n7",
+          "label": "Approval policy",
+          "subLabel": "Autopilot controls unattended",
+          "meta": "not origin alone",
+          "icon": "globe",
+          "shape": "umlActor",
+          "badge": {
+            "text": "CONFIRM",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=umlActor;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "n8",
+        "type": "card",
+        "position": {
+          "x": 1089.3308411214953,
+          "y": 779.7383177570093
+        },
+        "data": {
+          "id": "n8",
+          "label": "Available workflows",
+          "subLabel": "No invocation-kind filter",
+          "meta": "valid supplied candidates",
+          "icon": "branch",
+          "shape": "rhombus",
+          "badge": {
+            "text": "SELECT",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=rhombus;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "2"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 227.73831775700933
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 192
+        },
+        "data": {
+          "label": "ORIGIN CHANNELS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 243.73831775700933
+        },
+        "data": {
+          "label": "ORIGIN CHANNELS",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 465.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 198
+        },
+        "data": {
+          "label": "AUTOMATION ADMISSION AND DURABLE WORK",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 481.7383177570093
+        },
+        "data": {
+          "label": "AUTOMATION ADMISSION AND DURABLE WORK",
+          "width": 1255.2
+        }
+      },
+      {
+        "id": "group-2",
+        "type": "band",
+        "position": {
+          "x": 166.1308411214953,
+          "y": 695.7383177570093
+        },
+        "style": {
+          "width": 1295.2,
+          "height": 226
+        },
+        "data": {
+          "label": "PICKUP, CONFIRMATION AND SELECTION",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-2-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 186.1308411214953,
+          "y": 711.7383177570093
+        },
+        "data": {
+          "label": "PICKUP, CONFIRMATION AND SELECTION",
+          "width": 1255.2
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "n0",
+        "target": "n6",
+        "label": "start",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 198.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 142.1308411214953,
+              "y": 343.7383177570093
+            },
+            {
+              "x": 142.1308411214953,
+              "y": 819.0716510903427
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 819.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 158.93084112149532,
+            "y": 343.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n3",
+        "label": "match",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 813.7308411214954,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 813.7308411214954,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 575.0716510903427
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 575.0716510903427
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 489.93084112149535,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "n2",
+        "target": "n3",
+        "label": "claim",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1259.3308411214953,
+              "y": 395.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1473.3308411214953,
+              "y": 427.7383177570093
+            },
+            {
+              "x": 1473.3308411214953,
+              "y": 691.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 691.7383177570093
+            },
+            {
+              "x": 166.1308411214953,
+              "y": 600.404984423676
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 600.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1366.3308411214953,
+            "y": 427.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "n3",
+        "target": "n4",
+        "label": "publish",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.9308411214954,
+            "y": 587.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "n4",
+        "target": "n5",
+        "label": "pickup",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 983.7308411214954,
+              "y": 587.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 587.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.5308411214953,
+            "y": 587.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "n5",
+        "target": "n6",
+        "label": "start",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 1259.3308411214953,
+              "y": 639.7383177570093
+            },
+            {
+              "x": 1259.3308411214953,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 118.13084112149531,
+              "y": 671.7383177570093
+            },
+            {
+              "x": 118.13084112149531,
+              "y": 844.404984423676
+            },
+            {
+              "x": 198.1308411214953,
+              "y": 844.404984423676
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 688.7308411214952,
+            "y": 671.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "n6",
+        "target": "n7",
+        "label": "policy",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 538.1308411214953,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 643.7308411214954,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 590.9308411214954,
+            "y": 831.7383177570093
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "n7",
+        "target": "n8",
+        "label": "select",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 983.7308411214954,
+              "y": 831.7383177570093
+            },
+            {
+              "x": 1089.3308411214953,
+              "y": 831.7383177570093
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 1036.5308411214953,
+            "y": 831.7383177570093
+          }
+        }
+      }
+    ],
+    "canvasWidth": 1627.4616822429907,
+    "canvasHeight": 1053.1401869158876
+  }
+}

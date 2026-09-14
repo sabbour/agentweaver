@@ -1,0 +1,211 @@
+{
+  "diagram": "sandbox-pod-execution-fig7",
+  "source_sha256": "bdaedcdf19e16adff8f91db0420ab5c43edac2bd2e11366e2a531ffee7e751c4",
+  "png_sha256": "b66e000ba40cff2b4c96cbd74a92c7d22a1a0d17442288be513b71b2e219b803",
+  "prior_model": "docs\\diagrams\\reviews\\canonical-pod-process-boundaries\\content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Current final PNGs are byte-identical to the individually stage-exported pass-04 artifacts. All five stages inspected through 50 contact sheets; dense replay, executor selection, approval round trip and pod-process boundaries additionally opened individually. 121 final arrows traced; all 20 new manifests passed >=9x with no padding. See completion-20260913 records and completion-inspections.json.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Return the decision to the owning gate"
+    },
+    {
+      "cell": "takeaway",
+      "text": "Only an Unknown durable-gate result takes the authenticated pod fallback."
+    },
+    {
+      "cell": "operator-title",
+      "text": "Operator decision"
+    },
+    {
+      "cell": "operator-subtitle",
+      "text": "Coordinator or child run ID"
+    },
+    {
+      "cell": "operator-metadata",
+      "text": "Authorize request and owner"
+    },
+    {
+      "cell": "operator-badge",
+      "text": "USER"
+    },
+    {
+      "cell": "api-title",
+      "text": "API approval endpoint"
+    },
+    {
+      "cell": "api-subtitle",
+      "text": "Resolve owning child"
+    },
+    {
+      "cell": "api-metadata",
+      "text": "Try durable gate first"
+    },
+    {
+      "cell": "api-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "durable-title",
+      "text": "Durable gate"
+    },
+    {
+      "cell": "durable-subtitle",
+      "text": "Known terminal: return result"
+    },
+    {
+      "cell": "durable-metadata",
+      "text": "Unknown: pod-per-run fallback"
+    },
+    {
+      "cell": "durable-badge",
+      "text": "DATA"
+    },
+    {
+      "cell": "response-title",
+      "text": "Public response"
+    },
+    {
+      "cell": "response-subtitle",
+      "text": "Return mapped result"
+    },
+    {
+      "cell": "response-metadata",
+      "text": "200 / 404 / 409 / 503"
+    },
+    {
+      "cell": "response-badge",
+      "text": "STEP"
+    },
+    {
+      "cell": "client-title",
+      "text": "Approval HTTP client"
+    },
+    {
+      "cell": "client-subtitle",
+      "text": "Resolve pod origin + credential"
+    },
+    {
+      "cell": "client-metadata",
+      "text": "Authenticated control callback"
+    },
+    {
+      "cell": "client-badge",
+      "text": "NET"
+    },
+    {
+      "cell": "pod-title",
+      "text": "AgentHost local gate"
+    },
+    {
+      "cell": "pod-subtitle",
+      "text": "Resolve pending tool request"
+    },
+    {
+      "cell": "pod-metadata",
+      "text": "Return resolution to API"
+    },
+    {
+      "cell": "pod-badge",
+      "text": "K8S"
+    },
+    {
+      "cell": "arrow-1",
+      "text": "grant"
+    },
+    {
+      "cell": "arrow-2",
+      "text": "try"
+    },
+    {
+      "cell": "arrow-3",
+      "text": "unknown"
+    },
+    {
+      "cell": "arrow-4",
+      "text": "forward"
+    },
+    {
+      "cell": "arrow-5",
+      "text": "result"
+    },
+    {
+      "cell": "arrow-6",
+      "text": "return"
+    },
+    {
+      "cell": "arrow-7",
+      "text": "respond"
+    },
+    {
+      "cell": "note-0",
+      "text": "The fallback uses ApprovalHttpClient; arrows summarize request and return."
+    },
+    {
+      "cell": "note-1",
+      "text": "Configured control auth accepts turn or preview credential; dev can omit both."
+    },
+    {
+      "cell": "note-2",
+      "text": "Errors and provisional-grant rollback/finalize stay in the consumer prose."
+    }
+  ],
+  "context_pages": [
+    "docs/deep-dive/sandbox-pod-execution.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "operator",
+      "to": "api",
+      "label": "grant",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "api",
+      "to": "durable",
+      "label": "try",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "durable",
+      "to": "client",
+      "label": "unknown",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "client",
+      "to": "pod",
+      "label": "forward",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "pod",
+      "to": "client",
+      "label": "result",
+      "result": "clean"
+    },
+    {
+      "id": "e5",
+      "from": "client",
+      "to": "response",
+      "label": "return",
+      "result": "clean"
+    },
+    {
+      "id": "e6",
+      "from": "response",
+      "to": "operator",
+      "label": "respond",
+      "result": "clean"
+    }
+  ]
+}

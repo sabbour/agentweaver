@@ -1,0 +1,213 @@
+{
+  "diagram": "experience-scaling-operations-fig3",
+  "source_sha256": "049a51a61e2f8f69fe327a6dbaf53bc398b5b6dc112405d074f0f432ae2102d5",
+  "png_sha256": "1d4b8243e261026ed0101fa13849c92ee12296c7266d5cf4f6bbacd84aef0f84",
+  "prior_model": "docs\\diagrams\\reviews\\experience-00-overview-fig1\\experience-content-models.json",
+  "prior_pitch_iteration_records": "retained unchanged",
+  "style_contract": "approved classicThin 8 / React optical Fluent",
+  "inspection": "contact-sheet",
+  "inspection_notes": "Opened all current family contact sheets, with individual enlarged inspections for complex routing, recovered shared-bus relationships, sequence lifelines, native symbols and corrected group captions/perimeter endpoints. Preserved compact Fluent card geometry, semantic colors and complete source relationship maps. Every staged source passes the arrow/bridge/junction/overlap contract. Prior valid pitch and iteration evidence is retained; original context is explicitly preserved outside the canvas.",
+  "preserved_copy": [
+    {
+      "cell": "title",
+      "text": "Lease transfer is not turn replay"
+    },
+    {
+      "cell": "takeaway",
+      "text": "An expired owner can be replaced; continuation depends on the persisted run state."
+    },
+    {
+      "cell": "group-title-0",
+      "text": "LEASE OWNERSHIP"
+    },
+    {
+      "cell": "group-title-1",
+      "text": "STATE-DEPENDENT RECOVERY"
+    },
+    {
+      "cell": "n0-badge",
+      "text": "OWNER"
+    },
+    {
+      "cell": "n0-title",
+      "text": "Worker A"
+    },
+    {
+      "cell": "n0-subtitle",
+      "text": "Guarded lease claim"
+    },
+    {
+      "cell": "n0-meta",
+      "text": "owner A + token n"
+    },
+    {
+      "cell": "n0-detail",
+      "text": "Renewals must match both owner and fencing token."
+    },
+    {
+      "cell": "n1-badge",
+      "text": "EXPIRY"
+    },
+    {
+      "cell": "n1-title",
+      "text": "Lease expires"
+    },
+    {
+      "cell": "n1-subtitle",
+      "text": "Renewals cease"
+    },
+    {
+      "cell": "n1-meta",
+      "text": "free / expired eligibility"
+    },
+    {
+      "cell": "n1-detail",
+      "text": "Failure is not a message; expiry permits a later claim."
+    },
+    {
+      "cell": "n2-badge",
+      "text": "NEW OWNER"
+    },
+    {
+      "cell": "n2-title",
+      "text": "Worker B"
+    },
+    {
+      "cell": "n2-subtitle",
+      "text": "Win eligible next claim"
+    },
+    {
+      "cell": "n2-meta",
+      "text": "owner B + token n+1"
+    },
+    {
+      "cell": "n2-detail",
+      "text": "Old-token terminal ownership checks reject stale results."
+    },
+    {
+      "cell": "n3-badge",
+      "text": "FAILURE"
+    },
+    {
+      "cell": "n3-title",
+      "text": "Visible failure"
+    },
+    {
+      "cell": "n3-subtitle",
+      "text": "Stranded child / root"
+    },
+    {
+      "cell": "n3-meta",
+      "text": "retryable child vs root"
+    },
+    {
+      "cell": "n3-detail",
+      "text": "Child may be redispatched; no automatic mid-turn replay."
+    },
+    {
+      "cell": "n4-badge",
+      "text": "DECIDE"
+    },
+    {
+      "cell": "n4-title",
+      "text": "Inspect run state"
+    },
+    {
+      "cell": "n4-subtitle",
+      "text": "Checkpoint or work plan"
+    },
+    {
+      "cell": "n4-meta",
+      "text": "recovery prerequisites"
+    },
+    {
+      "cell": "n4-detail",
+      "text": "AwaitingReview, coordinator, and stranded turns differ."
+    },
+    {
+      "cell": "n5-badge",
+      "text": "CONTINUE"
+    },
+    {
+      "cell": "n5-title",
+      "text": "Durable recovery"
+    },
+    {
+      "cell": "n5-subtitle",
+      "text": "Eligible saved state"
+    },
+    {
+      "cell": "n5-meta",
+      "text": "checkpoint / coordinator plan"
+    },
+    {
+      "cell": "n5-detail",
+      "text": "Recover only supported state; missing checkpoints surface."
+    },
+    {
+      "cell": "e0",
+      "text": "renewals stop"
+    },
+    {
+      "cell": "e1",
+      "text": "next claim"
+    },
+    {
+      "cell": "e2",
+      "text": "inspect"
+    },
+    {
+      "cell": "e3",
+      "text": "stranded turn"
+    },
+    {
+      "cell": "e4",
+      "text": "recoverable"
+    },
+    {
+      "cell": "note",
+      "text": "Fencing protects guarded ownership operations, not every external tool side effect."
+    }
+  ],
+  "context_pages": [
+    "docs/experience/scaling-operations.md"
+  ],
+  "single_agent_exception": "User forbids subagents and waives repeat article research for existing valid evidence.",
+  "arrow_trace": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n1",
+      "label": "renewals stop",
+      "result": "clean"
+    },
+    {
+      "id": "e1",
+      "from": "n1",
+      "to": "n2",
+      "label": "next claim",
+      "result": "clean"
+    },
+    {
+      "id": "e2",
+      "from": "n2",
+      "to": "n4",
+      "label": "inspect",
+      "result": "clean"
+    },
+    {
+      "id": "e3",
+      "from": "n4",
+      "to": "n3",
+      "label": "stranded turn",
+      "result": "clean"
+    },
+    {
+      "id": "e4",
+      "from": "n4",
+      "to": "n5",
+      "label": "recoverable",
+      "result": "clean"
+    }
+  ]
+}

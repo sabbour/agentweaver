@@ -1,0 +1,682 @@
+{
+  "title": "System diagnostics · a narrow live check map",
+  "nodes": [
+    {
+      "id": "request",
+      "label": "Diagnostics request",
+      "subLabel": "Protected endpoint",
+      "meta": "DiagnosticsEndpoints:52",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "REQUEST",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "service",
+      "label": "Diagnostics service",
+      "subLabel": "Ordered live checks",
+      "meta": "DiagnosticsService:89–136",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "COLLECT",
+        "tone": "lavender"
+      },
+      "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "storage",
+      "label": "SQLite + data directory",
+      "subLabel": "Reachability / write probe",
+      "meta": "DiagnosticsService:1192–1230",
+      "icon": "box",
+      "shape": "cylinder3",
+      "classification": "native:database",
+      "badge": {
+        "text": "STORAGE",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "builtins",
+      "label": "Built-in definitions",
+      "subLabel": "Workflow + review-policy checks",
+      "meta": "DiagnosticsService:97–103",
+      "icon": "box",
+      "shape": "document",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "REGISTRY",
+        "tone": "teal"
+      },
+      "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+      "group": "0"
+    },
+    {
+      "id": "heartbeat",
+      "label": "Heartbeat + project store",
+      "meta": "DiagnosticsService:97–103",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "STATUS",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "github",
+      "label": "GitHub CLI / auth",
+      "subLabel": "Local CLI diagnostic surface",
+      "meta": "DiagnosticsService:1292+",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "CLI",
+        "tone": "green"
+      },
+      "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "counts",
+      "label": "Counts + pod quota",
+      "subLabel": "Provider-aware run/project counts",
+      "meta": "DiagnosticsService:105–138",
+      "icon": "box",
+      "shape": "process",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "COUNTS",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    },
+    {
+      "id": "dto",
+      "label": "SystemDiagnosticsDto",
+      "subLabel": "Checks / details / durations",
+      "meta": "DiagnosticsService:116–134",
+      "icon": "box",
+      "shape": "document",
+      "classification": "native:flowchart",
+      "badge": {
+        "text": "SNAPSHOT",
+        "tone": "marigold"
+      },
+      "nativeStyle": "shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+      "group": "1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "request",
+      "to": "service",
+      "label": "collect",
+      "loopback": false
+    },
+    {
+      "from": "service",
+      "to": "storage",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "service",
+      "to": "builtins",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "service",
+      "to": "heartbeat",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "service",
+      "to": "github",
+      "label": "check",
+      "loopback": false
+    },
+    {
+      "from": "service",
+      "to": "counts",
+      "label": "read counts",
+      "loopback": false
+    },
+    {
+      "from": "github",
+      "to": "dto",
+      "label": "check results",
+      "loopback": false
+    },
+    {
+      "from": "counts",
+      "to": "dto",
+      "label": "summary",
+      "loopback": false
+    }
+  ],
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "0",
+      "label": "SYSTEM CHECKS"
+    },
+    {
+      "id": "1",
+      "label": "STATUS / COUNTS"
+    }
+  ],
+  "layoutSnapshot": {
+    "nodes": [
+      {
+        "id": "request",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "request",
+          "label": "Diagnostics request",
+          "subLabel": "Protected endpoint",
+          "meta": "DiagnosticsEndpoints:52",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "REQUEST",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "service",
+        "type": "card",
+        "position": {
+          "x": 534.0851311953353,
+          "y": 108.0874635568513
+        },
+        "data": {
+          "id": "service",
+          "label": "Diagnostics service",
+          "subLabel": "Ordered live checks",
+          "meta": "DiagnosticsService:89–136",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "COLLECT",
+            "tone": "lavender"
+          },
+          "nativeStyle": "shape=process;fillColor=#d2ccf8;strokeColor=#3f3682;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "storage",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 352.0874635568513
+        },
+        "data": {
+          "id": "storage",
+          "label": "SQLite + data directory",
+          "subLabel": "Reachability / write probe",
+          "meta": "DiagnosticsService:1192–1230",
+          "icon": "box",
+          "shape": "cylinder3",
+          "classification": "native:database",
+          "badge": {
+            "text": "STORAGE",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=cylinder3;size=6;boundedLbl=1;backgroundOutline=1;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "builtins",
+        "type": "card",
+        "position": {
+          "x": 534.0851311953353,
+          "y": 338.0874635568513
+        },
+        "data": {
+          "id": "builtins",
+          "label": "Built-in definitions",
+          "subLabel": "Workflow + review-policy checks",
+          "meta": "DiagnosticsService:97–103",
+          "icon": "box",
+          "shape": "document",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "REGISTRY",
+            "tone": "teal"
+          },
+          "nativeStyle": "shape=document;fillColor=#a6e9ed;strokeColor=#00666d;strokeWidth=1.5;",
+          "group": "0"
+        }
+      },
+      {
+        "id": "heartbeat",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "heartbeat",
+          "label": "Heartbeat + project store",
+          "meta": "DiagnosticsService:97–103",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "STATUS",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "github",
+        "type": "card",
+        "position": {
+          "x": 534.0851311953353,
+          "y": 596.0874635568513
+        },
+        "data": {
+          "id": "github",
+          "label": "GitHub CLI / auth",
+          "subLabel": "Local CLI diagnostic surface",
+          "meta": "DiagnosticsService:1292+",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "CLI",
+            "tone": "green"
+          },
+          "nativeStyle": "shape=process;fillColor=#9fd89f;strokeColor=#0e700e;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "counts",
+        "type": "card",
+        "position": {
+          "x": 35.68513119533529,
+          "y": 826.0874635568513
+        },
+        "data": {
+          "id": "counts",
+          "label": "Counts + pod quota",
+          "subLabel": "Provider-aware run/project counts",
+          "meta": "DiagnosticsService:105–138",
+          "icon": "box",
+          "shape": "process",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "COUNTS",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=process;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "dto",
+        "type": "card",
+        "position": {
+          "x": 534.0851311953353,
+          "y": 840.0874635568513
+        },
+        "data": {
+          "id": "dto",
+          "label": "SystemDiagnosticsDto",
+          "subLabel": "Checks / details / durations",
+          "meta": "DiagnosticsService:116–134",
+          "icon": "box",
+          "shape": "document",
+          "classification": "native:flowchart",
+          "badge": {
+            "text": "SNAPSHOT",
+            "tone": "marigold"
+          },
+          "nativeStyle": "shape=document;fillColor=#f9e2ae;strokeColor=#835b00;strokeWidth=1.5;",
+          "group": "1"
+        }
+      },
+      {
+        "id": "group-0",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 44.087463556851304
+        },
+        "style": {
+          "width": 902.4,
+          "height": 450
+        },
+        "data": {
+          "label": "SYSTEM CHECKS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-0-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 60.087463556851304
+        },
+        "data": {
+          "label": "SYSTEM CHECKS",
+          "width": 862.4
+        }
+      },
+      {
+        "id": "group-1",
+        "type": "band",
+        "position": {
+          "x": 3.6851311953352877,
+          "y": 532.0874635568513
+        },
+        "style": {
+          "width": 902.4,
+          "height": 450
+        },
+        "data": {
+          "label": "STATUS / COUNTS",
+          "tier": 1
+        }
+      },
+      {
+        "id": "group-1-label",
+        "type": "bandLabel",
+        "position": {
+          "x": 23.685131195335288,
+          "y": 548.0874635568513
+        },
+        "data": {
+          "label": "STATUS / COUNTS",
+          "width": 862.4
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "source": "request",
+        "target": "service",
+        "label": "collect",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 534.0851311953353,
+              "y": 160.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 454.8851311953353,
+            "y": 160.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e1",
+        "source": "service",
+        "target": "storage",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 534.0851311953353,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 427.7981746735962,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 427.7981746735962,
+              "y": 440.48746355685125
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 440.48746355685125
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 411.7981746735962,
+            "y": 440.48746355685125
+          }
+        }
+      },
+      {
+        "id": "e2",
+        "source": "service",
+        "target": "builtins",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 704.0851311953353,
+              "y": 212.0874635568513
+            },
+            {
+              "x": 704.0851311953353,
+              "y": 338.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 704.0851311953353,
+            "y": 275.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e3",
+        "source": "service",
+        "target": "heartbeat",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 534.0851311953353,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 451.8754693595865,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 451.8754693595865,
+              "y": 684.4874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 684.4874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [
+            {
+              "x": 451.8754693595865,
+              "y": 180.8874635568513
+            }
+          ],
+          "labelPos": {
+            "x": 413.7803002774609,
+            "y": 684.4874635568513
+          }
+        }
+      },
+      {
+        "id": "e4",
+        "source": "service",
+        "target": "github",
+        "label": "check",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 874.0851311953353,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 880.0326530612246,
+              "y": 160.0874635568513
+            },
+            {
+              "x": 880.0326530612246,
+              "y": 648.0874635568513
+            },
+            {
+              "x": 874.0851311953353,
+              "y": 648.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 880.0326530612246,
+            "y": 312.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e5",
+        "source": "service",
+        "target": "counts",
+        "label": "read counts",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 534.0851311953353,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 475.9527640455768,
+              "y": 180.8874635568513
+            },
+            {
+              "x": 475.9527640455768,
+              "y": 938.2874635568513
+            },
+            {
+              "x": 375.6851311953353,
+              "y": 938.2874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [
+            {
+              "x": 475.9527640455768,
+              "y": 180.8874635568513
+            }
+          ],
+          "labelPos": {
+            "x": 443.9527640455768,
+            "y": 938.2874635568513
+          }
+        }
+      },
+      {
+        "id": "e6",
+        "source": "github",
+        "target": "dto",
+        "label": "check results",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 704.0851311953353,
+              "y": 700.0874635568513
+            },
+            {
+              "x": 704.0851311953353,
+              "y": 840.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 704.0851311953353,
+            "y": 770.0874635568513
+          }
+        }
+      },
+      {
+        "id": "e7",
+        "source": "counts",
+        "target": "dto",
+        "label": "summary",
+        "markerEnd": true,
+        "style": {},
+        "data": {
+          "points": [
+            {
+              "x": 375.6851311953353,
+              "y": 892.0874635568513
+            },
+            {
+              "x": 534.0851311953353,
+              "y": 892.0874635568513
+            }
+          ],
+          "loopback": false,
+          "junctions": [],
+          "labelPos": {
+            "x": 431.6851311953353,
+            "y": 892.0874635568513
+          }
+        }
+      }
+    ],
+    "canvasWidth": 907.7877551020409,
+    "canvasHeight": 993.6909620991254
+  }
+}

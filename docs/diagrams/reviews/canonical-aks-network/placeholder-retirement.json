@@ -1,0 +1,93 @@
+[
+  {
+    "path": "docs/public/guide/images/board.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/casting-wizard.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/create-blank-project.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/create-from-github.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/execution-watch.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/overview.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/project-gallery.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/run-diff.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/run-topology.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/sign-in.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/start-orchestration.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/team-page.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  },
+  {
+    "path": "docs/public/guide/images/workflows-page.png",
+    "width": 1,
+    "height": 1,
+    "sha256": "6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "action": "removed verified placeholder; UI prose retained"
+  }
+]

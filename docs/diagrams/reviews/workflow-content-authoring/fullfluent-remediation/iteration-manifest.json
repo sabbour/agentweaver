@@ -1,0 +1,157 @@
+{
+  "diagram": "workflow-content-authoring",
+  "orientation": "A5-portrait",
+  "pitch": {
+    "drawio": "workflow-content-authoring-pitch.drawio",
+    "png": "workflow-content-authoring-pitch.png",
+    "change_record": "workflow-content-authoring-pitch.md",
+    "png_inspected_print": true,
+    "png_inspected_enlarged": true
+  },
+  "passes": [
+    {
+      "number": 1,
+      "mode": "visual-upgrade",
+      "drawio": "workflow-content-authoring-pass-01.drawio",
+      "png": "workflow-content-authoring-pass-01.png",
+      "change_record": "workflow-content-authoring-pass-01.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 1,
+      "arrow_defects": 1,
+      "growth_metric": "visible-semantic-canonical-xml-v1",
+      "baseline_meaningful_xml": 2367,
+      "result_meaningful_xml": 37015,
+      "growth_ratio": 15.637938
+    },
+    {
+      "number": 2,
+      "mode": "correction-only",
+      "drawio": "workflow-content-authoring-pass-02.drawio",
+      "png": "workflow-content-authoring-pass-02.png",
+      "change_record": "workflow-content-authoring-pass-02.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 3,
+      "mode": "correction-only",
+      "drawio": "workflow-content-authoring-pass-03.drawio",
+      "png": "workflow-content-authoring-pass-03.png",
+      "change_record": "workflow-content-authoring-pass-03.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0
+    },
+    {
+      "number": 4,
+      "mode": "correction-only",
+      "drawio": "workflow-content-authoring-pass-04.drawio",
+      "png": "workflow-content-authoring-pass-04.png",
+      "change_record": "workflow-content-authoring-pass-04.md",
+      "png_inspected_print": true,
+      "png_inspected_enlarged": true,
+      "orientation_defects": 0,
+      "overlap_defects": 0,
+      "arrow_defects": 0,
+      "all_arrows_traced": true,
+      "arrow_trace": [
+        {
+          "id": "edge-01",
+          "source": "research",
+          "target": "draft",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:82\u201383",
+          "result": "clean"
+        },
+        {
+          "id": "edge-02",
+          "source": "draft",
+          "target": "edit",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:85\u201386",
+          "result": "clean"
+        },
+        {
+          "id": "edge-03",
+          "source": "edit",
+          "target": "rai-check",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:89\u201390",
+          "result": "clean"
+        },
+        {
+          "id": "edge-04",
+          "source": "rai-check",
+          "target": "draft",
+          "relationship": "revise",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:93\u201395",
+          "result": "clean"
+        },
+        {
+          "id": "edge-05",
+          "source": "rai-check",
+          "target": "terminal-safety-failed",
+          "relationship": "safety-failed",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:97\u201399",
+          "result": "clean"
+        },
+        {
+          "id": "edge-06",
+          "source": "rai-check",
+          "target": "done",
+          "relationship": "no-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:101\u2013103",
+          "result": "clean"
+        },
+        {
+          "id": "edge-07",
+          "source": "rai-check",
+          "target": "human-review",
+          "relationship": "review",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:105\u2013107",
+          "result": "clean"
+        },
+        {
+          "id": "edge-08",
+          "source": "human-review",
+          "target": "publish",
+          "relationship": "approved",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:109\u2013111",
+          "result": "clean"
+        },
+        {
+          "id": "edge-09",
+          "source": "human-review",
+          "target": "draft",
+          "relationship": "request-changes",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:113\u2013115",
+          "result": "clean"
+        },
+        {
+          "id": "edge-10",
+          "source": "human-review",
+          "target": "terminal-declined",
+          "relationship": "declined",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:117\u2013119",
+          "result": "clean"
+        },
+        {
+          "id": "edge-11",
+          "source": "publish",
+          "target": "done",
+          "relationship": "unconditional",
+          "evidence": "packages/Agentweaver.Squad/Catalog/Resources/workflows/content_authoring.yaml:121\u2013122",
+          "result": "clean"
+        }
+      ]
+    }
+  ],
+  "final_pass": 4
+}

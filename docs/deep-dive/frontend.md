@@ -19,12 +19,11 @@ The most important rebuilding idea is **snapshot + stream**:
 
 This gives the UI a robust mental model: the backend is the source of truth; the frontend is a deterministic projection of backend facts.
 
-![Purpose and Mental Model: Operator, AuthGate, AppShell: TopBar, LeftNav, ProjectSwitcher, ProjectPage board, Embedded run inspection, CoordinatorRunPage, WorkspacePage, AgentweaverApiClient, useBoard poll, useRunStream, topologyReducer, sessionStorage token, …](../diagrams/frontend-fig1.png)
+![App routes and shell providers consume API snapshots and streams to produce browser-only projections](../diagrams/frontend-fig1.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/frontend-fig1.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig1.
+     Review lineage: ../diagrams/reviews/frontend-fig1/iteration-manifest.json. -->
 
 Where this lives:
 
@@ -37,7 +36,7 @@ The frontend has three runtime layers:
 
 1. **React/Vite SPA** — the application the user interacts with. It owns routing, presentation, browser state, REST calls, SSE consumption, and UI projections.
 2. **Agentweaver API** — the authoritative backend. It owns projects, auth, runs, orchestration, work plans, event logs, files, reviews, and mutations.
-3. **Static web host** — a small ASP.NET Core app that serves the built SPA and docs. It is not a backend-for-frontend; it does not implement the API routes used by the SPA.
+3. **Static web host** — a small ASP.NET Core app that serves the built SPA and redirects `/docs` to the external documentation site. It is not a backend-for-frontend and does not implement the SPA's API routes.
 
 A rebuild should preserve that boundary. Avoid putting business decisions in the browser just because the browser has enough data to guess. For example, the coordinator graph is server-authored: the UI renders topology snapshots and deltas instead of recomputing dependencies on the client.
 
@@ -61,6 +60,8 @@ At the app root, the UI is wrapped in:
 - an auth gate, so protected app routes do not render until session validation completes,
 - a persistent shell, so navigation and top-level context remain stable across pages.
 
+`App.tsx` declares `<Routes>` explicitly; it does not consume a runtime route registry. `AppShell` supplies `ProjectListProvider` and `NotificationsProvider`. Showcase/provider examples are not the product's composition root.
+
 Rebuild principle: keep the app root boring. Cross-cutting concerns belong there; feature behavior belongs in pages, hooks, reducers, and components.
 
 Where this lives:
@@ -76,8 +77,9 @@ Routes are split into **global** destinations and **project-scoped** destination
 
 Global routes do not require a project id:
 
-- overview / now view,
-- project gallery / project creation.
+- overview and project gallery/creation,
+- Assistant, sessions, skills, observability, and cluster surfaces,
+- platform settings, with its own authorization gate.
 
 Project-scoped routes start with `/projects/:projectId` and represent the work surface for one project:
 
@@ -95,12 +97,11 @@ Project-scoped routes start with `/projects/:projectId` and represent the work s
 
 All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep orchestration page.
 
-![Routing and Information Architecture: App root, Auth checked?, Loading screen, Sign-in page, Persistent AppShell, Global routes, Project routes, / and /overview, /projects, /projects/:projectId, /board, /flow, …](../diagrams/frontend-fig2.png)
+![Explicit App.tsx routes distinguish global destinations, project-scoped paths and redirects](../diagrams/frontend-fig2.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/frontend-fig2.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig2.
+     Review lineage: ../diagrams/reviews/frontend-fig2/iteration-manifest.json. -->
 
 The shell derives the active project from the URL. When the user moves to a global page, it remembers the last active project in local storage so the project switcher and project-scoped navigation can still point somewhere useful. This is a UX convenience only; the route remains the source of truth for the currently displayed page.
 
@@ -122,16 +123,16 @@ The frontend uses one conceptual API client: a typed wrapper around `fetch`. Eac
 - parse successful JSON responses,
 - throw a structured API error for non-OK responses.
 
-### The `/api` base URL convention
+### API origin, not an `/api` base path
 
-Important convention: **the API client base URL may be `/api`, so individual client method paths must not include `/api`.**
+**`API_URL` is an origin, or an empty string for same-origin requests.** Client method paths include `/api` where the actual endpoint does; authentication and protocol paths may be rooted elsewhere.
 
-For example, the client should be configured with a base URL like `/api`, then methods should call relative API paths like `/runs`, `/auth/github`, or `/projects/{id}/orchestrations`. If a method includes `/api` itself, production builds would accidentally call `/api/api/...`.
+For example, `API_URL=""` plus `/api/projects` calls the same-origin API. `API_URL="http://localhost:5000"` plus `/api/projects` calls the development API. Configuring `/api` as the origin would produce the incorrect `/api/api/projects`.
 
 This convention is what lets the same SPA run in multiple environments:
 
 - local development can point at `http://localhost:5000`,
-- containerized production can point at `/api`, usually through a reverse proxy or same-origin API route,
+- containerized production can use `""`, with the gateway routing same-origin API requests,
 - the bundle does not need to be rebuilt just because the API origin changes.
 
 ### Why centralize API calls?
@@ -149,22 +150,21 @@ Where this lives:
 
 ## Runtime Configuration and Static Hosting
 
-The SPA is built once and configured at container startup. `index.html` loads `/env-config.js` before the React bundle. The container entrypoint writes `window.__AGENTWEAVER_CONFIG__` with the API URL, defaulting to `/api`.
+The SPA is built once and configured at container startup. `index.html` loads `/env-config.js` before the React bundle. Runtime `window.__AGENTWEAVER_CONFIG__` supplies the API origin; an empty string selects same-origin routing.
 
 This design separates build-time artifacts from deployment-time configuration:
 
 - Vite builds static JavaScript, CSS, and assets.
 - The container decides where the API is at startup.
-- The ASP.NET Core host serves the static files and docs.
+- The ASP.NET Core host serves SPA files and redirects `/docs` and its descendants externally; it does not bundle the VitePress site.
 - Non-HTML assets can be cached aggressively because their built filenames are content-addressed by Vite.
 - HTML and fallback responses should not be treated as immutable because they bootstrap the current app version and runtime config.
 
-![Runtime Configuration and Static Hosting: Vite build, Static SPA assets, VitePress docs build, Static docs, ASP.NET Core publish, Agentweaver.Web, Container entrypoint, /env-config.js, Browser, Agentweaver API](../diagrams/frontend-fig3.png)
+![Static SPA hosting, origin-only runtime API configuration and external docs redirects](../diagrams/frontend-fig3.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/frontend-fig3.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig3.
+     Review lineage: ../diagrams/reviews/frontend-fig3/iteration-manifest.json. -->
 
 Rebuild principle: static hosting should be dumb and predictable. Let the API own API behavior; let the SPA own client behavior; let the host serve files and route unknown non-doc paths back to `index.html` for client-side routing.
 
@@ -181,8 +181,8 @@ The UI starts in an auth gate. It does not render the signed-in shell until it h
 
 Conceptually, sign-in works like this:
 
-1. The unauthenticated page sends the browser to the backend GitHub authorization endpoint.
-2. The backend completes the GitHub flow and redirects back to the SPA with a short-lived code marker.
+1. The unauthenticated page sends the browser to the backend Entra authorization endpoint.
+2. The backend completes Entra authentication and redirects back to the SPA with a short-lived, one-time exchange code.
 3. Before rendering protected routes, the auth gate exchanges that code for session information.
 4. The frontend stores the session token and login in `sessionStorage`.
    A newly opened same-origin tab requests the token from an already authenticated tab
@@ -199,12 +199,11 @@ shared peer-recovery request and lets all failed calls retry with the recovered 
 prevents a burst of concurrent 401 handlers from clearing a token that another call just
 restored.
 
-![Authentication and Session Flow: User, React SPA, Agentweaver API, GitHub](../diagrams/frontend-fig6.png)
+![Entra sign-in, one-time session exchange, per-tab bearer storage and authenticated API requests](../diagrams/frontend-fig6.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig6.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/frontend-fig6.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig6.
+     Review lineage: ../diagrams/reviews/frontend-fig6/iteration-manifest.json. -->
 
 The stored login is not just display data. The auth gate compares it with the backend-reported login. If the browser has a token for one user but the backend session reports another, the UI clears local session state rather than silently mixing identities.
 
@@ -225,7 +224,7 @@ Where this lives:
 - `apps/web/src/App.tsx`
 - `apps/web/src/config.ts`
 - `apps/web/src/pages/SignInPage.tsx`
-- `apps/web/src/components/GitHubSignIn.tsx`
+- `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs`
 
 ## State Management Philosophy
 
@@ -269,12 +268,11 @@ A run can emit events such as:
 
 The stream hook uses `fetch`, not browser `EventSource`. That is intentional: authenticated streams need custom headers such as `Authorization`, and replay after reconnect benefits from `Last-Event-ID`.
 
-![Live Run Timeline: Event-Sourced UI Projection: Embedded run surface, useRunStream, Run stream endpoint, Timeline/topology reducers, Rendered panels](../diagrams/frontend-fig7.png)
+![Authenticated fetch-based SSE, cursor replay, bounded buffering and deterministic UI projections](../diagrams/frontend-fig7.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Editable source: ../diagrams/src/frontend-fig7.drawio.
+     Export with pinned draw.io Desktop 31.4.5 using --spec frontend-fig7.
+     Review lineage: ../diagrams/reviews/frontend-fig7/iteration-manifest.json. -->
 
 The hook keeps a bounded event buffer so a runaway stream does not grow the DOM forever. It recognizes terminal events so completed streams stop reconnecting. It uses reconnect backoff so transient network issues do not immediately fail the page.
 
@@ -297,19 +295,20 @@ Where this lives:
 
 A live stream alone is not enough. Users frequently open pages after work has already started or completed. A completed run may no longer have an active stream. A coordinator topology snapshot may have been emitted before the browser connected.
 
-Agentweaver solves this by layering data:
+Agentweaver solves this by merging independent inputs; opening the stream does not wait for the REST seed:
 
 1. **REST seed** — load the latest known snapshot or persisted event list.
-2. **SSE stream** — append newer live changes.
+2. **SSE stream** — subscribe concurrently and buffer live changes.
 3. **Deduplication** — avoid showing the same event twice, usually by sequence id.
-4. **Reducer fold** — derive display state from the merged event list.
+4. **Reducer fold** — derive display state from the merged event list. Run/generation guards reject stale seed responses; positive sequences are deduplicated, with restricted handling for sequence-zero singleton events.
 
-![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/canonical-event-replay-tail.png)
+The backend side of reconnect is a durable cursor, not a cross-replica live channel.
+The Postgres event provider reads ordered rows after the last delivered sequence;
+the client-side REST seed, buffering and reducer fold remain the separate steps above.
 
-<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+![Durable event delivery: committed Postgres events, cursor polling and ordered SSE frames consumed by web and MCP watchers](../diagrams/canonical-durable-event-stream.png)
+
+<!-- Editable source: ../diagrams/src/canonical-durable-event-stream.drawio; pinned draw.io Desktop export. -->
 
 For embedded single-agent/child runs, the surface resolves run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor when needed, and then merges live stream events over the seed.
 
@@ -324,9 +323,9 @@ Where this lives:
 
 ## Single-Agent Run Flow
 
-A single-agent run is the simplest execution path:
+Inspection of an existing single-agent or coordinator-child run follows this path. Public `POST /api/runs` is retired (410); new work enters through coordinator submission rather than a direct single-agent creation API:
 
-1. The user starts a run from a project surface, usually with a task, branch, and optional agent selection.
+1. A project orchestration creates work and, when needed, child runs.
 2. The backend creates the run and returns identifiers.
 3. The run appears in project/coordinator surfaces.
 4. Embedded inspection resolves the run metadata and stream key.
@@ -360,10 +359,9 @@ Conceptually:
 
 ![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Exported from ../diagrams/src/canonical-coordinator-architecture.drawio with the
+     Fluent draw.io template. Edit the source, invoke `docs-diagram-iterate`, then
+     commit the regenerated PNG + .hash.txt. -->
 
 The topology reducer is intentionally thin. It applies server-authored snapshots and deltas, merges subtask status updates, and attaches steering state to existing nodes. It does not invent dependencies or compute topology from scratch. This protects the UI from accidentally disagreeing with backend scheduling rules.
 
@@ -429,7 +427,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 1. Static Vite React shell with routing and a root error boundary.
 2. Runtime config loader that can set API base URL at deployment time.
 3. Typed API client with centralized auth, credentials, JSON parsing, and API errors.
-4. GitHub sign-in handoff, session exchange, session validation, and sign-out.
+4. Entra sign-in handoff, session exchange, session validation, and sign-out.
 5. Persistent app shell with global/project navigation and project context.
 6. Project list/provider and project-scoped pages.
 7. Run stream hook using fetch-based SSE with auth headers, `Last-Event-ID`, dedupe, terminal detection, and reconnect backoff.
@@ -438,15 +436,358 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 10. Coordinator page using graph/work-plan/children seeds plus coordinator SSE.
 11. Thin topology reducer that applies server-authored snapshots and deltas.
 12. Review, approval, question-answering, and steering actions that call the correct owning run.
-13. Static hosting with SPA fallback and docs handling.
+13. Static hosting with SPA fallback and external docs redirects.
 
 ## Gotchas and Conventions
 
-- Do not prefix API client method paths with `/api`; configure `/api` as the base URL and use relative paths such as `/runs` or `/auth/github`.
-- The static web host is not the API. It serves built files, docs, and SPA fallbacks.
+- Configure `API_URL` as an origin or `""`; method paths retain their actual `/api` prefix.
+- The static web host is not the API. It serves SPA files/fallbacks and redirects docs externally.
 - Runtime API URL should override build-time environment so one bundle can deploy to multiple environments.
 - Use fetch-based SSE, not plain `EventSource`, if authenticated headers and replay control are required.
 - Finished or parked runs need REST seeds because their live stream may already be closed.
 - Coordinator topology is server-authored; render it instead of recomputing it.
 - Child questions and tool approvals shown on the coordinator page must be answered against the child run that asked.
 - Keep browser state small. Backend state is authoritative; UI state is a projection.
+
+<!-- diagram-context:canonical-durable-event-stream:start -->
+<details id="diagram-context-canonical-durable-event-stream">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Postgres is the event relay</td></tr>
+<tr><td>subtitle</td><td>Any API replica can serve a cursor over durable RunEvents—no sticky session required.</td></tr>
+<tr><td>group-title0</td><td>Write path · replica A</td></tr>
+<tr><td>group-title1</td><td>Read path · replica B</td></tr>
+<tr><td>Run producer</td><td>Run producer</td></tr>
+<tr><td>Run producer</td><td>Append a structured event</td></tr>
+<tr><td>Run producer</td><td>runId + type + payload</td></tr>
+<tr><td>EF event stream</td><td>EF event stream</td></tr>
+<tr><td>EF event stream</td><td>Serialize writes per run</td></tr>
+<tr><td>EF event stream</td><td>pg_advisory_xact_lock</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>Shared PostgreSQL table</td></tr>
+<tr><td>RunEvents</td><td>(RunId, Sequence)</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web / MCP watcher</td></tr>
+<tr><td>Web / MCP watcher</td><td>Consume ordered events</td></tr>
+<tr><td>Web / MCP watcher</td><td>last delivered cursor</td></tr>
+<tr><td>SSE endpoint</td><td>SSE endpoint</td></tr>
+<tr><td>SSE endpoint</td><td>Emit id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>ordered response frames</td></tr>
+<tr><td>EF subscriber</td><td>EF subscriber</td></tr>
+<tr><td>EF subscriber</td><td>Read Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>idle poll: 250 ms</td></tr>
+<tr><td>e1</td><td>append</td></tr>
+<tr><td>e2</td><td>commit</td></tr>
+<tr><td>e3</td><td>ordered batch</td></tr>
+<tr><td>e4</td><td>yield</td></tr>
+<tr><td>e5</td><td>SSE frames</td></tr>
+<tr><td>assurance-title</td><td>POSTGRES LANE ONLY</td></tr>
+<tr><td>assurance-line1</td><td>SQLite register-channel / replay / tail is a separate implementation—not this architecture.</td></tr>
+<tr><td>assurance-line2</td><td>Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>Run producer</td><td>Input</td></tr>
+<tr><td>Run producer</td><td>RunStreamEntry</td></tr>
+<tr><td>Run producer</td><td>Identity</td></tr>
+<tr><td>Run producer</td><td>runId + event type</td></tr>
+<tr><td>Run producer</td><td>Body</td></tr>
+<tr><td>Run producer</td><td>Structured payload</td></tr>
+<tr><td>Run producer</td><td>Ack</td></tr>
+<tr><td>Run producer</td><td>After durable commit</td></tr>
+<tr><td>EF event stream</td><td>Lock</td></tr>
+<tr><td>EF event stream</td><td>Per-run advisory lock</td></tr>
+<tr><td>EF event stream</td><td>Next</td></tr>
+<tr><td>EF event stream</td><td>MAX(Sequence) + 1</td></tr>
+<tr><td>EF event stream</td><td>Write</td></tr>
+<tr><td>EF event stream</td><td>Save transaction</td></tr>
+<tr><td>EF event stream</td><td>Commit</td></tr>
+<tr><td>EF event stream</td><td>Before acknowledgement</td></tr>
+<tr><td>RunEvents</td><td>Table</td></tr>
+<tr><td>RunEvents</td><td>Key</td></tr>
+<tr><td>RunEvents</td><td>RunId + Sequence</td></tr>
+<tr><td>RunEvents</td><td>Order</td></tr>
+<tr><td>RunEvents</td><td>Ascending sequence</td></tr>
+<tr><td>RunEvents</td><td>Reuse</td></tr>
+<tr><td>RunEvents</td><td>Same type / payload</td></tr>
+<tr><td>Web / MCP watcher</td><td>Client</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web or MCP</td></tr>
+<tr><td>Web / MCP watcher</td><td>Resume</td></tr>
+<tr><td>Web / MCP watcher</td><td>Last delivered cursor</td></tr>
+<tr><td>Web / MCP watcher</td><td>Replica</td></tr>
+<tr><td>Web / MCP watcher</td><td>No sticky requirement</td></tr>
+<tr><td>Web / MCP watcher</td><td>History</td></tr>
+<tr><td>Web / MCP watcher</td><td>Durable ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Frame</td></tr>
+<tr><td>SSE endpoint</td><td>id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>Cursor</td></tr>
+<tr><td>SSE endpoint</td><td>Last-Event-ID</td></tr>
+<tr><td>SSE endpoint</td><td>Delivery</td></tr>
+<tr><td>SSE endpoint</td><td>Yield ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Close</td></tr>
+<tr><td>SSE endpoint</td><td>After batch is drained</td></tr>
+<tr><td>EF subscriber</td><td>Query</td></tr>
+<tr><td>EF subscriber</td><td>Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>Idle</td></tr>
+<tr><td>EF subscriber</td><td>Poll after 250 ms</td></tr>
+<tr><td>EF subscriber</td><td>State</td></tr>
+<tr><td>EF subscriber</td><td>Shared durable table</td></tr>
+<tr><td>EF subscriber</td><td>Blocked</td></tr>
+<tr><td>EF subscriber</td><td>Retryable: keep open</td></tr>
+<tr><td>producer</td><td>Coordinator or run execution; Acknowledgement follows commit</td></tr>
+<tr><td>append</td><td>Allocate MAX(Sequence) + 1; Save and commit transaction</td></tr>
+<tr><td>store</td><td>Cross-replica ordered history; Explicit duplicates must match payload</td></tr>
+<tr><td>client</td><td>Reconnect from the cursor; No local channel dependency</td></tr>
+<tr><td>sse</td><td>Cursor advances after delivery; Drain batch before terminal close</td></tr>
+<tr><td>reader</td><td>Query the shared durable table; Retryable assembly_blocked stays open</td></tr>
+<tr><td>notes</td><td>POSTGRES LANE ONLY; SQLite register-channel / replay / tail is a separate implementation—not this architecture.; Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:canonical-durable-event-stream:end -->
+
+<!-- diagram-context:frontend-fig1:start -->
+<details id="diagram-context-frontend-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Frontend: intent and projection</td></tr>
+<tr><td>takeaway</td><td>The browser presents backend facts; the API remains the authority.</td></tr>
+<tr><td>group-title-0</td><td>BROWSER · OPERATOR INTENT</td></tr>
+<tr><td>group-title-1</td><td>BACKEND FACTS · UI PROJECTION</td></tr>
+<tr><td>AuthGate</td><td>AuthGate</td></tr>
+<tr><td>AuthGate</td><td>Validated SPA session</td></tr>
+<tr><td>AuthGate</td><td>REST and SSE use the session bearer</td></tr>
+<tr><td>AuthGate</td><td>App.tsx</td></tr>
+<tr><td>Rendered controls</td><td>Rendered controls</td></tr>
+<tr><td>Rendered controls</td><td>Status, timeline and graph</td></tr>
+<tr><td>Rendered controls</td><td>Operator decisions become new API calls</td></tr>
+<tr><td>Rendered controls</td><td>CoordinatorRunPage.tsx</td></tr>
+<tr><td>AppShell</td><td>AppShell</td></tr>
+<tr><td>AppShell</td><td>TopBar · LeftNav · project switcher</td></tr>
+<tr><td>AppShell</td><td>ProjectList + Notifications providers</td></tr>
+<tr><td>AppShell</td><td>AppShell.tsx:134-182</td></tr>
+<tr><td>Client projection</td><td>Client projection</td></tr>
+<tr><td>Client projection</td><td>Reducers combine backend facts</td></tr>
+<tr><td>Client projection</td><td>Topology is server-authored, not invented</td></tr>
+<tr><td>Route pages</td><td>Route pages</td></tr>
+<tr><td>Route pages</td><td>Board · run · workspace</td></tr>
+<tr><td>Route pages</td><td>Route parameters select the current scope</td></tr>
+<tr><td>Route pages</td><td>App.tsx:80-127</td></tr>
+<tr><td>Seed + live events</td><td>Seed + live events</td></tr>
+<tr><td>Seed + live events</td><td>Independent REST and SSE inputs</td></tr>
+<tr><td>Seed + live events</td><td>Positive sequence IDs deduplicate events</td></tr>
+<tr><td>Seed + live events</td><td>useSeededRunStream.ts</td></tr>
+<tr><td>API client</td><td>API client</td></tr>
+<tr><td>API client</td><td>Typed requests and error handling</td></tr>
+<tr><td>API client</td><td>API_URL origin + endpoint /api paths</td></tr>
+<tr><td>API client</td><td>config.ts:13-36</td></tr>
+<tr><td>Agentweaver API</td><td>Agentweaver API</td></tr>
+<tr><td>Agentweaver API</td><td>Projects · runs · graph · events</td></tr>
+<tr><td>Agentweaver API</td><td>Server owns persisted state and topology</td></tr>
+<tr><td>AuthGate</td><td>enter</td></tr>
+<tr><td>AppShell</td><td>contains</td></tr>
+<tr><td>Route pages</td><td>request</td></tr>
+<tr><td>API client</td><td>HTTP</td></tr>
+<tr><td>Agentweaver API</td><td>history + SSE</td></tr>
+<tr><td>Seed + live events</td><td>events</td></tr>
+<tr><td>Client projection</td><td>render</td></tr>
+<tr><td>scope</td><td>Read direction: intent down the left; backend facts rise on the right.</td></tr>
+<tr><td>groups</td><td>BROWSER · OPERATOR INTENT; BACKEND FACTS · UI PROJECTION</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:frontend-fig1:end -->
+
+<!-- diagram-context:frontend-fig2:start -->
+<details id="diagram-context-frontend-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Routes: global and project scope</td></tr>
+<tr><td>takeaway</td><td>App.tsx declares routes; AppShell supplies shared context, not a route registry.</td></tr>
+<tr><td>group-title-0</td><td>GLOBAL · NO PROJECT PARAMETER</td></tr>
+<tr><td>group-title-1</td><td>SHARED SHELL + PROJECT ROUTES</td></tr>
+<tr><td>App.tsx Routes</td><td>App.tsx Routes</td></tr>
+<tr><td>App.tsx Routes</td><td>/ · /overview · /projects</td></tr>
+<tr><td>App.tsx Routes</td><td>Global sessions, settings and assistant</td></tr>
+<tr><td>App.tsx Routes</td><td>App.tsx:80-100</td></tr>
+<tr><td>AppShell</td><td>AppShell</td></tr>
+<tr><td>AppShell</td><td>ProjectListProvider</td></tr>
+<tr><td>AppShell</td><td>NotificationsProvider wraps shell content</td></tr>
+<tr><td>AppShell</td><td>AppShell.tsx:134-182</td></tr>
+<tr><td>Operator destinations</td><td>Operator destinations</td></tr>
+<tr><td>Operator destinations</td><td>/console → /assistant</td></tr>
+<tr><td>Operator destinations</td><td>/sessions is global; ?project scopes it</td></tr>
+<tr><td>Operator destinations</td><td>App.tsx:93-100,130-135</td></tr>
+<tr><td>Project route family</td><td>Project route family</td></tr>
+<tr><td>Project route family</td><td>/projects/:projectId</td></tr>
+<tr><td>Project route family</td><td>Dashboard · board · flow · orchestrations</td></tr>
+<tr><td>Project route family</td><td>App.tsx:104-126</td></tr>
+<tr><td>Platform settings</td><td>Platform settings</td></tr>
+<tr><td>Platform settings</td><td>/platform-settings</td></tr>
+<tr><td>Platform settings</td><td>Non-admin users redirect to /overview</td></tr>
+<tr><td>Platform settings</td><td>App.tsx:87-92</td></tr>
+<tr><td>Project resources</td><td>Project resources</td></tr>
+<tr><td>Project resources</td><td>Workspace · settings · team</td></tr>
+<tr><td>Project resources</td><td>Cast · agent memory · memories · skills</td></tr>
+<tr><td>Project resources</td><td>App.tsx:110-117</td></tr>
+<tr><td>Global observability</td><td>Global observability</td></tr>
+<tr><td>Global observability</td><td>/observability · /traces · /agents</td></tr>
+<tr><td>Global observability</td><td>Redirect pages resolve destination scope</td></tr>
+<tr><td>Global observability</td><td>App.tsx:99-101</td></tr>
+<tr><td>Project operations</td><td>Project operations</td></tr>
+<tr><td>Project operations</td><td>Observability · workflows</td></tr>
+<tr><td>Project operations</td><td>Diagnostics · heartbeat · cluster</td></tr>
+<tr><td>Project operations</td><td>App.tsx:118-125</td></tr>
+<tr><td>AppShell</td><td>wraps</td></tr>
+<tr><td>App.tsx Routes</td><td>declares</td></tr>
+<tr><td>scope</td><td>Cards group declared paths, not navigation dependencies. Global admin/observability are independent routes.</td></tr>
+<tr><td>groups</td><td>GLOBAL · NO PROJECT PARAMETER; SHARED SHELL + PROJECT ROUTES</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:frontend-fig2:end -->
+
+<!-- diagram-context:frontend-fig3:start -->
+<details id="diagram-context-frontend-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Static hosting and API origins</td></tr>
+<tr><td>takeaway</td><td>The Web host serves the SPA; API_URL is an origin or empty, never /api.</td></tr>
+<tr><td>group-title-0</td><td>WEB HOST · STATIC DELIVERY</td></tr>
+<tr><td>group-title-1</td><td>BROWSER · RUNTIME DESTINATIONS</td></tr>
+<tr><td>Browser request</td><td>Browser request</td></tr>
+<tr><td>Browser request</td><td>Assets or a client-side route</td></tr>
+<tr><td>Browser request</td><td>The Web host is not the API host</td></tr>
+<tr><td>Browser request</td><td>Web/Program.cs:39-65</td></tr>
+<tr><td>Runtime configuration</td><td>Runtime configuration</td></tr>
+<tr><td>Runtime configuration</td><td>window.__AGENTWEAVER_CONFIG__</td></tr>
+<tr><td>Runtime configuration</td><td>API_URL selects the API origin</td></tr>
+<tr><td>Runtime configuration</td><td>config.ts:13-36</td></tr>
+<tr><td>Static file middleware</td><td>Static file middleware</td></tr>
+<tr><td>Static file middleware</td><td>Default files + static assets</td></tr>
+<tr><td>Static file middleware</td><td>Non-HTML assets get immutable caching</td></tr>
+<tr><td>Static file middleware</td><td>Web/Program.cs:39-50</td></tr>
+<tr><td>Origin resolution</td><td>Origin resolution</td></tr>
+<tr><td>Origin resolution</td><td>Origin string, or &quot;&quot; = same-origin</td></tr>
+<tr><td>Origin resolution</td><td>Client endpoints append their own /api</td></tr>
+<tr><td>SPA route fallback</td><td>SPA route fallback</td></tr>
+<tr><td>SPA route fallback</td><td>Unknown route → index.html</td></tr>
+<tr><td>SPA route fallback</td><td>React handles the resulting route</td></tr>
+<tr><td>SPA route fallback</td><td>Web/Program.cs:61-65</td></tr>
+<tr><td>API destination</td><td>API destination</td></tr>
+<tr><td>API destination</td><td>REST + authenticated fetch SSE</td></tr>
+<tr><td>API destination</td><td>Same-origin still uses /api endpoints</td></tr>
+<tr><td>API destination</td><td>api/sse.ts:239-337</td></tr>
+<tr><td>Documentation route</td><td>Documentation route</td></tr>
+<tr><td>Documentation route</td><td>/docs and /docs/{path}</td></tr>
+<tr><td>Documentation route</td><td>Temporary redirect preserves suffix</td></tr>
+<tr><td>Documentation route</td><td>Web/Program.cs:52-59</td></tr>
+<tr><td>External documentation</td><td>External documentation</td></tr>
+<tr><td>External documentation</td><td>Configured documentation base URL</td></tr>
+<tr><td>External documentation</td><td>Not the local SPA fallback</td></tr>
+<tr><td>Browser request</td><td>asset</td></tr>
+<tr><td>Static file middleware</td><td>unmatched</td></tr>
+<tr><td>Runtime configuration</td><td>supplies</td></tr>
+<tr><td>Origin resolution</td><td>requests</td></tr>
+<tr><td>Documentation route</td><td>302 redirect</td></tr>
+<tr><td>scope</td><td>Parallel concerns: static delivery, runtime API selection and external docs redirection.</td></tr>
+<tr><td>groups</td><td>WEB HOST · STATIC DELIVERY; BROWSER · RUNTIME DESTINATIONS</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:frontend-fig3:end -->
+
+<!-- diagram-context:frontend-fig6:start -->
+<details id="diagram-context-frontend-fig6" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Entra sign-in and browser session</td></tr>
+<tr><td>takeaway</td><td>The callback returns a one-time code; session exchange delivers the SPA bearer.</td></tr>
+<tr><td>group-title-0</td><td>SIGN-IN · API + ENTRA</td></tr>
+<tr><td>group-title-1</td><td>SESSION · PER-TAB BROWSER STATE</td></tr>
+<tr><td>Browser sign-in</td><td>Browser sign-in</td></tr>
+<tr><td>Browser sign-in</td><td>Begin API Entra authorization</td></tr>
+<tr><td>Browser sign-in</td><td>State binds the browser callback</td></tr>
+<tr><td>Browser sign-in</td><td>AuthEndpoints.cs</td></tr>
+<tr><td>Session exchange</td><td>Session exchange</td></tr>
+<tr><td>Session exchange</td><td>POST the one-time exchange code</td></tr>
+<tr><td>Session exchange</td><td>Returns validated token + browser session</td></tr>
+<tr><td>Session exchange</td><td>AuthEndpoints.cs:398-455</td></tr>
+<tr><td>Microsoft Entra ID</td><td>Microsoft Entra ID</td></tr>
+<tr><td>Microsoft Entra ID</td><td>Authenticate the user</td></tr>
+<tr><td>Microsoft Entra ID</td><td>Identity authority, not GitHub OAuth</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>Per-tab sessionStorage</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>Store the SPA bearer</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>No durable localStorage token</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>config.ts:60-138</td></tr>
+<tr><td>API callback</td><td>API callback</td></tr>
+<tr><td>API callback</td><td>Validate callback and state</td></tr>
+<tr><td>API callback</td><td>Issue a one-time frontend exchange code</td></tr>
+<tr><td>Same-origin peer tab</td><td>Same-origin peer tab</td></tr>
+<tr><td>Same-origin peer tab</td><td>BroadcastChannel request/response</td></tr>
+<tr><td>Same-origin peer tab</td><td>Transient token transfer to a new tab</td></tr>
+<tr><td>Same-origin peer tab</td><td>config.ts:207-240</td></tr>
+<tr><td>Frontend callback</td><td>Frontend callback</td></tr>
+<tr><td>Frontend callback</td><td>Receive exchange code</td></tr>
+<tr><td>Frontend callback</td><td>Do not treat the code as an access token</td></tr>
+<tr><td>Authenticated requests</td><td>Authenticated requests</td></tr>
+<tr><td>Authenticated requests</td><td>REST and fetch-based SSE</td></tr>
+<tr><td>Authenticated requests</td><td>Bearer token; API authorizes resources</td></tr>
+<tr><td>Authenticated requests</td><td>api/sse.ts:239-337</td></tr>
+<tr><td>Browser sign-in</td><td>sign in</td></tr>
+<tr><td>Microsoft Entra ID</td><td>callback</td></tr>
+<tr><td>API callback</td><td>code</td></tr>
+<tr><td>Frontend callback</td><td>POST code</td></tr>
+<tr><td>Session exchange</td><td>session</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>transfer</td></tr>
+<tr><td>Per-tab sessionStorage</td><td>bearer</td></tr>
+<tr><td>scope</td><td>Only a one-time exchange code crosses the callback URL; the session token stays out of URLs.</td></tr>
+<tr><td>groups</td><td>SIGN-IN · API + ENTRA; SESSION · PER-TAB BROWSER STATE</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:frontend-fig6:end -->
+
+<!-- diagram-context:frontend-fig7:start -->
+<details id="diagram-context-frontend-fig7" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Live timeline: independent inputs</td></tr>
+<tr><td>takeaway</td><td>REST seed and live SSE run concurrently, then merge into a guarded projection.</td></tr>
+<tr><td>group-title-0</td><td>INDEPENDENT INPUTS</td></tr>
+<tr><td>group-title-1</td><td>MERGE · PROJECT · RECOVER</td></tr>
+<tr><td>Current run ID</td><td>Current run ID</td></tr>
+<tr><td>Current run ID</td><td>Route chooses stream scope</td></tr>
+<tr><td>Current run ID</td><td>Run/generation guards reject stale seeds</td></tr>
+<tr><td>Current run ID</td><td>useSeededRunStream.ts:43-151</td></tr>
+<tr><td>Merge run events</td><td>Merge run events</td></tr>
+<tr><td>Merge run events</td><td>Positive-sequence deduplication</td></tr>
+<tr><td>Merge run events</td><td>Restricted sequence-zero singleton rules</td></tr>
+<tr><td>Merge run events</td><td>mergeRunEvents.ts:23-79</td></tr>
+<tr><td>Persisted event history</td><td>Persisted event history</td></tr>
+<tr><td>Persisted event history</td><td>REST seed requested independently</td></tr>
+<tr><td>Persisted event history</td><td>A seed failure does not block live SSE</td></tr>
+<tr><td>Persisted event history</td><td>useSeededRunStream.ts:85-134</td></tr>
+<tr><td>Timeline projection</td><td>Timeline projection</td></tr>
+<tr><td>Timeline projection</td><td>Reducers + server topology seed</td></tr>
+<tr><td>Timeline projection</td><td>Render graph, timeline, status and controls</td></tr>
+<tr><td>Timeline projection</td><td>CoordinatorRunPage.tsx</td></tr>
+<tr><td>Live event transport</td><td>Live event transport</td></tr>
+<tr><td>Live event transport</td><td>Authenticated fetch + credentials</td></tr>
+<tr><td>Live event transport</td><td>Last-Event-ID resumes the cursor</td></tr>
+<tr><td>Live event transport</td><td>api/sse.ts:239-337</td></tr>
+<tr><td>Parser and event buffer</td><td>Parser and event buffer</td></tr>
+<tr><td>Parser and event buffer</td><td>Dedupe and bounded retention</td></tr>
+<tr><td>Parser and event buffer</td><td>Cursor advances with accepted events</td></tr>
+<tr><td>Unexpected disconnect</td><td>Unexpected disconnect</td></tr>
+<tr><td>Unexpected disconnect</td><td>Bounded reconnect backoff</td></tr>
+<tr><td>Unexpected disconnect</td><td>Explicit reconnect reopens after gate action</td></tr>
+<tr><td>done / terminal</td><td>done / terminal</td></tr>
+<tr><td>done / terminal</td><td>Stop the current transport</td></tr>
+<tr><td>done / terminal</td><td>A gate done is not universal run completion</td></tr>
+<tr><td>done / terminal</td><td>api/sse.ts; RunEndpoints.cs</td></tr>
+<tr><td>Current run ID</td><td>seed</td></tr>
+<tr><td>Current run ID</td><td>live</td></tr>
+<tr><td>Persisted event history</td><td>seed events</td></tr>
+<tr><td>Live event transport</td><td>frames</td></tr>
+<tr><td>Parser and event buffer</td><td>events</td></tr>
+<tr><td>Merge run events</td><td>merged</td></tr>
+<tr><td>Live event transport</td><td>disconnect</td></tr>
+<tr><td>Parser and event buffer</td><td>done</td></tr>
+<tr><td>scope</td><td>No REST→SSE prerequisite. Backend topology is an input; browser reducers do not author it.</td></tr>
+<tr><td>groups</td><td>INDEPENDENT INPUTS; MERGE · PROJECT · RECOVER</td></tr>
+</tbody></table>
+</details>
+<!-- diagram-context:frontend-fig7:end -->

@@ -170,9 +170,11 @@ authorization, shows a success or error status, and tells you to return to the M
 and poll the authorization status. OAuth state, callback cookies, GitHub codes, and
 credentials never appear on that page or in MCP output.
 
-For unattended project work, a Project Owner also completes
+When a project Copilot binding is needed, a Project Owner completes
 `project_copilot_app_connect → open browser_url → project_copilot_app_authorization_status`
-and verifies `project_github_capability_status`. Handoff and polling return only opaque
+and verifies `project_github_capability_status`. An eligible platform provider can
+supply project work without that binding; see [Provider hierarchy](./authentication#provider-hierarchy).
+Handoff and polling return only opaque
 transaction identifiers and lifecycle state; credentials, OAuth state, installations,
 repositories, and permissions never appear in MCP output.
 The status response separates `interactive_ready`, `unattended_ready`, and
@@ -187,7 +189,9 @@ settings.
 ## Recommended entry points
 
 - **Common case:** `run_task` — one call that starts the run, polls, and returns artifacts or the next action.
-- **Manual control:** `coordinator_start` → `run_status` / `run_watch` → `run_show_artifacts` → `run_get_file` → `run_review`
+- **Manual define-outcome control:** `coordinator_start(autopilot=false)` →
+  `coordinator_outcome_spec_get` → `coordinator_outcome_spec_confirm` (or revise) →
+  observation → artifact inspection → review when gated.
 
 ## Poll vs. stream
 
@@ -220,17 +224,29 @@ If a tool returns `-32001 Request timed out`:
 
 Manual end-to-end path:
 
-`project_list (or project_create) → list_blueprints → coordinator_start → run_status (poll) → [coordinator_steer if needed] → [run_show_artifacts → run_get_file → run_review if gated]`
+`project_list (or project_create) → confirm team → coordinator_start(autopilot=false) →
+coordinator_outcome_spec_get → coordinator_outcome_spec_confirm → run_status (poll) →
+[coordinator_steer if needed] → [run_show_artifacts → run_get_file → run_review if gated]`
+
+`team_cast` is proposal-only by default; confirm its proposal before dispatch.
+`run_review` accepts an `approved` boolean, not a request-changes payload. Use web/REST
+review for change-request feedback. `memory_export` is optional, not a required terminal step.
 
 Common one-call path:
 
 `run_task`
 
+This starts a **new** run in direct mode by default; it is not a Ready-card pickup command.
+See the [exact-tool lifecycle diagram](./example-scenarios#scenario-4-—-drive-the-full-lifecycle-from-an-mcp-client-copilot-cli).
+
 ## Backlog flow
 
-`backlog_capture_task → backlog_move_to_ready` (or `send_all_backlog_to_ready`) `→ run_task`
+`backlog_capture_task → backlog_move_to_ready` (or `send_all_backlog_to_ready`) `→ heartbeat pickup`
 
-Use `coordinator_start` instead of `run_task` when the operator wants manual control over the orchestration.
+Heartbeat atomically claims the Ready item and reserves its coordinator run. Do not also
+call `run_task` or `coordinator_start` for the same queued task. Those are alternative
+explicit starts. Pickup autopilot controls unattended confirmation; it does not remove
+tool approvals or human merge review.
 
 ## Results retrieval
 

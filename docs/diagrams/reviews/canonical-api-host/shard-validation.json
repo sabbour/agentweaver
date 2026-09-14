@@ -1,0 +1,263 @@
+{
+  "diagrams": [
+    {
+      "diagram": "00-system-overview-fig1",
+      "passes": 4,
+      "arrows": 6,
+      "growth_ratio": 9.950487,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "00-system-overview-fig2",
+      "passes": 5,
+      "arrows": 8,
+      "growth_ratio": 10.277496,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "00-system-overview-fig5",
+      "passes": 4,
+      "arrows": 8,
+      "growth_ratio": 10.336159,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "agent-definition-fig1",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.11782,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "agent-framework-fig1",
+      "passes": 4,
+      "arrows": 9,
+      "growth_ratio": 10.474083,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "agent-framework-fig2",
+      "passes": 4,
+      "arrows": 8,
+      "growth_ratio": 10.279344,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "agent-framework-fig3",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.123316,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "api-core-fig4",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.116064,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "api-core-fig6",
+      "passes": 4,
+      "arrows": 8,
+      "growth_ratio": 10.255141,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "canonical-api-host",
+      "passes": 4,
+      "arrows": 9,
+      "growth_ratio": 9.06942,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "canonical-testing-boundary",
+      "passes": 4,
+      "arrows": 2,
+      "growth_ratio": 9.20259,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "data-persistence-fig1",
+      "passes": 4,
+      "arrows": 2,
+      "growth_ratio": 9.179466,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "frontend-fig1",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.889862,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "frontend-fig2",
+      "passes": 4,
+      "arrows": 5,
+      "growth_ratio": 10.578269,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "frontend-fig3",
+      "passes": 4,
+      "arrows": 5,
+      "growth_ratio": 10.468378,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "frontend-fig6",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.933364,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "frontend-fig7",
+      "passes": 4,
+      "arrows": 8,
+      "growth_ratio": 11.169515,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "mcp-server-fig2",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 11.026292,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "project-generation-model-settings-fig1",
+      "passes": 4,
+      "arrows": 6,
+      "growth_ratio": 10.780734,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "project-skills-fig1",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.978002,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "projects-fig1",
+      "passes": 4,
+      "arrows": 8,
+      "growth_ratio": 11.092567,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "projects-fig2",
+      "passes": 4,
+      "arrows": 6,
+      "growth_ratio": 10.913125,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "repo-blueprint-suggestions-fig1",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.840724,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "testing-strategy-fig1",
+      "passes": 4,
+      "arrows": 0,
+      "growth_ratio": 9.022812,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    },
+    {
+      "diagram": "testing-strategy-fig4",
+      "passes": 4,
+      "arrows": 7,
+      "growth_ratio": 10.051443,
+      "schema": "valid",
+      "xml_a5_artifacts": "valid",
+      "publication_matches_final": true,
+      "sequence_endpoint_mappings": []
+    }
+  ],
+  "retired": [
+    "00-system-overview-fig7",
+    "00-system-overview-fig8",
+    "api-core-fig7"
+  ],
+  "errors": [],
+  "published_count": 25,
+  "post_pitch_pass_count": 101,
+  "arrow_count": 161
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pitch-edge0",
+    "source": "goal",
+    "target": "spec",
+    "relationship": "draft",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  },
+  {
+    "id": "pitch-edge1",
+    "source": "spec",
+    "target": "plan",
+    "relationship": "confirm",
+    "evidence": "apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:48-57,76,116-124,407,477,778; apps/Agentweaver.Api/Coordinator/CoordinatorWorkflowFactory.cs:81-96; docs/deep-dive/agent-communication.md:126-200",
+    "result": "clean"
+  }
+]
