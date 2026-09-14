@@ -5,8 +5,22 @@ namespace Agentweaver.AgentTools;
 /// </summary>
 public sealed record SandboxToolOptions(
     bool ShellEnabled,
-    int DefaultTimeoutMs = 300_000)
+    int DefaultTimeoutMs = SandboxToolOptions.DefaultRunCommandTimeoutMs)
 {
+    public const int DefaultRunCommandTimeoutMs = 30 * 60 * 1_000;
+    public const string DefaultRunCommandTimeoutSecondsEnvironmentVariable =
+        "AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS";
+
+    public static int ResolveDefaultRunCommandTimeoutMs()
+    {
+        var raw = Environment.GetEnvironmentVariable(DefaultRunCommandTimeoutSecondsEnvironmentVariable);
+        if (!long.TryParse(raw, out var seconds) || seconds <= 0)
+            return DefaultRunCommandTimeoutMs;
+
+        var milliseconds = seconds * 1_000;
+        return milliseconds > int.MaxValue ? int.MaxValue : (int)milliseconds;
+    }
+
     /// <summary>
     /// Short-lived credential for the run's selected repository. The shell tool gives it only to a
     /// simple <c>git</c> or <c>gh</c> child process. It is never written to disk or an event.

@@ -44,6 +44,16 @@ in evidence.
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
+Before choosing a persona for a dynamic API run, check
+`scripts/persona-briefs/catalog.json` through
+`node scripts/persona-briefs/find-similar.mjs --description "<intent>"`. If the API
+scenario must execute through completion or publish/validate a live preview, add
+`--requires-completion`; do not dispatch a candidate whose ranked output says
+`runsToCompletion: false` or `completionStatus: "stops-at-gate"` for that intent.
+The selector warns when the strongest keyword match stops at a gate and lists
+gate-stopping candidates under `rejectedMatches`, which is a scenario-selection
+problem, not evidence of a product regression.
+
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving
 actor and the target. Harness dispatches a fresh **`PersonaActor`** sub-agent

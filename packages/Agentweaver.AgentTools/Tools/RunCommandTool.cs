@@ -181,11 +181,21 @@ internal sealed class RunCommandTool : ISandboxTool
                             TimeSpan.FromMilliseconds(timeout) + ctx.Options.ShellWatchdogGrace,
                             ct).ConfigureAwait(false);
                     }
-                    result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);
+                    result = await ExecuteWithDeadlineAsync(ctx, cmd, timeout, commandHash, ct)
+                        .ConfigureAwait(false);
                 }
                 finally
                 {
                     executionLease?.Dispose();
+                }
+
+                if (result.TimedOut)
+                {
+                    EmitDeadlineExceeded(ctx, timeout);
+                    result = result with
+                    {
+                        Stderr = AppendDeadlineGuidance(result.Stderr, timeout),
+                    };
                 }
 
                 var stdout = RedactOutput(result.Stdout, ctx);
@@ -223,6 +233,135 @@ internal sealed class RunCommandTool : ISandboxTool
         ctx.CurrentToolCallId?.Invoke()
         ?? SandboxToolInvocation.CurrentToolCallId
         ?? Guid.NewGuid().ToString("n");
+
+    private static async Task<SandboxExecResult> ExecuteWithDeadlineAsync(
+        SandboxToolContext ctx,
+        SandboxCommand command,
+        int timeoutMs,
+        string commandHash,
+        CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var execution = ctx.Executor.ExecuteAsync(command, deadline.Token);
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var completed = await Task.WhenAny(
+                execution,
+                Task.Delay(timeout, ct))
+            .ConfigureAwait(false);
+
+        if (ReferenceEquals(completed, execution))
+            return await AwaitExecutionAsync(execution, deadline, timeoutMs, ct).ConfigureAwait(false);
+
+        if (ct.IsCancellationRequested)
+            throw new OperationCanceledException(ct);
+
+        try
+        {
+            await deadline.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (execution.IsCompleted)
+            return await AwaitExecutionAsync(execution, deadline, timeoutMs, ct).ConfigureAwait(false);
+
+        _ = ObserveLateExecutorCompletionAsync(execution, ctx.Logger, commandHash);
+        ctx.Logger.LogWarning(
+            "run_command exceeded execution budget and was cancelled — timeoutMs={TimeoutMs} commandHash={CommandHash}",
+            timeoutMs,
+            commandHash);
+        return new SandboxExecResult(
+            -1,
+            "",
+            BuildDeadlineGuidance(timeoutMs),
+            TimedOut: true,
+            OutputTruncated: false);
+    }
+
+    private static async Task<SandboxExecResult> AwaitExecutionAsync(
+        Task<SandboxExecResult> execution,
+        CancellationTokenSource deadline,
+        int timeoutMs,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await execution.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            return new SandboxExecResult(
+                -1,
+                "",
+                BuildDeadlineGuidance(timeoutMs),
+                TimedOut: true,
+                OutputTruncated: false);
+        }
+    }
+
+    private static async Task ObserveLateExecutorCompletionAsync(
+        Task<SandboxExecResult> execution,
+        ILogger logger,
+        string commandHash)
+    {
+        try
+        {
+            await execution.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "run_command executor completed with an exception after its tool deadline — commandHash={CommandHash}",
+                commandHash);
+        }
+    }
+
+    private static void EmitDeadlineExceeded(SandboxToolContext ctx, int timeoutMs)
+    {
+        ctx.EmitEvent?.Invoke(EventTypes.RunDegraded, new
+        {
+            toolName = "run_command",
+            reason = BuildDeadlineGuidance(timeoutMs),
+            timeoutMs,
+        });
+    }
+
+    private static string AppendDeadlineGuidance(string stderr, int timeoutMs)
+    {
+        var guidance = BuildDeadlineGuidance(timeoutMs);
+        if (string.IsNullOrWhiteSpace(stderr))
+            return guidance;
+
+        if (stderr.Contains(guidance, StringComparison.Ordinal))
+            return stderr;
+
+        return stderr.TrimEnd() + "\n" + guidance;
+    }
+
+    private static string BuildDeadlineGuidance(int timeoutMs)
+    {
+        var budget = timeoutMs > 0
+            ? $" of {FormatTimeout(timeoutMs)}"
+            : "";
+        return $"run_command exceeded its execution budget{budget} and was killed. " +
+               "Do not use run_command for long-lived or backgrounded servers. " +
+               "Use start_preview_process for preview/dev servers, then call observe_bound_port " +
+               "with the returned session_id and start_preview only after the port is healthy. " +
+               "For finite builds or tests, run a narrower command or set an explicit timeout_ms " +
+               "that fits within the command budget.";
+    }
+
+    private static string FormatTimeout(int timeoutMs)
+    {
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        if (timeout.TotalMinutes >= 1)
+            return $"{timeout.TotalMinutes:n0} minutes";
+        if (timeout.TotalSeconds >= 1)
+            return $"{timeout.TotalSeconds:n0} seconds";
+        return $"{timeoutMs} ms";
+    }
 
     private static Dictionary<string, string> BuildCommandEnvironment(
         string workingDirectory,

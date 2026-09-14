@@ -451,6 +451,8 @@ typed optional fields with `project_configure`.
 
 The runtime CLI path also accepts two environment-variable fallbacks, checked in order after the config key: `AGENTWEAVER_COPILOT_CLI_PATH`, then `COPILOT_CLI_PATH` (`GitHubCopilotClientFactory.cs:50`). If the configured path does not exist on disk, Agentweaver logs a warning and falls back to SDK auto-resolution rather than failing (`GitHubCopilotClientFactory.cs:117`).
 
+Sandboxed `run_command` calls are bounded finite commands, not a process supervisor. The default execution budget is 30 minutes; override it with `AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS` for a deployment, or with the model/tool-call `timeout_ms` argument for one command. When the budget expires, Agentweaver cancels the sandbox process and returns `timed_out: true` guidance to use `start_preview_process` for long-lived preview/dev servers, followed by `observe_bound_port` and `start_preview`.
+
 ::: tip "Copilot runtime not found"
 The GitHub Copilot SDK ships a native CLI and normally resolves it automatically from the build output. On a host whose RID was never provisioned into that output — for example a local WSL dev build on an architecture the publish step didn't produce — the SDK can fail at runtime with a "Copilot runtime not found" style error. Two fixes:
 

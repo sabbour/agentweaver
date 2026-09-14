@@ -112,7 +112,7 @@ import type {
   RunStatus,
   WorkPlanResponse,
 } from '../api/types';
-import { safeTerminalFailureMessage } from '../api/types';
+import { isSafeTerminalCause, safeTerminalFailureMessage } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -2607,7 +2607,14 @@ export function CoordinatorRunPage() {
       });
       if (detail.status === 'failed') {
         apiClient.getRunTerminalDiagnostic(runId)
-          .then((diagnostic) => { if (!cancelled) setTerminalDiagnostic(diagnostic); })
+          .then((diagnostic) => {
+            if (!cancelled) {
+              setTerminalDiagnostic({
+                ...diagnostic,
+                cause_chain: diagnostic.cause_chain.filter(isSafeTerminalCause),
+              });
+            }
+          })
           .catch(() => { if (!cancelled) setTerminalDiagnostic(null); });
       }
       if (wp) consecutiveWorkPlanNotReady = 0;
@@ -4059,7 +4066,7 @@ export function CoordinatorRunPage() {
       </div>
     </div>
   );
-  const isRetryable     = viewState.canRetry;
+  const isRetryable = viewState.canRetry && terminalDiagnostic?.retryable !== false;
   // Stop/toggle endpoints still require an active run, but coordinator messaging uses the backend's
   // explicit steerability bit so review-gated runs can receive operator instructions.
   const coordActive = coordinatorSteerable === true || (coordinatorSteerable === undefined && viewState.canStop);
@@ -4658,7 +4665,11 @@ export function CoordinatorRunPage() {
         {previewStatusContent()}
       </div>
     );
-  const retryHint = isRetryable ? 'Starts a fresh run from the same goal. The original run is kept and linked.' : 'Re-run available after failure';
+  const retryHint = isRetryable
+    ? 'Starts a fresh run from the same goal. The original run is kept and linked.'
+    : terminalDiagnostic?.retryable === false
+      ? 'This terminal failure is marked non-retryable.'
+      : 'Re-run is unavailable for this run state.';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
@@ -4785,6 +4796,7 @@ export function CoordinatorRunPage() {
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {terminalDiagnostic.cause_chain.length > 0 ? ` Cause chain: ${terminalDiagnostic.cause_chain.join(' -> ')}.` : ''}
                 {' '}{terminalDiagnosticAction}
               </MessageBarBody>
               <MessageBarActions>

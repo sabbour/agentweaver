@@ -64,6 +64,23 @@ which does a cheap keyword/tag match (no LLM call) against
 `scripts/persona-briefs/catalog.json` and returns ranked close matches. Only proceed
 to generation below if nothing close already exists.
 
+If the intent must drive work through execution, completion, or live preview
+validation, pass `--requires-completion`:
+
+```powershell
+node scripts/persona-briefs/find-similar.mjs `
+  --description "<intent that must reach completion>" `
+  --requires-completion
+```
+
+Every ranked match reports `runsToCompletion`, `completionStatus`, and `stopsAt`.
+With `--requires-completion`, personas that stop at a review/confirmation gate are
+returned under `rejectedMatches` instead of `matches`, and the command emits a
+warning naming the gate-stopping top keyword match. If no keyword-matched persona
+declares `runsToCompletion: true`, treat that explicit warning as a catalog gap:
+generate/review a new completion-capable persona or relax the requirement; do not
+silently run a stop-at-gate persona for a completion scenario.
+
 The supported generation flow produces:
 
 1. one new surface-agnostic persona core prompt, then
