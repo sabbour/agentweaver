@@ -331,6 +331,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
+  commandDetails: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  commandDetailsSummary: {
+    cursor: 'pointer',
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
   attributes: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr)',
@@ -724,6 +734,7 @@ function TraceInspector({
 
   const { span, type } = node;
   const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
+  const toolName = span.toolName ?? span.name;
   const nodeCost = aggregateNanoAiu(node);
   const costLabel = type === 'invoke-agent' ? 'AIC (invocation)' : type === 'llm' ? 'AIC (model call)' : 'AIC';
   return (
@@ -783,21 +794,40 @@ function TraceInspector({
         </div>
       </div>
       {type === 'tool' && (
-        <>
-          <ToolValue
-            title="Input"
-            value={toolDetail?.arguments}
-            emptyLabel="No input"
-            styles={styles}
-          />
-          <ToolValue
-            title="Output"
-            value={toolDetail?.errorMessage ?? toolDetail?.content}
-            emptyLabel="No output"
-            error={toolDetail?.errorMessage !== undefined}
-            styles={styles}
-          />
-        </>
+        toolName === 'run_command' ? (
+          <details className={styles.commandDetails} data-testid="run-command-details">
+            <summary className={styles.commandDetailsSummary}>Command details</summary>
+            <ToolValue
+              title="Input"
+              value={toolDetail?.arguments}
+              emptyLabel="No input"
+              styles={styles}
+            />
+            <ToolValue
+              title="Output"
+              value={toolDetail?.errorMessage ?? toolDetail?.content}
+              emptyLabel="No output"
+              error={toolDetail?.errorMessage !== undefined}
+              styles={styles}
+            />
+          </details>
+        ) : (
+          <>
+            <ToolValue
+              title="Input"
+              value={toolDetail?.arguments}
+              emptyLabel="No input"
+              styles={styles}
+            />
+            <ToolValue
+              title="Output"
+              value={toolDetail?.errorMessage ?? toolDetail?.content}
+              emptyLabel="No output"
+              error={toolDetail?.errorMessage !== undefined}
+              styles={styles}
+            />
+          </>
+        )
       )}
     </aside>
   );
