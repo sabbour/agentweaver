@@ -433,7 +433,8 @@ public static class WorkflowDefinitionEndpoints
             return Results.Created(
                 $"/api/projects/{projectId}/backlog/tasks/{task.Id}",
                 new { task_id = task.Id.ToString() });
-        });
+        })
+            .RequiresAiExecutionContext("orchestration");
 
         // PUT /api/projects/{projectId}/workflows/{workflowId} — parse, binder dry-run, save (US7).
         // Returns 200 WorkflowDetailDto on success; 400 { error, line? } on parse/validation failure.
@@ -710,7 +711,8 @@ public static class WorkflowDefinitionEndpoints
             {
                 return EndpointHelpers.AiExecutionError(ex);
             }
-        });
+        })
+            .RequiresAiExecutionContext("workflow_generation");
     }
 
     private static int ProviderFailureStatus(AgentProviderFailureKind kind) =>
