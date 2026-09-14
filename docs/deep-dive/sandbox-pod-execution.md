@@ -730,7 +730,12 @@ should not have to discover the discrepancy themselves.
 ### The per-run writable system root
 
 Package managers that install into the system root cannot work against a read-only image, so each
-run that needs one gets a **private, disposable system root**:
+run that needs one gets a **private, disposable system root**. The executor does not create this
+root for every `run_command`: ordinary commands run against the read-only image view, while
+package-manager commands (`apt`, `apt-get`, `aptitude`, `dpkg`, `add-apt-repository`) trigger the
+writable-root holder lazily. If a holder startup fails, that run falls back to the read-only view
+and the sidecar backs off before retrying, so a broken optional package-install feature cannot add a
+multi-minute delay to every shell command.
 
 - `apps/Agentweaver.AgentHost/sandbox/awx-run-root` creates an unprivileged **user + mount
   namespace**, mounts a size-bounded **tmpfs**, layers `/usr` and `/var` as **overlays** whose upper
