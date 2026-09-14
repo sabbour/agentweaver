@@ -215,6 +215,87 @@ public sealed class RunTerminalDiagnosticReaderTests
     }
 
     [Fact]
+    public async Task GetAsync_EnrichesProviderTimeoutWithSafeStepAndToolFailureCauses()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new MemoryDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.RunEvents.AddRange(
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 1,
+                EventType = EventTypes.WorkflowStep,
+                PayloadJson = """{"step":"preview","status":"started","message":"Starting live preview."}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-6),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 2,
+                EventType = EventTypes.ToolCall,
+                PayloadJson = """{"callId":"call-1","toolName":"start_preview","arguments":{"prompt":"must-not-escape"}}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-5),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 3,
+                EventType = EventTypes.ToolError,
+                PayloadJson = """{"callId":"call-1","errorMessage":"registration timed out with secret=must-not-escape"}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-4),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 4,
+                EventType = EventTypes.ToolCall,
+                PayloadJson = """{"callId":"call-2","toolName":"start_preview"}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-3),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 5,
+                EventType = EventTypes.ToolError,
+                PayloadJson = """{"callId":"call-2","errorMessage":"registration timed out"}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-2),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 6,
+                EventType = EventTypes.ToolError,
+                PayloadJson = """{"callId":"call-2","errorMessage":"registration timed out"}""",
+                CreatedAt = DateTime.UtcNow.AddSeconds(-1),
+            },
+            new RunEventRecord
+            {
+                RunId = "run-1",
+                Sequence = 7,
+                EventType = EventTypes.RunFailed,
+                PayloadJson = """{"errorCode":"github_copilot_turn_timeout","retryable":true,"causeChain":[]}""",
+                CreatedAt = DateTime.UtcNow,
+            });
+        await db.SaveChangesAsync();
+
+        var diagnostic = await new RunTerminalDiagnosticReader(db)
+            .GetAsync("run-1", CancellationToken.None);
+
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be("github_copilot_turn_timeout");
+        diagnostic.Component.Should().Be("agent_tool");
+        diagnostic.Message.Should().Be("Run failed with code 'github_copilot_turn_timeout'. Retry is available.");
+        diagnostic.CauseChain.Should().Equal("step:preview:started", "tool:start_preview:failed:3");
+        System.Text.Json.JsonSerializer.Serialize(diagnostic).Should().NotContain("must-not-escape")
+            .And.NotContain("registration timed out");
+    }
+
+    [Fact]
     public void TryRead_ProjectsCorrelatedPreLaunchProviderFailure()
     {
         const string payload = """

@@ -44,20 +44,101 @@ export function scoreEntry(queryTokens, entry) {
   return { score, matchedTokens: [...matched] };
 }
 
-/**
- * Rank catalog entries by relevance to a free-text description.
- * Returns entries with score > 0, sorted descending, each entry annotated with
- * `score` and `matchedTokens`. No entries are dropped for zero overlap results
- * except by the caller-supplied `limit`.
- */
-export function findSimilar(description, { entries = null, catalogPath = CATALOG_PATH, limit = 5 } = {}) {
+function annotateCompletion(entry) {
+  const runsToCompletion = typeof entry.runsToCompletion === 'boolean' ? entry.runsToCompletion : null;
+  const completionStatus = runsToCompletion === true
+    ? 'runs-to-completion'
+    : runsToCompletion === false
+      ? 'stops-at-gate'
+      : 'unknown';
+  return {
+    ...entry,
+    runsToCompletion,
+    completionStatus,
+    stopsAt: entry.stopsAt ?? null,
+  };
+}
+
+function rankMatches(description, { entries = null, catalogPath = CATALOG_PATH } = {}) {
   const queryTokens = [...new Set(tokenize(description))];
   const catalog = entries ?? loadCatalog(catalogPath);
   return catalog
-    .map((entry) => ({ ...entry, ...scoreEntry(queryTokens, entry) }))
+    .map((entry) => ({ ...annotateCompletion(entry), ...scoreEntry(queryTokens, entry) }))
     .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+}
+
+function describeGateStoppingCandidates(candidates) {
+  return candidates
+    .map((entry) => `${entry.id}${entry.stopsAt ? ` (${entry.stopsAt})` : ''}`)
+    .join(', ');
+}
+
+/**
+ * Rank catalog entries by relevance to a free-text description.
+ * Returns entries with score > 0, sorted descending, each entry annotated with
+ * `score`, `matchedTokens`, `runsToCompletion`, `completionStatus`, and `stopsAt`.
+ * Set `requiresCompletion` to keep only personas that declare
+ * `runsToCompletion: true`.
+ */
+export function findSimilar(description, {
+  entries = null,
+  catalogPath = CATALOG_PATH,
+  limit = 5,
+  requiresCompletion = false,
+} = {}) {
+  return findSimilarWithDiagnostics(description, { entries, catalogPath, limit, requiresCompletion }).matches;
+}
+
+/**
+ * Like findSimilar(), but also returns rejected matches and human-facing warnings
+ * for cases where keyword similarity diverges from run-to-completion suitability.
+ */
+export function findSimilarWithDiagnostics(description, {
+  entries = null,
+  catalogPath = CATALOG_PATH,
+  limit = 5,
+  requiresCompletion = false,
+} = {}) {
+  const ranked = rankMatches(description, { entries, catalogPath });
+  const rejectedMatches = requiresCompletion
+    ? ranked.filter((entry) => entry.runsToCompletion !== true)
+    : [];
+  const matches = (requiresCompletion
+    ? ranked.filter((entry) => entry.runsToCompletion === true)
+    : ranked).slice(0, limit);
+  const warnings = [];
+  const topKeywordMatch = ranked[0];
+
+  if (topKeywordMatch?.runsToCompletion === false) {
+    const gate = topKeywordMatch.stopsAt ? `; stopsAt: ${topKeywordMatch.stopsAt}` : '';
+    warnings.push(
+      `Top keyword match "${topKeywordMatch.id}" stops at a gate (runsToCompletion: false${gate}).` +
+      (requiresCompletion
+        ? ' It was excluded because completion was required.'
+        : ' Use --requires-completion for scenarios that must execute through completion.'),
+    );
+  }
+
+  if (requiresCompletion && ranked.length > 0 && matches.length === 0) {
+    const rejected = describeGateStoppingCandidates(rejectedMatches);
+    warnings.push(
+      'This query requires a run-to-completion persona, but no keyword-matched candidate declares ' +
+      `runsToCompletion: true.${rejected ? ` Gate-stopping/unknown candidates: ${rejected}.` : ''}`,
+    );
+  } else if (requiresCompletion && ranked.length === 0) {
+    warnings.push(
+      'This query requires a run-to-completion persona, but no keyword-matched candidates were found.',
+    );
+  }
+
+  return {
+    query: description,
+    requirements: { requiresCompletion },
+    matches,
+    rejectedMatches: rejectedMatches.slice(0, limit),
+    warnings,
+  };
 }
 
 async function main() {
@@ -70,12 +151,30 @@ async function main() {
     args.splice(index, 2);
     return value;
   };
+  const takeBoolean = (flag) => {
+    const index = args.indexOf(flag);
+    if (index < 0) return false;
+    args.splice(index, 1);
+    return true;
+  };
   const description = take('--description');
   const limit = take('--limit');
-  if (args.length || !description) throw new Error('usage: node find-similar.mjs --description "<free text>" [--limit n]');
-  const matches = findSimilar(description, { limit: limit ? Number(limit) : undefined });
-  process.stdout.write(`${JSON.stringify({ query: description, matches }, null, 2)}\n`);
-  if (matches.length === 0) {
+  const requiresCompletion = takeBoolean('--requires-completion') || takeBoolean('--must-run-to-completion');
+  if (args.length || !description) {
+    throw new Error(
+      'usage: node find-similar.mjs --description "<free text>" [--limit n] ' +
+      '[--requires-completion|--must-run-to-completion]',
+    );
+  }
+  const result = findSimilarWithDiagnostics(description, {
+    limit: limit ? Number(limit) : undefined,
+    requiresCompletion,
+  });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  for (const warning of result.warnings) console.error(`Warning: ${warning}`);
+  if (result.matches.length === 0 && requiresCompletion) {
+    console.error('No completion-eligible matches found — choose a runsToCompletion persona or generate a new reviewed persona core with generate-core.mjs.');
+  } else if (result.matches.length === 0) {
     console.error('No close matches found — consider generating a new persona core with generate-core.mjs.');
   }
 }

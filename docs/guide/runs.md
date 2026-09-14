@@ -163,10 +163,12 @@ The graph shows:
 ### Comparing topology layouts
 
 The **Topology layout** control is available on the live run graph. **Balanced grid
-(current)** is the default layout engine. Choose **Legacy staircase (comparison)** only
-to compare card placement while diagnosing a rollout; it does not alter the run,
-its nodes, dependencies, edge direction, or status data. The selection is remembered
-locally and is also available in workflow graph viewer and editor canvases.
+(current)** is the default layout engine. It reserves the full rendered card footprint,
+including pod chips, and routes connector lines through gutters around cards so arrows
+remain readable at dense zoom levels. Choose **Legacy staircase (comparison)** only to
+compare card placement while diagnosing a rollout; it does not alter the run, its nodes,
+dependencies, edge direction, or status data. The selection is remembered locally and is
+also available in workflow graph viewer and editor canvases.
 
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 
@@ -182,7 +184,10 @@ While a coordinator orchestration is active, you can intervene from the topology
 | **Stop run** | Immediately stop the orchestration; takes effect on running agents right away |
 
 ::: tip Stop is immediate; redirect is at the next turn
-Stopping a run takes effect immediately on all running agents. Redirecting or amending takes effect at the next agent turn boundary — the current turn completes first.
+Stopping a run takes effect immediately on all running agents. Redirecting or amending
+takes effect at the next agent turn boundary. If a targeted redirect must interrupt a
+stuck child turn, that cancellation is treated as a redirect handoff rather than a child
+failure, so unrelated siblings and dependents are not failed by the steer itself.
 :::
 
 After sending guidance, the Messages pane records a durable acknowledgement with its
@@ -331,10 +336,15 @@ the configured provider changed, became unavailable, or requires reconnection. R
 GitHub only when a new run reports `github_copilot_auth_required`.
 
 The projection contains only a bounded error code, safe message, component,
-timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
-AgentHost-generated internal failures and pre-launch provider failures include a
-server-generated correlation ID, the active trace ID when available, and a bounded
-exception-type chain. If an earlier
+timestamp, retryability, allowlisted correlation IDs, and sanitized cause breadcrumbs.
+Those breadcrumbs may include exception type names plus server-authored `step:*`,
+`phase:*`, `reason:*`, and `tool:*` labels; they never include prompts, tool payloads,
+headers, credentials, raw paths, or stack traces. AgentHost-generated internal failures
+and pre-launch provider failures include a server-generated correlation ID, the active
+trace ID when available, and a bounded exception-type chain. When a terminal failure
+has no direct exception chain, the diagnostic reader inspects recent persisted step and
+tool-error events so repeated tool failures are surfaced instead of misattributing the
+failure to the component that timed out last. If an earlier
 best-effort agent operation failed but the Coordinator later terminalized for another
 reason, the projection uses the latest terminal failure instead of the earlier recovered
 failure.

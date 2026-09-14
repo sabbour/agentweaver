@@ -65,7 +65,7 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
 import { TopologyLayoutToggle } from '../components/TopologyLayoutToggle';
 import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
@@ -112,7 +112,7 @@ import type {
   RunStatus,
   WorkPlanResponse,
 } from '../api/types';
-import { safeTerminalFailureMessage } from '../api/types';
+import { isSafeTerminalCause, safeTerminalFailureMessage } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -2607,7 +2607,14 @@ export function CoordinatorRunPage() {
       });
       if (detail.status === 'failed') {
         apiClient.getRunTerminalDiagnostic(runId)
-          .then((diagnostic) => { if (!cancelled) setTerminalDiagnostic(diagnostic); })
+          .then((diagnostic) => {
+            if (!cancelled) {
+              setTerminalDiagnostic({
+                ...diagnostic,
+                cause_chain: diagnostic.cause_chain.filter(isSafeTerminalCause),
+              });
+            }
+          })
           .catch(() => { if (!cancelled) setTerminalDiagnostic(null); });
       }
       if (wp) consecutiveWorkPlanNotReady = 0;
@@ -3044,6 +3051,9 @@ export function CoordinatorRunPage() {
         nodeSizeHints[node.id].height = COMPACT_NODE_H;
         // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
+        if (topoNode?.executionPodName) {
+          nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
+        }
         // Defensive: read display fields from flat props OR nested data map.
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
         const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
@@ -3104,6 +3114,9 @@ export function CoordinatorRunPage() {
       // height. (Human Review awaiting a decision is expanded further below to fit its on-face buttons.)
       if (wfModel) {
         nodeSizeHints[node.id].height = FIXED_NODE_WITH_CAPTION_H;
+      }
+      if (wfPod) {
+        nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
       }
 
       // Collective-assembly stage status. Two sources combine: the phase projection
@@ -3179,7 +3192,7 @@ export function CoordinatorRunPage() {
       // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
       // room in the layout so neighboring bands keep clear of it. (Matches WorkflowNode's isHumanWaiting.)
       if (roleKey === 'review' && !nodePlanned && stepStatus === 'started') {
-        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H;
+        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H + (wfPod ? POD_INDICATOR_NODE_H : 0);
       }
 
       // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up
@@ -4053,7 +4066,7 @@ export function CoordinatorRunPage() {
       </div>
     </div>
   );
-  const isRetryable     = viewState.canRetry;
+  const isRetryable = viewState.canRetry && terminalDiagnostic?.retryable !== false;
   // Stop/toggle endpoints still require an active run, but coordinator messaging uses the backend's
   // explicit steerability bit so review-gated runs can receive operator instructions.
   const coordActive = coordinatorSteerable === true || (coordinatorSteerable === undefined && viewState.canStop);
@@ -4652,7 +4665,11 @@ export function CoordinatorRunPage() {
         {previewStatusContent()}
       </div>
     );
-  const retryHint = isRetryable ? 'Starts a fresh run from the same goal. The original run is kept and linked.' : 'Re-run available after failure';
+  const retryHint = isRetryable
+    ? 'Starts a fresh run from the same goal. The original run is kept and linked.'
+    : terminalDiagnostic?.retryable === false
+      ? 'This terminal failure is marked non-retryable.'
+      : 'Re-run is unavailable for this run state.';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
@@ -4779,6 +4796,7 @@ export function CoordinatorRunPage() {
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {terminalDiagnostic.cause_chain.length > 0 ? ` Cause chain: ${terminalDiagnostic.cause_chain.join(' -> ')}.` : ''}
                 {' '}{terminalDiagnosticAction}
               </MessageBarBody>
               <MessageBarActions>

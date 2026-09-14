@@ -256,9 +256,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       message: `${instruction} BlobEndpoint=https://agentweaver.blob.core.windows.net/;SharedAccessSignature=sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D`,
       component: 'agent_host',
       timestamp: '2026-09-09T00:00:00Z',
-      retryable: true,
+      retryable: false,
       correlation_ids: {},
-      cause_chain: [],
+      cause_chain: ['step:preview:started', 'tool:start_preview:failed:3', '******example.test/trace'],
     });
 
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -269,7 +269,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
         payload: {
           errorCode: 'agent_turn_internal_error',
           message: "Run failed with code 'agent_turn_internal_error'.",
-          retryable: true,
+          retryable: false,
         },
       },
     ];
@@ -283,7 +283,10 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
     expect((await screen.findByTestId('terminal-failure-diagnostic')).textContent).toContain(
-      "Failure in agent_host. Run failed with code 'agent_host_turn_incomplete'. Retry is available.",
+      "Failure in agent_host. Run failed with code 'agent_host_turn_incomplete'. Retry is not available.",
+    );
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain(
+      'Cause chain: step:preview:started -> tool:start_preview:failed:3.',
     );
     expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
     expect(screen.getByTestId('run-header').textContent).not.toContain('Expected provider: GitHub Copilot');
@@ -291,6 +294,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(screen.getByTestId('coordinator-retry-button').getAttribute('aria-label')).toContain(
       'Expected provider: GitHub Copilot. Model: gpt-5.',
     );
+    expect((screen.getByTestId('coordinator-retry-button') as HTMLButtonElement).disabled).toBe(true);
     expect(document.body.textContent).not.toContain('abc%2Bdef%3D');
     expect(document.body.textContent).not.toContain(secret);
     expect(document.body.textContent).not.toContain('Authorization');

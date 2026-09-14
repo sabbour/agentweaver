@@ -190,6 +190,15 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
             .Should().Be("coordinator_execution_failed");
+
+        var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+            $"/api/runs/{runId}/terminal-diagnostic");
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be("coordinator_execution_failed");
+        diagnostic.Retryable.Should().BeFalse();
+        diagnostic.Message.Should().Be("Run failed with code 'coordinator_execution_failed'. Retry is not available.");
+        diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
+        diagnostic.CauseChain.Should().Contain("reason:outcome_spec_draft_timeout");
     }
 
     [Fact]
@@ -345,6 +354,15 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
             .Should().Be("coordinator_execution_failed");
+
+        var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+            $"/api/runs/{runId}/terminal-diagnostic");
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be("coordinator_execution_failed");
+        diagnostic.Retryable.Should().BeFalse();
+        diagnostic.Message.Should().Be("Run failed with code 'coordinator_execution_failed'. Retry is not available.");
+        diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
+        diagnostic.CauseChain.Should().Contain("TimeoutException");
     }
 
     [Fact]

@@ -181,6 +181,32 @@ public sealed class StructuredRunFailureTerminalTests
     }
 
     [Fact]
+    public void NormalizeFailure_PreservesOnlySafeCauseChainEntries()
+    {
+        var inbound = new RunEvent(1, EventTypes.RunFailed, new
+        {
+            errorCode = "github_copilot_turn_timeout",
+            retryable = true,
+            causeChain = new[]
+            {
+                "AgentProviderException",
+                "tool:start_preview:failed:3",
+                "step:preview:started",
+                "https://agentweaver.blob.core.windows.net/runs/log?sig=secret",
+            },
+        });
+
+        var normalized = StructuredRunFailureTerminal.NormalizeFailure(inbound);
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(normalized.Payload));
+
+        doc.RootElement.GetProperty("errorCode").GetString().Should().Be("github_copilot_turn_timeout");
+        doc.RootElement.GetProperty("causeChain")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .Should().Equal("AgentProviderException", "tool:start_preview:failed:3", "step:preview:started");
+    }
+
+    [Fact]
     public void CreateInternalError_ReplacesAzureSasDiagnosticWithSafeServerAuthoredText()
     {
         const string sas = "BlobEndpoint=https://agentweaver.blob.core.windows.net/;SharedAccessSignature=sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D";

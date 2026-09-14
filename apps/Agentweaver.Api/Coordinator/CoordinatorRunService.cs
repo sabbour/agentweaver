@@ -1107,7 +1107,12 @@ public sealed class CoordinatorRunService
                 _logger.LogWarning(ex,
                     "Coordinator run {RunId} failed: GitHub Copilot token is unauthorized or expired. " +
                     "User must re-link their GitHub account.", runId);
-                await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.AuthRequiredErrorCode).ConfigureAwait(false);
+                await FailRunSafeAsync(
+                    runId,
+                    entry,
+                    GitHubCopilotUnauthorizedException.AuthRequiredErrorCode,
+                    failure: ex,
+                    failurePhase: "coordinator_watch").ConfigureAwait(false);
             }
             catch (Exception ex) when (ContainsOutcomeSpecDraftTimeout(ex))
             {
@@ -1115,12 +1120,21 @@ public sealed class CoordinatorRunService
                     ex,
                     "Coordinator run {RunId} exceeded the outcome-spec drafting deadline; transitioning to Failed",
                     runId);
-                await FailRunSafeAsync(runId, entry, "outcome_spec_draft_timeout").ConfigureAwait(false);
+                await FailRunSafeAsync(
+                    runId,
+                    entry,
+                    "outcome_spec_draft_timeout",
+                    failure: ex,
+                    failurePhase: "outcome_spec_draft").ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Coordinator watch loop failed for run {RunId}; transitioning to Failed", runId);
-                await FailRunSafeAsync(runId, entry).ConfigureAwait(false);
+                await FailRunSafeAsync(
+                    runId,
+                    entry,
+                    failure: ex,
+                    failurePhase: "coordinator_watch").ConfigureAwait(false);
             }
         }, _appStopping);
     }
@@ -1155,7 +1169,13 @@ public sealed class CoordinatorRunService
                         failed.ExecutorId,
                         runId,
                         reason);
-                    await FailRunSafeAsync(runId, entry, reason, providerFailure, failed.Data).ConfigureAwait(false);
+                    await FailRunSafeAsync(
+                        runId,
+                        entry,
+                        reason,
+                        providerFailure,
+                        failed.Data,
+                        failed.ExecutorId).ConfigureAwait(false);
                     return;
 
                 case RequestInfoEvent rie:
@@ -1275,7 +1295,11 @@ public sealed class CoordinatorRunService
             {
                 _logger.LogError(ex, "Coordinator restart recovery failed for run {RunId}; failing it", run.Id);
                 var entry = _streamStore.Get(run.Id.ToString()) ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
-                await FailRunSafeAsync(run.Id.ToString(), entry).ConfigureAwait(false);
+                await FailRunSafeAsync(
+                    run.Id.ToString(),
+                    entry,
+                    failure: ex,
+                    failurePhase: "coordinator_recovery").ConfigureAwait(false);
             }
         }
 
@@ -1976,15 +2000,22 @@ public sealed class CoordinatorRunService
             .ConfigureAwait(false);
     }
 
-    private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason = "watch_loop_error")
-        => await FailRunSafeAsync(runId, entry, reason, providerFailure: null).ConfigureAwait(false);
+    private async Task FailRunSafeAsync(
+        string runId,
+        RunStreamEntry entry,
+        string reason = "watch_loop_error",
+        Exception? failure = null,
+        string? failurePhase = null)
+        => await FailRunSafeAsync(runId, entry, reason, providerFailure: null, failure, failurePhase)
+            .ConfigureAwait(false);
 
     private async Task FailRunSafeAsync(
         string runId,
         RunStreamEntry entry,
         string reason,
         AgentProviderException? providerFailure,
-        Exception? failure = null)
+        Exception? failure = null,
+        string? failurePhase = null)
     {
         try
         {
@@ -2022,7 +2053,7 @@ public sealed class CoordinatorRunService
                     retryable = false,
                     correlationId,
                     traceId = Activity.Current?.TraceId.ToHexString(),
-                    causeChain = BuildSafeCauseChain(failure),
+                    causeChain = BuildSafeCauseChain(reason, failurePhase, failure),
                 });
                 _logger.LogError(
                     "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
@@ -2039,7 +2070,7 @@ public sealed class CoordinatorRunService
                     retryable = providerFailure.IsRetryable,
                     correlationId,
                     traceId = Activity.Current?.TraceId.ToHexString(),
-                    causeChain = BuildSafeCauseChain(providerFailure),
+                    causeChain = BuildSafeCauseChain(reason, failurePhase, providerFailure),
                 });
                 _logger.LogError(
                     "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
@@ -2062,12 +2093,34 @@ public sealed class CoordinatorRunService
         }
     }
 
-    private static IReadOnlyList<string> BuildSafeCauseChain(Exception? exception)
+    private static IReadOnlyList<string> BuildSafeCauseChain(
+        string reason,
+        string? failurePhase,
+        Exception? exception)
     {
         var causes = new List<string>(4);
-        for (var current = exception; current is not null && causes.Count < 4; current = current.InnerException)
-            causes.Add(current.GetType().Name);
-        return causes;
+        if (NormalizeDiagnosticIdentifier(failurePhase) is { } phase)
+            causes.Add($"phase:{phase}:failed");
+        if (NormalizeDiagnosticIdentifier(reason) is { } safeReason)
+            causes.Add($"reason:{safeReason}");
+        if (exception is not null)
+            causes.AddRange(StructuredRunFailureTerminal.BuildExceptionCauseChain(exception));
+        return StructuredRunFailureTerminal.NormalizeCauseChain(causes);
+    }
+
+    private static string? NormalizeDiagnosticIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = new string(value.Trim()
+            .Select(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or ':' ? c : '-')
+            .ToArray())
+            .Trim('-', '.', ':', '_');
+        return normalized is { Length: > 0 and <= 96 }
+            && !SensitiveDataRedactor.ContainsSensitiveValue(normalized)
+                ? normalized
+                : null;
     }
 
     private static AgentProviderException? FindProviderFailure(Exception? exception)

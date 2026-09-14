@@ -24,6 +24,7 @@ import { DAG_NODE_SEP,
   layoutDagBalancedGrid,
   layoutDagStaircase,
   NODE_W,
+  POD_INDICATOR_NODE_H,
   RENDERED_TOPOLOGY_NODE_H,
   routeGridEdges } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
@@ -630,7 +631,14 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
       position: { x: 0, y: 0 },
     }));
     const nodeSizeHints = Object.fromEntries(
-      nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
+      nodes.map((node) => [
+        node.id,
+        {
+          width: NODE_W,
+          height: (node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H)
+            + (node.executionPodName ? POD_INDICATOR_NODE_H : 0),
+        },
+      ]),
     );
     if (layoutEngine === 'legacy-staircase') {
       return layoutDagStaircase(raw, rfEdges, {

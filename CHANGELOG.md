@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.32.2
+
+### Patch Changes
+
+- 7ae7024: Make persona similarity ranking completion-aware: `find-similar.mjs` now surfaces completion metadata, accepts `--requires-completion`, rejects gate-stopping personas for completion-required scenarios, and warns when the top keyword match stops before execution.
+- 7ae7024: Treat targeted coordinator redirects as non-destructive handoffs, so interrupting a stuck child to apply new direction no longer fails that child or cascades failure to unrelated subtasks.
+- 7ae7024: Bound sandboxed `run_command` execution so a non-terminating command can no longer park a run silently forever. Commands now have a configurable default budget of 30 minutes, emit a degraded-run signal when they exceed it, and return guidance telling agents to use `start_preview_process` for long-lived preview/dev servers.
+- 7ae7024: Surface safe terminal-failure cause breadcrumbs from structured failures, coordinator phases, and recent tool-error events so operators can tell which step or tool failed and whether retry is available.
+- 6084786: Fix the Topology panel's balanced-grid layout so dense coordinator graphs reserve pod-bearing cards, keep forward arrows flowing consistently, route connectors around cards, and drop edges whose endpoints are not present.
+
 ## 0.32.1
 
 ### Patch Changes

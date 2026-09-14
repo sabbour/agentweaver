@@ -159,6 +159,11 @@ The heartbeat never carries command text, stdout, stderr, exit code, working dir
 environment data. Browser clients consume it from the existing run stream; they must not add
 separate polling.
 
+`run_command` is bounded by its effective execution budget (30 minutes by default, configurable via
+`AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS` or the tool-call `timeout_ms`). If that deadline
+expires, the tool stops emitting heartbeats, cancels the sandbox process, returns `timed_out: true`
+guidance to the model, and emits `run.degraded` with the same actionable guidance.
+
 ### `run.completed`
 
 This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the
