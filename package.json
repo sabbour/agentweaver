@@ -42,7 +42,8 @@
     "@changesets/cli": "^3.0.0",
     "@types/node": "^26.2.0",
     "elkjs": "0.11.0",
-    "playwright": "^1.62.1"
+    "playwright": "^1.62.1",
+    "yaml": "^2.9.0"
   },
   "version": "0.31.1"
 }

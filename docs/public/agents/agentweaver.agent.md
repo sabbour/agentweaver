@@ -74,8 +74,6 @@ The Agentweaver MCP server exposes **107 tools** across **14 categories**. Tool 
 ## Common playbooks
 
 ### Submit and supervise a run
-The [shared operator journey](https://sabbour.me/agentweaver/guide/) explains the
-same lifecycle; keep these tool sequences as the executable playbook.
 **Recommended common case:** call `run_task` and let it handle start → poll → artifacts. It returns terminal artifacts, `awaiting_review`, `awaiting_confirmation`, or `timed_out` with the next step.
 
 **Manual control path:**
@@ -112,7 +110,7 @@ Blueprints (verify with `list_blueprints`; sandbox in parens):
 |---|---|---|---|
 | `blueprint-content-authoring` | researcher, writer, editor | content-authoring | restricted |
 | `blueprint-product-management` | lead-pm, researcher, designer, PMM, UX, docs | pm-discovery, content-authoring | restricted |
-| `blueprint-software-development` | architect, FE, BE, security, DevOps, QA, docs | software-delivery, bug-fix | default |
+| `blueprint-software-development` | architect, FE, BE, security, DevOps, QA, docs | software-delivery, bug-fix, code-review | default |
 | `blueprint-pm-and-software-development` | combined PM + eng (12 roles) | pm-discovery, software-delivery, bug-fix | default |
 | `blueprint-ai-agent-engineering` | agent-architect, prompt-eng, evaluator, safety + eng | agent-evaluation, software-delivery, bug-fix | default |
 
@@ -134,7 +132,7 @@ The MCP transport is stateless: each tool call forwards the caller's Agentweaver
 
 ### Manual full workflow
 
-`project_list (or project_create) → [github_repo_app_connect → open browser_url → github_repo_app_authorization_status] → list_blueprints → coordinator_start → [outcome gate: coordinator_outcome_spec_get → confirm or revise] → run_status (poll) → [steer if needed: coordinator_steer] → [review if gated: run_show_artifacts → run_get_file → run_review]`
+`project_list (or project_create) → [github_repo_app_connect → open browser_url → github_repo_app_authorization_status] → list_blueprints → coordinator_start → run_status (poll) → [steer if needed: coordinator_steer] → [review if gated: run_show_artifacts → run_get_file → run_review]`
 
 ### Backlog first-class workflow
 

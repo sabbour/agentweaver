@@ -345,7 +345,11 @@ def main():
     parser.add_argument("--report", type=Path)
     parser.add_argument("--json", action="store_true")
     args=parser.parse_args()
-    raw=sys.stdin.read() if str(args.source) == "-" else args.source.read_text(encoding="utf-8")
+    if str(args.source) == "-":
+        raw=sys.stdin.read()
+    else:
+        with args.source.open("r", encoding="utf-8", newline="") as source:
+            raw=source.read()
     bindings=json.loads(args.bindings.read_text()) if args.bindings else None
     try:
         if args.output:
@@ -360,7 +364,9 @@ def main():
         args.report.parent.mkdir(parents=True,exist_ok=True)
         args.report.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
     if output is not None:
-        args.output.write_text(output+"\n",encoding="utf-8")
+        serialized=output if output.endswith(("\n","\r")) else output+"\n"
+        with args.output.open("w", encoding="utf-8", newline="") as destination:
+            destination.write(serialized)
     print(json.dumps(report if args.json else {"status":report["status"],"errors":len(report["errors"]),"uncertainty":len(report["uncertainty"])}))
     return 0 if report["status"]=="passed" else 1
 
