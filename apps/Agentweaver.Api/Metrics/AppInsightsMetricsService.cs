@@ -951,6 +951,12 @@ public sealed class AppInsightsMetricsService
             ToolName = BoundedDimension(dimensions, TraceTelemetry.ToolName, "tool_name"),
             ToolCallId = BoundedDimension(dimensions, TraceTelemetry.ToolCallId, "gen_ai.tool.call.id"),
             ToolSuccess = ReadDimensionBoolean(dimensions, TraceTelemetry.ToolSuccess),
+            ToolInput = BoundedPayloadDimension(dimensions, TraceTelemetry.ToolInput),
+            ToolInputState = AllowedDimension(dimensions, TraceTelemetry.ToolInputState,
+                [TraceTelemetry.PayloadCaptured, TraceTelemetry.PayloadNotCaptured, TraceTelemetry.PayloadTruncated, TraceTelemetry.PayloadRedacted]),
+            ToolOutput = BoundedPayloadDimension(dimensions, TraceTelemetry.ToolOutput),
+            ToolOutputState = AllowedDimension(dimensions, TraceTelemetry.ToolOutputState,
+                [TraceTelemetry.PayloadCaptured, TraceTelemetry.PayloadNotCaptured, TraceTelemetry.PayloadTruncated, TraceTelemetry.PayloadRedacted]),
             PolicyDecision = AllowedDimension(dimensions, TraceTelemetry.PolicyDecision,
                 [TraceTelemetry.DecisionAllowed, TraceTelemetry.DecisionDenied, TraceTelemetry.DecisionEvaluationError]),
             AuthorizationDecision = AllowedDimension(dimensions, TraceTelemetry.AuthorizationDecision,
@@ -1351,6 +1357,15 @@ public sealed class AppInsightsMetricsService
                 return value;
         }
         return null;
+    }
+
+    private static string? BoundedPayloadDimension(IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        if (!dimensions.TryGetValue(key, out var value) || value is null)
+            return null;
+        return value.Length <= 8_000 && value.All(ch => !char.IsControl(ch) || ch is '\r' or '\n' or '\t')
+            ? value
+            : null;
     }
 
     private static string? AllowedDimension(

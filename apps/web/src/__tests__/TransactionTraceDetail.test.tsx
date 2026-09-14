@@ -418,6 +418,129 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
   });
 
+  it('renders populated tool input and output from span attributes when persisted events are absent', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'tool',
+          name: 'run_command',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 500,
+          success: true,
+          toolName: 'run_command',
+          toolCallId: 'call-7',
+          attributes: {
+            runId: 'run-47',
+            toolName: 'run_command',
+            toolCallId: 'call-7',
+            toolInput: '{"command":"npm test"}',
+            toolInputState: 'captured',
+            toolOutput: 'stdout:\nok\nexit_code: 0',
+            toolOutputState: 'captured',
+          },
+        },
+      ],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId('trace-span'));
+    fireEvent.click(screen.getByText('Command details'));
+
+    expect(screen.getByText(/"command": "npm test"/)).toBeTruthy();
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('stdout:\nok');
+  });
+
+  it('renders distinct explanations for each missing or transformed span payload state', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'not-captured',
+          name: 'grep',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'grep',
+          toolCallId: 'not-captured-call',
+          attributes: {
+            toolName: 'grep',
+            toolCallId: 'not-captured-call',
+            toolInputState: 'not_captured',
+            toolOutputState: 'not_captured',
+          },
+        },
+        {
+          id: 'truncated',
+          name: 'read_file',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:02.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'read_file',
+          toolCallId: 'truncated-call',
+          attributes: {
+            toolName: 'read_file',
+            toolCallId: 'truncated-call',
+            toolInput: '{"path":"big.log"}',
+            toolInputState: 'captured',
+            toolOutput: 'line 1\n… [truncated because too large]',
+            toolOutputState: 'truncated',
+          },
+        },
+        {
+          id: 'redacted',
+          name: 'web_fetch',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:03.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'web_fetch',
+          toolCallId: 'redacted-call',
+          attributes: {
+            toolName: 'web_fetch',
+            toolCallId: 'redacted-call',
+            toolInput: '{"url":"https://example.com","authorization":"***REDACTED***"}',
+            toolInputState: 'redacted',
+            toolOutput: '***REDACTED***',
+            toolOutputState: 'redacted',
+          },
+        },
+      ],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const spans = screen.getAllByTestId('trace-span');
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'not-captured')!);
+    expect(screen.getByText('Input was not captured in telemetry.')).toBeTruthy();
+    expect(screen.getByText('Output was not captured in telemetry.')).toBeTruthy();
+    expect(screen.queryByText('No input')).toBeNull();
+
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'truncated')!);
+    expect(screen.getByText('Truncated because too large')).toBeTruthy();
+    expect(screen.getByText(/line 1/)).toBeTruthy();
+
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'redacted')!);
+    expect(screen.getAllByText('Redacted by policy').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/).length).toBeGreaterThan(0);
+  });
+
   it('renders live run_command heartbeat progress from the run stream', async () => {
     vi.mocked(apiClient.getRunTraces).mockResolvedValue({
       runId: 'run-47',
@@ -477,7 +600,7 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Span inspector').textContent).toContain('Running for 12 s');
   });
 
-  it('labels an absent persisted tool output with correctly spaced text', async () => {
+  it('labels an absent persisted tool output with a capture reason', async () => {
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       {
         sequence: 8,
@@ -496,7 +619,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    await waitFor(() => expect(screen.getByText('No output')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Output was not captured in telemetry.')).toBeTruthy());
   });
 
   it('distinguishes a recovered failed attempt from an active or terminally failed run', async () => {
@@ -620,7 +743,7 @@ describe('TransactionTracePanel trace detail', () => {
     fireEvent.click(toolSpan!);
 
     await waitFor(() => expect(screen.queryByText(secret)).toBeNull());
-    expect(screen.getAllByText('Redacted')).toHaveLength(2);
+    expect(screen.getAllByText('Redacted by policy')).toHaveLength(2);
     expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/)).toHaveLength(2);
   });
 });

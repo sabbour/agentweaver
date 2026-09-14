@@ -3,8 +3,9 @@ namespace Agentweaver.Domain;
 /// <summary>
 /// Bounded, public-safe trace dimensions emitted by Agentweaver activities.
 /// The contract deliberately contains only identifiers, enum-like operational state, booleans,
-/// and counters. Prompts, credentials, raw tool arguments/results, and arbitrary payload data
-/// must never be added here.
+/// counters, and explicitly redacted/truncated tool payload previews. Prompts, credentials,
+/// raw tokens, unbounded raw tool arguments/results, and arbitrary payload data must never be
+/// added here.
 /// </summary>
 public static class TraceTelemetry
 {
@@ -19,6 +20,12 @@ public static class TraceTelemetry
     public const string ToolName = "gen_ai.tool.name";
     public const string ToolCallId = "tool.call.id";
     public const string ToolSuccess = "gen_ai.tool.call.success";
+    // Deliberately NOT the gen_ai.tool.call.arguments/result attributes: these are Agentweaver's
+    // bounded/redacted operator previews, never raw SDK payloads.
+    public const string ToolInput = "agentweaver.tool.input";
+    public const string ToolInputState = "agentweaver.tool.input.state";
+    public const string ToolOutput = "agentweaver.tool.output";
+    public const string ToolOutputState = "agentweaver.tool.output.state";
 
     // Agentweaver trace contract.
     public const string SpanKind = "agentweaver.span.kind";
@@ -55,6 +62,10 @@ public static class TraceTelemetry
     public const string DecisionApproved = "approved";
     public const string DecisionAutoApproved = "auto_approved";
     public const string DecisionEvaluationError = "evaluation_error";
+    public const string PayloadCaptured = "captured";
+    public const string PayloadNotCaptured = "not_captured";
+    public const string PayloadTruncated = "truncated";
+    public const string PayloadRedacted = "redacted";
 
     public static string PurposeValue(AgentHostPurpose purpose) => purpose switch
     {

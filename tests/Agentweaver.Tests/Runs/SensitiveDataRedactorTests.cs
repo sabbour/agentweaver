@@ -127,6 +127,20 @@ public sealed class SensitiveDataRedactorTests
         redacted.Should().Be(content);
     }
 
+    [Fact]
+    public void RedactJsonStringIfApplicable_RedactsInlineCommandSecretsWithoutDroppingWholePayload()
+    {
+        const string content = "curl -H \"Authorization: Bearer super-secret-token\" https://example.test --password hunter2";
+
+        var redacted = SensitiveDataRedactor.RedactJsonStringIfApplicable(content);
+
+        redacted.Should().Contain("curl -H");
+        redacted.Should().Contain("https://example.test");
+        redacted.Should().Contain(SensitiveDataRedactor.RedactedPlaceholder);
+        redacted.Should().NotContain("super-secret-token");
+        redacted.Should().NotContain("hunter2");
+    }
+
     [Theory]
     [InlineData("ghu_token")]
     [InlineData("ghs_token")]

@@ -218,14 +218,14 @@ coordinator run. The trace detail includes a timeline, span attributes, and pers
 Trace spans load in chronological pages; choose **Load more spans** until no more spans are
 available to inspect the complete trace. The opaque continuation keeps already loaded spans,
 selection, and tree state intact, and a failed page can be retried without reloading the whole
-trace. Persisted events are loaded only when the Events tab or a tool span needs them, so tool
-inputs and outputs remain available without delaying the initial trace. It shows only trace data returned by
-Application Insights and the persisted run-event API. In
+trace. Tool spans carry bounded, redacted input/output previews in Application Insights, and
+persisted events are still loaded when the Events tab or a tool span needs additional context.
+It shows only trace data returned by Application Insights and the persisted run-event API. In
 particular, it shows the trace session ID only when the runtime emitted one, and it does not invent
 event timestamps when a legacy persisted event has no recorded time. The attributes pane is a fixed,
 safe schema rather than a dump of custom dimensions: it includes operational identity, model,
-provider, policy, sandbox, usage, and status fields, but never prompts, credentials, raw tokens,
-secrets, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
+provider, policy, sandbox, usage, status, and tool-payload capture state fields, but never prompts,
+credentials, raw tokens, secrets, unbounded output, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
 child agent that executed them using the persisted parent-run relationship; the original distributed
 trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
