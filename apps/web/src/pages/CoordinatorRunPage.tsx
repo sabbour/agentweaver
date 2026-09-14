@@ -65,7 +65,7 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
 import { TopologyLayoutToggle } from '../components/TopologyLayoutToggle';
 import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
@@ -3051,6 +3051,9 @@ export function CoordinatorRunPage() {
         nodeSizeHints[node.id].height = COMPACT_NODE_H;
         // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
+        if (topoNode?.executionPodName) {
+          nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
+        }
         // Defensive: read display fields from flat props OR nested data map.
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
         const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
@@ -3111,6 +3114,9 @@ export function CoordinatorRunPage() {
       // height. (Human Review awaiting a decision is expanded further below to fit its on-face buttons.)
       if (wfModel) {
         nodeSizeHints[node.id].height = FIXED_NODE_WITH_CAPTION_H;
+      }
+      if (wfPod) {
+        nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
       }
 
       // Collective-assembly stage status. Two sources combine: the phase projection
@@ -3186,7 +3192,7 @@ export function CoordinatorRunPage() {
       // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
       // room in the layout so neighboring bands keep clear of it. (Matches WorkflowNode's isHumanWaiting.)
       if (roleKey === 'review' && !nodePlanned && stepStatus === 'started') {
-        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H;
+        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H + (wfPod ? POD_INDICATOR_NODE_H : 0);
       }
 
       // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up

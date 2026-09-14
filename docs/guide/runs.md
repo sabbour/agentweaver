@@ -163,10 +163,12 @@ The graph shows:
 ### Comparing topology layouts
 
 The **Topology layout** control is available on the live run graph. **Balanced grid
-(current)** is the default layout engine. Choose **Legacy staircase (comparison)** only
-to compare card placement while diagnosing a rollout; it does not alter the run,
-its nodes, dependencies, edge direction, or status data. The selection is remembered
-locally and is also available in workflow graph viewer and editor canvases.
+(current)** is the default layout engine. It reserves the full rendered card footprint,
+including pod chips, and routes connector lines through gutters around cards so arrows
+remain readable at dense zoom levels. Choose **Legacy staircase (comparison)** only to
+compare card placement while diagnosing a rollout; it does not alter the run, its nodes,
+dependencies, edge direction, or status data. The selection is remembered locally and is
+also available in workflow graph viewer and editor canvases.
 
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 

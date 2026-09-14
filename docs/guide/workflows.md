@@ -62,8 +62,9 @@ From a project, navigate to **Workflows** in the sidebar. Each workflow card sho
 Click a workflow to expand it and see its full YAML definition, a visual graph of the roles and steps, or the raw step-by-step pipeline.
 
 The visual graph and visual editor include a **Topology layout** comparison control.
-They default to **Balanced grid (current)**. **Legacy staircase (comparison)** changes
-only the visual arrangement, never the workflow YAML, nodes, or edges.
+They default to **Balanced grid (current)**, which keeps card footprints reserved and
+routes connectors around occupied cards. **Legacy staircase (comparison)** changes only
+the visual arrangement, never the workflow YAML, nodes, or edges.
 
 ### Setting the default workflow
 
