@@ -314,6 +314,10 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install diagram tooling dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
 
       - name: Test generators and verify rendered artifact stamps
         run: node scripts/ci/validate.mjs --profile ci --area diagrams
