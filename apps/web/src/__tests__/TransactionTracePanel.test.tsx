@@ -124,6 +124,21 @@ describe('buildToolCallIndex', () => {
       expect(value.text).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
       expect(value.text).not.toContain('secret-value');
     });
+
+    it('marks already-redacted strings while preserving safe surrounding context', () => {
+      expect(formatSafeToolValue('provider returned ***REDACTED***')).toEqual({
+        state: 'redacted',
+        text: 'provider returned ***REDACTED***',
+      });
+    });
+
+    it('truncates oversize values with an explicit marker', () => {
+      const value = formatSafeToolValue(`prefix-${'x'.repeat(200)}`, 80);
+
+      expect(value.state).toBe('truncated');
+      expect(value.text).toContain('prefix-');
+      expect(value.text).toContain('truncated because too large');
+    });
   });
 
   it('pairs tool.call arguments with a matching tool.error message by callId', () => {

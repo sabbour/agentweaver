@@ -804,6 +804,26 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task RunDetail_SuppressesStaleAssemblyBlockedReason_WhenCoordinatorIsDispatching()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            result: "assembly_blocked: ineligible_subtasks [370]");
+        await SeedWorkPlanAsync(
+            runId,
+            WorkPlanStatus.Dispatching,
+            assemblyStatusReason: "assembly_subtasks_not_ready: ineligible_subtasks [370]");
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+
+        detail.GetProperty("status").GetString().Should().Be("in_progress");
+        detail.GetProperty("coordinator_status").GetString().Should().Be("dispatching");
+        detail.GetProperty("result").GetString().Should().Be("assembly_blocked: ineligible_subtasks [370]");
+        detail.GetProperty("coordinator_status_reason").ValueKind.Should().Be(JsonValueKind.Null,
+            "a stale assembly-blocked run result must not be projected as the current dispatching coordinator reason");
+    }
+
+    [Fact]
     public async Task WorkPlan_SurfaceAssemblyStageTruth_ForTerminalAssembly()
     {
         var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
@@ -1061,7 +1081,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     /// </summary>
     private async Task<string> InsertInactiveCoordinatorRunAsync(
         string ownerUser,
-        RunStatus status = RunStatus.InProgress)
+        RunStatus status = RunStatus.InProgress,
+        string? result = null)
     {
         var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
@@ -1075,6 +1096,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             Task = "inactive coordinator run",
             SubmittingUser = ownerUser,
             Status = status,
+            Result = result,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ProjectId = ProjectId.Parse(projectId),

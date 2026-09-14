@@ -102,7 +102,7 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         using var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
 
-        var psi = executor.BuildProcessStartInfo(Command());
+        var psi = executor.BuildProcessStartInfo(AptCommand());
 
         psi.FileName.Should().Be("nsenter");
         psi.ArgumentList.Should().ContainInConsecutiveOrder("--preserve-credentials", "--", "bwrap");
@@ -111,6 +111,41 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         psi.ArgumentList.Should().Contain("--die-with-parent");
         psi.ArgumentList.Should().ContainInOrder("--bind", "/usr", "/usr");
         psi.ArgumentList.Should().NotContainInOrder("--ro-bind", "/usr", "/usr");
+    }
+
+    /// <summary>
+    /// A plain command must not pay the per-run writable-root startup cost. The helper is optional
+    /// plumbing for package-manager writes into /usr, /etc and /var; starting it for every
+    /// <c>run_command</c> made trivial commands inherit its 120-second failure ceiling.
+    /// </summary>
+    [Fact]
+    public void PlainCommands_DoNotRequestTheWritableSystemRoot()
+    {
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("echo hello"))
+            .Should().BeFalse();
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("printf '%s\\n' apt-get"))
+            .Should().BeFalse();
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("git status --short"))
+            .Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Package-manager commands are the one-shot path that still needs the private writable system
+    /// root; the executor should recognize common shell spellings and direct execution.
+    /// </summary>
+    [Fact]
+    public void PackageManagerCommands_RequestTheWritableSystemRoot()
+    {
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("apt-get update"))
+            .Should().BeTrue();
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("cd src && sudo apt install -y curl"))
+            .Should().BeTrue();
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command("/usr/bin/dpkg -i package.deb"))
+            .Should().BeTrue();
+        KataBwrapExecutor.CommandMayRequireWritableSystemRoot(Command(
+                "ignored",
+                new SandboxDirectExecution("/usr/bin/apt-get", ["update"], null)))
+            .Should().BeTrue();
     }
 
     /// <summary>
@@ -150,12 +185,12 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         executor.RegisterRuntimeHome(runC, homeC);
 
         // Fill both slots: run-a and run-b each get a real holder.
-        executor.BuildProcessStartInfo(Command(_runA)).FileName.Should().Be("nsenter");
-        executor.BuildProcessStartInfo(Command(runB)).FileName.Should().Be("nsenter");
+        executor.BuildProcessStartInfo(AptCommand(_runA)).FileName.Should().Be("nsenter");
+        executor.BuildProcessStartInfo(AptCommand(runB)).FileName.Should().Be("nsenter");
 
         // The cap is full and every workspace still exists, so run-c must fall back to read-only
         // rather than evicting an active run's holder.
-        var stillFull = executor.BuildProcessStartInfo(Command(runC));
+        var stillFull = executor.BuildProcessStartInfo(AptCommand(runC));
         stillFull.FileName.Should().Be("bwrap");
         stillFull.ArgumentList.Should().ContainInOrder("--ro-bind", "/usr", "/usr");
 
@@ -164,11 +199,11 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
 
         // run-c can now claim a slot: the stale run-a holder is reclaimed, and run-b's holder (whose
         // workspace still exists) is left untouched.
-        var afterReclaim = executor.BuildProcessStartInfo(Command(runC));
+        var afterReclaim = executor.BuildProcessStartInfo(AptCommand(runC));
         afterReclaim.FileName.Should().Be("nsenter");
         afterReclaim.ArgumentList.Should().ContainInOrder("--bind", "/usr", "/usr");
 
-        var runBStillWritable = executor.BuildProcessStartInfo(Command(runB));
+        var runBStillWritable = executor.BuildProcessStartInfo(AptCommand(runB));
         runBStillWritable.FileName.Should().Be("nsenter");
     }
 
@@ -190,7 +225,7 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
             using var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
             RegisterRun(executor);
 
-            var psi = executor.BuildProcessStartInfo(Command());
+            var psi = executor.BuildProcessStartInfo(AptCommand());
 
             psi.FileName.Should().Be("bwrap");
             psi.ArgumentList.Should().ContainInOrder("--ro-bind", "/usr", "/usr");
@@ -227,11 +262,29 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         executor.RegisterRuntimeHome(_runA, Path.Combine(_root, "home", "run-a"));
     }
 
-    private SandboxCommand Command() => Command(_runA);
+    private SandboxCommand Command() => Command("true", _runA);
 
-    private static SandboxCommand Command(string workingDirectory) =>
+    private SandboxCommand AptCommand() => AptCommand(_runA);
+
+    private static SandboxCommand AptCommand(string workingDirectory) =>
+        Command("apt-get update", workingDirectory);
+
+    private static SandboxCommand Command(string commandLine) => Command(commandLine, Directory.GetCurrentDirectory());
+
+    private static SandboxCommand Command(
+        string commandLine,
+        SandboxDirectExecution? directExecution) =>
         new(
-            "true",
+            commandLine,
+            Directory.GetCurrentDirectory(),
+            null,
+            new SandboxFsPolicy([Directory.GetCurrentDirectory()], [], []),
+            5000,
+            DirectExecution: directExecution);
+
+    private static SandboxCommand Command(string commandLine, string workingDirectory) =>
+        new(
+            commandLine,
             workingDirectory,
             null,
             new SandboxFsPolicy([workingDirectory], [], []),

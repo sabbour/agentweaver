@@ -125,6 +125,24 @@ npm run azure:deploy-from-commit -- <sha-or-ref>
 - Configure `APPLICATIONINSIGHTS_CONNECTION_STRING` **and** a Log Analytics workspace id (`APPLICATIONINSIGHTS_WORKSPACE_ID` or `ApplicationInsights:WorkspaceId`) unless your connection string already embeds `WorkspaceId`.
 - If App Insights is not configured, or no workspace id can be resolved, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
 
+### Cluster topology details
+
+The **Cluster** page topology cards open an operator detail panel instead of repeating the
+card text. Runtime and workload details are sourced from the bounded
+`GET /api/diagnostics/cluster/topology` envelope, which allow-lists concise Kubernetes
+fields rather than exposing raw manifests or cluster credentials to the browser.
+
+Use the panel to copy pod, claim, run, deployment, warm-pool, sandbox, and template
+identifiers during triage. Healthy snapshots stay quiet; unhealthy pods, short
+readiness, and non-zero restarts are sorted first and called out. Each panel shows the
+topology snapshot's **Last updated** time and names any partial layer read (for example,
+runtime detail timeout) instead of falling back to a bare count.
+
+Sandbox details show the runtime class and isolation backend. In AKS, AgentHost
+sandboxes normally run with `kata-vm-isolation` and the `agentweaver-exec` sidecar on
+the Kata node pool, while non-sandbox control-plane workloads run with the default runc
+runtime.
+
 ### AgentHost assembly recovery diagnostics
 
 Assembly RAI and Build & Test use the coordinator run's warm-pool AgentHost. Recovery is
@@ -200,28 +218,30 @@ coordinator run. The trace detail includes a timeline, span attributes, and pers
 Trace spans load in chronological pages; choose **Load more spans** until no more spans are
 available to inspect the complete trace. The opaque continuation keeps already loaded spans,
 selection, and tree state intact, and a failed page can be retried without reloading the whole
-trace. Persisted events are loaded only when the Events tab or a tool span needs them, so tool
-inputs and outputs remain available without delaying the initial trace. It shows only trace data returned by
-Application Insights and the persisted run-event API. In
+trace. Tool spans carry bounded, redacted input/output previews in Application Insights, and
+persisted events are still loaded when the Events tab or a tool span needs additional context.
+It shows only trace data returned by Application Insights and the persisted run-event API. In
 particular, it shows the trace session ID only when the runtime emitted one, and it does not invent
 event timestamps when a legacy persisted event has no recorded time. The attributes pane is a fixed,
 safe schema rather than a dump of custom dimensions: it includes operational identity, model,
-provider, policy, sandbox, usage, and status fields, but never prompts, credentials, raw tokens,
-secrets, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
+provider, policy, sandbox, usage, status, and tool-payload capture state fields, but never prompts,
+credentials, raw tokens, secrets, unbounded output, or arbitrary tool payloads. For coordinator runs, child-run spans are grouped below the
 child agent that executed them using the persisted parent-run relationship; the original distributed
 trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
 
 If the Application Insights workspace is unavailable or slow, trace retrieval stops after three
-seconds and displays a diagnostic to authorized run viewers. The API coalesces concurrent requests
-for the same run and cursor page into one bounded workspace query, then pauses workspace queries
-briefly rather than allowing repeated trace loads to queue or amplify the dependency failure. A
-recently retrieved page may be shown while the source recovers and is explicitly labeled as such;
-an unavailable source with no safe cached page is not presented as proof that the run has no trace
-data. Cursor paging remains incremental, so retry or **Load more spans** only requests the needed
-page. Retry after the displayed interval; platform operators can use the API log's query context
-and failure type to investigate workspace credentials, RBAC, and availability without logging KQL
-payloads.
+seconds and displays a diagnostic to authorized run viewers only after the trace panel has made a
+small number of automatic retry attempts with backoff. While those retries remain, the panel stays
+in its normal loading state instead of showing a failure banner. The API coalesces concurrent
+requests for the same run and cursor page into one bounded workspace query, and trace reads are not
+short-circuited by an unrelated dashboard-metrics cooldown. A recently retrieved page may be shown
+while the source recovers and is explicitly labeled as such; an unavailable source with no safe
+cached page is not presented as proof that the run has no trace data. Cursor paging remains
+incremental, so retry or **Load more spans** only requests the needed page. If the automatic
+attempts are exhausted, use **Retry** to start a fresh bounded trace load; platform operators can use
+the API log's query context and failure type to investigate workspace credentials, RBAC, and
+availability without logging KQL payloads.
 
 ### Provisioning monitoring resources
 

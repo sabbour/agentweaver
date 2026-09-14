@@ -156,7 +156,7 @@ public sealed class RunCommandHeartbeatTests : IDisposable
                 emitToolCallOnce: (callId, _, _) => callIds.Add(callId),
                 emitToolResultOnce: (_, _) => { },
                 emitToolErrorOnce: (_, _) => { },
-                startToolSpan: (_, _, _) => { },
+                startToolSpan: (_, _, _, _) => { },
                 completeToolSpan: (_, _, _, _, _) => { }))
         .Single(tool => tool.Name == "run_command");
 

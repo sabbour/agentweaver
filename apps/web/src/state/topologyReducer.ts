@@ -61,6 +61,18 @@ function str(value: unknown): string | undefined {
   return value != null ? String(value) : undefined;
 }
 
+function normalizeChildRunStatus(status: string | undefined): string | undefined {
+  const normalized = status?.toLowerCase().replace(/[^a-z_]/g, '');
+  switch (normalized) {
+    case 'inprogress':
+    case 'in_progress':
+    case 'running':
+      return 'running';
+    default:
+      return undefined;
+  }
+}
+
 // Read a node's display fields, tolerating both the field names in the Phase 2
 // brief (title/assignedAgent/selectedModelId) and the names the backend actually
 // emits (label/agent/model). Thin client — we surface whatever the server sends.
@@ -321,9 +333,10 @@ export function seedTopologyFromWorkPlan(
     const id = subtaskNodeId(c.subtaskId);
     const prev = nodes[id];
     if (!prev) continue;
+    const activeChildStatus = normalizeChildRunStatus(c.childRunStatus);
     nodes[id] = {
       ...prev,
-      status: c.subtaskStatus ?? prev.status,
+      status: activeChildStatus ?? c.subtaskStatus ?? prev.status,
       childRunId: c.childRunId ?? prev.childRunId,
       assignedAgent: c.assignedAgent || prev.assignedAgent,
       selectedModelId: c.selectedModelId || prev.selectedModelId,

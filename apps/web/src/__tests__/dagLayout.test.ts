@@ -360,7 +360,7 @@ function segmentCrossesRect(from: { x: number; y: number }, to: { x: number; y: 
   return false;
 }
 
-describe('balanced-grid topology geometry invariants', () => {
+describe('topology geometry invariants', () => {
   const ids = [
     'coordinator',
     'outcome-plan',
@@ -397,16 +397,28 @@ describe('balanced-grid topology geometry invariants', () => {
     },
   ]));
 
-  function layout() {
-    return layoutDagBalancedGrid(
-      ids.map(topologyNode),
-      edges,
-      { rankSep: 40, nodeSep: 20, minColumns: 1, maxColumns: 4 },
-      hints,
-    );
-  }
+  const engines = [
+    {
+      name: 'balanced grid',
+      layout: () => layoutDagBalancedGrid(
+        ids.map(topologyNode),
+        edges,
+        { rankSep: 40, nodeSep: 20, minColumns: 1, maxColumns: 4 },
+        hints,
+      ),
+    },
+    {
+      name: 'legacy staircase',
+      layout: () => layoutDagStaircase(
+        ids.map(topologyNode),
+        edges,
+        { rankdir: 'LR', rankSep: 40, nodeSep: 20, targetAspect: 1.35, minStepRanks: 3 },
+        hints,
+      ),
+    },
+  ] as const;
 
-  it('does not overlap any realistic coordinator topology cards', () => {
+  it.each(engines)('$name: does not overlap any realistic coordinator topology cards', ({ layout }) => {
     const nodes = layout();
     for (let i = 0; i < nodes.length; i += 1) {
       for (let j = i + 1; j < nodes.length; j += 1) {
@@ -422,7 +434,7 @@ describe('balanced-grid topology geometry invariants', () => {
     }
   });
 
-  it('routes realistic coordinator topology edges without crossing unrelated cards', () => {
+  it.each(engines)('$name: routes realistic coordinator topology edges without crossing unrelated cards', ({ layout }) => {
     const nodes = layout();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
@@ -441,7 +453,7 @@ describe('balanced-grid topology geometry invariants', () => {
     }
   });
 
-  it('keeps wrapped balanced-grid edges from pointing leftward', () => {
+  it.each(engines)('$name: keeps topology edges from pointing leftward', ({ layout }) => {
     const nodes = layout();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
@@ -457,7 +469,7 @@ describe('balanced-grid topology geometry invariants', () => {
     }
   });
 
-  it('drops invalid graph edges instead of rendering dangling stubs', () => {
+  it.each(engines)('$name: drops invalid graph edges instead of rendering dangling stubs', ({ layout }) => {
     const nodes = layout();
     const routed = routeGridEdges([
       ...edges,

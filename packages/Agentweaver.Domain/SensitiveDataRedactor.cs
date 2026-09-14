@@ -24,9 +24,22 @@ namespace Agentweaver.Domain;
 public static class SensitiveDataRedactor
 {
     public const string RedactedPlaceholder = "***REDACTED***";
+    private const string TruncationSuffix = "\n… [truncated because too large]";
     private static readonly Regex SensitiveValuePattern = new(
         @"(?:\bgh[uspor]_[A-Za-z0-9_-]+\b|\bgithub_pat_[A-Za-z0-9_]+\b|-----BEGIN [A-Z0-9 ]+-----|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?|https?://[^\s/@:]+:[^\s/@]+@|(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?=[^A-Za-z0-9+/=]|$))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex InlineCredentialPattern = new(
+        @"(?ix)
+        (?<prefix>
+            (?:--|/)?(?:access[-_]?token|auth[-_]?token|token|password|passwd|pwd|secret|api[-_]?key|client[-_]?secret|private[-_]?key|access[-_]?key|connection[-_]?string)\b
+            (?:\s+|=)
+            |[A-Z0-9_]*(?:TOKEN|PASSWORD|PASSWD|PWD|SECRET|API_KEY|CLIENT_SECRET|PRIVATE_KEY|ACCESS_KEY|CONNECTION_STRING)[A-Z0-9_]*\s*=\s*
+            |Authorization\s*[:=]\s*(?:Bearer|Basic)?\s*
+        )
+        (?<quote>[""']?)
+        (?<secret>[^\s""']+)
+        \k<quote>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex AzureSasParameterSetPattern = new(
         @"(?=[^\s""'<>]{0,4096}(?:^|[?&;])\s*(?:sv|ss|sp|se)\s*=)(?=[^\s""'<>]{0,4096}(?:^|[?&;])\s*sig\s*=)(?:^|[?&;])\s*(?:sv|ss|sp|se|sig)\s*=",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -110,8 +123,13 @@ public static class SensitiveDataRedactor
                     result.Add(RedactNode(item));
                 return result;
             }
-            case JsonValue value when value.TryGetValue<string>(out var text) && ContainsSensitiveValue(text):
-                return JsonValue.Create(RedactedPlaceholder);
+            case JsonValue value when value.TryGetValue<string>(out var text):
+            {
+                var redacted = RedactText(text);
+                return string.Equals(redacted, text, StringComparison.Ordinal)
+                    ? node.DeepClone()
+                    : JsonValue.Create(redacted);
+            }
             default:
                 return node?.DeepClone();
         }
@@ -172,6 +190,55 @@ public static class SensitiveDataRedactor
         return redacted?.ToJsonString() ?? content;
     }
 
-    private static string RedactText(string content) =>
-        ContainsSensitiveValue(content) ? RedactedPlaceholder : content;
+    public sealed record TelemetryPayloadCapture(string? Text, string State);
+
+    /// <summary>
+    /// Builds a bounded, redacted text preview that is safe to copy into the trace telemetry
+    /// contract. The returned <c>State</c> explains whether the preview is complete, redacted, or
+    /// truncated; callers should use <see cref="TraceTelemetry.PayloadNotCaptured"/> when they do
+    /// not have a payload value to pass here.
+    /// </summary>
+    public static TelemetryPayloadCapture RedactAndBoundTelemetryPayload(object value, int maximumLength)
+    {
+        if (maximumLength < TruncationSuffix.Length + 1)
+            throw new ArgumentOutOfRangeException(nameof(maximumLength), "Maximum length must leave room for the truncation marker.");
+
+        var raw = value switch
+        {
+            JsonElement element => element.GetRawText(),
+            JsonNode node => node.ToJsonString(),
+            string s => s,
+            _ => JsonSerializer.Serialize(value),
+        };
+        var redacted = value is string
+            ? RedactJsonStringIfApplicable(raw)
+            : RedactObject(value)?.ToJsonString() ?? string.Empty;
+        var wasRedacted = !string.Equals(raw, redacted, StringComparison.Ordinal)
+            || redacted.Contains(RedactedPlaceholder, StringComparison.Ordinal);
+        var wasTruncated = false;
+        if (redacted.Length > maximumLength)
+        {
+            wasTruncated = true;
+            redacted = string.Concat(redacted.AsSpan(0, maximumLength - TruncationSuffix.Length), TruncationSuffix);
+        }
+
+        return new TelemetryPayloadCapture(
+            redacted,
+            wasRedacted
+                ? TraceTelemetry.PayloadRedacted
+                : wasTruncated
+                    ? TraceTelemetry.PayloadTruncated
+                    : TraceTelemetry.PayloadCaptured);
+    }
+
+    private static string RedactText(string content)
+    {
+        if (ContainsAzureStorageCredential(content))
+            return RedactedPlaceholder;
+
+        var redacted = SensitiveValuePattern.Replace(content, RedactedPlaceholder);
+        redacted = InlineCredentialPattern.Replace(redacted, match =>
+            $"{match.Groups["prefix"].Value}{match.Groups["quote"].Value}{RedactedPlaceholder}{match.Groups["quote"].Value}");
+        return redacted;
+    }
 }
