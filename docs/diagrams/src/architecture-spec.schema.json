@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver Fluent UML component architecture spec",
+  "type": "object",
+  "required": ["kind", "title", "alt", "notation", "layers", "nodes", "edges"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "kind": { "const": "architecture" },
+    "title": { "type": "string" },
+    "alt": { "type": "string" },
+    "notation": { "type": "string", "enum": ["uml-component", "c4-container", "deployment"] },
+    "layers": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "nodes"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "nodes": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "role", "badge"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "subLabel": { "type": "string" },
+          "meta": { "type": "string" },
+          "slot": { "type": "integer", "minimum": 0 },
+          "role": { "type": "string", "enum": ["actor", "component", "service", "coordinator", "worker", "datastore", "workspace", "external"] },
+          "fluentIcon": { "type": "string" },
+          "library": { "type": "string", "enum": ["kubernetes"] },
+          "shape": { "type": "string" },
+          "badge": {
+            "type": "object",
+            "required": ["text", "tone"],
+            "properties": {
+              "text": { "type": "string" },
+              "tone": { "type": "string", "enum": ["lavender", "teal", "green", "marigold", "neutral"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "label": { "type": "string" },
+          "relation": { "type": "string", "enum": ["dependency", "association", "flow"], "default": "dependency" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

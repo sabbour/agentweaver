@@ -55,8 +55,8 @@ function embedBlock(name, alt, relDir, type) {
   return [
     `![${alt}](${relDir}${name}.png)`,
     '',
-    `<!-- Rendered from ${relDir}src/${name}.json by docs/diagram-renderer +`,
-    `     Playwright (Fluent-styled ${type === 'sequenceDiagram' ? 'sequence diagram' : 'React Flow'}), replacing Mermaid.`,
+    `<!-- Generated from ${relDir}src/${name}.json as editable draw.io XML,`,
+    `     then exported by the official draw.io Desktop CLI (${type === 'sequenceDiagram' ? 'sequence' : 'graph'} diagram), replacing Mermaid.`,
     '     Edit the JSON, then run `npm run docs:render-diagrams` and commit the',
     '     regenerated PNG + .hash.txt. -->',
   ].join('\n');

@@ -12,14 +12,11 @@ The easiest way to understand the system is to separate three concerns:
 
 This separation is deliberate. Models are useful but non-deterministic, so Agentweaver puts workflow authority in deterministic services. Persistent stores define truth. Workflow state determines the next eligible step. Review gates define who can approve. Merge locks control repository changes. Sandbox policy controls tool access. The platform governs the route toward an outcome. It does not claim that model outputs are deterministic.
 
-![Purpose and Mental Model: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers](../diagrams/00-system-overview-fig1.png)
+Repository workflows have identity, state, events, an isolated workspace, and review boundaries. Operator conversations are a distinct run type: they reuse durable identity/events but do not create a repository worktree or review/merge graph.
 
-<!-- Rendered from ../diagrams/src/00-system-overview-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-The platform is not just a chat wrapper around an agent. It is closer to a CI/CD-style orchestrator for agentic changes: every run has identity, state, events, a workspace, a review boundary, and a terminal result.
+MCP clients reach a separately authenticated MCP resource server, which forwards broker-authorized
+requests to the API. API web-role processes, worker-role processes, and remote AgentHost execution
+are separate deployment boundaries; the static web host is not an API proxy.
 
 ## Architectural Responsibilities
 
@@ -48,12 +45,9 @@ A run is both a state machine and a story. Operators need the live story while i
 
 The invariant is that the durable event log is the source of truth. The in-memory stream is a same-replica optimization; cross-replica watchers read from the shared `RunEvents` table by `Last-Event-ID` cursor. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`.
 
-![Durable events plus live fan-out: Workflow step, Shared RunEvents table, Any web replica, UI / MCP client](../diagrams/00-system-overview-fig8.png)
-
-<!-- Rendered from ../diagrams/src/00-system-overview-fig8.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+This sequence describes the EF durable subscription. A replica with a local `RunStreamStore`
+entry can instead serve an atomic snapshot and wait for local changes; it is not a universal
+channel-publish phase inside `EfRunEventStream`.
 
 ### Human gates protect irreversible actions
 
@@ -88,14 +82,9 @@ A rebuild should preserve the boundaries more than the exact classes. The crucia
 
 ## Single-Agent Run Lifecycle
 
-A single-agent run is the smallest complete unit of Agentweaver work. It starts with a task and ends in one of a few terminal outcomes: merged, declined, failed, content-safety flagged, no changes, or similar terminal states.
-
-![Single-Agent Run Lifecycle: Submit task + project + branch + options, Validate request and canonicalize repository, Create isolated worktree and run branch, Build prompt context, Agent turn uses governed tools, Commit worktree changes and compute diff, Responsible AI review, RAI result, Human review gate, Reviewer decision, Merge under repository lock, Scribe updates memory/session/export, …](../diagrams/00-system-overview-fig2.png)
-
-<!-- Rendered from ../diagrams/src/00-system-overview-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+This is the representative **full single-agent workflow**, not the public submission contract or the
+trimmed coordinator-child graph. Public `POST /api/runs` is retired (410); new submissions use the
+coordinator. The full graph can end merged, declined, failed, safety-flagged, or with no changes.
 
 ### What each stage is for
 
@@ -125,13 +114,6 @@ Where this lives: `apps/Agentweaver.Api/Runs`, `apps/Agentweaver.Api/Endpoints`,
 A coordinator run exists for work that is too broad for one linear agent pass. It adds planning, dependency management, parallel child execution in isolated child worktrees, and collective assembly.
 
 The key idea is to move from a vague goal to a confirmed contract before agents start editing. The coordinator first drafts an **OutcomeSpec**: desired outcome, scope, assumptions, and clarifying questions. A human can revise or confirm that spec. Only after confirmation does the system decompose work into a **WorkPlan**: subtasks, dependencies, assigned agents, isolation hints, and assembly strategy.
-
-![Coordinator Run Lifecycle: Human goal or ready backlog item, Draft OutcomeSpec, Human confirms?, Revise spec, Create WorkPlan DAG, Find ready dependency frontier, Dispatch child runs in parallel, Observe child terminal states, All usable outputs ready?, Build integration branch, Review aggregate diff, One human review, …](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ### Why coordinator children do not each merge
 
@@ -165,13 +147,6 @@ Agentweaver represents work as workflows rather than hard-coded endpoint scripts
 
 The default full workflow is intentionally conservative:
 
-![Workflow Model: Agent, RAI, Terminal: safety blocked, Scribe, Human review, Terminal: declined, Merge, Terminal: done](../diagrams/canonical-default-workflow.png)
-
-<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 The workflow abstraction matters because it gives project authors and future features a vocabulary for changing process without rewriting orchestration primitives. However, Agentweaver does not blindly execute arbitrary graph nodes. Runtime binding classifies nodes by supported type and gate semantics, then maps them to known executors. Unsupported nodes fail closed. That preserves extensibility without allowing a malformed workflow to bypass review, RAI, or merge policy.
 
 Trade-off: workflow graphs add indirection. The payoff is that single-agent runs, coordinator child runs, and future project-authored workflows can share the same execution concepts while choosing different pipelines. For example, coordinator child runs use a trimmed agent-only pipeline because RAI, review, and merge happen later at collective assembly.
@@ -200,20 +175,16 @@ The most important invariant is monotonicity: once a durable event or state tran
 
 Agentweaver's memory system is a structured feedback loop:
 
-![Memory and Decision Flywheel: Run produces observations, Agent memory tools, Decision inbox, Memory DB, Coordinator / Scribe / human policy, Accepted decisions, Project context export, Future run prompt context](../diagrams/00-system-overview-fig5.png)
-
-<!-- Rendered from ../diagrams/src/00-system-overview-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 This loop separates three categories of knowledge:
 
 - **Session context** — what is currently being worked on and what matters right now.
 - **Agent memory** — reusable observations, patterns, and learnings scoped to an agent or shared through tags.
 - **Decisions** — durable architectural, process, scope, or technical choices that should constrain future work.
 
-The inbox is the safety valve. Agents may propose decisions, but promotion is explicit. This avoids memory pollution while still capturing important discoveries before they disappear from the run transcript.
+The inbox is the safety valve. Low-risk, run-provenanced learning/pattern/update entries can be
+promoted automatically by the post-run Scribe. Architectural and scope proposals remain pending
+review. The context compiler applies trust filters and budgets; an exported file is not automatically
+trusted policy.
 
 Exports make memory portable. Instead of burying all context in a database, Agentweaver regenerates human-readable project artifacts such as decisions, pending inbox entries, agent history, current session context, and boundary/pattern files. A rebuild should preserve this bidirectional shape: structured database for correctness and queryability; file exports for transparency, review, and prompt context.
 
@@ -222,13 +193,6 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `packages/Agentweaver.Squad/Mem
 ## Sandbox and Tool Governance
 
 Agentweaver treats every model tool call as a request, not a right. The governance stack is layered so a single missed check is less likely to become a workspace escape.
-
-![Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied](../diagrams/canonical-sandbox-boundary.png)
-
-<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Key concepts:
 
@@ -257,18 +221,19 @@ Named agents add another layer above providers. A role such as reviewer, planner
 
 In AKS, Agentweaver separates public services, persistent state, secrets, and sandbox execution.
 
-![AKS Runtime Topology: Users and MCP clients, Gateway API, /api /auth OAuth routes, /mcp and MCP metadata, / frontend, API service, MCP service, Frontend service, API pod, MCP pod, Frontend pods, Data PVC, …](../diagrams/00-system-overview-fig7.png)
+The [shared AKS component map](../diagrams/flagship/canonical-aks-components.png) is the stable
+replacement target. Its legacy image is not embedded here while the shared owner completes
+publication approval. The obsolete API-single-writer/Data-PVC overview image is also withheld.
+The deployment facts below, grounded in the current manifests, remain authoritative.
 
-<!-- Rendered from ../diagrams/src/00-system-overview-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- Pending shared canonical promotion: canonical-aks-components.
+     Do not restore the retired overview embed or edit the foreign canonical here. -->
 
 ### Why the topology looks this way
 
 - **Gateway routing** gives one public HTTPS entry point while keeping API, MCP, and frontend as independently deployable services.
 - **PostgreSQL and durable leasing** let API and worker replicas scale without double-dispatching a run.
-- **Separate data and workspace volumes** distinguish application state from repository working files. They have different access patterns and backup concerns.
+- **PostgreSQL plus a shared workspace volume** separate durable application rows from repository files; production application state is not a Data PVC.
 - **Key Vault CSI** keeps secrets out of images and manifests while making them available to pods at runtime.
 - **Warm sandbox capacity** reduces run startup latency while preserving per-run isolation.
 - **Network policy** should start from deny-by-default and then open only DNS, ingress, app-internal, GitHub/provider, and MCP-to-API paths required for operation.
@@ -300,8 +265,8 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 | Term | Meaning |
 | --- | --- |
 | Agentweaver | The whole platform: API, web UI, MCP host, runtime, tools, sandboxing, memory, and deployment assets. |
-| Run | A durable unit of agent work tied to a task, repository, branch, workspace, status, events, and output artifact. |
-| Single-agent run | A direct run that uses the full pipeline: worktree, agent, RAI, human review, merge, and Scribe. |
+| Run | Durable execution/conversation identity, status, and events; repository runs additionally carry worktree and output metadata. |
+| Single-agent run | A full workflow with worktree, agent, RAI, human review, merge, and Scribe; not a promise of a public direct-submit route. |
 | Coordinator run | A parent run that turns a goal into a confirmed OutcomeSpec, WorkPlan, child runs, assembly, review, merge, and Scribe. |
 | OutcomeSpec | The human-confirmed contract for a coordinator run: desired outcome, scope, assumptions, and clarification state. |
 | WorkPlan | The persisted DAG of coordinator subtasks, dependencies, assignments, isolation hints, and assembly status. |
@@ -325,3 +290,318 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 
 - Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
 - The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.
+
+<details id="diagram-context-canonical-default-workflow">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Generic default workflow</td></tr>
+<tr><td>subtitle</td><td>Built-in template • merge → PR publication → Scribe</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>PR action can skip / fail and still reach Scribe. No-changes also reaches Scribe.</td></tr>
+<tr><td>Agent work</td><td>Agent</td></tr>
+<tr><td>Agent work</td><td>Agent task</td></tr>
+<tr><td>Agent work</td><td>agent</td></tr>
+<tr><td>RAI gate</td><td>Rai</td></tr>
+<tr><td>RAI gate</td><td>Verdict routing</td></tr>
+<tr><td>RAI gate</td><td>rai</td></tr>
+<tr><td>Human review</td><td>Review</td></tr>
+<tr><td>Human review</td><td>human-review</td></tr>
+<tr><td>Merge</td><td>Merge</td></tr>
+<tr><td>Merge</td><td>Merge outcome routing</td></tr>
+<tr><td>Merge</td><td>merge</td></tr>
+<tr><td>Publish / reuse PR</td><td>Publish / reuse PR</td></tr>
+<tr><td>Publish / reuse PR</td><td>Create / reuse; not git push</td></tr>
+<tr><td>Publish / reuse PR</td><td>action</td></tr>
+<tr><td>Scribe</td><td>Scribe</td></tr>
+<tr><td>Scribe</td><td>Record the run outcome</td></tr>
+<tr><td>Scribe</td><td>scribe</td></tr>
+<tr><td>Safety failed</td><td>Safety failed</td></tr>
+<tr><td>Safety failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-02-label</td><td>revise</td></tr>
+<tr><td>edge-03-label</td><td>safety- failed</td></tr>
+<tr><td>edge-04-label</td><td>no- changes</td></tr>
+<tr><td>edge-05-label</td><td>review</td></tr>
+<tr><td>edge-06-label</td><td>approved</td></tr>
+<tr><td>edge-07-label</td><td>request-changes</td></tr>
+<tr><td>edge-08-label</td><td>declined</td></tr>
+<tr><td>edge-09-label</td><td>merged</td></tr>
+<tr><td>edge-10-label</td><td>blocked</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-00-system-overview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Agentweaver · boundaries, not one process</td></tr>
+<tr><td>takeaway</td><td>Intent enters through API or MCP; execution and durable state have separate owners.</td></tr>
+<tr><td>group-0-title</td><td>INTENT / CONTROL</td></tr>
+<tr><td>group-1-title</td><td>EXECUTION / STATE</td></tr>
+<tr><td>Browser / Web host</td><td>Browser / Web host</td></tr>
+<tr><td>Browser / Web host</td><td>SPA assets and API requests</td></tr>
+<tr><td>Browser / Web host</td><td>Web serves files; /docs redirects externally</td></tr>
+<tr><td>Browser / Web host</td><td>Web/Program.cs:39–65</td></tr>
+<tr><td>API web role</td><td>API web role</td></tr>
+<tr><td>API web role</td><td>Endpoint-classified authority</td></tr>
+<tr><td>API web role</td><td>Entra / broker auth + resource-specific roles</td></tr>
+<tr><td>API web role</td><td>Program.cs:1274–1295</td></tr>
+<tr><td>MCP host</td><td>MCP host</td></tr>
+<tr><td>MCP host</td><td>Validate broker JWT</td></tr>
+<tr><td>MCP host</td><td>Tool calls forward the same accepted bearer</td></tr>
+<tr><td>MCP host</td><td>McpBrokerAuthenticationHandler</td></tr>
+<tr><td>Worker role</td><td>Worker role</td></tr>
+<tr><td>Worker role</td><td>Shared application code</td></tr>
+<tr><td>Worker role</td><td>Probes only; registrations are not all role-gated</td></tr>
+<tr><td>Worker role</td><td>Program.cs:1255–1264</td></tr>
+<tr><td>Run orchestration</td><td>Run orchestration</td></tr>
+<tr><td>Run orchestration</td><td>MAF graphs + service drivers</td></tr>
+<tr><td>Run orchestration</td><td>Full runs, trimmed children and collective phase</td></tr>
+<tr><td>Run orchestration</td><td>RunWorkflowFactory / Coordinator</td></tr>
+<tr><td>AgentHost leaf</td><td>AgentHost leaf</td></tr>
+<tr><td>AgentHost leaf</td><td>Governed remote agent execution</td></tr>
+<tr><td>AgentHost leaf</td><td>One-shot work; Operator uses per-turn broker</td></tr>
+<tr><td>AgentHost leaf</td><td>RemoteOperatorAssistantAgent</td></tr>
+<tr><td>PostgreSQL</td><td>PostgreSQL</td></tr>
+<tr><td>PostgreSQL</td><td>Shared EF operational state</td></tr>
+<tr><td>PostgreSQL</td><td>Events, checkpoints and CAS leases</td></tr>
+<tr><td>PostgreSQL</td><td>Program.cs:1026–1075</td></tr>
+<tr><td>Workspace + worktrees</td><td>Workspace + worktrees</td></tr>
+<tr><td>Workspace + worktrees</td><td>Files are not the database</td></tr>
+<tr><td>Workspace + worktrees</td><td>Each child owns its branch and Git index</td></tr>
+<tr><td>Workspace + worktrees</td><td>RunOrchestrator.cs:277–317</td></tr>
+<tr><td>Browser / Web host</td><td>REST / SSE</td></tr>
+<tr><td>MCP host</td><td>broker</td></tr>
+<tr><td>API web role</td><td>delegate</td></tr>
+<tr><td>Run orchestration</td><td>execute</td></tr>
+<tr><td>Run orchestration</td><td>persist</td></tr>
+<tr><td>AgentHost leaf</td><td>worktree</td></tr>
+<tr><td>scope</td><td>Deployment roles ≠ exclusive orchestration ownership. Operator history is not a MAF run graph.</td></tr>
+<tr><td>groups</td><td>INTENT / CONTROL; EXECUTION / STATE</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-00-system-overview-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Full single-agent run · representative lifecycle</td></tr>
+<tr><td>takeaway</td><td>Safety, review and merge outcomes branch; coordinator children use a trimmed graph.</td></tr>
+<tr><td>group-0-title</td><td>EXECUTION + SAFETY</td></tr>
+<tr><td>group-1-title</td><td>REVIEW + OUTCOME</td></tr>
+<tr><td>Accepted run</td><td>Accepted run</td></tr>
+<tr><td>Accepted run</td><td>Provider / capability validation</td></tr>
+<tr><td>Accepted run</td><td>Create worktree, persist InProgress and charter</td></tr>
+<tr><td>Accepted run</td><td>RunOrchestrator:164–255</td></tr>
+<tr><td>Agent turn</td><td>Agent turn</td></tr>
+<tr><td>Agent turn</td><td>Project context + task</td></tr>
+<tr><td>Agent turn</td><td>Compose AgentTurnInput; execute workflow</td></tr>
+<tr><td>Rai safety</td><td>Rai safety</td></tr>
+<tr><td>Rai safety</td><td>Inspect the successful turn</td></tr>
+<tr><td>Rai safety</td><td>Revision required below cap → agent again</td></tr>
+<tr><td>Rai safety</td><td>GraphBinder:335–426</td></tr>
+<tr><td>Human review</td><td>Human review</td></tr>
+<tr><td>Human review</td><td>Nonempty diff, no further Rai revision</td></tr>
+<tr><td>Human review</td><td>Approve / request changes / decline</td></tr>
+<tr><td>Empty diff result</td><td>Empty diff result</td></tr>
+<tr><td>Empty diff result</td><td>Flagged versus unflagged</td></tr>
+<tr><td>Empty diff result</td><td>Flagged → safety-failed; unflagged → Scribe</td></tr>
+<tr><td>Merge attempt</td><td>Merge attempt</td></tr>
+<tr><td>Merge attempt</td><td>Approval uses saved merge data</td></tr>
+<tr><td>Merge attempt</td><td>Blocked → review; any nonblocked → Scribe</td></tr>
+<tr><td>Scribe</td><td>Scribe</td></tr>
+<tr><td>Scribe</td><td>Record nonblocked outcome</td></tr>
+<tr><td>Scribe</td><td>Includes terminal merge failure; append memory</td></tr>
+<tr><td>Watch loop / terminal</td><td>Watch loop / terminal</td></tr>
+<tr><td>Watch loop / terminal</td><td>Output determines persisted state</td></tr>
+<tr><td>Watch loop / terminal</td><td>Decline and safety-failed bypass Scribe</td></tr>
+<tr><td>Watch loop / terminal</td><td>RunWatchLoopService:595–681</td></tr>
+<tr><td>Accepted run</td><td>launch</td></tr>
+<tr><td>Agent turn</td><td>turn output</td></tr>
+<tr><td>Rai safety</td><td>no revision</td></tr>
+<tr><td>Rai safety</td><td>empty</td></tr>
+<tr><td>Human review</td><td>approve</td></tr>
+<tr><td>Empty diff result</td><td>unflagged</td></tr>
+<tr><td>Merge attempt</td><td>nonblocked</td></tr>
+<tr><td>Scribe</td><td>output</td></tr>
+<tr><td>scope</td><td>Branch labels inside cards are explicit exits, not hidden arrows. POST /api/runs is retired (410).</td></tr>
+<tr><td>groups</td><td>EXECUTION + SAFETY; REVIEW + OUTCOME</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-00-system-overview-fig5" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Memory · promotion before reuse</td></tr>
+<tr><td>takeaway</td><td>Only eligible, approved context returns to prompts; exported files are mirrors, not policy.</td></tr>
+<tr><td>group-0-title</td><td>CAPTURE / PROMOTION</td></tr>
+<tr><td>group-1-title</td><td>COMMITTED STATE / USE</td></tr>
+<tr><td>Agent observation</td><td>Agent observation</td></tr>
+<tr><td>Agent observation</td><td>Submit pending decision</td></tr>
+<tr><td>Agent observation</td><td>Attach project, agent and run provenance</td></tr>
+<tr><td>Agent observation</td><td>DecisionsEndpoints:125–143</td></tr>
+<tr><td>Decision inbox</td><td>Decision inbox</td></tr>
+<tr><td>Decision inbox</td><td>Unapproved observation</td></tr>
+<tr><td>Decision inbox</td><td>No automatic authority from submission</td></tr>
+<tr><td>Post-run Scribe</td><td>Post-run Scribe</td></tr>
+<tr><td>Post-run Scribe</td><td>Select eligible run entries</td></tr>
+<tr><td>Post-run Scribe</td><td>Same project + agent + run + time window</td></tr>
+<tr><td>Post-run Scribe</td><td>PostRunScribeService:25–150</td></tr>
+<tr><td>Approved active state</td><td>Approved active state</td></tr>
+<tr><td>Approved active state</td><td>Low-risk learning / pattern / update</td></tr>
+<tr><td>Approved active state</td><td>Auto-promotion; architecture / scope stay pending</td></tr>
+<tr><td>Current open session</td><td>Current open session</td></tr>
+<tr><td>Current open session</td><td>Append the run summary</td></tr>
+<tr><td>Current open session</td><td>Session continuity, not blanket policy adoption</td></tr>
+<tr><td>Context compiler</td><td>Context compiler</td></tr>
+<tr><td>Context compiler</td><td>Trust filters + memory budgets</td></tr>
+<tr><td>Context compiler</td><td>Approved architecture/scope + eligible memories</td></tr>
+<tr><td>Context compiler</td><td>MemoryContextCompiler:55–160</td></tr>
+<tr><td>Workspace mirrors</td><td>Workspace mirrors</td></tr>
+<tr><td>Workspace mirrors</td><td>Exporter refreshes committed memory</td></tr>
+<tr><td>Workspace mirrors</td><td>One-way export; not an automatic trust input</td></tr>
+<tr><td>Subsequent prompt</td><td>Subsequent prompt</td></tr>
+<tr><td>Subsequent prompt</td><td>Include selected context</td></tr>
+<tr><td>Subsequent prompt</td><td>Child prompts use the decisions-only variant</td></tr>
+<tr><td>Agent observation</td><td>submit</td></tr>
+<tr><td>Decision inbox</td><td>eligible</td></tr>
+<tr><td>Post-run Scribe</td><td>low-risk only</td></tr>
+<tr><td>Post-run Scribe</td><td>append</td></tr>
+<tr><td>Approved active state</td><td>approved</td></tr>
+<tr><td>Current open session</td><td>session</td></tr>
+<tr><td>Current open session</td><td>export</td></tr>
+<tr><td>Context compiler</td><td>compile</td></tr>
+<tr><td>scope</td><td>Architecture and scope proposals require coordinator review. An observation alone is never trusted policy.</td></tr>
+<tr><td>groups</td><td>CAPTURE / PROMOTION; COMMITTED STATE / USE</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-aks-components" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>AKS separates control from execution</td></tr>
+<tr><td>takeaway</td><td>Replicated API and workers share durable services; AgentHost pods execute isolated turns.</td></tr>
+<tr><td>group-title0</td><td>APPLICATION CONTROL</td></tr>
+<tr><td>group-title1</td><td>EXECUTION / DURABLE STATE</td></tr>
+<tr><td>Application ingress</td><td>Application ingress</td></tr>
+<tr><td>Application ingress</td><td>Frontend deployment</td></tr>
+<tr><td>Application ingress</td><td>AKS App Routing Gateway</td></tr>
+<tr><td>Application ingress</td><td>Frontend: 2 replicas</td></tr>
+<tr><td>Application ingress</td><td>Preview gateway separate</td></tr>
+<tr><td>API deployment</td><td>API deployment</td></tr>
+<tr><td>API deployment</td><td>Request and run control</td></tr>
+<tr><td>API deployment</td><td>2 API replicas</td></tr>
+<tr><td>API deployment</td><td>Postgres + CSI secrets</td></tr>
+<tr><td>API deployment</td><td>Shared workspace mount</td></tr>
+<tr><td>MCP deployment</td><td>MCP deployment</td></tr>
+<tr><td>MCP deployment</td><td>Broker-authenticated tools</td></tr>
+<tr><td>MCP deployment</td><td>1 MCP replica</td></tr>
+<tr><td>MCP deployment</td><td>Forwards requests to API</td></tr>
+<tr><td>MCP deployment</td><td>No CSI secret mount</td></tr>
+<tr><td>Worker deployment</td><td>Worker deployment</td></tr>
+<tr><td>Worker deployment</td><td>Background orchestration</td></tr>
+<tr><td>Worker deployment</td><td>2 baseline replicas</td></tr>
+<tr><td>Worker deployment</td><td>HPA scales from 2 to 3</td></tr>
+<tr><td>AgentHost pods</td><td>AgentHost pods</td></tr>
+<tr><td>AgentHost pods</td><td>SandboxClaim warm pool</td></tr>
+<tr><td>AgentHost pods</td><td>Per-run /configure</td></tr>
+<tr><td>AgentHost pods</td><td>Kata-isolated agent turns</td></tr>
+<tr><td>AgentHost pods</td><td>No ambient user secrets</td></tr>
+<tr><td>Durable services</td><td>Durable services</td></tr>
+<tr><td>Durable services</td><td>Postgres + Azure Files</td></tr>
+<tr><td>Durable services</td><td>Run state / events in DB</td></tr>
+<tr><td>Durable services</td><td>RWX project workspace</td></tr>
+<tr><td>Durable services</td><td>Key Vault via API/worker CSI</td></tr>
+<tr><td>relation-0</td><td>1 HTTPS</td></tr>
+<tr><td>relation-1</td><td>2 API tools</td></tr>
+<tr><td>relation-2</td><td>3 persist / mount</td></tr>
+<tr><td>relation-3</td><td>4 persist / mount</td></tr>
+<tr><td>relation-4</td><td>5 claim + dispatch</td></tr>
+<tr><td>assurance</td><td>Application and preview Gateways are separate. AgentHost has no Key Vault-role identity or CSI secret mount.</td></tr>
+<tr><td>assurance-0-label</td><td>Azure AKS environment</td></tr>
+<tr><td>assurance-0-fact</td><td>GatewayClass: approuting-istio.</td></tr>
+<tr><td>assurance-0-source</td><td>gateway.yaml</td></tr>
+<tr><td>assurance-1-label</td><td>Manifest facts</td></tr>
+<tr><td>assurance-1-fact</td><td>Worker HPA is CPU-based, 2–3.</td></tr>
+<tr><td>assurance-1-source</td><td>worker-hpa.yaml</td></tr>
+<tr><td>assurance-2-label</td><td>Distinct identities</td></tr>
+<tr><td>assurance-2-fact</td><td>AgentHost has no Key Vault role.</td></tr>
+<tr><td>assurance-2-source</td><td>serviceaccount-agenthost.yaml</td></tr>
+<tr><td>n0</td><td>AKS App Routing Gateway; Frontend: 2 replicas</td></tr>
+<tr><td>n1</td><td>2 API replicas; Postgres + CSI secrets</td></tr>
+<tr><td>n2</td><td>1 MCP replica; Forwards requests to API</td></tr>
+<tr><td>n3</td><td>2 baseline replicas; HPA scales from 2 to 3</td></tr>
+<tr><td>n4</td><td>Per-run /configure; Kata-isolated agent turns</td></tr>
+<tr><td>n5</td><td>Run state / events in DB; RWX project workspace</td></tr>
+<tr><td>groups</td><td>APPLICATION CONTROL; EXECUTION / DURABLE STATE</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-durable-event-stream-sequence" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>notes</td><td>LOOP · repeat durable reads; idle wait = 250 ms; Drain the whole batch before terminal close. Retryable assembly_blocked is not terminal.; Explicit-sequence reuse is idempotent only for matching type/payload. SQLite live channels are a separate lane.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-sandbox-boundary" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Several checks contain each action</td></tr>
+<tr><td>takeaway</td><td>Native shell is denied; governed tools combine AGT policy, direct containment and execution isolation.</td></tr>
+<tr><td>group-title0</td><td>TOOL SELECTION / POLICY</td></tr>
+<tr><td>group-title1</td><td>POINT-OF-USE CONTAINMENT</td></tr>
+<tr><td>Model tool request</td><td>Model tool request</td></tr>
+<tr><td>Model tool request</td><td>Permission dispatch</td></tr>
+<tr><td>Model tool request</td><td>Native shell: always denied</td></tr>
+<tr><td>Model tool request</td><td>URL approvals handled apart</td></tr>
+<tr><td>Model tool request</td><td>Custom reporting bypass</td></tr>
+<tr><td>Governance</td><td>Governance</td></tr>
+<tr><td>Governance</td><td>Deny-by-default policy</td></tr>
+<tr><td>Governance</td><td>AGT policy must allow</td></tr>
+<tr><td>Governance</td><td>Direct backend must allow</td></tr>
+<tr><td>Governance</td><td>Both checks, not either</td></tr>
+<tr><td>Registered tools</td><td>Registered tools</td></tr>
+<tr><td>Registered tools</td><td>Explicit capability surface</td></tr>
+<tr><td>Registered tools</td><td>Files revalidate at use</td></tr>
+<tr><td>Registered tools</td><td>run_command gates shell</td></tr>
+<tr><td>Registered tools</td><td>Unknown tools denied</td></tr>
+<tr><td>Workspace boundary</td><td>Workspace boundary</td></tr>
+<tr><td>Workspace boundary</td><td>Sandbox filesystem</td></tr>
+<tr><td>Workspace boundary</td><td>Lexical + real-path checks</td></tr>
+<tr><td>Workspace boundary</td><td>Reject symlink escapes</td></tr>
+<tr><td>Workspace boundary</td><td>Bounded / redacted output</td></tr>
+<tr><td>Execution boundary</td><td>Execution boundary</td></tr>
+<tr><td>Execution boundary</td><td>Selected isolation backend</td></tr>
+<tr><td>Execution boundary</td><td>Shell policy + approval</td></tr>
+<tr><td>Execution boundary</td><td>Kata pod in AKS</td></tr>
+<tr><td>Execution boundary</td><td>Direct mode is opt-in</td></tr>
+<tr><td>Credential handling</td><td>Credential handling</td></tr>
+<tr><td>Credential handling</td><td>Current implementation</td></tr>
+<tr><td>Credential handling</td><td>Host + tool options hold token</td></tr>
+<tr><td>Credential handling</td><td>Direct git status / allowed gh</td></tr>
+<tr><td>Credential handling</td><td>No blanket shell injection</td></tr>
+<tr><td>relation-0</td><td>1 governed calls</td></tr>
+<tr><td>relation-1</td><td>2 both allow</td></tr>
+<tr><td>relation-2</td><td>3 file operation</td></tr>
+<tr><td>relation-3</td><td>4 run_command</td></tr>
+<tr><td>relation-4</td><td>5 eligible git / gh</td></tr>
+<tr><td>assurance</td><td>Current code delivers repository credentials into Host/tool options; the normative no-credential contract is NOT met.</td></tr>
+<tr><td>assurance-0-label</td><td>Dispatch exceptions</td></tr>
+<tr><td>assurance-0-fact</td><td>Native shell denied; URL path separate.</td></tr>
+<tr><td>assurance-0-source</td><td>CopilotAIAgent.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Execution isolation</td></tr>
+<tr><td>assurance-1-fact</td><td>Sidecar: separate PID namespace.</td></tr>
+<tr><td>assurance-1-source</td><td>sandbox-template-agenthost.yaml</td></tr>
+<tr><td>assurance-2-label</td><td>Credential reality</td></tr>
+<tr><td>assurance-2-fact</td><td>No blanket shell credential inheritance.</td></tr>
+<tr><td>assurance-2-source</td><td>RunCommandTool.cs</td></tr>
+<tr><td>n0</td><td>Native shell: always denied; URL approvals handled apart</td></tr>
+<tr><td>n1</td><td>AGT policy must allow; Direct backend must allow</td></tr>
+<tr><td>n2</td><td>Files revalidate at use; run_command gates shell</td></tr>
+<tr><td>n3</td><td>Lexical + real-path checks; Reject symlink escapes</td></tr>
+<tr><td>n4</td><td>Shell policy + approval; Kata pod in AKS</td></tr>
+<tr><td>n5</td><td>Host + tool options hold token; Direct git status / allowed gh</td></tr>
+<tr><td>groups</td><td>TOOL SELECTION / POLICY; POINT-OF-USE CONTAINMENT</td></tr>
+</tbody></table>
+</details>

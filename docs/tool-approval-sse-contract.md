@@ -158,15 +158,19 @@ child run is `pod-per-run` and the API-side durable gate returns `Unknown`:
 3. `AgentHostApprovalHttpClient` sends the decision through the `a2a-sandbox-pod` HTTP client to
    the pod-root `/tool-approvals` or `/tool-denials` route.
 4. AgentHost authenticates the bearer and resolves its in-memory `IToolApprovalGate`.
-5. For `run`, `tool`, and `always`, the exact selected scope becomes a current-pod bridge only if
-   it wins and applies that pending approval. The bridge is in place before the waiting tool call
-   resumes, so the next call in that pod does not re-prompt while the API persists the durable
-   cross-pod policy.
-6. The API persists that durable policy only for an `approved` response with `applied: true`.
-   A late or duplicate forward may return the prior terminal `approved` state with
-   `applied: false`; it cannot create a policy. Failed, denied, expired, or unapplied forwards
-   are fail-closed.
-7. A terminal result causes the API to emit `tool.approval_resolved` on the owning child run.
+5. For `run`, `tool`, and `always`, the API first probes the pending request's context
+   and rechecks that the target run is active. It issues an opaque provisional scope
+   grant id and expiry. The winning AgentHost grant bridges the current pod before
+   the waiting call resumes.
+6. Durable policy is persisted only when the response is `approved`, `applied: true`,
+   reachable, and proves that exact provisional grant id. A duplicate terminal
+   `approved` response with `applied: false` cannot create a policy.
+7. On durable success the API finalizes the rollback handle; later scoped authorization
+   consults lifecycle-aware durable policy. On persistence failure, a lost response,
+   or an unproven grant id, it rolls back the exact provisional grant or waits until
+   its lease expires before returning an error. This does not undo a tool call
+   already released by the one-time approval.
+8. A terminal result causes the API to emit `tool.approval_resolved` on the owning child run.
 
 Forwarded outcome states:
 
@@ -177,11 +181,12 @@ Forwarded outcome states:
 | `409` | `pending` | The request remains pending and should be retried |
 | `503` | `agenthost_unreachable` | The pod origin, call, or response was unavailable |
 
-Sources: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1594-1625`,
-`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
-`apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98`,
-`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`, and
-`apps/Agentweaver.AgentHost/Program.cs:287-288,486-588`.
+Scoped-grant failure can instead return HTTP `503` Problem Details without a `state`
+field, or `409` when the run is no longer active. Do not infer a reusable approval
+policy from HTTP `200` alone or from an earlier one-time approval.
+
+Sources: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2006-2218,3465-3523`,
+`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:75-162`.
 
 ---
 
@@ -238,7 +243,7 @@ the gate self-expires (emitting only `tool.error`) is still caught as stalled. T
 protects gate sites that emit **no** heartbeat, such as the preview gate
 (`AgentPreviewGate.RequestApprovalAsync` emits `tool.approval_required`).
 
-Sources: `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1436-1439,1466-1475,1489-1507`,
+Sources: `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1865-1917`,
 `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:111`.
 
 ## Related reading

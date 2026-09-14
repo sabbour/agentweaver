@@ -1,0 +1,180 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Workflow selection: explicit intent first, bounded automation second",
+  "alt": "Two-phase flowchart showing Blueprint workflow candidates, explicit and conversational overrides, zero/one/multiple candidate handling, bounded model selection with deterministic fallback, and post-decomposition Build and Test compatibility.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "candidates",
+      "label": "Resolve available candidates",
+      "subLabel": "Blueprint set plus valid registry definitions",
+      "icon": "box",
+      "fluentIcon": "archive",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "override",
+      "label": "Available override?",
+      "subLabel": "Request or conversational choice",
+      "icon": "box",
+      "fluentIcon": "person",
+      "badge": "Priority",
+      "variant": "decision"
+    },
+    {
+      "id": "count",
+      "label": "Candidate count?",
+      "subLabel": "Zero, one, or multiple",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": "Branch",
+      "variant": "decision"
+    },
+    {
+      "id": "automatic",
+      "label": "Automatic selection",
+      "subLabel": "Default, singleton, or bounded model choice",
+      "icon": "box",
+      "fluentIcon": "model",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "usable",
+      "label": "Usable candidate?",
+      "subLabel": "Never accept an invented workflow",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Validate",
+      "variant": "decision"
+    },
+    {
+      "id": "fallback",
+      "label": "Deterministic fallback",
+      "subLabel": "Default/standard, then non-review, then first",
+      "icon": "box",
+      "fluentIcon": "history",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "selected",
+      "label": "Selected definition",
+      "subLabel": "Record provenance and rationale",
+      "icon": "box",
+      "fluentIcon": "outcome",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "decompose",
+      "label": "Decompose work",
+      "subLabel": "Selected workflow drives planning",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "compatible",
+      "label": "Code work has Build and Test?",
+      "subLabel": "Check actual decomposition",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Compatibility",
+      "variant": "decision"
+    },
+    {
+      "id": "final",
+      "label": "Persist final workflow ID",
+      "subLabel": "Honor explicit choice or correct automation",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": "WorkPlan",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "candidates",
+      "to": "override",
+      "label": "ordered choices"
+    },
+    {
+      "from": "override",
+      "to": "selected",
+      "label": "explicit match"
+    },
+    {
+      "from": "override",
+      "to": "count",
+      "label": "none"
+    },
+    {
+      "from": "count",
+      "to": "automatic",
+      "label": "0 / 1 / multiple"
+    },
+    {
+      "from": "automatic",
+      "to": "usable",
+      "label": "candidate"
+    },
+    {
+      "from": "usable",
+      "to": "automatic",
+      "label": "retry once",
+      "loopback": true
+    },
+    {
+      "from": "usable",
+      "to": "selected",
+      "label": "yes"
+    },
+    {
+      "from": "usable",
+      "to": "fallback",
+      "label": "no"
+    },
+    {
+      "from": "fallback",
+      "to": "selected",
+      "label": "fallback"
+    },
+    {
+      "from": "selected",
+      "to": "decompose",
+      "label": "plan"
+    },
+    {
+      "from": "decompose",
+      "to": "compatible",
+      "label": "inspect"
+    },
+    {
+      "from": "compatible",
+      "to": "final",
+      "label": "compatible or explicit"
+    },
+    {
+      "from": "compatible",
+      "to": "automatic",
+      "label": "automatic reselection",
+      "loopback": true
+    }
+  ]
+}

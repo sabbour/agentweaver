@@ -1,25 +1,14 @@
 # Coordinator orchestration experience
 
-Coordinator orchestration is the Agentweaver experience for turning one plain-language goal into a confirmed outcome, a dependency-aware work plan, multiple specialist child runs, and one assembled result. The core interaction is deliberately human-accountable: the coordinator drafts an OutcomeSpec, suspends at a confirmation gate, and dispatches no subagent work until the user confirms. The web UI and MCP expose the same lifecycle, so a user can start, confirm, watch, drill in, steer, recover, and review an orchestration from either surface.
+Coordinator orchestration turns one plain-language goal into a dependency-aware work plan, specialist child runs, and one assembled result. **Define Outcome** drafts an OutcomeSpec and waits for human confirmation before dispatch. **Direct** starts from the goal without that confirmation step. **Ready pickup** reserves a coordinator run atomically and starts it unattended, with automatic outcome confirmation attributed to the task's capturing identity. These start modes retain later review, tool-approval, assembly, and merge gates; they do not all require an interactive confirmation.
 
 Related experience docs: [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
 
-![Coordinator orchestration experience: Plain-language goal, Start coordinator orchestration, Draft OutcomeSpec, Confirm gate, Request revision, Confirm OutcomeSpec, Create work plan, Dispatch ready children, Watch topology, Steer or recover, Collective assembly, Done](../diagrams/canonical-coordinator-journey.png)
-
-<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-![Orchestrations page listing active and recent coordinator runs](/screenshots/orchestrations-list.png)
-
-> 📸 **Screenshot — `orchestrations-list.png`**
-> *Shows:* the project **Orchestrations** page with coordinator-run status summary, **Active** and **Recent** run sections, and **Open** / **Stop** / **Delete** actions.
-> *Path:* open a project → click **Orchestrations** → `/projects/:projectId/orchestrations`.
+Open **Orchestrations** from a project to inspect its coordinator runs and their available **Open**, **Stop**, and **Delete** actions. The previous image was a placeholder, not a product capture; this page describes the implemented controls without presenting it as evidence.
 
 ## The experience in one sentence
 
-The coordinator is a project-level team manager. The user describes the outcome once, confirms the coordinator's interpretation, then watches a live topology of subtasks move through specialists, dependencies, child runs, steering, assembly, and final review.
+The coordinator is a project-level team manager. The user describes the outcome, chooses whether to review a structured plan first, then watches subtasks move through specialists, dependencies, steering, assembly, and final review.
 
 The experience is not a faster way to skip review. It makes the work larger and more parallel while keeping the user's intent, intervention points, and final accountability visible.
 
@@ -33,7 +22,7 @@ Before starting, the project must have a cast team with at least one active work
 
 When the user selects **Define Outcome**, the UI posts the goal and opens the coordinator run. The coordinator then drafts an OutcomeSpec. **Direct** also creates a coordinator run, but starts from the goal without the outcome-confirmation step.
 
-That matters. A broad request such as "Add OAuth sign-in and update the docs and tests" can mean many things: provider choice, scope boundaries, migration expectations, documentation depth, and test coverage. The coordinator's first job is to turn that request into a confirmable contract, not to launch agents immediately.
+That matters. A broad request such as "Add OAuth sign-in and update the docs and tests" can mean many things: provider choice, scope boundaries, migration expectations, documentation depth, and test coverage. **Define Outcome** first turns that request into a confirmable contract instead of launching child agents immediately.
 
 What the drafted **Scope** covers tracks the breadth the goal asks for, filtered by the team you cast. A full-journey goal — "take this from the initial idea all the way to a working, previewable app" — yields an outcome whose scope enumerates the intermediate deliverables the goal implies (customer/market research, positioning/marketing, user stories, a PRD, UX design, and the built app), but only for deliverables some role on the team can actually produce. A narrow goal (a bug fix or a single document) stays lean and does not sprout extra planning stages. If the breadth is unclear, the coordinator surfaces it as a clarifying question rather than assuming the widest scope — so review the drafted scope before confirming and revise if it is broader or narrower than you intended.
 
@@ -44,16 +33,17 @@ MCP starts the same experience with `coordinator_start`:
 - `project_id` selects the project.
 - `goal` is the plain-language outcome the user wants.
 - `model_id` optionally overrides the coordinator model for the planning run.
+- `start_mode` selects `defineOutcome` (the default) or `direct`; `workflow_id` can pin a workflow.
 
-`coordinator_start` returns the created coordinator run. The run begins drafting a confirmable OutcomeSpec and then suspends at the confirmation gate. No subtask decomposition, child run dispatch, or topology fan-out happens before confirmation.
+`coordinator_start` returns the created coordinator run. In its default `defineOutcome` mode, it drafts an OutcomeSpec and suspends before decomposition and child dispatch. With `start_mode: "direct"`, it skips that interactive planning gate. The convenience tool `run_task` defaults to direct mode and returns at completion, a gate, or its timeout.
 
 Use MCP when the orchestration starts from an assistant workflow, a CLI session, or another tool that can hold the run id and continue with the coordinator tools. Use the web UI when the user wants the visual confirmation gate and live topology from the start.
 
-## The confirmation gate: the key UX beat
+## The confirmation gate in Define Outcome mode
 
-The coordinator run deliberately pauses before work begins. The OutcomeSpec is persisted with an awaiting-confirmation state, the web page shows the **Outcome spec** panel, and the system tells the user: **No subagent work is dispatched until you confirm this outcome spec.**
+In **Define Outcome** mode, the coordinator deliberately pauses before child work begins. The OutcomeSpec is persisted with an awaiting-confirmation state, the web page shows the **Outcome spec** panel, and the system tells the user: **No subagent work is dispatched until you confirm this outcome spec.**
 
-This is the safety property of coordinator orchestration. The system may draft, ask questions, and revise; it does not treat the goal as executable until the human confirms the interpretation. The user has one clean moment to say "yes, that is what I meant" before work fans out across multiple agents.
+This is the planning contract of **Define Outcome**, not a universal property of every start. It gives the user a moment to say "yes, that is what I meant" before fan-out. Direct mode treats the submitted goal as the instruction; unattended pickup supplies its own automatic confirmation.
 
 ### What suspension feels like
 
@@ -65,7 +55,7 @@ The left-side **Outcome spec** panel carries the action from the start of the ru
 
 The gate prevents accidental fan-out. Without it, each child agent could receive an ambiguous version of the original request and independently choose scope. With it, every downstream subtask is grounded in the same confirmed OutcomeSpec.
 
-The gate also prevents surprise cost and surprise changes. A user can inspect scope, exclusions, and assumptions before multiple agents touch a repository, generate output, ask for tool approvals, or produce branches for assembly.
+The gate lets a user inspect scope, exclusions, and assumptions before child execution. Drafting itself can consume model usage, and confirmation is not a cost ceiling or a guarantee that execution will need no further judgment.
 
 ## OutcomeSpec experience
 
@@ -109,11 +99,11 @@ Revision is the right action when the desired outcome is correct in spirit but w
 
 Revision does not resume work. It returns the run to the awaiting-confirmation state because the artifact that controls execution has changed. The user gets a fresh chance to inspect the new desired outcome, scope, assumptions, and questions before the coordinator creates the work plan.
 
-This makes the experience predictable: every executable interpretation is confirmed exactly at the boundary where planning turns into dispatch.
+Within this planning mode, a revised interpretation is presented for confirmation again before dispatch.
 
 ## Choosing the workflow
 
-Right after you confirm the spec, and before any subtasks appear, the coordinator picks **which workflow** (which run process) the work should follow. Most projects carry a single workflow, so this is invisible — that one workflow is used with no prompt and no extra step. The experience only becomes visible when a project offers more than one eligible workflow.
+Before decomposition, the coordinator selects **which workflow** the work should follow. For Define Outcome this follows confirmation; Direct and unattended starts reach selection without waiting for the same human gate. Projects with a single eligible workflow do not need a selection prompt.
 
 ### What decides the workflow
 
@@ -147,9 +137,9 @@ If anything goes wrong (the model is unavailable, returns an unusable answer, or
 
 ## Work plan experience
 
-### From confirmed intent to executable plan
+### From accepted intent to executable plan
 
-After confirmation, the coordinator creates a work plan. The work plan is the execution contract for the orchestration. It decomposes the confirmed OutcomeSpec into bounded subtasks, assigns each subtask to an agent, selects a model, records status, attaches a child run id when dispatched, and stores dependency edges.
+After the selected start path accepts the intent, the coordinator creates a work plan. It decomposes that intent into bounded subtasks, assigns agents and models, records status, attaches child run ids after dispatch, and stores dependency edges.
 
 MCP reads the persisted plan with `coordinator_work_plan_get`. The response includes the coordinator run id, the OutcomeSpec id, the work plan status, optional isolation summary, subtasks, and dependency rows.
 
@@ -204,7 +194,7 @@ Each node in the topology carries an `executionPodName` field. The UI renders a 
 - **Coordinator node** — shows the API pod name when the coordinator process is running inside Kubernetes; null otherwise.
 - **Subtask node** — shows the pod name of the child run's bound AgentHost pod, populated by the backend from the pod registry (`IPodNameRegistry`) once the child run is dispatched. `null` before dispatch or on non-Kubernetes deployments.
 
-A node with no assigned pod shows no chip. The chip never falls back to the API pod for child or intermediate nodes.
+A node with no assigned pod shows no chip. `PodIndicator` reads that node's own `executionPodName`; it does not use an unrelated child pod or the API pod as a global fallback (`apps/web/src/components/CoordinatorTopologyGraph.tsx:293`).
 
 The UI also seeds the graph from `coordinator_work_plan_get` and `coordinator_children_get` equivalents so a finished run or a stream that connected after the first snapshot still renders immediately. Stream deltas reconcile on top of that seed.
 
@@ -229,13 +219,11 @@ The parent coordinator owns the collective result. Children perform their assign
 
 In the graph, a dispatched subtask gains a child run id. The subtask card can show **Expand pipeline**. Expanding the card reveals a compact child pipeline, typically showing steps like **Agent**, **Rai**, and **Assemble-ready**, with statuses and timers. If the child graph descriptor is available, the UI uses the actual child pipeline instead of the fallback.
 
-The card also offers **View run**. In the orchestration detail page, this opens the child run in a modal using the standard run watcher. The user stays in the orchestration context while inspecting the child's timeline, tool calls, questions, approvals, files, and status.
+Selecting a subtask focuses its **Agent session** panel inside the orchestration page. Inspect the selected task's messages, tool calls, questions, approvals, changes, and files without opening a retired standalone Workflow or Execution page.
 
-Some topology views link directly to the child run's normal workflow page. The experience goal is the same: a user can move from the all-up topology to the responsible child run without losing which subtask it belongs to.
+### Selected-task Agent session panel
 
-### Slide-up agent session panel
-
-The coordinator page now opens child and coordinator sessions in a full-width slide-up **Agent session** panel instead of a small modal. The panel keeps the orchestration context visible behind it, uses a left run tree for coordinator/child selection, and exposes per-run tabs: **Messages**, **Changes**, and **Files** (`apps/web/src/components/AgentSessionPanel.tsx:1054`, `:1407`).
+The coordinator page uses the **Agent session** panel for the selected coordinator, planned subtask, child, or assembly stage. It exposes **Messages**, **Changes**, and **Files** for the selected context. A planned subtask can be selected before dispatch; its artifact tabs explain why no child files exist yet.
 
 **Messages** renders each turn as cards. System prompts and coordinator instructions are collapsed by default, while agent messages are open and rendered with `react-markdown`, `remark-gfm`, and `rehype-sanitize` so Markdown is useful but sanitized (`AgentSessionPanel.tsx:31`, `:819`, `:829`, `:1595`). Tool calls are grouped behind a **Tool calls** disclosure and labeled in human terms such as **Read file**, **Edit file**, **View**, or **Run command** (`AgentSessionPanel.tsx:794`, `:1647`). File references from tool arguments become file cards with **Preview** actions (`AgentSessionPanel.tsx:950`, `:1674`).
 
@@ -379,7 +367,7 @@ run-bound pod/worktree instead of releasing resources and cold-launching a repla
 means previews and gate context survive the request-changes cycle, and a second pass reuses the warm
 pod instead of waiting for Kubernetes to schedule a replacement AgentHost pod.
 
-During **In review**, the page clearly marks that human review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
+During **In review**, the page marks human review as pending and directs the user to the collective **Changes** and **Files** surface. Review actions go to the assembly review gate, not to individual children. For exhausted autonomous budgets, scoped author recovery, and fresh budgets after human request-changes, see the existing [resilient-review state model](../deep-dive/resilient-assembly-review.md); this is not a second assembly state machine.
 
 If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status
 badges, and hints such as re-running affected subtasks or stopping the run. Build & Test infrastructure
@@ -403,7 +391,7 @@ If the run later shows **Blocked** at assembly time, `assembly_blocked` means th
 
 A typical MCP client flow is:
 
-1. Call `coordinator_start` with `project_id`, `goal`, and optional `model_id`.
+1. Call `coordinator_start` with `project_id`, `goal`, and `start_mode: "defineOutcome"` (the default), plus optional `model_id`.
 2. Watch the coordinator run stream or call `coordinator_outcome_spec_get` until the spec is available.
 3. Present the OutcomeSpec to the user.
 4. Call `coordinator_outcome_spec_confirm` when the user approves, or `coordinator_outcome_spec_revise` with feedback when the user wants changes.
@@ -411,7 +399,7 @@ A typical MCP client flow is:
 6. Use `orchestration_topology` for a one-shot graph or `run_watch` for live topology events.
 7. Call `coordinator_steer` to stop, redirect, amend, or recover.
 
-This mirrors the web UI exactly. The MCP client owns presentation; the coordinator service owns orchestration state.
+This follows the web **Define Outcome** path. Direct mode skips steps 2–4; queued Ready pickup is a separate unattended path, not a reason to start a second run for the same task. The MCP client owns presentation; the coordinator service owns state.
 
 ### Inspecting a run after reconnect
 
@@ -429,11 +417,11 @@ The persisted artifacts are enough to rebuild the user's mental model even if th
 
 ### Coordinator
 
-The coordinator is the visible parent run and the accountable orchestrator. It drafts intent, waits for confirmation, decomposes work, dispatches children, observes progress, accepts steering, recovers eligible parked work, and assembles the result.
+The coordinator is the visible parent run and accountable orchestrator. It accepts intent through the selected start mode, decomposes work, dispatches children, observes progress, accepts steering, recovers eligible parked work, and assembles the result.
 
 ### OutcomeSpec
 
-The OutcomeSpec is the intent contract. It answers: what are we trying to accomplish, what is in scope, what assumptions are active, and what needs clarification? It must be confirmed before subagent work is dispatched.
+The OutcomeSpec is the structured intent contract: desired outcome, scope, assumptions, and clarifications. Define Outcome requires interactive confirmation; Direct skips that drafting/confirmation step, and unattended pickup confirms automatically.
 
 ### Work plan
 
@@ -458,7 +446,7 @@ Steer means the user intervenes while the orchestration is alive or parked. Stop
 ## Scope and limits
 
 - Pause is not supported.
-- The confirmation gate is required for interactive coordinator runs; no subagent work dispatches before confirmation.
+- The interactive confirmation gate belongs to **Define Outcome**, not **Direct** or unattended pickup.
 - `redirect` and `amend` apply at the next subagent turn boundary, not in the middle of an active model turn.
 - Omitting `target_child_run_id` in `coordinator_steer` broadcasts to all active children.
 - Child isolation is advisory from the user's perspective; the coordinator still relies on dependency edges, scoped subtasks, review, and assembly to manage conflicts.
@@ -466,10 +454,9 @@ Steer means the user intervenes while the orchestration is alive or parked. Stop
 
 ## Why this design works
 
-The experience keeps the user oriented at every scale. At the start, the user sees one understandable contract: the OutcomeSpec. In the middle, the user sees a topology: who is doing what, what is blocked, and which dependencies matter. At intervention time, the user has steering verbs that match intent: stop, redirect, amend, recover. At the end, the user reviews one assembled outcome.
+The experience keeps intent, execution, and review distinct. Define Outcome adds a structured confirmation step; Direct starts from the submitted goal. The live topology explains dependencies and blockers, steering changes direction or recovers eligible work, and the user reviews the assembled outcome.
 
-The web UI makes that lifecycle visual and action-oriented. MCP makes the same lifecycle scriptable and composable. Both surfaces preserve the same product promise: the coordinator can run a team, but the user confirms intent before work starts and retains control while the team executes.
-
+The web UI makes that lifecycle visual and action-oriented. MCP makes it scriptable. Both let the user choose the start mode and retain review and steering controls while the team executes.
 
 ## v0.9.5 run page updates
 
@@ -491,6 +478,94 @@ The UI can also distinguish the terminal stage and reason for parked assembly st
 
 ## Preview-first delivery
 
-For runnable work, the coordinator should make the review hand-off inspectable, not just readable. Workflows with the platform-owned `build_test` gate use that gate as the primary mechanism: it builds, tests, starts web/service artifacts, observes the actual bound port, verifies the server, and registers the sandbox preview through `start_preview(port=PORT)`. The run tree ties that preview URL to the Build & Test assembly node and clears stale preview sessions when a newer run/gate replaces them, so users do not confuse an old preview with the current candidate.
+For runnable work, the platform-owned **PreviewStep** follows Build & Test on the retained coordinator pod and detached integration worktree. It may run after an **approved** or **request-changes** Build & Test verdict, but skips **declined**. Preview provisioning failures are isolated so they do not block review; an unavailable preview is not proof that the candidate passed its gates. See the existing [live-preview provisioning model](../deep-dive/live-preview-provisioning.md).
 
 When a runnable subtask is outside that gate, the coordinator includes preview intent in the OutcomeSpec confirmation, dispatches the child with instructions to start and verify the app in its sandbox, and asks the child to include the preview URL in its completion message. The assembled review output should surface all reported URLs near the top in a `Live Previews` table with agent, URL, port, and description. If the sandbox backend cannot provide previews, the assembled output should include local run instructions instead.
+
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>

@@ -2,7 +2,7 @@
 
 Unified steering makes correction feedback visible and predictable. Whether feedback comes from you, RAI, Rubberduck, Build & Test, another agent, the coordinator, or a workflow step, it goes to the coordinator first. The coordinator decides what to do and the timeline shows both the signal and the decision.
 
-For the implementation details, see the [deep dive](../deep-dive/unified-steering.md). For event and route contracts, see the [reference](../reference/unified-steering.md).
+For the implementation details and the existing shared **source → signal → decision → effect** diagram, see the [deep dive](../deep-dive/unified-steering.md). For event and route contracts, see the [reference](../reference/unified-steering.md).
 
 ## What you see
 
@@ -42,7 +42,7 @@ Previously, a request-changes gate could look like a glitch: subtasks reset and 
 - **Same behavior from every source.** Feedback source changes the `source` label, not the routing mechanism.
 - **Coordinator is the decider.** The coordinator chooses in-place steering, fresh dispatch, proceed/terminal, or advisory no-op.
 - **Fresh dispatch is loud.** If a subtask is reset, the timeline says so before it happens.
-- **Loops are bounded.** A subtask can be recovered at most three times; a plan can steer at most six times.
+- **Autonomous loops are bounded.** The default budget is three recoveries per subtask and six steering iterations per plan within a convergence window. Human request-changes resets that budget; it is not a lifetime cap on supervised review rounds.
 - **Human review stays understandable.** Review request-changes becomes a steering signal instead of a hidden assembly reset.
 
 ## Failure recovery
@@ -58,7 +58,7 @@ If the revision genuinely fails, the child run now fails visibly with `child_exe
 3. Read the following **steering decision** event to see the coordinator's chosen action and rationale.
 4. If it says **steered in place**, expect the same child session to resume.
 5. If it says **fresh dispatch**, expect new child work because the coordinator explicitly chose that path.
-6. If budget is exhausted, expect the run to proceed or surface a blocked terminal reason rather than loop forever.
+6. If the autonomous budget is exhausted during reviewable collective assembly, expect escalation to the **human-review gate**, not an automatic terminal dead end. Inspect accumulated feedback, then approve, decline, or request changes with a fresh autonomous budget. Other unrecoverable paths can still fail or block visibly.
 
 ## Related reading
 

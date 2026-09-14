@@ -10,13 +10,14 @@ Agentweaver is a platform for running teams of AI agents on infrastructure you c
 
 The agents remain probabilistic. Agentweaver makes their path toward the outcome governed and repeatable through persisted workflow state, explicit gates, and human approvals. Use the web interface or connect an assistant, editor, or CLI through MCP.
 
-![Agentweaver](/guide/images/overview.png)
+Start in the **Project Gallery** for project work, or **Sessions** for a personal
+Assistant conversation. Project pages expose the board, team, workflows, and run history.
 
 ## How it works
 
 ### Coordinator orchestration
 
-Submit a goal. The coordinator:
+For a **define-outcome** submission with autopilot off, the coordinator:
 
 1. Drafts an **OutcomeSpec** — goal, desired outcome, scope, assumptions
 2. Selects the best-fit **workflow** for your task via an LLM pass over available workflows and team roles — surfacing the choice and rationale. You can override from the **Start task** dialog or by typing `use {workflow-id}` in the coordinator chat.
@@ -26,21 +27,19 @@ Submit a goal. The coordinator:
 6. Shows a **live topology graph** of every agent and its status
 7. Lets you **steer mid-run** — send a directive, redirect a child, amend the plan, or stop
 8. Assembles all results into one combined diff
-9. Routes through a **single review gate** (RAI + human approval)
+9. Runs the selected collective gates, including RAI and applicable Build & Test, then human review
 10. Runs a **Scribe pass** after merge to record what the team learned
 
-![Coordinator orchestration: Submit goal, Coordinator drafts OutcomeSpec, Selects workflow, You confirm?, WorkPlan: subtask DAG, Parallel child runs, RAI check per agent, Assembled result, Human review, Merge, Declined, Scribe memory pass](../diagrams/canonical-coordinator-journey.png)
-
-<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Direct mode skips outcome drafting; explicit autopilot can confirm a define-outcome run
+without a manual pause. Neither is permission to bypass tool or human merge approvals.
 
 ## Key concepts
 
 ### Projects
 
-A **Project** is the top-level container — a git working directory bound to an AI configuration (provider and default model). Every run, every agent, and all team memory live inside a project. Create from scratch or clone from GitHub.
+A **Project** contains a git working directory, project orchestration, its team, and team
+memory, with an effective provider and model configuration. Create from scratch or clone
+from GitHub. Personal [Assistant sessions](./assistant) are separate conversations, not project-owned runs.
 
 → [Working with Projects](./projects)
 
@@ -70,7 +69,8 @@ When you submit a task, an LLM pass automatically matches it to the best-fit wor
 
 ### The board
 
-Every project has a **Kanban board** with six columns:
+Every project has a **Kanban board** with six semantic buckets, presented as a main row
+and a separate attention section:
 
 | Column | Owned by |
 |---|---|
@@ -87,13 +87,17 @@ A **heartbeat** periodically promotes Ready tasks and starts coordinator runs up
 
 ### Runs
 
-A **Run** is a unit of execution. Each run works inside an isolated git worktree, streams every event live, and requires your explicit approval before anything merges.
+A **Run** is a unit of execution. Project implementation work uses isolated git worktrees
+and durable event streams; collective changes require your approval before merge.
+Personal Assistant conversations do not require a project checkout.
 
 → [Submitting and Watching Runs](./runs)
 
 ### Review & Merge
 
-All work passes through a review pipeline before merging: RAI safety check → human approval gate. For coordinator orchestrations, this happens **once** over the assembled output of all agents.
+Before merging, coordinator orchestrations evaluate the selected workflow's collective
+gates over the assembled output, not per child. Built-in software workflows include RAI,
+Build & Test, and human approval.
 
 → [Reviewing and Merging](./review)
 
@@ -127,8 +131,8 @@ The full Agentweaver feature set is available programmatically through an MCP se
 | Other tools | Agentweaver |
 |---|---|
 | Orchestration primitives you wire up yourself | Generated or reusable teams, skills, and workflows in one platform |
-| Optional HITL through workflow patterns | Mandatory OutcomeSpec gate + mandatory human review — enforced by the platform |
-| State in opaque managed stores | File-native, repo-resident, inspectable team/memory/decisions |
+| Optional HITL through workflow patterns | Define-outcome confirmation or direct launch; mandatory human approval before merge |
+| State in opaque managed stores | Inspectable file mirrors backed by authoritative structured memory/decision trust records |
 | One review gate per agent | Single collective review over all assembled work |
 | Vendor-hosted control plane | Run the platform on infrastructure you control |
 | Code-only scenarios | Any knowledge-work scenario via the workflow system |
@@ -140,3 +144,91 @@ The full Agentweaver feature set is available programmatically through an MCP se
 - [Learn about workflows](./workflows)
 - [Submit your first run](./runs)
 - [Connect an MCP client](./mcp-cli)
+
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>

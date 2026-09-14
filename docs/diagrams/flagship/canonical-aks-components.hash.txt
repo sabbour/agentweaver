@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-aks-components.json",
+    "sha256": "b1948c301f704c16a9470a26b51b201e4ae0a2560cb3d8ab28569e77c9cd1ab3"
+  },
+  "drawio": {
+    "file": "canonical-aks-components.drawio",
+    "sha256": "df0ff772e3a5398de33dd9f63c7717a94f9040b6d13f0de52415b75992686a31"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-aks-components.png",
+    "sha256": "9e1f453f9d8c6658d85c72ca3aad713aa25208e44638696f9c28e5f22d095d2c"
+  }
+}

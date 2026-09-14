@@ -1,0 +1,62 @@
+{
+  "skill_name": "docs-diagram-pitch",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a new documentation architecture diagram showing how Agentweaver turns a confirmed OutcomeSpec into parallel child runs and one reviewed result. Use the repository implementation as ground truth.",
+      "expected_output": "A one-page A5, uncompressed, editable draw.io pitch plus an inspected PNG and research/change record, followed by an explicit handoff to docs-diagram-iterate.",
+      "files": [],
+      "expectations": [
+        "The workflow runs two or three independent subject-research threads and records evidence.",
+        "Visual references, official logos or native symbols, and asset rights are researched.",
+        "The source is uncompressed editable draw.io XML on one A5 page.",
+        "The output distinguishes native draw.io symbols from Agentweaver-specific custom components.",
+        "The actual exported pitch PNG is inspected at print size and enlarged detail.",
+        "The pitch is not represented as publication-ready and is handed to docs-diagram-iterate."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Our AKS deployment guide needs a completely redesigned architecture picture separating ingress, services, workloads, and durable state. Make it editable and preserve the Agentweaver look.",
+      "expected_output": "A grounded A5 draw.io pitch using native Azure, Kubernetes, networking, database, and cloud symbols where semantically correct, with Agentweaver styling and credits.",
+      "files": [],
+      "expectations": [
+        "Native Azure and Kubernetes symbols are preferred over custom approximations.",
+        "Agentweaver card hierarchy, palette, group surfaces, and connector conventions remain intact.",
+        "Every component and connector is backed by repository evidence.",
+        "The editable source, PNG, and pitch record are separate artifacts."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Turn this service inventory into a generic Mermaid flowchart for a scratchpad. It is not for Agentweaver documentation.",
+      "expected_output": "The docs-diagram-pitch skill should not trigger because the request is neither Agentweaver documentation nor draw.io authoring.",
+      "files": [],
+      "expectations": [
+        "The skill description excludes generic Mermaid scratchpad work."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Fix the typo and one reversed arrow in the existing docs/diagrams/src/control-plane.drawio.",
+      "expected_output": "The pitch skill should defer to docs-diagram-iterate because this is a correction to an existing draw.io diagram.",
+      "files": [],
+      "expectations": [
+        "The skill description differentiates new/redesigned diagrams from existing-diagram corrections."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Inventory all documentation diagrams, classify each as retain, reuse, merge, remove, or redesign, then prepare independent batches for guide and deep-dive agents without migrating anything yet.",
+      "expected_output": "A validated inventory with stable names/output paths, explicit dispositions and targets, and non-overlapping owner-area selections.",
+      "files": [],
+      "expectations": [
+        "The workflow discovers diagrams and documentation references without changing them.",
+        "Every diagram has one disposition and one owner area.",
+        "Reuse and merge decisions identify a target diagram.",
+        "Selections can be filtered by exact name and owner area.",
+        "Parallel batches cannot assign the same diagram to multiple writers."
+      ]
+    }
+  ]
+}

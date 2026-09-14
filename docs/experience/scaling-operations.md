@@ -1,28 +1,26 @@
 # Scaling Operations — Experience
 
-This page is for the **operator** — the person who runs Agentweaver in a cluster and has to keep agents moving as load grows. Scaling is mostly invisible to end users: a developer submitting a run or watching it stream sees the same product before, during, and after a cutover. To the operator, though, scaling is very visible — more pods, two roles instead of one, a managed database instead of a file, and runs that survive a pod restart on their own. This page gives you the mental model and tells you what to expect in practice.
+This page is for the **operator** keeping Agentweaver moving as cluster load grows. The run and review
+contracts remain familiar, but replica restarts can interrupt connections and remote turns. The current
+checked-in deployment separates web and worker roles over Postgres; recovery uses leases and durable
+checkpoints, not a guarantee that every interrupted action is replayed invisibly.
 
 For the reasoning behind these mechanics see the [distributed execution & scaling deep dive](../deep-dive/distributed-execution-scaling.md); for the exhaustive schema, topology, and config details see the [scaling data layer reference](../reference/scaling-data-layer.md). Related operator context: [Operations experience](./operations.md), [Configuration](../guide/configuration.md), and the [AKS deployment guide](../guide/deployment-aks.md).
 
 ## The mental model
 
-Before scaling, Agentweaver is one pod that does three jobs at once: it serves the API and the live event stream, it runs every run's orchestration, and it writes everything to a single SQLite file on a disk only it can hold. That single-writer file is the reason the deployment is pinned to one replica — you cannot simply add pods, because two of them cannot safely write the same file.
+The historical single-pod design combined API serving, orchestration, and a local SQLite database.
+That is context for the split, not the current Kubernetes deployment.
 
-Scaling unwinds that pod into independent, repeatable pieces:
+The current operator model separates:
 
 1. **A managed database** (Azure Database for PostgreSQL Flexible Server) replaces the SQLite file, so more than one process can write at once.
 2. **Two pod roles** replace the one combined pod: a **web** tier that talks to clients, and a **worker** tier that owns the actual runs.
 3. **A lease** lets many worker pods share the pool of runs without ever stepping on each other.
-4. **Event fan-out** keeps a run watchable from any web pod, even when a different worker pod is executing it.
+4. **Durable event polling** keeps a run watchable from any web pod, even when a different worker pod
+   is executing it.
 
 The operator's job after scaling is mostly about the second and third points: making sure enough web pods exist for request load, enough worker pods exist for run backlog, and that runs are being leased and renewed cleanly.
-
-![The mental model: Developer, Web pods (many), Worker pods (many), Managed Postgres, Per-run sandbox pods](../diagrams/experience-scaling-operations-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ## What scaling looks like in practice
 
@@ -30,10 +28,17 @@ The operator's job after scaling is mostly about the second and third points: ma
 
 Instead of one Deployment you operate two, both built from the **same image** and told apart by a role flag:
 
-- **Web pods** are stateless. They serve the REST API, authentication, and the live event stream. You scale them on request and connection load — more concurrent users or open streams means more web pods. Because they hold no run state, you can add or remove them freely; nothing is lost when one restarts.
-- **Worker pods** own runs. A worker claims a run, drives its orchestration, dispatches the per-run sandbox pods that do the heavy execution, and writes the durable checkpoints and events. You scale them on **run backlog depth**, not CPU — the meaningful question is "how many runs are queued and unclaimed?", not "how busy is the processor?".
+- **Web pods** serve REST, authentication, and live event streams without owning durable run execution.
+  The manifest starts with two replicas. Restarts can disconnect clients; persisted events support
+  reconnect and catch-up.
+- **Worker pods** claim runs, drive orchestration, dispatch sandbox leaf execution, and write durable
+  checkpoints/events. The active HPA has **minimum 2, maximum 3**, with **CPU 70%** and **memory 80%**
+  utilization targets. Backlog pressure is useful operational context, not the active HPA input.
 
-Autoscaling reflects this split: web scales on request load (a standard horizontal autoscaler), and worker scales on queued-run depth (preferably a KEDA scaler reading the backlog from Postgres, with scale-to-min so there is always at least one worker leasing and draining — never scale workers to zero).
+`k8s/base/worker-hpa.yaml` contains a **commented future KEDA alternative** and a **commented web HPA
+example**; neither is deployed by that file. The exported `agentweaver_run_queued` gauge counts eligible
+Ready backlog tasks in active projects awaiting pickup. It is not the count of all leased or running
+runs. Keep workers available; scaling them to zero does not make web-role pods take over execution.
 
 ### A managed database instead of a file
 
@@ -46,67 +51,79 @@ The database connection is passwordless: pods authenticate using the cluster's w
 
 ## What stays consistent for end users
 
-This is the reassuring part. **Across and after the cutover, the product an end user sees does not change.** The run and review model is the same, the REST and event-stream contracts are the same, and a developer who submits a run or watches it stream cannot tell whether they are hitting a single combined pod or a fleet of web and worker pods.
+The run/review model and REST/event-stream contracts do not change with replica count. This is contract
+continuity, not a promise that users cannot notice reconnections, delayed scheduling, or failed turns.
 
-![Overview page showing fleet-wide active projects and runs unchanged across pods](/screenshots/overview-active-projects.png)
+The current Overview uses Recent projects, AI usage & performance, Activity feed, and Needs attention.
+Those projections help users find work; they do not demonstrate lease or fencing guarantees.
 
-> 📸 **Screenshot — `overview-active-projects.png`**
-> *Shows:* the **Overview** page "Fleet activity at a glance." with the **Active workflow runs** and **Active projects** sections populated; the same view regardless of whether one combined pod or a web/worker fleet is serving it.
-> *Path:* sign in → **Overview** in the left rail → `/overview`.
-
-The one thing the system has to work to preserve is **live watching across pods**. A run executes on one worker pod, but a developer's browser may be connected to any web pod. The event stream makes this seamless: every event is durably written to the database before it is acknowledged, and each web pod is notified so it can relay events for runs it is not itself executing, with a steady catch-up read as a backstop. The net effect for the user is an unbroken live stream regardless of which pods are involved. As an operator you generally do not touch this — but it is why a run started before a web pod restarts is still fully watchable afterward.
+**Live watching crosses replicas.** A run executes on a worker while the browser may connect to another
+web replica. `EfRunEventStream` appends durably and subscribers poll the shared event table from their
+cursor (a 250 ms polling interval). This is not a deployed LISTEN/NOTIFY relay. Connection loss can delay
+delivery; reconnect/catch-up is distinct from replaying an interrupted model turn.
 
 ## How runs survive replica restarts
 
 This is the behavior that most changes the operator's day, and it is worth understanding well.
 
-Every run is **leased** to exactly one worker. Leasing is what lets many workers share runs safely, and it is also what makes runs self-healing across restarts. A lease has three operative facts: who owns the run, when the lease expires, and a steadily refreshed heartbeat while the owner is alive and working.
+An active workflow watcher claims a **lease** before processing its stream. Leasing lets workers
+coordinate ownership; restart recovery separately decides what can resume. A lease records its owner,
+expiry, fencing token, and heartbeat.
 
-Claiming is atomic. When a worker takes a run it does so with a single guarded database update that succeeds **only if** the run is currently free or its lease has expired. Exactly one worker can win; every other worker trying for the same run simply sees that it lost and moves on. That guarantee — one winner, always — is what prevents the same run from being picked up or dispatched twice.
+Claiming is atomic. A guarded database update succeeds only if a run is free or its lease has expired.
+Competing claims have one winner; each successful acquisition advances the fencing token. This protects
+ownership, not arbitrary external side effects from an interrupted turn.
 
 Now the restart story:
 
 - A worker pod is restarted, drained, or crashes.
 - It stops renewing the heartbeats on the runs it held, so those leases lapse.
-- Any other worker, on its normal claim cycle, finds those now-expired runs and re-claims them with the same atomic guarded update.
-- The run continues from its last durable checkpoint on the new owner. No operator action is required.
+- A subsequent eligible watcher can claim a free or expired lease with the guarded update.
+- Recovery depends on the run state: AwaitingReview can resume from a usable checkpoint; interrupted
+  coordinator parents recover through their persisted work plan. Stranded in-progress child turns
+  become retryable `a2a_transport_interrupted` failures for coordinator redispatch, while stranded root
+  turns fail as `stranded_in_progress`. Lease expiry alone does not replay a model turn.
 
-A graceful shutdown is even cleaner: on a stop signal a worker stops claiming new runs, releases (or lets expire) the leases it holds, and finishes or checkpoints whatever is in flight before exiting — which is why worker disruption budgets favor draining one pod at a time.
+A graceful shutdown stops new claims and attempts to release owned leases. The worker disruption
+budget keeps at least one worker available; it is not a guarantee that every in-flight turn finishes
+before termination.
 
-![How runs survive replica restarts: Worker A (owns run), Postgres (lease), Worker B](../diagrams/experience-scaling-operations-fig3.png)
-
-<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-A subtle but important guarantee sits underneath this: a former owner that was paused or stuck cannot wake up later and corrupt a run that has since been re-leased. Each acquisition carries a token that only moves forward, and a stale token's writes are rejected — so the new owner is always the only one whose work counts.
+Renewal and release match both owner and fencing token. Terminal handlers check current lease ownership
+before updating run state, rejecting a stale owner's terminal outcome. Do not broaden those guards
+into a claim that every filesystem, tool, or external side effect is fenced.
 
 ## The operator's mental checklist
 
 When you operate a scaled Agentweaver, these are the things worth watching:
 
-![Diagnostics Global tab with fleet health metrics](/screenshots/diagnostics-global-health.png)
+Open project **Diagnostics → Global** for health checks and counts, then **Cluster** for claims and
+resource readiness. Interpret process uptime separately from fleet-wide persisted run counts.
 
-> 📸 **Screenshot — `diagnostics-global-health.png`**
-> *Shows:* the **Diagnostics** page on the **Global** tab with the fleet metrics **API version**, **Uptime**, **Total projects**, **Total runs**, and **Active runs**, plus the check cards with `pass` / `warn` / `fail` badges — the operator's quick confirmation that a scaled deployment is healthy.
-> *Path:* open any project → **Diagnostics** in the left rail → select the **Global** tab → `/projects/:projectId/diagnostics`.
-
-1. **Web replica count vs request load.** Too few web pods shows up as slow API responses or refused connections, not as failed runs. Scale web on request/connection pressure.
-2. **Worker replica count vs backlog.** The signal is queued, unleased run depth. A growing backlog with workers at their floor means scale up; an empty backlog means workers can scale toward their minimum (but not to zero).
+1. **Web replicas vs request load.** Inspect request/connection pressure before changing the two-replica
+   baseline; do not assume a web HPA is installed.
+2. **Worker HPA and backlog.** Check CPU/memory targets and the 2–3 replica bounds alongside eligible
+   Ready backlog depth. A growing backlog can also indicate unavailable projects or scheduling delays.
 3. **Leases are being renewed.** Healthy workers refresh heartbeats; runs whose leases keep expiring and getting re-claimed point at workers that are crashing, starved, or being killed too aggressively.
-4. **Database health.** The managed Postgres is now the system's shared source of truth — its availability, connection headroom, and the pooling mode matter. (One specific gotcha: live cross-pod event delivery needs session-mode database connections; the wrong pooling mode degrades streaming to "merely slow," not "broken," so it is easy to miss.)
+4. **Database health.** Postgres is the shared source of truth. Watch availability, connection headroom,
+   and event-read latency. The current cursor-polling relay does not depend on session-bound
+   LISTEN/NOTIFY connections.
 5. **Roll one worker at a time.** Worker disruption budgets and graceful drain are tuned so leases hand off cleanly; respect them during upgrades so in-flight runs checkpoint and migrate rather than restart.
 
-## The rollout, from an operator's seat
+## Historical rollout and rollback boundaries
 
-You will not flip everything at once. The change arrives in phases, each reversible by a flag that defaults to today's behavior, so you can advance and roll back deliberately:
+The P1/P2/P3 plan explains how the architecture developed; it is not a pending rollout or a rollback runbook:
 
-- **P1** moves the heavy per-run execution into sandbox pods. It runs on the existing single pod and SQLite, and its whole purpose is to stop the out-of-memory crashes. Rollback is the `Sandbox:AgentExecutionMode` flag back to in-process.
-- **P2** cuts the data layer over to Postgres. Once reads and writes are verified you drop the single-writer disk, switch to a rolling update, and allow more than one replica. Rollback is the `Database:Provider` flag back to SQLite (take a backup first — this step is data-loss-aware).
-- **P3** splits the tier into web and worker roles and turns on leasing and autoscaling. Rollback is scaling workers to zero and letting web fall back to the in-process path behind the role flag.
+- **P1 — remote leaf execution:** moves heavyweight sessions into sandbox pods. `in-api` selects local
+  execution when deployed, but does not migrate active remote turns.
+- **P2 — shared Postgres:** removes the single-writer deployment constraint. Switching
+  `Database:Provider` does not copy or reconcile data; rollback requires an explicit data restoration or
+  migration plan plus compatible storage and replica settings.
+- **P3 — web/worker roles and leases:** separates serving from execution. Web-role pods do not
+  automatically become workers when worker replicas reach zero; a role/topology rollback must keep
+  an execution owner available.
 
-Every step lands as reviewed manifests applied through the normal deploy pipeline — never an ad-hoc live patch — and each is independently revertible. From the end user's side, none of these phases changes the product; from yours, each one adds a lever and removes a ceiling.
+Apply reviewed configuration and manifests through the normal deployment process. Validate ownership,
+checkpoint recovery, storage compatibility, and capacity before calling any rollback safe.
 
 ## Related reading
 
@@ -115,3 +132,109 @@ Every step lands as reviewed manifests applied through the normal deploy pipelin
 - [Operations experience](./operations.md) — day-to-day operational surfaces.
 - [Configuration](../guide/configuration.md) and the [AKS deployment guide](../guide/deployment-aks.md) — the knobs and the cluster.
 - [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) and [agent communication](../deep-dive/agent-communication.md) — where runs actually execute.
+
+<details id="diagram-context-experience-scaling-operations-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Scale roles, keep state shared</td></tr>
+<tr><td>takeaway</td><td>Web serves requests; workers execute; Postgres coordinates durable state; pods run leaves.</td></tr>
+<tr><td>group-title-0</td><td>CONTROL-PLANE ROLES</td></tr>
+<tr><td>group-title-1</td><td>SHARED STATE AND LEAF COMPUTE</td></tr>
+<tr><td>Browser</td><td>Browser</td></tr>
+<tr><td>Browser</td><td>REST and watch client</td></tr>
+<tr><td>Browser</td><td>request / SSE response</td></tr>
+<tr><td>Browser</td><td>Connects to web replicas; not a worker-local queue.</td></tr>
+<tr><td>Web tier</td><td>Web tier</td></tr>
+<tr><td>Web tier</td><td>Requests and event reads</td></tr>
+<tr><td>Web tier</td><td>base: 2 replicas</td></tr>
+<tr><td>Web tier</td><td>Uses shared durable state; reads event cursors.</td></tr>
+<tr><td>Worker tier</td><td>Worker tier</td></tr>
+<tr><td>Worker tier</td><td>Execution and ownership</td></tr>
+<tr><td>Worker tier</td><td>HPA: 2-3 replicas</td></tr>
+<tr><td>Worker tier</td><td>CPU 70% / memory 80%; leases and workflow state.</td></tr>
+<tr><td>Current boundary</td><td>Current boundary</td></tr>
+<tr><td>Current boundary</td><td>Configuration, not a probe</td></tr>
+<tr><td>Current boundary</td><td>KEDA / web HPA: examples</td></tr>
+<tr><td>Current boundary</td><td>Checked-in scaling settings are not live cluster evidence.</td></tr>
+<tr><td>Postgres</td><td>Postgres</td></tr>
+<tr><td>Postgres</td><td>Shared durable state</td></tr>
+<tr><td>Postgres</td><td>events / leases / checkpoints</td></tr>
+<tr><td>Postgres</td><td>Event relay polls the table; not LISTEN/NOTIFY.</td></tr>
+<tr><td>Sandbox pods</td><td>Sandbox pods</td></tr>
+<tr><td>Sandbox pods</td><td>Remote AgentHost leaves</td></tr>
+<tr><td>Sandbox pods</td><td>run context + A2A</td></tr>
+<tr><td>Sandbox pods</td><td>Return events to the worker; no direct pod DB access.</td></tr>
+<tr><td>e0</td><td>requests</td></tr>
+<tr><td>e1</td><td>state / events</td></tr>
+<tr><td>e2</td><td>persist</td></tr>
+<tr><td>e3</td><td>execute</td></tr>
+<tr><td>e4</td><td>results</td></tr>
+<tr><td>note</td><td>Worker HPA is active; KEDA and web HPA blocks are commented proposals. Kubernetes owns scheduling.</td></tr>
+<tr><td>n0</td><td>Connects to web replicas;
+not a worker-local queue.</td></tr>
+<tr><td>n1</td><td>Uses shared durable state;
+reads event cursors.</td></tr>
+<tr><td>n2</td><td>CPU 70% / memory 80%;
+leases and workflow state.</td></tr>
+<tr><td>n3</td><td>Checked-in scaling settings
+are not live cluster evidence.</td></tr>
+<tr><td>n4</td><td>Event relay polls the table;
+not LISTEN/NOTIFY.</td></tr>
+<tr><td>n5</td><td>Return events to the worker;
+no direct pod DB access.</td></tr>
+<tr><td>groups</td><td>CONTROL-PLANE ROLES; SHARED STATE AND LEAF COMPUTE</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-experience-scaling-operations-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Lease transfer is not turn replay</td></tr>
+<tr><td>takeaway</td><td>An expired owner can be replaced; continuation depends on the persisted run state.</td></tr>
+<tr><td>group-title-0</td><td>LEASE OWNERSHIP</td></tr>
+<tr><td>group-title-1</td><td>STATE-DEPENDENT RECOVERY</td></tr>
+<tr><td>Worker A</td><td>Worker A</td></tr>
+<tr><td>Worker A</td><td>Guarded lease claim</td></tr>
+<tr><td>Worker A</td><td>owner A + token n</td></tr>
+<tr><td>Worker A</td><td>Renewals must match both owner and fencing token.</td></tr>
+<tr><td>Lease expires</td><td>Lease expires</td></tr>
+<tr><td>Lease expires</td><td>Renewals cease</td></tr>
+<tr><td>Lease expires</td><td>free / expired eligibility</td></tr>
+<tr><td>Lease expires</td><td>Failure is not a message; expiry permits a later claim.</td></tr>
+<tr><td>Worker B</td><td>Worker B</td></tr>
+<tr><td>Worker B</td><td>Win eligible next claim</td></tr>
+<tr><td>Worker B</td><td>owner B + token n+1</td></tr>
+<tr><td>Worker B</td><td>Old-token terminal ownership checks reject stale results.</td></tr>
+<tr><td>Visible failure</td><td>Visible failure</td></tr>
+<tr><td>Visible failure</td><td>Stranded child / root</td></tr>
+<tr><td>Visible failure</td><td>retryable child vs root</td></tr>
+<tr><td>Visible failure</td><td>Child may be redispatched; no automatic mid-turn replay.</td></tr>
+<tr><td>Inspect run state</td><td>Inspect run state</td></tr>
+<tr><td>Inspect run state</td><td>Checkpoint or work plan</td></tr>
+<tr><td>Inspect run state</td><td>recovery prerequisites</td></tr>
+<tr><td>Inspect run state</td><td>AwaitingReview, coordinator, and stranded turns differ.</td></tr>
+<tr><td>Durable recovery</td><td>Durable recovery</td></tr>
+<tr><td>Durable recovery</td><td>Eligible saved state</td></tr>
+<tr><td>Durable recovery</td><td>checkpoint / coordinator plan</td></tr>
+<tr><td>Durable recovery</td><td>Recover only supported state; missing checkpoints surface.</td></tr>
+<tr><td>e0</td><td>renewals stop</td></tr>
+<tr><td>e1</td><td>next claim</td></tr>
+<tr><td>e2</td><td>inspect</td></tr>
+<tr><td>e3</td><td>stranded turn</td></tr>
+<tr><td>e4</td><td>recoverable</td></tr>
+<tr><td>note</td><td>Fencing protects guarded ownership operations, not every external tool side effect.</td></tr>
+<tr><td>n0</td><td>Renewals must match both
+owner and fencing token.</td></tr>
+<tr><td>n1</td><td>Failure is not a message;
+expiry permits a later claim.</td></tr>
+<tr><td>n2</td><td>Old-token terminal ownership
+checks reject stale results.</td></tr>
+<tr><td>n3</td><td>Child may be redispatched;
+no automatic mid-turn replay.</td></tr>
+<tr><td>n4</td><td>AwaitingReview, coordinator,
+and stranded turns differ.</td></tr>
+<tr><td>n5</td><td>Recover only supported state;
+missing checkpoints surface.</td></tr>
+<tr><td>groups</td><td>LEASE OWNERSHIP; STATE-DEPENDENT RECOVERY</td></tr>
+</tbody></table>
+</details>

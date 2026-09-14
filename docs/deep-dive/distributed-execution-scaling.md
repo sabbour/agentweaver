@@ -30,13 +30,6 @@ Separately, each run's tool, shell, and model execution wants its own isolation 
 
 The key insight is that **memory relief and isolation are the same move**. Relocating the heavy execution — the model SDK session, the in-pod runner, and tool/shell/file execution — into a per-run [sandbox pod](./sandbox-pod-execution.md) simultaneously evicts the dominant per-run footprint from the API process *and* gives each run its own isolated boundary. After the move, the API tier becomes a thin orchestrator: HTTP, event relay, and database. This is the foundation everything else builds on.
 
-![Isolation: the security boundary: HTTP + SSE, Orchestration graph, Model SDK session + tool exec, SQLite — single writer, HTTP + SSE, Orchestration graph, Sandbox pod, Postgres — multi-writer](../diagrams/distributed-execution-scaling-fig1.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## The phased rollout
 
 The current design combines pod-based agent execution, provider-aware persistence, and a web/worker split. `Sandbox:AgentExecutionMode`, `Database:Provider`, and `App:Role` select the runtime topology.
@@ -57,24 +50,17 @@ P2 is mostly invisible to end users — the run/review model and the public API 
 
 ### P3 — web/worker split + durable run leasing
 
-P3 splits the now-stateless tier by role and adds the coordination primitive that lets many copies of the worker role run at once. The split is real today: `AppRole` reads `App:Role` (env `App__Role`, values `web`/`worker`), and `Program.cs` branches on `isWorker` to wire each tier's concerns. This is where horizontal scale actually arrives, and it is the heart of the topology.
+P3 separates public surfaces and orchestration deployment responsibilities and adds durable coordination. `AppRole` reads `App:Role` (env `App__Role`, values `web`/`worker`), but role selection alone is not a prohibition on background orchestration: `CoordinatorHeartbeatService` is registered independently and its pickup loop uses `Coordinator:HeartbeatEnabled`. Workers still hold graphs in memory.
 
 ## The web/worker deployment split
 
 Once SQLite is gone, the orchestrator's two jobs have very different scaling shapes, and they are separated into two deployments built from the **same image**, differentiated only by the `App:Role` flag (`web` vs `worker`).
 
-- **Web tier** — serves the REST API, authentication, and the live event (SSE) relay to clients. It is stateless: it holds no run's orchestration graph in memory. It scales with *request and connection load* and can grow freely to N replicas.
+- **Web tier** — serves REST, authentication and SSE. This is the public deployment responsibility, not a claim that `App:Role=web` disables every background service.
 
-- **Worker tier** — owns the orchestration loop. A worker claims a run, runs its orchestration graph in-process, drives the agent turns over the bridge to sandbox pods, and performs the durable checkpoint and run-event writes. It scales with *run backlog depth*, not raw CPU, because claim-then-dispatch work is I/O-bound.
+- **Worker tier** — claims runs, holds orchestration graphs, drives remote leaf turns, and writes checkpoints/events. The shipped HPA uses **CPU 70% and memory 80%, with 2-3 replicas**. Backlog-driven KEDA is a proposed alternative, not the active scaling mechanism; its global queued-run gauge would use `max`, not a sum across replicas.
 
-The division of labor is the important idea: **web pods touch clients but never own runs; worker pods own runs but are not on the request hot path.** A client can connect to any web pod and still observe a run that a completely different worker pod is executing — which is exactly what the event fan-out (below) has to make true.
-
-![The web/worker deployment split: Clients, Web pod A, Web pod B, Worker pod A, Worker pod B, Warm AgentHost + CopilotAIAgent, Warm AgentHost + CopilotAIAgent, Azure PostgreSQL](../diagrams/distributed-execution-scaling-fig3.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The intended division is public request handling versus orchestration ownership. Background pickup is independently enabled, so do not interpret this as a hard role-isolation guarantee. A client can observe events through a different web replica using the shared durable stream.
 
 ## Durable run leasing
 
@@ -87,14 +73,7 @@ Leasing rests on a small set of per-row ideas:
 - **Ownership** — which worker currently holds the run (its identity, e.g. a pod name), or nothing if the run is free.
 - **Expiry** — a lease deadline. An expired lease is reclaimable by *any* worker even if an owner is still nominally stamped. This is what makes crash recovery automatic: a worker that dies stops renewing, its lease lapses, and another worker re-claims the run.
 - **Heartbeat** — a liveness stamp the owner refreshes while it works, so stalls are visible across the fleet rather than only inside one process.
-- **A fencing token** — a number that increments on every successful acquisition. A worker must present its token when it writes; a stale (smaller) token is rejected. This stops a paused or zombie former owner from waking up and clobbering a run that has since been re-leased to someone else.
-
-![Durable run leasing: Worker A, Worker B, Postgres (run row)](../diagrams/distributed-execution-scaling-fig5.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+- **A fencing token** — increments on successful acquisition. Renew/release require the matching owner/token, and terminal paths check active ownership. This is not a guarantee that every write is atomically fenced or execution is exactly once. Failed renewal logs a warning; it does not itself immediately cancel all work.
 
 The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
 
@@ -108,14 +87,16 @@ The live event stream is what makes a run watchable in real time. In a single pr
 
 ### Current mechanism: durable write-through + cursor polling
 
-`EfRunEventStream` is registered as the Postgres `IRunEventStream` implementation (`Program.cs:534`). Its append path writes through to `RunEvents` before acknowledging, using a serializable transaction and retrying sequence conflicts. Its subscribe path repeatedly loads rows with `Sequence > lastSeen`, yields them in order, and sleeps for `250 ms` only when no new row was emitted. That gives every replica the same live floor: it can stream any run as long as it can read the shared database. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:97`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:114`.
-
-![Sequence showing a worker mirroring a run event into the shared RunEvents table, one web replica streaming it live, and another replica resuming after the browser reconnects with a cursor](../diagrams/distributed-execution-scaling-fig4.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram).
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+`EfRunEventStream` writes through before acknowledging. PostgreSQL uses a
+**ReadCommitted transaction plus a per-run advisory transaction lock**, then
+allocates `MAX+1` for an automatic sequence, inserts and commits. `RecordNext`
+requests allocation with sequence zero and only then updates local history and
+signals local waiters. Explicit historical sequence values are idempotent for
+identical content and reject conflicting content; not every append mode promises
+gaplessness. Subscribers read `Sequence > lastSeen` in order and wait 250 ms only
+when empty. There is no PostgreSQL `NOTIFY` or cross-replica notification bus.
+Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:224-288`,
+`:409-419`, `apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs:183-234`.
 
 The process-local `RunStreamStore` still matters for same-replica compatibility and low-latency waiters, but it is no longer a horizontal-scale boundary. If a web replica does not have a local stream entry, `/api/runs/{id}/stream` falls back to `IRunEventStream.SubscribeAsync` with the `Last-Event-ID` cursor and writes the replayed rows as SSE frames. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:416`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:431`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:443`.
 
@@ -129,7 +110,7 @@ Multi-replica streaming also made browser refreshes more common while coordinato
 
 The three concerns are not independent features bolted together — each one unblocks the next:
 
-- Moving execution into pods (P1) is what makes the orchestrator *thin enough* to be stateless.
+- Moving execution into pods (P1) removes heavy leaf state; the orchestration graph remains in the hosting process.
 - A multi-writer database (P2) is what makes "more than one orchestrator" legal at all.
 - Leasing is what makes "more than one orchestrator" *safe*, and the lease's owner identity is what affinity and the brokered checkpoint store key off of.
 - Event fan-out is what keeps the user experience identical once a run and its watcher can land on different pods.
@@ -143,4 +124,150 @@ Take any one away and the rest cannot stand: leasing without a multi-writer stor
 - [Sandbox pod execution](./sandbox-pod-execution.md) — where the heavy agent execution actually runs.
 - [Agent communication](./agent-communication.md) and the [A2A bridge](./a2a-bridge.md) — how the worker drives an agent turn inside a pod.
 - [Data & persistence](./data-persistence.md) — the durable domain model the migration carries forward.
-- [Infrastructure & deployment](./infra-deployment.md) and [AKS architecture](../architecture-aks.md) — the cluster this runs on.
+- [Infrastructure & deployment](./infra-deployment.md) and [AKS architecture](../guide/architecture-aks.md) — the cluster this runs on.
+
+<details id="diagram-context-canonical-sandbox-pod-evolution" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Move heavy leaf state, keep orchestration</td></tr>
+<tr><td>takeaway</td><td>Remoting compute and migrating the database are independent changes.</td></tr>
+<tr><td>Before: worker graph</td><td>Before: worker graph</td></tr>
+<tr><td>Before: worker graph</td><td>Workflow and gates</td></tr>
+<tr><td>Before: worker graph</td><td>Same host as live leaf state</td></tr>
+<tr><td>Before: live SDK</td><td>Before: live SDK</td></tr>
+<tr><td>Before: live SDK</td><td>Provider session in worker</td></tr>
+<tr><td>Before: live SDK</td><td>Heavy per-run footprint</td></tr>
+<tr><td>Command sandbox</td><td>Command sandbox</td></tr>
+<tr><td>Command sandbox</td><td>Individual shell commands</td></tr>
+<tr><td>Command sandbox</td><td>Separate executor seam</td></tr>
+<tr><td>Now: worker graph</td><td>Now: worker graph</td></tr>
+<tr><td>Now: worker graph</td><td>Workflow and checkpoints</td></tr>
+<tr><td>Now: worker graph</td><td>Keeps orchestration ownership</td></tr>
+<tr><td>Remote leaf proxy</td><td>Remote leaf proxy</td></tr>
+<tr><td>Remote leaf proxy</td><td>Claim/configure then A2A</td></tr>
+<tr><td>Remote leaf proxy</td><td>No database migration implied</td></tr>
+<tr><td>Per-run AgentHost</td><td>Per-run AgentHost</td></tr>
+<tr><td>Per-run AgentHost</td><td>Live SDK + controlled tools</td></tr>
+<tr><td>Per-run AgentHost</td><td>Kata pod with executor sidecar</td></tr>
+<tr><td>arrow-1</td><td>invoke</td></tr>
+<tr><td>arrow-2</td><td>command</td></tr>
+<tr><td>arrow-4</td><td>A2A</td></tr>
+<tr><td>note-0</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.</td></tr>
+<tr><td>note-1</td><td>P1 can retain one SQLite writer; multiple writers require suitable shared storage.</td></tr>
+<tr><td>note-2</td><td>Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
+<tr><td>notes</td><td>Top: earlier host-local leaf. Bottom: pod-per-run execution.; P1 can retain one SQLite writer; multiple writers require suitable shared storage.; Graph-level gates stay host-side; pod-local tool approval has a return path.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-distributed-execution-scaling-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Logical roles and the shipped autoscaler</td></tr>
+<tr><td>takeaway</td><td>Separate public traffic and orchestration responsibility without claiming hard role isolation.</td></tr>
+<tr><td>Clients</td><td>Clients</td></tr>
+<tr><td>Clients</td><td>HTTP and SSE</td></tr>
+<tr><td>Clients</td><td>Reconnect with event cursor</td></tr>
+<tr><td>Web/API deployment</td><td>Web/API deployment</td></tr>
+<tr><td>Web/API deployment</td><td>Public REST/auth/event surface</td></tr>
+<tr><td>Web/API deployment</td><td>Background pickup independent</td></tr>
+<tr><td>PostgreSQL</td><td>PostgreSQL</td></tr>
+<tr><td>PostgreSQL</td><td>Shared state and event cursors</td></tr>
+<tr><td>PostgreSQL</td><td>Both roles can write</td></tr>
+<tr><td>Worker HPA</td><td>Worker HPA</td></tr>
+<tr><td>Worker HPA</td><td>CPU 70% + memory 80%</td></tr>
+<tr><td>Worker HPA</td><td>Shipped range: 2-3 replicas</td></tr>
+<tr><td>Worker deployment</td><td>Worker deployment</td></tr>
+<tr><td>Worker deployment</td><td>Owns in-process graphs</td></tr>
+<tr><td>Worker deployment</td><td>Run leases / checkpoints / events</td></tr>
+<tr><td>AgentHost pods</td><td>AgentHost pods</td></tr>
+<tr><td>AgentHost pods</td><td>Heavy per-run leaf execution</td></tr>
+<tr><td>AgentHost pods</td><td>A2A output returns to host</td></tr>
+<tr><td>arrow-1</td><td>HTTP</td></tr>
+<tr><td>arrow-2</td><td>state</td></tr>
+<tr><td>arrow-3</td><td>persist</td></tr>
+<tr><td>arrow-4</td><td>scale</td></tr>
+<tr><td>arrow-5</td><td>A2A</td></tr>
+<tr><td>note-0</td><td>App:Role does not alone disable CoordinatorHeartbeatService pickup.</td></tr>
+<tr><td>note-1</td><td>Backlog-driven KEDA is a proposed alternative, not the active HPA.</td></tr>
+<tr><td>note-2</td><td>SQL run leases and Kubernetes SandboxClaims are different mechanisms.</td></tr>
+<tr><td>notes</td><td>App:Role does not alone disable CoordinatorHeartbeatService pickup.; Backlog-driven KEDA is a proposed alternative, not the active HPA.; SQL run leases and Kubernetes SandboxClaims are different mechanisms.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-distributed-execution-scaling-fig4" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Durable allocation, then cursor replay</td></tr>
+<tr><td>takeaway</td><td>Cross-replica delivery polls shared rows; local notifications are not a distributed bus.</td></tr>
+<tr><td>RecordNext</td><td>RecordNext</td></tr>
+<tr><td>RecordNext</td><td>Request sequence allocation</td></tr>
+<tr><td>RecordNext</td><td>Append with Sequence = 0</td></tr>
+<tr><td>EF append</td><td>EF append</td></tr>
+<tr><td>EF append</td><td>ReadCommitted + advisory lock</td></tr>
+<tr><td>EF append</td><td>Serialize allocation per run</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>MAX+1 / insert / commit</td></tr>
+<tr><td>RunEvents</td><td>Return assigned sequence</td></tr>
+<tr><td>Local history</td><td>Local history</td></tr>
+<tr><td>Local history</td><td>Updated after durable ack</td></tr>
+<tr><td>Local history</td><td>Notify only local waiters</td></tr>
+<tr><td>Web replica A</td><td>Web replica A</td></tr>
+<tr><td>Web replica A</td><td>Read Sequence &gt; lastSeen</td></tr>
+<tr><td>Web replica A</td><td>250 ms delay only when empty</td></tr>
+<tr><td>Browser watcher</td><td>Browser watcher</td></tr>
+<tr><td>Browser watcher</td><td>SSE sequence IDs</td></tr>
+<tr><td>Browser watcher</td><td>Remember last event cursor</td></tr>
+<tr><td>Reconnect cursor</td><td>Reconnect cursor</td></tr>
+<tr><td>Reconnect cursor</td><td>Last-Event-ID</td></tr>
+<tr><td>Reconnect cursor</td><td>Not tied to original web pod</td></tr>
+<tr><td>Web replica B</td><td>Web replica B</td></tr>
+<tr><td>Web replica B</td><td>Ordered replay and live tail</td></tr>
+<tr><td>Web replica B</td><td>Read same shared RunEvents</td></tr>
+<tr><td>Resumed watcher</td><td>Resumed watcher</td></tr>
+<tr><td>Resumed watcher</td><td>Receive rows after cursor</td></tr>
+<tr><td>Resumed watcher</td><td>No PostgreSQL NOTIFY required</td></tr>
+<tr><td>arrow-1</td><td>append</td></tr>
+<tr><td>arrow-2</td><td>commit</td></tr>
+<tr><td>arrow-3</td><td>ack</td></tr>
+<tr><td>arrow-4</td><td>poll</td></tr>
+<tr><td>arrow-5</td><td>SSE</td></tr>
+<tr><td>arrow-6</td><td>resume</td></tr>
+<tr><td>note-0</td><td>Rows: write-through / live delivery / reconnect on another replica.</td></tr>
+<tr><td>note-1</td><td>Explicit historic sequence: identical content is idempotent; conflicts fail.</td></tr>
+<tr><td>note-2</td><td>SQL commits before local history update; polling reads the shared table.</td></tr>
+<tr><td>notes</td><td>Rows: write-through / live delivery / reconnect on another replica.; Explicit historic sequence: identical content is idempotent; conflicts fail.; SQL commits before local history update; polling reads the shared table.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-distributed-execution-scaling-fig5" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One lease winner, bounded ownership</td></tr>
+<tr><td>takeaway</td><td>Conditional acquisition and fencing guard lease operations and terminal ownership checks.</td></tr>
+<tr><td>Worker A claims</td><td>Worker A claims</td></tr>
+<tr><td>Worker A claims</td><td>Conditional update</td></tr>
+<tr><td>Worker A claims</td><td>Unowned or expired row only</td></tr>
+<tr><td>Run row</td><td>Run row</td></tr>
+<tr><td>Run row</td><td>Owner + expiry + heartbeat</td></tr>
+<tr><td>Run row</td><td>Increment fencing token / attempt</td></tr>
+<tr><td>Worker B contends</td><td>Worker B contends</td></tr>
+<tr><td>Worker B contends</td><td>Zero affected rows</td></tr>
+<tr><td>Worker B contends</td><td>No second winner for that claim</td></tr>
+<tr><td>A renews</td><td>A renews</td></tr>
+<tr><td>A renews</td><td>Match owner and token t</td></tr>
+<tr><td>A renews</td><td>5 min TTL / half-TTL renewal</td></tr>
+<tr><td>A stops renewing</td><td>A stops renewing</td></tr>
+<tr><td>A stops renewing</td><td>Crash or loss of ownership</td></tr>
+<tr><td>A stops renewing</td><td>Expired lease becomes claimable</td></tr>
+<tr><td>B takes over</td><td>B takes over</td></tr>
+<tr><td>B takes over</td><td>Successful conditional update</td></tr>
+<tr><td>B takes over</td><td>Token increases to t+1</td></tr>
+<tr><td>arrow-1</td><td>CAS</td></tr>
+<tr><td>arrow-3</td><td>expires</td></tr>
+<tr><td>arrow-4</td><td>claim</td></tr>
+<tr><td>note-0</td><td>Stale renew/release fail; terminal paths recheck active ownership.</td></tr>
+<tr><td>note-1</td><td>Failed renewal logs a warning; it does not itself cancel all execution.</td></tr>
+<tr><td>note-2</td><td>Do not infer exactly-once execution or fencing of every application write.</td></tr>
+<tr><td>notes</td><td>Stale renew/release fail; terminal paths recheck active ownership.; Failed renewal logs a warning; it does not itself cancel all execution.; Do not infer exactly-once execution or fencing of every application write.</td></tr>
+</tbody></table>
+</details>

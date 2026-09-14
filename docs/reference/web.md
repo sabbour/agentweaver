@@ -1,21 +1,17 @@
 # Web UI reference
 
+See [Coordinator entry, outcome gate, embedded child inspection and review](../diagrams/flagship/canonical-coordinator-journey.png) for the shared visual model.
+
 The Agentweaver web UI is a TypeScript React 19 SPA built with Vite. It uses React Router for routing, Fluent UI React Components (Fluent 2) for styling, and React Flow for workflow diagrams. It submits runs, streams live events, shows run details, and records your review decision before anything merges. The browser client keeps all run logic in the API layer.
 
 ## Configuration
 
-The web UI authenticates users through Microsoft Entra ID and sends the resulting session token automatically — no static API key is required in the browser. Copy `.env.example` to `.env` in `apps/web`, then set the Vite variables:
+`API_URL` is the API origin without `/api`. Runtime `window.__AGENTWEAVER_CONFIG__.API_URL` precedes `VITE_API_URL`; an explicit empty runtime value means same-origin. The client adds one `/api` to XHR paths, while auth redirects use origin-root `/auth/entra/*`.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `VITE_API_URL` | `http://localhost:5000` | API base URL. In container deployments this is injected at runtime as `/api` through `window.__AGENTWEAVER_CONFIG__`. |
-| `VITE_API_KEY` | empty | Optional bearer key for non-interactive use; unset by the Docker build and not needed for browser sign-in |
-
-### API client convention
-
-The shared client (`api/apiClient.ts`) is constructed from `API_URL` (resolved in `config.ts` from `window.__AGENTWEAVER_CONFIG__.API_URL`, then `VITE_API_URL`, then `http://localhost:5000`). In container deployments `API_URL` is `/api`.
-
-All client methods in `api/client.ts` call **relative paths without an `/api/` prefix** — for example `/runs`, `/runs/{id}/stream`, `/projects`, and `/auth/github`. The `/api` prefix comes from the base URL, so paths must not repeat it. Requests are sent with `credentials: 'include'`, and an `Authorization: Bearer <session-token>` header is added when a session token is present in `sessionStorage`.
+| Setting | Meaning |
+|---|---|
+| `VITE_API_URL` | Build-time origin fallback. Runtime configuration takes precedence. |
+| Browser authentication | Session authentication; the current client does not consume `VITE_API_KEY`. |
 
 ## Develop and build
 
@@ -38,7 +34,7 @@ For production hosting, the Vite build output is served by the ASP.NET Core stat
 | `/`, `/overview` | Overview | Fleet activity, active projects, and recent activity |
 | `/projects` | Project gallery | Card grid of all projects; create-blank and create-from-GitHub dialogs |
 | `/projects/:projectId` | Dashboard | Project counters, throughput chart, and agent leaderboard |
-| `/projects/:projectId/board` | Board | Project info, Kanban board, run list, and start-run dialog |
+| `/projects/:projectId/board` | Board | Project info, Kanban board, run list, and orchestration entry |
 | `/projects/:projectId/flow` | Flow | Live view of what each agent is working on |
 | `/projects/:projectId/orchestrations` | Orchestrations | Coordinator orchestration run list |
 | `/projects/:projectId/workspace` | Workspace | Project repository and run worktree browser |
@@ -61,13 +57,13 @@ Two dialogs let you create a project. Both use the shared `CreateProjectDialogSh
 
 **Create blank project** — collects a name and a local working directory path, then opens the shared Blueprint panel on **Generated | Templates** (`ProjectGalleryPage.tsx:405`). The directory must already exist and be a git repository.
 
-**Create from GitHub** — collects a name, GitHub repository URL, and a local path, then opens the shared Blueprint panel on **Suggested | Templates | Generate** (`ProjectGalleryPage.tsx:676`). The server clones the repository into that path. The repository-source list starts with the signed-in user's personal account (`@{login}` plus **You**) before organizations, and repository search uses the selected account's repositories (`ProjectGalleryPage.tsx:471`, `:501`, `:642`).
+**Create from GitHub** — browses repositories available through the caller's Repo App capability, obtains a caller-bound, expiring, single-use repository selection code, and submits that code with project creation. The server resolves clone metadata and credentials; a typed repository URL used for blueprint suggestions is not clone authority. See the [repository-selection contract](./repo-blueprint-suggestions.md).
 
 Clicking a project card navigates to the project dashboard.
 
 ### Board page
 
-The board page (`/projects/:projectId/board`) shows project details, the Kanban board, a list of past runs, and a start-run dialog.
+The board page (`/projects/:projectId/board`) shows project details, the Kanban board, past runs, and orchestration entry.
 
 The details section shows the project name, origin, source repository (for GitHub projects), working directory, default branch, and provider settings.
 
@@ -75,13 +71,7 @@ The run list shows each run's id, status, and start time. Status badges show hum
 
 Coordinator runs (detected via `isCoordinatorRun`) instead show their **orchestration status** label when the optional `coordinator_status` field is present — `Dispatching`, `Awaiting assembly`, `In review`, `Assembling`, `Complete`, `Failed`, `Blocked`, or `Declined` (a `Failed` badge appends `coordinator_status_reason` when available). When the field is absent the bare run status is shown. Coordinator rows link to the orchestration topology page via the **Topology** button; non-coordinator rows no longer open standalone workflow run pages.
 
-The start-run dialog collects:
-
-- **Task** — required description for the agent
-- **Model** — optional override; falls back to the project default
-- **Base branch** — optional; falls back to the project's default branch
-
-A **Start orchestration** button sits alongside the start-run controls. It opens the start-orchestration dialog and, on success, navigates to the coordinator run page (`/projects/:projectId/orchestrations/:runId`). See [Start an orchestration](#start-an-orchestration) below.
+Start work through [Start an orchestration](#start-an-orchestration) or backlog pickup, not the retired standalone project-run submission endpoint.
 
 ### Project settings
 
@@ -93,21 +83,17 @@ The project settings page (`/projects/:projectId/settings`) has three sections:
 
 **Delete** — permanently deletes the project record after confirmation. The working directory and git history are not affected.
 
-### GitHub sign-in
+### Product sign-in
 
-The `GitHubSignIn` component is mounted in the application header and is visible on every page.
-
-When signed out or never signed in, it shows a **Sign in with GitHub** button. Clicking the button starts the device authorization flow: the component displays the verification URL and one-time code. The component polls the API automatically and updates to show the authenticated GitHub username once the flow completes.
-
-When signed in, it shows the GitHub username and a **Sign out** button.
+Product sign-in uses Microsoft Entra ID through `SignInPage` and `AuthGate`; the client sends session authentication. GitHub Repo App and Copilot App are purpose-specific capabilities, not alternative product identities. Start work through Coordinator orchestration or backlog pickup.
 
 ### Submit a run
 
-The `HomePage` submit form collects the repository path, originating branch, task description, and model source. Submit stays disabled until the path, branch, and task are filled in. On success the app navigates to the watch screen for the new run. The current routed project flow starts runs from the board page's start-run dialog.
+Use [Start an orchestration](#start-an-orchestration). Standalone project-run submission is retired.
 
 ### Start an orchestration
 
-The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the **Start orchestration** button on the board page. It collects a single **Goal** field — a plain-language description of the outcome to achieve. Submit stays disabled until the goal is non-empty. Submitting calls `POST /api/projects/{id}/orchestrations`, which starts a coordinator run and returns its `runId`; the app then navigates to the coordinator run page at `/projects/:projectId/orchestrations/:runId`.
+The start dialog accepts a goal, optional workflow and launch automation. Direct starts planning from the prompt; outcome definition uses draft/confirm. Both call orchestration and navigate to the Coordinator run.
 
 ### Coordinator run and outcome-spec gate
 
@@ -126,7 +112,7 @@ When the spec is awaiting confirmation, two actions appear:
 - **Confirm** — calls `POST /api/runs/{id}/outcome-spec/confirm`, resuming the run past the gate. During submit it disables both gate actions, changes the label to **Confirming...**, shows a spinner, guards against double-click re-entry, retries the short-lived `409 no_pending_gate` gate-arming race, refreshes the spec on 409, and surfaces terminal/non-active errors as panel feedback (`OutcomeSpecPanel.tsx:237`, `:338`, `:345`, `:360`, `:578`, `:588`).
 - **Request changes** — opens a dialog with a required **Feedback** field and calls `POST /api/runs/{id}/outcome-spec/revise`. The coordinator re-drafts and re-presents the spec without dispatching any work.
 
-The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch occurs before a human confirms.
+Interactive defineOutcome waits for confirm/revise; Direct skips the drafted-spec gate and launch Autopilot can confirm unattended. Review/merge and tool permissions remain separate boundaries.
 
 ### Coordinator orchestration and unified graph view
 
@@ -146,14 +132,13 @@ The graph seeds from `GET /api/runs/{coordinatorRunId}/graph`, which returns a `
 The coordinator-variant descriptor contains:
 - **Coordinator node** (`id: "coordinator"`, `node_type: "agent"`, `role: "coordinator"`) — the orchestrator itself
 - **Subtask nodes** (`id: "plan:subtask-{n}"`, `node_type: "subtask"`) — one per dispatched subtask; carries optional `agent`, `model`, `phase`, `child_graph_ref`, and `child_run_id` fields
-- **Planned assembly nodes** (`id: "planned:assembly-{rai|review|merge|scribe}"`, `kind: "planned"`) — the fixed post-subtask pipeline; always rendered muted/dashed, never show a running or pending spinner
+- **Assembly nodes** use stable `planned:assembly-*` IDs, become live when reached, and display persisted status/reason/terminal-stage. The selected workflow determines the gate chain rather than a fixed muted RAI-only pipeline.
 
 Subtask status is projected from topology and run events by mapping the subtask node id (`plan:subtask-{n}`) to the topology node id (`subtask-{n}`) by stripping the `plan:` prefix.
 
 #### Coordinator loopback edges
 
-The coordinator descriptor may include **loopback back-edges** (`loopback: true`) from the assembly RAI gate and Human Review gate back to the coordinator node — representing a re-dispatch when the collective output is flagged or changes are requested. `GraphEdge` has no `label` field, so the renderer derives a visible label from the **source node's role** (falling back to its id) via `coordinatorLoopbackLabel`: a RAI source is labelled **"RAI flags"** and a review source **"Request changes"** (unknown sources get a generic **"Rework"** so the back-edge is never unlabelled). These render with the same dashed/curved back-edge styling as the per-run loopbacks. The logic is robust to descriptors with zero loopbacks (older runs simply have no back-edges).
-
+Each selected assembly gate can have a **loopback back-edge** (`loopback: true`) to the Coordinator. These edges represent rework, not forward pipeline progression, and are excluded from forward-degree/cardinality calculations. The renderer derives labels from the source role, including **RAI flags**, **Request changes**, and a generic **Rework** fallback, and uses dashed/curved back-edge styling. The selected workflow determines the gates; do not assume exactly two loopbacks.
 
 #### Subtask node expansion
 
@@ -181,7 +166,7 @@ See [Decoupled live-preview provisioning](./live-preview-provisioning.md) for th
 
 The graph's visual layer is shared across the coordinator run page and inline editor previews via `WorkflowGraphPanel.tsx`:
 
-- **Spine edges** — forward edges use a custom `spine` edge type (`SpineEdge`) instead of React Flow's default bezier. Every edge in a fan-out (shared source) or fan-in (shared target) bundle is routed deterministically through a single shared rounded **junction dot** positioned between the columns, drawn as two smooth `getBezierPath` segments that enter/leave the junction horizontally. There are no hard arrowheads. Gate-condition labels (e.g. an editor edge's `when`) are rendered at the junction via `EdgeLabelRenderer`.
+- Forward edges use `SpineEdge`: stepped orthogonal routes from `buildSteppedConnectorRoute` and `buildBridgedOrthogonalPath`, with arrow markers, crossing bridges and computed junctions. This is not a two-Bezier-segment router.
 - **Status accent bar** — both `WorkflowNode` and the coordinator `SubtaskNode` cards render a colored top-accent bar keyed to status (via the exported `accentClass` helper) with the status badge moved to the top-left of the card header.
 - **Node dimensions** — `layoutDag` / `layoutDagColumns` in `dagLayout.ts` seed each node's `initialWidth` / `initialHeight` from its size hint (falling back to `NODE_W` / `NODE_H`), so the minimap has authoritative geometry even before React Flow measures the DOM. These are `initial*` hints (not fixed `width` / `height`), so expandable cards are never clipped.
 - **MiniMap** — the coordinator run page renders a React Flow `MiniMap` in the bottom-right (172×116, rounded container with a subtle border and shadow). Each node is colored by its `topoStatus` (green complete, blue running/dispatching, amber waiting/awaiting-assembly, red failed/declined, neutral otherwise) with rounded corners, a light mask, and a brand-blue viewport outline.
@@ -269,8 +254,6 @@ Two action buttons appear in the page header:
 
 **Add member** — opens a dialog to select a role from the full catalog and cast a new team member directly, without going through the casting wizard.
 
-**New Run** — opens the New Run dialog (see below).
-
 A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
 
 The sync panel at the bottom of the page shows the pending uncommitted changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
@@ -325,13 +308,7 @@ When an existing team is detected, a choice of intent is presented before confir
 
 ### New Run dialog
 
-On the team page, clicking **New Run** opens a dialog with:
-
-- **Agent** — dropdown of active team members showing name and role
-- **Task** — multi-line text area describing what to do
-- **Branch** — branch to run against (defaults to the project's default branch)
-
-Submitting starts a project-scoped run via `POST /api/projects/{id}/runs` with the selected agent's name in `agent_name`. The agent's charter is injected as their system prompt. The new run appears immediately in the Recent Runs section at the bottom of the team page.
+Use [Start an orchestration](#start-an-orchestration). Standalone project-run submission is retired.
 
 ### Recent Runs section
 
@@ -347,51 +324,116 @@ Coordinator run entries open the orchestration detail page; standalone workflow/
 ## Structure
 
 ```text
-src/
-  api/
-    types.ts            API shapes
-    client.ts           fetch-based API client
-    apiClient.ts        shared client built from config
-    sse.ts              run-stream hook
+apps/web/src/
+  App.tsx                    route declarations and access gates
+  config.ts                  runtime/build-time API origin
   components/
-    RunSubmitForm.tsx
-    Timeline.tsx        renders the ordered list of timeline items
-    TurnGroup.tsx       one agent turn: divider + steps
-    TurnDivider.tsx     "Turn N · X steps" header with active/done indicator
-    AgentMessageBubble.tsx  streaming plain-text or settled Markdown bubble
-    ToolCallCard.tsx    collapsible card: icon + title + args + result/error
-    LifecycleEventCard.tsx  flat card for run/review/merge lifecycle events
-    ReviewPanel.tsx
-    DiffViewer.tsx      syntax-highlighted unified diff component
-    ArtifactBrowser.tsx resizable split-panel file tree + Monaco/markdown viewer
-    FileViewerModal.tsx read-only Monaco diff viewer and CommonMark preview modal
-    GitHubSignIn.tsx    header component: device-flow sign-in, polling, sign-out
-    StartOrchestrationDialog.tsx  goal entry that starts a coordinator run
-    OutcomeSpecPanel.tsx  outcome-spec review with confirm/revise gate
-    WorkflowGraphPanel.tsx  shared generic graph renderer: WorkflowNode, LoopbackEdge,
-                            styles (node_type → card size), helpers, contexts
-  timeline/
-    types.ts            discriminated union types for reducer state
-    reducer.ts          pure grouping reducer (turns, steps, streaming state)
-    useTimelineItems.ts hook that feeds the SSE event list into the reducer
+    StartOrchestrationDialog.tsx
+    OutcomeSpecPanel.tsx
+    WorkflowGraphPanel.tsx
+    AgentSessionPanel.tsx
   pages/
-    ProjectGalleryPage.tsx  project gallery: card grid, create-blank and create-from-GitHub dialogs
-    ProjectPage.tsx         board: project detail, Kanban board, run list, start-run dialog
-    ProjectSettingsPage.tsx provider defaults, rename, delete
-    TeamPage.tsx            team roster, member management, charter dialogs, sync panel
-    CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
-    DashboardPage.tsx       project dashboard counters, throughput, and leaderboard
-    OverviewPage.tsx        global fleet activity overview
-    FlowPage.tsx            live view of what each agent is working on
-    OrchestrationsPage.tsx  coordinator orchestration run list
-    WorkspacePage.tsx       project repository and run worktree browser
-    WorkflowsPage.tsx       workflow definitions and editing
-    DiagnosticsPage.tsx     project diagnostics
-    HeartbeatPage.tsx       coordinator heartbeat status
-    CoordinatorRunPage.tsx  coordinator run page: outcome-spec gate + unified graph + steering
-    SettingsPage.tsx        sandbox-policy settings component (not currently routed)
-    HomePage.tsx            submit form (not currently routed)
-  App.tsx               Fluent provider and routing
-  main.tsx              entry point
-  config.ts             reads VITE_API_URL and VITE_API_KEY
+    SignInPage.tsx
+    SessionsPage.tsx
+    SettingsPage.tsx
+    SkillsPage.tsx
+    ClusterPage.tsx
 ```
+
+Coordinator and Assistant route boundaries, plus project observability views, are wired from `App.tsx`.
+
+## Current navigation and action boundaries
+
+Routes include `/sessions`, `/settings`, `/assistant`, platform-admin-only `/platform-settings`, project skills/cluster/observability, and `/projects/:projectId/team/:agentName/memory`. Legacy project-session and global-observability URLs redirect.
+
+Project creation uses Repo App browse → selection code → server-authorized creation, not arbitrary repository-URL authority. Start through Coordinator; `/api/projects/{id}/runs` is retired (`410`), not an agent-specific submission path.
+
+Safe-tool auto-approval covers `web_fetch` and `start_preview`; Autopilot handles clarifying questions and launch-time outcome confirmation. Human assembly buttons require a human-review gate, not every assembly-review-requested event. Steer only server-reported steerable runs; terminal failed/declined runs are not universally amendable in place. Child questions/approvals target the actual child. Preview failure remains visible independently of the Build/Test verdict.
+
+<details id="diagram-context-canonical-coordinator-journey" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One goal, one collective review</td></tr>
+<tr><td>subtitle</td><td>Confirm intent, dispatch bounded work, then integrate and review the whole result.</td></tr>
+<tr><td>group-title0</td><td>Plan and execute</td></tr>
+<tr><td>group-title1</td><td>Integrate, review, finish</td></tr>
+<tr><td>Confirm intent</td><td>Confirm intent</td></tr>
+<tr><td>Confirm intent</td><td>Draft the OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>human confirmation</td></tr>
+<tr><td>Plan the work</td><td>Plan the work</td></tr>
+<tr><td>Plan the work</td><td>Persist a WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>subtasks + dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Run the eligible frontier</td></tr>
+<tr><td>Dispatch children</td><td>per-child worktrees</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge + Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Approved integration path</td></tr>
+<tr><td>Merge + Scribe</td><td>MergeWorktree → Scribe</td></tr>
+<tr><td>Collective review</td><td>Collective review</td></tr>
+<tr><td>Collective review</td><td>One human decision</td></tr>
+<tr><td>Collective review</td><td>approve / revise / decline</td></tr>
+<tr><td>Integrate + gates</td><td>Integrate + gates</td></tr>
+<tr><td>Integrate + gates</td><td>Assemble child branches</td></tr>
+<tr><td>Integrate + gates</td><td>configured checks / review</td></tr>
+<tr><td>e1</td><td>confirm</td></tr>
+<tr><td>e2</td><td>dispatch</td></tr>
+<tr><td>e3</td><td>settled work</td></tr>
+<tr><td>e4</td><td>request review</td></tr>
+<tr><td>e5</td><td>approve</td></tr>
+<tr><td>assurance-title</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION</td></tr>
+<tr><td>assurance-line1</td><td>The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.</td></tr>
+<tr><td>assurance-line2</td><td>A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>Confirm intent</td><td>Input</td></tr>
+<tr><td>Confirm intent</td><td>Human goal</td></tr>
+<tr><td>Confirm intent</td><td>Artifact</td></tr>
+<tr><td>Confirm intent</td><td>OutcomeSpec</td></tr>
+<tr><td>Confirm intent</td><td>Gate</td></tr>
+<tr><td>Confirm intent</td><td>Confirm or revise</td></tr>
+<tr><td>Confirm intent</td><td>Scope</td></tr>
+<tr><td>Confirm intent</td><td>Explicit assumptions</td></tr>
+<tr><td>Plan the work</td><td>Select</td></tr>
+<tr><td>Plan the work</td><td>Workflow choice</td></tr>
+<tr><td>Plan the work</td><td>WorkPlan DAG</td></tr>
+<tr><td>Plan the work</td><td>Owners</td></tr>
+<tr><td>Plan the work</td><td>Named subtasks</td></tr>
+<tr><td>Plan the work</td><td>Store</td></tr>
+<tr><td>Plan the work</td><td>Persist dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Ready</td></tr>
+<tr><td>Dispatch children</td><td>Satisfied dependencies</td></tr>
+<tr><td>Dispatch children</td><td>Files</td></tr>
+<tr><td>Dispatch children</td><td>Child-owned worktree</td></tr>
+<tr><td>Dispatch children</td><td>Observe</td></tr>
+<tr><td>Dispatch children</td><td>Child status / results</td></tr>
+<tr><td>Dispatch children</td><td>Failure</td></tr>
+<tr><td>Dispatch children</td><td>Blocks dependents</td></tr>
+<tr><td>Merge + Scribe</td><td>Merge</td></tr>
+<tr><td>Merge + Scribe</td><td>Reviewed integration</td></tr>
+<tr><td>Merge + Scribe</td><td>Then</td></tr>
+<tr><td>Merge + Scribe</td><td>Collective Scribe</td></tr>
+<tr><td>Merge + Scribe</td><td>Record</td></tr>
+<tr><td>Merge + Scribe</td><td>Promote decisions</td></tr>
+<tr><td>Merge + Scribe</td><td>Decline</td></tr>
+<tr><td>Merge + Scribe</td><td>Skips Scribe</td></tr>
+<tr><td>Collective review</td><td>Approve</td></tr>
+<tr><td>Collective review</td><td>Proceed to merge</td></tr>
+<tr><td>Collective review</td><td>Revise</td></tr>
+<tr><td>Collective review</td><td>Steer / redispatch</td></tr>
+<tr><td>Collective review</td><td>No Scribe path</td></tr>
+<tr><td>Collective review</td><td>Blocked</td></tr>
+<tr><td>Collective review</td><td>Recoverable state</td></tr>
+<tr><td>Integrate + gates</td><td>Child branches</td></tr>
+<tr><td>Integrate + gates</td><td>Target</td></tr>
+<tr><td>Integrate + gates</td><td>Integration branch</td></tr>
+<tr><td>Integrate + gates</td><td>Gates</td></tr>
+<tr><td>Integrate + gates</td><td>Selected checks</td></tr>
+<tr><td>Integrate + gates</td><td>Output</td></tr>
+<tr><td>intent</td><td>Scope and assumptions are explicit; Revision reopens the intent gate</td></tr>
+<tr><td>plan</td><td>Outcome-complete decomposition; Bounded work with named owners</td></tr>
+<tr><td>dispatch</td><td>Observe child status and results; Failure / RAI blocks dependents</td></tr>
+<tr><td>finish</td><td>Decline skips Scribe; No automatic PR claim here</td></tr>
+<tr><td>review</td><td>Changes can redispatch work; Blocked is recoverable, not terminal</td></tr>
+<tr><td>integrate</td><td>Collective—not per-child delivery; Merge failure may still run Scribe</td></tr>
+<tr><td>notes</td><td>DO NOT CONFUSE ASSEMBLY WITH PUBLICATION; The collective workflow reaches MergeWorktree and Scribe; this graphic does not promise PR creation.; A blocked assembly can be recovered. Review approval does not itself mark the run complete.</td></tr>
+<tr><td>groups</td><td>Plan and execute; Integrate, review, finish</td></tr>
+</tbody></table>
+</details>

@@ -11,16 +11,9 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
-![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/canonical-coordinator-architecture.png)
-
-<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 A useful rebuilding rule is: **the coordinator owns intent and coordination; workflows own execution gates.**
 
-Casting and Blueprints feed orchestration with team shape, role charters, workflow defaults, and review-policy defaults. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
+Casting and Blueprints feed orchestration with team shape, role charters, and workflow defaults. Blueprint validation accepts only `review_policy: default`; this is not a configurable project review-policy overlay. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
 
 Live workflow execution and non-workflow single-prompt paths use the Copilot SDK. The
 live workflow worker path does not switch worker implementation based on the run's model
@@ -34,7 +27,7 @@ These invariants are the backbone of the system:
 - **Confirm ambiguity at the boundary.** The coordinator may draft, revise, and ask for confirmation before committing a plan. Once confirmed, later components can assume the outcome is intentional.
 - **Use declarative graphs for policy.** Workflows describe nodes, gates, and edges. Runtime code binds those declarations to executable steps and fails closed when a step cannot be safely bound.
 - **Advance only the ready frontier.** Subtasks form a DAG. A subtask can run only after its dependencies are complete, so parallelism is safe and deterministic.
-- **Separate child work from collective responsibility.** Child runs produce reviewed pieces. The parent coordinator assembles, reviews, merges, and records the combined outcome.
+- **Separate child work from collective responsibility.** Child runs produce pieces ready for assembly, not independently reviewed pieces. The parent coordinator assembles, reviews, merges, and records the combined outcome.
 - **Make gates explicit and durable.** Safety, human review, merge, and terminal states are visible run states and stream events, not hidden control flow.
 - **Prefer idempotent recovery over clever replay.** If a plan already exists, reuse it. If a run already reached a gate, resume from that gate. If a stream disconnects, replay durable events.
 
@@ -99,13 +92,6 @@ Each subtask includes its assigned agent, model choice, charter/context, isolati
 
 The plan is a DAG because ordering is a correctness constraint. If subtask B depends on subtask A, B should not start merely because an agent is free. This allows safe parallelism: every tick can dispatch all currently-ready nodes while preserving required sequencing.
 
-![WorkPlan: The Execution Contract: Confirmed OutcomeSpec, WorkPlan, Subtask A, Subtask B, Subtask C, Subtask D, Assembly](../diagrams/orchestration-fig2.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Rebuild guidance: store the plan before dispatch. If the coordinator crashes after planning but before child runs start, it should resume from the persisted WorkPlan rather than ask a model to decompose again.
 
 ### Coordinator Control Flow
@@ -114,13 +100,6 @@ The coordinator flow has two phases:
 
 1. **Model-assisted planning phase** — draft and confirm the OutcomeSpec, select a workflow, decompose the work, and persist the WorkPlan.
 2. **Service-driven execution phase** — dispatch ready subtasks, watch child runs, assemble results, and advance the parent run through review and merge gates.
-
-![Coordinator Control Flow: User, Coordinator, Durable Store, Dispatcher, Child Runs, Parent Run](../diagrams/orchestration-fig8.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig8.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 The coordinator is designed to be idempotent. If it is asked to orchestrate a run that already has a WorkPlan, it does not create a second plan. That invariant prevents duplicate child runs and conflicting DAGs.
 
@@ -142,18 +121,13 @@ Cycle breaking is essential. Model-generated plans can accidentally create circu
 
 The dispatcher repeatedly asks: **which pending subtasks have all dependencies completed?** Those subtasks form the ready frontier.
 
-For each ready subtask, it launches a child run in its own git worktree and branch. Child runs are intentionally trimmed: they perform agent work, then stop at an assemble-ready boundary. They do not each perform RAI, human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
+For each ready subtask, it launches a child run with an isolated working tree and output branch. Child runs are intentionally trimmed: they perform agent work, then stop at an assemble-ready boundary. They do not each perform RAI, human review, merge, or scribe. Those are parent-level responsibilities because the user reviews the combined outcome, not a pile of isolated fragments.
 
 When a child reaches assemble-ready/completed, the dispatcher rebuilds the coordinator integration branch from the successful child branches in dependency order. Dependents are then branched from that integration branch, so they can read files produced by their prerequisites without concurrent siblings sharing one mutable git index.
 
-![Dispatch and Assembly: Pending subtasks, Ready frontier, Launch child runs, Child safety gate, Assemble-ready child outputs, Rebuild integration branch, All subtasks settled?, Parent assembly, Parent review and merge](../diagrams/orchestration-fig3.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Assembly is where the coordinator turns independent child outputs into one coherent result. This is also where conflicts, missing pieces, and cross-subtask inconsistencies should be detected before the parent enters review and merge gates.
+
+The child graph branches on `AgentTurnOutput.TerminalFailureReason`: a clean turn reaches `child-assemble-ready`, while a typed failure reaches `child-turn-failed` (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:788–814`). “All subtasks settled” is not equivalent to “all outputs eligible for assembly”; a failed child is not an approved aggregate input.
 
 Where this lives:
 
@@ -173,16 +147,9 @@ A workflow definition answers:
 - Which gates can send work back for revision?
 - Which failures are terminal?
 - Which path means success?
-- Which trigger types are allowed to use this workflow?
+- Which event or schedule declarations can initiate backlog work for this workflow?
 
-The default conceptual workflow is:
-
-![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/canonical-default-workflow.png)
-
-<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The shared illustration describes the standalone built-in workflow, not mandatory collective assembly policy. Its current success path is `agent -> rai -> review -> merge -> push-pr -> scribe -> done` (`apps/Agentweaver.Api/Workflows/DefaultWorkflowTemplate.cs:42–161`); child runs bypass this graph.
 
 The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
 
@@ -197,12 +164,14 @@ The selection order is deliberately conservative:
 1. Load built-in, catalog/library, and project-authored workflows.
 2. Record invocation kind from the run origin.
 3. Honor a valid override if present.
-4. Prefer the configured project default when available.
+4. Order the configured project default first without short-circuiting automatic selection.
 5. If exactly one workflow remains, use it without model help.
 6. If several remain, ask the selector to choose the best process fit.
 7. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
 
 This pattern limits model authority. The model may choose among safe candidates, but it cannot bypass validation or runtime binding.
+
+See [workflow selection](workflow-selection.md) for override events, selector retry/fallback behavior, and the post-decomposition Build & Test compatibility check. That check can choose a platform software workflow when automatic project candidates cannot cover code-producing work; an explicit workflow lacking Build & Test is honored with a warning.
 
 ### Binding Declarative Nodes to Runtime Execution
 
@@ -213,7 +182,7 @@ The binder should:
 - classify nodes by type and gate kind,
 - resolve each node to a known executor,
 - expand logical edges into the live execution graph,
-- verify all required review-policy gates have bindings,
+- verify every workflow-declared gate and transition has a binding,
 - and fail closed if a required node cannot be executed safely.
 
 Failing closed is a security and correctness property. A workflow that asks for a safety gate but cannot bind one should not silently skip safety. Likewise, a custom node type should not become a no-op merely because the binder does not understand it.
@@ -278,16 +247,9 @@ stateDiagram-v2
     MergeFailed --> [*]
 ```
 
-The state machine is designed for externally visible gates. When a human review node is reached, the run becomes `AwaitingReview` and the client can act. When merge is requested, the run becomes `Merging`. These are not merely internal events; they are durable states used by clients, recovery, and monitoring.
+This is a conceptual, non-exhaustive state machine. It emphasizes externally visible gates. When a human review node is reached, the run becomes `AwaitingReview` and the client can act. When merge is requested, the run becomes `Merging`. These are not merely internal events; they are durable states used by clients, recovery, and monitoring.
 
 ### Runtime Sequence
-
-![Runtime Sequence: Client, Orchestrator, Workflow Factory, Agent Turn Executor, Worker Agent, Watch Loop, Event Stream / SSE](../diagrams/orchestration-fig9.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig9.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 The watch loop translates live runtime events into persisted run state. This keeps state transitions centralized. The agent produces work; the workflow emits events; the watch loop decides what those events mean for durable status and client-visible stream completion.
 
@@ -298,16 +260,9 @@ Run events have two purposes:
 1. **Live feedback** — clients can see what the agent is doing now.
 2. **Recovery and reconnect** — clients can replay what happened if they disconnect or the process restarts.
 
-The conceptual design is replay-then-tail:
+The Postgres path appends durably, then reads ordered rows after the subscriber's cursor:
 
-![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/canonical-event-replay-tail.png)
-
-<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-A robust rebuild should write events durably before publishing them live. Then a reconnecting client can provide the last seen event id, replay missed events from storage, and continue tailing live updates. The stream should end with an explicit done marker so clients do not infer completion from connection closure alone.
+`EfRunEventStream` allocates the next sequence under a per-run advisory transaction lock and acknowledges only after commit. Subscribers query `Sequence > cursor` and poll again after 250 ms when no rows are available. A reconnect can therefore land on another API replica without relying on the first replica's channel. The SQLite/local alternative has a bounded process-local channel; that channel is not the Postgres cross-replica delivery mechanism. The SSE endpoint supplies framing and completion behavior.
 
 Where this lives:
 
@@ -327,19 +282,11 @@ This separates **commitment** from **execution**:
 - A task can be captured and ordered in the backlog.
 - Later, when it becomes ready and workspace conditions allow, the system claims it.
 - Claiming creates or reserves exactly one coordinator run.
-- That coordinator run executes the same planning and workflow path as a manually-started coordinator run, but with unattended confirmation rules.
+- That coordinator run executes the same planning and workflow path as a manually-started coordinator run. Resolved approval/autopilot settings determine whether confirmation can be unattended; pickup alone is not approval.
 
 ### Backlog Task Lifecycle
 
-```mermaid
-stateDiagram-v2
-    [*] --> Backlog
-    Backlog --> Ready: committed / prerequisites satisfied
-    Ready --> Claimed: heartbeat atomically reserves task + run
-    Claimed --> Running: coordinator run starts
-    Running --> Completed: run terminal success
-    Running --> Failed: run terminal failure
-```
+The persisted task states are `Backlog -> Ready -> Claimed`. Running, completed, and failed are board projections of the linked run, not additional `BacklogTaskState` values. Use the shared [backlog board](../experience/workflows-backlog.md) explanation rather than a second lifecycle diagram.
 
 The critical operation is the transition from Ready to Claimed. It must be atomic. If two heartbeat ticks or processes see the same ready task, only one should reserve the task and create the coordinator run. Otherwise, the system would execute duplicate plans for the same backlog item.
 
@@ -351,17 +298,13 @@ The heartbeat loop is intentionally simple and repeatable:
 2. Skip projects whose workspace is unavailable.
 3. Read a deterministic top-N set of Ready tasks per project.
 4. For each task, attempt an atomic claim and run reservation.
-5. Start the reserved coordinator run with unattended confirmation.
-6. Run reconciliation to pick up stalled or partially-progressed coordinator work.
+5. Start the reserved coordinator run under its resolved approval/autopilot settings.
+6. After the project loop, run one coordinator reconciliation sweep and drain orphaned OutcomeSpec decisions.
+7. Every configured Nth tick, run the optional AgentHost orphan-pod reaper.
 
-![Heartbeat Loop: Heartbeat, ProjectStore, Backlog, Pickup, Runs, Reconciler](../diagrams/orchestration-fig10.png)
+The reconciliation, deferred-decision drain, and reaper are separate guarded phases outside the per-project loop (`apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs:151–210`).
 
-<!-- Rendered from ../diagrams/src/orchestration-fig10.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-Workflow overrides are allowed at the backlog task level, but they are still filtered by trigger eligibility. The pickup service may prepend or carry override intent into the coordinator goal, but it cannot bypass workflow safety rules.
+Workflow overrides are allowed at the backlog task level, subject to registry availability and binding—not invocation-kind or trigger-eligibility filtering. Event and schedule producers initiate backlog work upstream; selection considers the valid available workflow set.
 
 ### Why Heartbeat Instead of Immediate Execution?
 
@@ -378,28 +321,13 @@ Where this lives:
 - `apps/Agentweaver.Api/Coordinator/`
 - `packages/Agentweaver.Domain/`
 
-## Review Policies, Gates, and Merge
+## Workflow Gates and Merge
 
-### Review Policy as a Safety Overlay
+### Workflow-declared review gates
 
-Workflows define the shape of execution. Review policies define which review gates must be present for a project.
+Review gates are declared in workflow nodes and edges. `RunWorkflowFactory.ResolveEffectiveWorkflowAsync` resolves a workflow and returns it without composing a separate project policy (`apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs:1495–1517`). Blueprint validation accepts only `review_policy: default` (`apps/Agentweaver.Api/Blueprints/BlueprintService.cs:113–115`). Legacy policy-prefixed adapters are binding plumbing, not a registry or composer.
 
-This separation is useful because teams often need the same workflow structure with different gate requirements. For example, one project requires only Responsible AI plus human review; another adds a rubberduck review before human approval.
-
-A review policy is an ordered list of review steps. Conceptually common steps are:
-
-- **Responsible AI review** — checks safety and returns pass, revision request, or terminal failure.
-- **Rubberduck review** — an automated sanity or explanation pass.
-- **Human review** — asks a person to approve, request changes, or decline.
-
-The composer injects missing required gates before merge. It should not duplicate gates already present in a workflow, and it should fail if a required gate has no runtime executor.
-
-![Review Policy as a Safety Overlay: Selected workflow, Active review policy, Compose policy onto workflow, All required gates bound?, Start run, Fail submission / fail closed](../diagrams/orchestration-fig7.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+See [binding declarative nodes to runtime execution](workflow-engine.md#binding-declarative-nodes-to-runtime-execution) for fail-closed gate/edge binding. Collective assembly executes the authored aggregate gates; a collective RAI RED verdict opens a **durable human-review escalation** (`InReview` / `AwaitingReview`, reason `rai_red`), not a terminal `RaiBlocked` dead end (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:3752–3795`).
 
 ### Human Review as a Pause Point
 
@@ -411,14 +339,9 @@ The user action then chooses a path:
 - request changes and loop back to agent work,
 - or decline and terminate.
 
-![Human Review as a Pause Point: Workflow, Watch, Store, Client, User](../diagrams/orchestration-fig11.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig11.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 This design keeps review durable and externally controllable. A browser tab can close while a run waits for review; the run state still tells the next client exactly what is needed.
+
+The client submits a decision to the API; it does not resume a workflow directly. The shared review sequence owns the authorization, pending-request arbitration, and replay behavior.
 
 ### Merge Gate
 
@@ -438,7 +361,7 @@ Scribe is the post-outcome memory step. It records what happened, decisions, lea
 
 Where this lives:
 
-- `apps/Agentweaver.Api/ReviewPolicies/`
+- `apps/Agentweaver.Api/Workflows/`
 - `apps/Agentweaver.Api/Runs/`
 
 ## Recovery and Failure Handling
@@ -484,7 +407,7 @@ The reconciler is what turns persisted state into eventual progress after crashe
 
 Casting provides the roster: agent names, role charters, default models, and required system agents such as Coordinator, Scribe, Ralph, and Rai. Orchestration consumes this roster when assigning subtasks and binding review responsibilities.
 
-Blueprints provide defaults: initial roster, workflow set, default workflow, review policy, sandbox profile, and optional bespoke roles. Applying a blueprint can materialize workflow definitions and persist defaults that later coordinator runs select from.
+Blueprints provide defaults: initial roster, workflow set, default workflow, sandbox profile, and optional bespoke roles. The required `review_policy` field accepts only `default`; it does not configure additional injected gates. Applying a blueprint can materialize workflow definitions and persist defaults that later coordinator runs select from.
 
 The key boundary is that Casting and Blueprints define **who is available** and **what defaults apply**. The orchestration engine decides **what work is needed now** and **how that work moves through gates**.
 
@@ -498,11 +421,11 @@ Where this lives:
 ## Extension Points and Gotchas
 
 - **Do not treat workflow ids as executable code.** A workflow must be parsed, classified, bound to known executors, and validated before it can run.
-- **Trigger filtering is a hard safety boundary.** Overrides and selector output should never make an ineligible workflow eligible.
+- **Trigger evaluation is an ingress boundary.** Verified events and schedules may initiate backlog work; they do not filter selector candidates by run origin.
 - **Child pipelines are intentionally shorter.** Per-child review, merge, and scribe would fragment responsibility. Keep those phases at the parent level for coordinated work.
 - **Advisory isolation is not a lock.** File ownership hints help dispatch and planning, but dependency edges, review, and merge conflict handling still matter.
-- **Review policy composition must fail closed.** Missing safety or human-review bindings should prevent run start rather than silently weaken review guarantees.
-- **Registry sync matters.** If workflow or review-policy files are cached, changing files on disk is not enough unless the registry refreshes or the process reloads.
+- **Workflow gate binding must fail closed.** An unsupported declared gate or transition prevents execution rather than silently weakening the authored graph.
+- **Registry sync matters.** Explicit sync gives immediate validation feedback; signature changes also refresh cached workflow results on the next read.
 - **Live streams and durable streams serve different users.** Live channels make the UI responsive; durable event logs make reconnect and crash recovery possible. Keep both.
 - **Comments can drift from behavior.** Prefer the persisted contracts and current service flow over historical comments when validating orchestration behavior.
 
@@ -511,9 +434,9 @@ Where this lives:
 If you were rebuilding Agentweaver orchestration from scratch, implement in this order:
 
 1. Durable run records, statuses, and event log.
-2. Workflow definitions with trigger filtering and fail-closed binding.
+2. Workflow definitions with separate trigger evaluation and fail-closed binding.
 3. Agent execution wrapped by a watch loop that projects events into statuses.
-4. Review policies composed onto workflows before merge.
+4. Workflow-declared review gates with durable decisions.
 5. OutcomeSpec confirmation flow.
 6. WorkPlan, subtask, and dependency persistence.
 7. Frontier-based child dispatch and assemble-ready handoff.
@@ -523,3 +446,420 @@ If you were rebuilding Agentweaver orchestration from scratch, implement in this
 11. Casting and Blueprint defaults feeding coordinator selection.
 
 The central design principle is simple: **persist intent, execute only eligible work, make every gate explicit, and recover by replaying durable state rather than reinterpreting the original request.**
+
+<details id="diagram-context-canonical-default-workflow">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Generic default workflow</td></tr>
+<tr><td>subtitle</td><td>Built-in template • merge → PR publication → Scribe</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>PR action can skip / fail and still reach Scribe. No-changes also reaches Scribe.</td></tr>
+<tr><td>Agent work</td><td>Agent</td></tr>
+<tr><td>Agent work</td><td>Agent task</td></tr>
+<tr><td>Agent work</td><td>agent</td></tr>
+<tr><td>RAI gate</td><td>Rai</td></tr>
+<tr><td>RAI gate</td><td>Verdict routing</td></tr>
+<tr><td>RAI gate</td><td>rai</td></tr>
+<tr><td>Human review</td><td>Review</td></tr>
+<tr><td>Human review</td><td>human-review</td></tr>
+<tr><td>Merge</td><td>Merge</td></tr>
+<tr><td>Merge</td><td>Merge outcome routing</td></tr>
+<tr><td>Merge</td><td>merge</td></tr>
+<tr><td>Publish / reuse PR</td><td>Publish / reuse PR</td></tr>
+<tr><td>Publish / reuse PR</td><td>Create / reuse; not git push</td></tr>
+<tr><td>Publish / reuse PR</td><td>action</td></tr>
+<tr><td>Scribe</td><td>Scribe</td></tr>
+<tr><td>Scribe</td><td>Record the run outcome</td></tr>
+<tr><td>Scribe</td><td>scribe</td></tr>
+<tr><td>Safety failed</td><td>Safety failed</td></tr>
+<tr><td>Safety failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-02-label</td><td>revise</td></tr>
+<tr><td>edge-03-label</td><td>safety- failed</td></tr>
+<tr><td>edge-04-label</td><td>no- changes</td></tr>
+<tr><td>edge-05-label</td><td>review</td></tr>
+<tr><td>edge-06-label</td><td>approved</td></tr>
+<tr><td>edge-07-label</td><td>request-changes</td></tr>
+<tr><td>edge-08-label</td><td>declined</td></tr>
+<tr><td>edge-09-label</td><td>merged</td></tr>
+<tr><td>edge-10-label</td><td>blocked</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-durable-event-stream">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Postgres is the event relay</td></tr>
+<tr><td>subtitle</td><td>Any API replica can serve a cursor over durable RunEvents—no sticky session required.</td></tr>
+<tr><td>group-title0</td><td>Write path · replica A</td></tr>
+<tr><td>group-title1</td><td>Read path · replica B</td></tr>
+<tr><td>Run producer</td><td>Run producer</td></tr>
+<tr><td>Run producer</td><td>Append a structured event</td></tr>
+<tr><td>Run producer</td><td>runId + type + payload</td></tr>
+<tr><td>EF event stream</td><td>EF event stream</td></tr>
+<tr><td>EF event stream</td><td>Serialize writes per run</td></tr>
+<tr><td>EF event stream</td><td>pg_advisory_xact_lock</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>Shared PostgreSQL table</td></tr>
+<tr><td>RunEvents</td><td>(RunId, Sequence)</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web / MCP watcher</td></tr>
+<tr><td>Web / MCP watcher</td><td>Consume ordered events</td></tr>
+<tr><td>Web / MCP watcher</td><td>last delivered cursor</td></tr>
+<tr><td>SSE endpoint</td><td>SSE endpoint</td></tr>
+<tr><td>SSE endpoint</td><td>Emit id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>ordered response frames</td></tr>
+<tr><td>EF subscriber</td><td>EF subscriber</td></tr>
+<tr><td>EF subscriber</td><td>Read Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>idle poll: 250 ms</td></tr>
+<tr><td>e1</td><td>append</td></tr>
+<tr><td>e2</td><td>commit</td></tr>
+<tr><td>e3</td><td>ordered batch</td></tr>
+<tr><td>e4</td><td>yield</td></tr>
+<tr><td>e5</td><td>SSE frames</td></tr>
+<tr><td>assurance-title</td><td>POSTGRES LANE ONLY</td></tr>
+<tr><td>assurance-line1</td><td>SQLite register-channel / replay / tail is a separate implementation—not this architecture.</td></tr>
+<tr><td>assurance-line2</td><td>Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>Run producer</td><td>Input</td></tr>
+<tr><td>Run producer</td><td>RunStreamEntry</td></tr>
+<tr><td>Run producer</td><td>Identity</td></tr>
+<tr><td>Run producer</td><td>runId + event type</td></tr>
+<tr><td>Run producer</td><td>Body</td></tr>
+<tr><td>Run producer</td><td>Structured payload</td></tr>
+<tr><td>Run producer</td><td>Ack</td></tr>
+<tr><td>Run producer</td><td>After durable commit</td></tr>
+<tr><td>EF event stream</td><td>Lock</td></tr>
+<tr><td>EF event stream</td><td>Per-run advisory lock</td></tr>
+<tr><td>EF event stream</td><td>Next</td></tr>
+<tr><td>EF event stream</td><td>MAX(Sequence) + 1</td></tr>
+<tr><td>EF event stream</td><td>Write</td></tr>
+<tr><td>EF event stream</td><td>Save transaction</td></tr>
+<tr><td>EF event stream</td><td>Commit</td></tr>
+<tr><td>EF event stream</td><td>Before acknowledgement</td></tr>
+<tr><td>RunEvents</td><td>Table</td></tr>
+<tr><td>RunEvents</td><td>Key</td></tr>
+<tr><td>RunEvents</td><td>RunId + Sequence</td></tr>
+<tr><td>RunEvents</td><td>Order</td></tr>
+<tr><td>RunEvents</td><td>Ascending sequence</td></tr>
+<tr><td>RunEvents</td><td>Reuse</td></tr>
+<tr><td>RunEvents</td><td>Same type / payload</td></tr>
+<tr><td>Web / MCP watcher</td><td>Client</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web or MCP</td></tr>
+<tr><td>Web / MCP watcher</td><td>Resume</td></tr>
+<tr><td>Web / MCP watcher</td><td>Last delivered cursor</td></tr>
+<tr><td>Web / MCP watcher</td><td>Replica</td></tr>
+<tr><td>Web / MCP watcher</td><td>No sticky requirement</td></tr>
+<tr><td>Web / MCP watcher</td><td>History</td></tr>
+<tr><td>Web / MCP watcher</td><td>Durable ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Frame</td></tr>
+<tr><td>SSE endpoint</td><td>id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>Cursor</td></tr>
+<tr><td>SSE endpoint</td><td>Last-Event-ID</td></tr>
+<tr><td>SSE endpoint</td><td>Delivery</td></tr>
+<tr><td>SSE endpoint</td><td>Yield ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Close</td></tr>
+<tr><td>SSE endpoint</td><td>After batch is drained</td></tr>
+<tr><td>EF subscriber</td><td>Query</td></tr>
+<tr><td>EF subscriber</td><td>Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>Idle</td></tr>
+<tr><td>EF subscriber</td><td>Poll after 250 ms</td></tr>
+<tr><td>EF subscriber</td><td>State</td></tr>
+<tr><td>EF subscriber</td><td>Shared durable table</td></tr>
+<tr><td>EF subscriber</td><td>Blocked</td></tr>
+<tr><td>EF subscriber</td><td>Retryable: keep open</td></tr>
+<tr><td>producer</td><td>Coordinator or run execution; Acknowledgement follows commit</td></tr>
+<tr><td>append</td><td>Allocate MAX(Sequence) + 1; Save and commit transaction</td></tr>
+<tr><td>store</td><td>Cross-replica ordered history; Explicit duplicates must match payload</td></tr>
+<tr><td>client</td><td>Reconnect from the cursor; No local channel dependency</td></tr>
+<tr><td>sse</td><td>Cursor advances after delivery; Drain batch before terminal close</td></tr>
+<tr><td>reader</td><td>Query the shared durable table; Retryable assembly_blocked stays open</td></tr>
+<tr><td>notes</td><td>POSTGRES LANE ONLY; SQLite register-channel / replay / tail is a separate implementation—not this architecture.; Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-orchestration-fig10" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>One heartbeat tick, two scopes</td></tr>
+<tr><td>takeaway</td><td>Pickup runs per project; reconciliation, deferred-spec drain and optional reaping run afterward.</td></tr>
+<tr><td>group-title-0</td><td>PROJECT LOOP</td></tr>
+<tr><td>group-title-1</td><td>PER-PROJECT PICKUP</td></tr>
+<tr><td>group-title-2</td><td>ONCE AFTER THE PROJECT LOOP</td></tr>
+<tr><td>Heartbeat tick</td><td>Heartbeat tick</td></tr>
+<tr><td>Heartbeat tick</td><td>Enumerate projects</td></tr>
+<tr><td>Heartbeat tick</td><td>failure-isolated sweep</td></tr>
+<tr><td>Active + available?</td><td>Active + available?</td></tr>
+<tr><td>Active + available?</td><td>Skip unavailable projects</td></tr>
+<tr><td>Active + available?</td><td>per-project admission</td></tr>
+<tr><td>Capped Ready list</td><td>Capped Ready list</td></tr>
+<tr><td>Capped Ready list</td><td>Deterministic candidates</td></tr>
+<tr><td>Capped Ready list</td><td>per-project limit</td></tr>
+<tr><td>Atomic claim</td><td>Atomic claim</td></tr>
+<tr><td>Atomic claim</td><td>Reserve coordinator run</td></tr>
+<tr><td>Atomic claim</td><td>competing claim may lose</td></tr>
+<tr><td>Start reserved run</td><td>Start reserved run</td></tr>
+<tr><td>Start reserved run</td><td>Carry backlog origin</td></tr>
+<tr><td>Start reserved run</td><td>confirmation policy applies</td></tr>
+<tr><td>End project loop</td><td>End project loop</td></tr>
+<tr><td>End project loop</td><td>Record tick result</td></tr>
+<tr><td>End project loop</td><td>not an inner-loop sweep</td></tr>
+<tr><td>Reconcile once</td><td>Reconcile once</td></tr>
+<tr><td>Reconcile once</td><td>Repair durable supervision</td></tr>
+<tr><td>Reconcile once</td><td>after all projects</td></tr>
+<tr><td>Drain spec decisions</td><td>Drain spec decisions</td></tr>
+<tr><td>Drain spec decisions</td><td>Recover orphaned decisions</td></tr>
+<tr><td>Drain spec decisions</td><td>durable OutcomeSpec</td></tr>
+<tr><td>Optional pod reaper</td><td>Optional pod reaper</td></tr>
+<tr><td>Optional pod reaper</td><td>Every N ticks when enabled</td></tr>
+<tr><td>Optional pod reaper</td><td>throttled cleanup</td></tr>
+<tr><td>e0</td><td>each</td></tr>
+<tr><td>e1</td><td>eligible</td></tr>
+<tr><td>e2</td><td>claim</td></tr>
+<tr><td>e3</td><td>won</td></tr>
+<tr><td>e4</td><td>loop done</td></tr>
+<tr><td>e5</td><td>once</td></tr>
+<tr><td>e6</td><td>then</td></tr>
+<tr><td>e7</td><td>when due</td></tr>
+<tr><td>groups</td><td>PROJECT LOOP; PER-PROJECT PICKUP; ONCE AFTER THE PROJECT LOOP</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-orchestration-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A dependency DAG, not agent chat</td></tr>
+<tr><td>takeaway</td><td>Illustrative tasks A-D show readiness; only assemble-ready/completed prerequisites count.</td></tr>
+<tr><td>group-title-0</td><td>DURABLE INTENT AND READINESS</td></tr>
+<tr><td>group-title-1</td><td>ILLUSTRATIVE PARALLEL ROOTS</td></tr>
+<tr><td>group-title-2</td><td>ILLUSTRATIVE DEPENDENTS AND HANDOFF</td></tr>
+<tr><td>Confirmed OutcomeSpec</td><td>Confirmed OutcomeSpec</td></tr>
+<tr><td>Confirmed OutcomeSpec</td><td>Intent before decomposition</td></tr>
+<tr><td>Confirmed OutcomeSpec</td><td>confirmed status</td></tr>
+<tr><td>Persisted WorkPlan</td><td>Persisted WorkPlan</td></tr>
+<tr><td>Persisted WorkPlan</td><td>Tasks + dependency edges</td></tr>
+<tr><td>Persisted WorkPlan</td><td>selected workflow</td></tr>
+<tr><td>Readiness rule</td><td>Readiness rule</td></tr>
+<tr><td>Readiness rule</td><td>Every predecessor satisfied</td></tr>
+<tr><td>Readiness rule</td><td>assemble_ready / done</td></tr>
+<tr><td>Example root A</td><td>Example root A</td></tr>
+<tr><td>Example root A</td><td>No prerequisites</td></tr>
+<tr><td>Example root A</td><td>illustrative, not fixed</td></tr>
+<tr><td>Example root B</td><td>Example root B</td></tr>
+<tr><td>Example root B</td><td>parallel with A</td></tr>
+<tr><td>Satisfied roots</td><td>Satisfied roots</td></tr>
+<tr><td>Satisfied roots</td><td>Not merely terminal</td></tr>
+<tr><td>Satisfied roots</td><td>failure does not unlock</td></tr>
+<tr><td>Example dependent C</td><td>Example dependent C</td></tr>
+<tr><td>Example dependent C</td><td>Depends on A</td></tr>
+<tr><td>Example dependent C</td><td>illustrative edge</td></tr>
+<tr><td>Example dependent D</td><td>Example dependent D</td></tr>
+<tr><td>Example dependent D</td><td>Depends on A and B</td></tr>
+<tr><td>Example dependent D</td><td>illustrative join</td></tr>
+<tr><td>Collective handoff</td><td>Collective handoff</td></tr>
+<tr><td>Collective handoff</td><td>Recheck aggregate eligibility</td></tr>
+<tr><td>Collective handoff</td><td>quiescence != success</td></tr>
+<tr><td>e0</td><td>persist</td></tr>
+<tr><td>e1</td><td>evaluate</td></tr>
+<tr><td>e2</td><td>ready</td></tr>
+<tr><td>e4</td><td>A done</td></tr>
+<tr><td>e6</td><td>B done</td></tr>
+<tr><td>e7</td><td>both</td></tr>
+<tr><td>e8</td><td>settled</td></tr>
+<tr><td>groups</td><td>DURABLE INTENT AND READINESS; ILLUSTRATIVE PARALLEL ROOTS; ILLUSTRATIVE DEPENDENTS AND HANDOFF</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-orchestration-fig3" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Child execution and dependency progress</td></tr>
+<tr><td>takeaway</td><td>Children publish typed results and branch content; collective review belongs to the parent.</td></tr>
+<tr><td>group-title-0</td><td>DEPENDENCY ADMISSION</td></tr>
+<tr><td>group-title-1</td><td>TRIMMED CHILD EXECUTION</td></tr>
+<tr><td>group-title-2</td><td>PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY</td></tr>
+<tr><td>Pending subtasks</td><td>Pending subtasks</td></tr>
+<tr><td>Pending subtasks</td><td>Persisted dependency map</td></tr>
+<tr><td>Pending subtasks</td><td>not automatically ready</td></tr>
+<tr><td>Ready frontier</td><td>Ready frontier</td></tr>
+<tr><td>Ready frontier</td><td>All predecessors satisfied</td></tr>
+<tr><td>Ready frontier</td><td>not any terminal result</td></tr>
+<tr><td>Isolated child</td><td>Isolated child</td></tr>
+<tr><td>Isolated child</td><td>Launch agent execution</td></tr>
+<tr><td>Isolated child</td><td>separate checkout</td></tr>
+<tr><td>Agent result</td><td>Agent result</td></tr>
+<tr><td>Agent result</td><td>Typed conditional output</td></tr>
+<tr><td>Agent result</td><td>no child RAI executor</td></tr>
+<tr><td>Assemble-ready</td><td>Assemble-ready</td></tr>
+<tr><td>Assemble-ready</td><td>Successful child content</td></tr>
+<tr><td>Assemble-ready</td><td>satisfies dependents</td></tr>
+<tr><td>Typed turn failure</td><td>Typed turn failure</td></tr>
+<tr><td>Typed turn failure</td><td>Does not satisfy dependents</td></tr>
+<tr><td>Typed turn failure</td><td>no per-child review</td></tr>
+<tr><td>Published branch</td><td>Published branch</td></tr>
+<tr><td>Published branch</td><td>Authoritative committed tip</td></tr>
+<tr><td>Published branch</td><td>not shared mutable files</td></tr>
+<tr><td>Dependency base</td><td>Dependency base</td></tr>
+<tr><td>Dependency base</td><td>Rebuild prerequisite content</td></tr>
+<tr><td>Dependency base</td><td>new isolated dependent</td></tr>
+<tr><td>Parent assembly check</td><td>Parent assembly check</td></tr>
+<tr><td>Parent assembly check</td><td>Quiescence plus eligibility</td></tr>
+<tr><td>Parent assembly check</td><td>collective gates later</td></tr>
+<tr><td>e0</td><td>evaluate</td></tr>
+<tr><td>e1</td><td>dispatch</td></tr>
+<tr><td>e2</td><td>execute</td></tr>
+<tr><td>e3</td><td>success</td></tr>
+<tr><td>e4</td><td>failed</td></tr>
+<tr><td>e5</td><td>publish</td></tr>
+<tr><td>e6</td><td>integrate</td></tr>
+<tr><td>e7</td><td>unlock</td></tr>
+<tr><td>e8</td><td>settled</td></tr>
+<tr><td>e9</td><td>blocked</td></tr>
+<tr><td>groups</td><td>DEPENDENCY ADMISSION; TRIMMED CHILD EXECUTION; PUBLISHED CONTENT AND AGGREGATE ELIGIBILITY</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-orchestration-fig8" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Persist the plan before dispatch</td></tr>
+<tr><td>takeaway</td><td>Confirmation, selection and decomposition precede durable child dispatch.</td></tr>
+<tr><td>group-title-0</td><td>INTENT AND REUSE</td></tr>
+<tr><td>group-title-1</td><td>SELECTION AND DURABLE PLAN</td></tr>
+<tr><td>group-title-2</td><td>DISPATCH AND COLLECTIVE HANDOFF</td></tr>
+<tr><td>Submitted request</td><td>Submitted request</td></tr>
+<tr><td>Submitted request</td><td>Goal + caller context</td></tr>
+<tr><td>Submitted request</td><td>manual or pickup</td></tr>
+<tr><td>Confirmation boundary</td><td>Confirmation boundary</td></tr>
+<tr><td>Confirmation boundary</td><td>Manual or unattended policy</td></tr>
+<tr><td>Confirmation boundary</td><td>autopilot-dependent</td></tr>
+<tr><td>Existing plan?</td><td>Existing plan?</td></tr>
+<tr><td>Existing plan?</td><td>Reuse persisted plan</td></tr>
+<tr><td>Existing plan?</td><td>avoid decomposing twice</td></tr>
+<tr><td>Select workflow</td><td>Select workflow</td></tr>
+<tr><td>Select workflow</td><td>Available definitions</td></tr>
+<tr><td>Select workflow</td><td>explicit choices honored</td></tr>
+<tr><td>Decompose + validate</td><td>Decompose + validate</td></tr>
+<tr><td>Decompose + validate</td><td>Outcome-complete work</td></tr>
+<tr><td>Decompose + validate</td><td>compatibility check</td></tr>
+<tr><td>Persist WorkPlan</td><td>Persist WorkPlan</td></tr>
+<tr><td>Persist WorkPlan</td><td>Subtasks and dependencies</td></tr>
+<tr><td>Persist WorkPlan</td><td>workflow identity</td></tr>
+<tr><td>Ready frontier</td><td>Ready frontier</td></tr>
+<tr><td>Ready frontier</td><td>Dependency satisfaction</td></tr>
+<tr><td>Ready frontier</td><td>pending -&gt; ready work</td></tr>
+<tr><td>Dispatch children</td><td>Dispatch children</td></tr>
+<tr><td>Dispatch children</td><td>Observe classified outcomes</td></tr>
+<tr><td>Dispatch children</td><td>isolated child runs</td></tr>
+<tr><td>Collective handoff</td><td>Collective handoff</td></tr>
+<tr><td>Collective handoff</td><td>After child supervision</td></tr>
+<tr><td>Collective handoff</td><td>assembly eligibility</td></tr>
+<tr><td>e0</td><td>confirm</td></tr>
+<tr><td>e1</td><td>lookup</td></tr>
+<tr><td>e2</td><td>new</td></tr>
+<tr><td>e3</td><td>decompose</td></tr>
+<tr><td>e4</td><td>persist</td></tr>
+<tr><td>e5</td><td>reuse</td></tr>
+<tr><td>e6</td><td>ready</td></tr>
+<tr><td>e7</td><td>dispatch</td></tr>
+<tr><td>e8</td><td>handoff</td></tr>
+<tr><td>groups</td><td>INTENT AND REUSE; SELECTION AND DURABLE PLAN; DISPATCH AND COLLECTIVE HANDOFF</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-orchestration-fig9" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Execution and observation cooperate</td></tr>
+<tr><td>takeaway</td><td>The watcher projects runtime events into durable state; it is not the executing graph.</td></tr>
+<tr><td>group-title-0</td><td>START AND BIND</td></tr>
+<tr><td>group-title-1</td><td>RUNTIME AND SUPERVISION</td></tr>
+<tr><td>group-title-2</td><td>DURABLE PROJECTIONS</td></tr>
+<tr><td>Run orchestrator</td><td>Run orchestrator</td></tr>
+<tr><td>Run orchestrator</td><td>Starts factory + watcher</td></tr>
+<tr><td>Run orchestrator</td><td>supervised lifetime</td></tr>
+<tr><td>Effective definition</td><td>Effective definition</td></tr>
+<tr><td>Effective definition</td><td>Resolve concrete workflow</td></tr>
+<tr><td>Effective definition</td><td>no policy composer</td></tr>
+<tr><td>Factory + binder</td><td>Factory + binder</td></tr>
+<tr><td>Factory + binder</td><td>Build executable graph</td></tr>
+<tr><td>Factory + binder</td><td>typed bindings</td></tr>
+<tr><td>Checkpointed stream</td><td>Checkpointed stream</td></tr>
+<tr><td>Checkpointed stream</td><td>MAF executes the graph</td></tr>
+<tr><td>Checkpointed stream</td><td>provider-aware store</td></tr>
+<tr><td>Watch loop</td><td>Watch loop</td></tr>
+<tr><td>Watch loop</td><td>Consumes runtime updates</td></tr>
+<tr><td>Watch loop</td><td>not graph execution</td></tr>
+<tr><td>Review request</td><td>Review request</td></tr>
+<tr><td>Review request</td><td>Persist pending decision</td></tr>
+<tr><td>Review request</td><td>durable pause context</td></tr>
+<tr><td>Typed terminal</td><td>Typed terminal</td></tr>
+<tr><td>Typed terminal</td><td>Classify completed output</td></tr>
+<tr><td>Typed terminal</td><td>not inferred from text</td></tr>
+<tr><td>Durable run state</td><td>Durable run state</td></tr>
+<tr><td>Durable run state</td><td>Persist status projection</td></tr>
+<tr><td>Durable run state</td><td>watcher owns updates</td></tr>
+<tr><td>Workflow-step events</td><td>Workflow-step events</td></tr>
+<tr><td>Workflow-step events</td><td>Expose execution progress</td></tr>
+<tr><td>Workflow-step events</td><td>client observation</td></tr>
+<tr><td>e0</td><td>start</td></tr>
+<tr><td>e1</td><td>resolve</td></tr>
+<tr><td>e2</td><td>execute</td></tr>
+<tr><td>e3</td><td>supervise</td></tr>
+<tr><td>e4</td><td>stream</td></tr>
+<tr><td>e5</td><td>request</td></tr>
+<tr><td>e6</td><td>terminal</td></tr>
+<tr><td>e7</td><td>persist</td></tr>
+<tr><td>e8</td><td>publish</td></tr>
+<tr><td>groups</td><td>START AND BIND; RUNTIME AND SUPERVISION; DURABLE PROJECTIONS</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-review-merge-fig5" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Review API decision paths</td></tr>
+<tr><td>takeaway</td><td>Authorize first. Deliver through the right path. Lock before any merge CAS.</td></tr>
+<tr><td>group-title-0</td><td>ADMISSION AND REPLAY</td></tr>
+<tr><td>group-title-1</td><td>DELIVERY ALTERNATIVES</td></tr>
+<tr><td>group-title-2</td><td>CONTINUATION AND MERGE</td></tr>
+<tr><td>Caller + access</td><td>Caller + access</td></tr>
+<tr><td>Caller + access</td><td>Project contributor check</td></tr>
+<tr><td>Caller + access</td><td>legacy: pending owner</td></tr>
+<tr><td>Reviewable state?</td><td>Reviewable state?</td></tr>
+<tr><td>Reviewable state?</td><td>Inspect status + pending</td></tr>
+<tr><td>Reviewable state?</td><td>awaiting_review</td></tr>
+<tr><td>Replay or conflict</td><td>Replay or conflict</td></tr>
+<tr><td>Replay or conflict</td><td>Matching terminal: reuse</td></tr>
+<tr><td>Replay or conflict</td><td>otherwise: 409</td></tr>
+<tr><td>Live pending</td><td>Live pending</td></tr>
+<tr><td>Live pending</td><td>Changes / decline use CAS</td></tr>
+<tr><td>Live pending</td><td>approve: no merge CAS</td></tr>
+<tr><td>Deferred pending</td><td>Deferred pending</td></tr>
+<tr><td>Deferred pending</td><td>Persist the decision first</td></tr>
+<tr><td>Deferred pending</td><td>then status transition</td></tr>
+<tr><td>No live / no pending</td><td>No live / no pending</td></tr>
+<tr><td>No live / no pending</td><td>Validate direct approval</td></tr>
+<tr><td>No live / no pending</td><td>changes: 409</td></tr>
+<tr><td>Consume + deliver</td><td>Consume + deliver</td></tr>
+<tr><td>Consume + deliver</td><td>Send workflow response</td></tr>
+<tr><td>Consume + deliver</td><td>live continuation</td></tr>
+<tr><td>Repository lock</td><td>Repository lock</td></tr>
+<tr><td>Repository lock</td><td>Only on reaching merge</td></tr>
+<tr><td>Repository lock</td><td>lock before CAS</td></tr>
+<tr><td>Merge CAS + Git</td><td>Merge CAS + Git</td></tr>
+<tr><td>Merge CAS + Git</td><td>Guard reviewed tree input</td></tr>
+<tr><td>Merge CAS + Git</td><td>release lock on exit</td></tr>
+<tr><td>e0</td><td>check</td></tr>
+<tr><td>e1</td><td>replay</td></tr>
+<tr><td>e2</td><td>live</td></tr>
+<tr><td>e3</td><td>deferred</td></tr>
+<tr><td>e4</td><td>direct</td></tr>
+<tr><td>e5</td><td>deliver</td></tr>
+<tr><td>e6</td><td>on merge</td></tr>
+<tr><td>e7</td><td>approve</td></tr>
+<tr><td>e8</td><td>locked</td></tr>
+<tr><td>groups</td><td>ADMISSION AND REPLAY; DELIVERY ALTERNATIVES; CONTINUATION AND MERGE</td></tr>
+</tbody></table>
+</details>

@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-coordinator-architecture.json",
+    "sha256": "474e93c2bfdf95b09cea9b887fac22a7458077c19f3de9f22e92e87317ea9072"
+  },
+  "drawio": {
+    "file": "canonical-coordinator-architecture.drawio",
+    "sha256": "f8887b4286a18c66f1bb1400d4db4b8b9313dd3e67ecd9422dfea539024fb012"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-coordinator-architecture.png",
+    "sha256": "6ce3c87ee71850c4d406d673f0899ca6997487ff46976d5a1f00f9e6ceeeea69"
+  }
+}

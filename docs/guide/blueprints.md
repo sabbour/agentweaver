@@ -9,7 +9,7 @@ Generated and user-supplied blueprints are validated before they can be applied.
 - required fields are present (`id`, `name`, `review_policy`, `sandbox_profile`, roster, and workflows);
 - roster roles are known catalog roles or declared bespoke roles with charters;
 - workflow ids exist and their graphs are runnable, connected from `start`, and free of unreachable nodes;
-- `review_policy` is coherent with the supported policy set;
+- `review_policy` is `default`, the only currently accepted policy;
 - `sandbox_profile` is one of the supported profiles (`default` or `restricted`).
 
 If generation returns an invalid blueprint, the API reports plain-language validation details and offers two safe next steps: regenerate with a clearer prompt or edit the draft and validate it again. Invalid blueprints are not saved or applied.
@@ -27,3 +27,13 @@ unrostered bespoke roles or bespoke ids that collide with catalog roles.
 
 See [Workflow generation](../workflow-generation.md) for the generation path and [Workflows](./workflows.md)
 for editing and saving generated workflow drafts.
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Blueprint relationships
+
+[![UML component view showing catalog selection, repository suggestion, or model generation producing a Blueprint; the Blueprint owning roster and role definitions while referencing workflows, review policy, and sandbox profile; explicit validation and apply materializing project configuration and a cast team consumed by the coordinator.](../diagrams/flagship/canonical-blueprint-relationships.png)](../diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-blueprint-relationships.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+<!-- flagship-diagrams:end -->

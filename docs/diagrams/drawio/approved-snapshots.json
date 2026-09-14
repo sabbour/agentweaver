@@ -1,0 +1,8 @@
+{
+  "coordinator-pilot-preserved-v1": {
+    "diagram": "canonical-coordinator-architecture",
+    "canonical_xml_sha256": "ec1bde74dd7b32148523695d705815cf25b5a166e1c8290524d55f57eaab6ab3",
+    "reason": "The user explicitly requires preservation of the approved coordinator pilot. Its original optical profile differs from the regenerated catalog. Only A5 metadata, explicit roles and the nine calibrated arrow markers changed. This exact-source approval is not a reusable style exemption.",
+    "review": "docs/diagrams/reviews/catalog-integration/pilot-compatibility/prepared-profile.json"
+  }
+}

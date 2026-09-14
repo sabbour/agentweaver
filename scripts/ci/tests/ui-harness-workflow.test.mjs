@@ -30,6 +30,12 @@ test("UI harness changes select the required Node toolchain job", () => {
   );
 });
 
+test("diagram changes run focused generator and drift validation", () => {
+  const job = workflowSection("  diagram-checks:\n", "\n  changeset-advisory:\n");
+  assert.match(job, /needs\.changes\.outputs\.diagrams == 'true'/);
+  assert.match(job, /validate\.mjs --profile ci --area diagrams/);
+});
+
 test("path filters escalate on ci.yml only, never on every workflow file", () => {
   const filters = workflowSection("          filters: |\n", "\n  dotnet-tests:\n");
 

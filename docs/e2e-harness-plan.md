@@ -2,6 +2,16 @@
 
 _Last updated: 2026-07-14_
 
+> **Historical operating log, not current deployment state.** Version, release,
+> issue-closure, staging-recovery, and resume instructions below record July 2026
+> work. They do not authorize a deployment or establish today's deployed revision.
+> Current release/deploy identity is owned by [RELEASING.md](../RELEASING.md).
+> The three surfaces share the [API plan's current harness contract](api-test-harness-plan.md#current-implementation-contract).
+> Raw `gh` tokens are not product sign-in: API persona runs use a target-matched
+> Agentweaver session, MCP HTTP uses a broker token, and UI runs reuse captured
+> browser state. A judge evaluates supplied evidence only; it does not run shell,
+> browser, or network diagnostics.
+
 ## Goal
 
 Run **continuous autopilot validation** of Agentweaver on staging AKS, built around two standing workstreams that run in parallel, indefinitely:
@@ -117,7 +127,11 @@ If you encounter **weird/unexplainable DNS resolution errors or catastrophic-loo
 
 **Design principle:** the harness itself should be LLM-driven — generating scenario prompts, launching runs, interpreting events/logs, and judging suitability — not a static script of fixed inputs.
 
-> **Harness architecture moved.** The harness-architecture design (the three-harness split — API/UI/MCP — the shared `scripts/persona-briefs/` + `scripts/harness-judge/` packages, the canonical `agentweaver.persona-judge-verdict/v1` schema, and the driver/judge separation) now lives in dedicated sibling specs and supersedes the architecture description here: **`docs/api-test-harness-plan.md`** (API, ground-truth), `docs/ui-test-harness-plan.md` (UI), `docs/mcp-test-harness-plan.md` (MCP). The autopilot/Squad-dispatch operating rules, release cadence, and methodology in this file are unchanged.
+> **Harness architecture moved.** The shared persona/evidence/judge contract is owned
+> by [the API plan](api-test-harness-plan.md#current-implementation-contract), with
+> [UI](ui-test-harness-plan.md) and [MCP](mcp-test-harness-plan.md) surface-specific
+> adapters. The operating log below remains historical; it does not override current
+> authentication, judge isolation, or [release policy](../RELEASING.md).
 
 ### Priority 1 (bring-forward)
 
