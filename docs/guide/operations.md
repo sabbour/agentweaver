@@ -231,15 +231,17 @@ trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
 
 If the Application Insights workspace is unavailable or slow, trace retrieval stops after three
-seconds and displays a diagnostic to authorized run viewers. The API coalesces concurrent requests
-for the same run and cursor page into one bounded workspace query, then pauses workspace queries
-briefly rather than allowing repeated trace loads to queue or amplify the dependency failure. A
-recently retrieved page may be shown while the source recovers and is explicitly labeled as such;
-an unavailable source with no safe cached page is not presented as proof that the run has no trace
-data. Cursor paging remains incremental, so retry or **Load more spans** only requests the needed
-page. Retry after the displayed interval; platform operators can use the API log's query context
-and failure type to investigate workspace credentials, RBAC, and availability without logging KQL
-payloads.
+seconds and displays a diagnostic to authorized run viewers only after the trace panel has made a
+small number of automatic retry attempts with backoff. While those retries remain, the panel stays
+in its normal loading state instead of showing a failure banner. The API coalesces concurrent
+requests for the same run and cursor page into one bounded workspace query, and trace reads are not
+short-circuited by an unrelated dashboard-metrics cooldown. A recently retrieved page may be shown
+while the source recovers and is explicitly labeled as such; an unavailable source with no safe
+cached page is not presented as proof that the run has no trace data. Cursor paging remains
+incremental, so retry or **Load more spans** only requests the needed page. If the automatic
+attempts are exhausted, use **Retry** to start a fresh bounded trace load; platform operators can use
+the API log's query context and failure type to investigate workspace credentials, RBAC, and
+availability without logging KQL payloads.
 
 ### Provisioning monitoring resources
 

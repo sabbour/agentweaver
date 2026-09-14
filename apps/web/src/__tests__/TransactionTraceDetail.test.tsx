@@ -132,16 +132,119 @@ afterEach(() => {
 
 describe('TransactionTracePanel trace detail', () => {
   it('does not imply an absent trace when the telemetry source is temporarily unavailable', async () => {
-    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
-      runId: 'run-47',
-      spans: [],
-      queryError: 'Application Insights trace telemetry is temporarily unavailable. Retry shortly.',
-    });
-    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+        runId: 'run-47',
+        spans: [],
+        queryError: 'Application Insights trace telemetry is temporarily unavailable. Retry shortly.',
+      });
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
 
-    await waitFor(() => expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy());
-    expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
-    expect(screen.queryByText('No trace data available for this run yet.')).toBeNull();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(1_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy();
+      expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
+      expect(screen.queryByText('No trace data available for this run yet.')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('automatically retries a first-load trace dependency failure without showing the failure banner', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryError = 'Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly.';
+      vi.mocked(apiClient.getRunTraces)
+        .mockResolvedValueOnce({ runId: 'run-47', spans: [], queryError })
+        .mockResolvedValueOnce({
+          runId: 'run-47',
+          spans: [{ id: 'agent', name: 'Coordinator turn', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+        });
+
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+      expect(screen.queryByText('Trace spans are temporarily unavailable.')).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('trace-tree').querySelector('[data-span-key="agent"]')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+      expect(screen.queryByText('Trace spans are temporarily unavailable.')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces a persistent first-load trace dependency failure after retries and keeps manual Retry working', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryError = 'Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly.';
+      vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'run-47', spans: [], queryError });
+
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(queryError)).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(3);
+      expect(screen.getByText(queryError)).toBeTruthy();
+      expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy();
+      expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(4);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('loads trace pages incrementally without replacing already-loaded spans', async () => {

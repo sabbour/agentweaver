@@ -82,7 +82,7 @@ public class AppInsightsMetricsServiceCancellationTests
     }
 
     [Fact]
-    public async Task GetRunTracesAsync_WhenWorkspaceFails_ReturnsDiagnosticAndFailsFastDuringCooldown()
+    public async Task GetRunTracesAsync_WhenWorkspaceFails_ReturnsDiagnosticWithoutReusingTraceCooldown()
     {
         var fakeClient = new AlwaysThrowingLogsQueryClient(new InvalidOperationException("simulated Azure Monitor outage"));
         var logger = new CapturingLogger();
@@ -95,8 +95,29 @@ public class AppInsightsMetricsServiceCancellationTests
         Assert.Contains("temporarily unavailable", first.QueryError, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(second.Spans);
         Assert.Contains("temporarily unavailable", second.QueryError, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, fakeClient.QueryCount);
+        Assert.DoesNotContain("after a dependency failure", second.QueryError, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, fakeClient.QueryCount);
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("AppTraces", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetRunTracesAsync_WhenMetricsCooldownIsOpen_StillAttemptsTraceQuery()
+    {
+        var fakeClient = new AlwaysThrowingLogsQueryClient(new InvalidOperationException("simulated Azure Monitor outage"));
+        var logger = new CapturingLogger();
+        var service = CreateService(fakeClient, logger);
+
+        await service.GetProjectMetricsAsync("project-1", from: null, to: null, CancellationToken.None);
+        var queryCountAfterMetrics = fakeClient.QueryCount;
+        var trace = await service.GetRunTracesAsync("run-1");
+
+        Assert.True(queryCountAfterMetrics > 0);
+        Assert.True(
+            fakeClient.QueryCount > queryCountAfterMetrics,
+            "Trace retrieval must not fail fast only because an earlier metrics request opened the workspace cooldown.");
+        Assert.Empty(trace.Spans);
+        Assert.Contains("temporarily unavailable", trace.QueryError, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("after a dependency failure", trace.QueryError, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
