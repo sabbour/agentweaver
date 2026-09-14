@@ -125,6 +125,24 @@ npm run azure:deploy-from-commit -- <sha-or-ref>
 - Configure `APPLICATIONINSIGHTS_CONNECTION_STRING` **and** a Log Analytics workspace id (`APPLICATIONINSIGHTS_WORKSPACE_ID` or `ApplicationInsights:WorkspaceId`) unless your connection string already embeds `WorkspaceId`.
 - If App Insights is not configured, or no workspace id can be resolved, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
 
+### Cluster topology details
+
+The **Cluster** page topology cards open an operator detail panel instead of repeating the
+card text. Runtime and workload details are sourced from the bounded
+`GET /api/diagnostics/cluster/topology` envelope, which allow-lists concise Kubernetes
+fields rather than exposing raw manifests or cluster credentials to the browser.
+
+Use the panel to copy pod, claim, run, deployment, warm-pool, sandbox, and template
+identifiers during triage. Healthy snapshots stay quiet; unhealthy pods, short
+readiness, and non-zero restarts are sorted first and called out. Each panel shows the
+topology snapshot's **Last updated** time and names any partial layer read (for example,
+runtime detail timeout) instead of falling back to a bare count.
+
+Sandbox details show the runtime class and isolation backend. In AKS, AgentHost
+sandboxes normally run with `kata-vm-isolation` and the `agentweaver-exec` sidecar on
+the Kata node pool, while non-sandbox control-plane workloads run with the default runc
+runtime.
+
 ### AgentHost assembly recovery diagnostics
 
 Assembly RAI and Build & Test use the coordinator run's warm-pool AgentHost. Recovery is
