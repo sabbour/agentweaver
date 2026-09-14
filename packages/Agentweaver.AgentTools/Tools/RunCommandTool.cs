@@ -15,8 +15,15 @@ internal sealed class RunCommandTool : ISandboxTool
             async (
                 [Description("Shell command to execute inside the sandbox.")] string command,
                 [Description("Timeout in milliseconds (bounded by the runtime policy).")] int? timeout_ms = null,
+                // #1317: the native Copilot shell tool accepts a `description`, so the model
+                // frequently supplies one here too. Accepting and ignoring it keeps the call
+                // matching this sandboxed tool instead of falling through to the disabled native
+                // shell, which cost a full turn to a tool.error + run.degraded before the agent
+                // retried without it.
+                [Description("Optional human-readable description of the command. Accepted for compatibility and otherwise ignored.")] string? description = null,
                 CancellationToken ct = default) =>
             {
+                _ = description;
                 if (ctx.Options.RejectBackgroundCommands && ContainsBackgrounding(command))
                     return "Command rejected: background/detached shell execution is not allowed.";
 

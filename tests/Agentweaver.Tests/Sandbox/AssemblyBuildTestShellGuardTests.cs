@@ -874,6 +874,29 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_command_accepts_and_ignores_a_model_supplied_description()
+    {
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(command => observed = command);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?>
+            {
+                ["command"] = "git status",
+                ["description"] = "Check the working tree",
+            }));
+
+        // #1317: the extra argument must not push the call to the disabled native shell.
+        result?.ToString().Should().NotContain("rejected");
+        observed.Should().NotBeNull();
+        observed!.CommandLine.Should().Contain("git status");
+    }
+
+    [Fact]
     public async Task Unattended_run_is_told_to_rewrite_a_blocked_destructive_command()
     {
         var executor = new CountingExecutor();
