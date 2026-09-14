@@ -120,11 +120,11 @@ $env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
 $env:ACR_QUERY_TIMEOUT_MS = "90000"    # 90s per ACR digest-verification attempt
 ```
 
-`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. The digest
-lookup is a read-only query, so a timed-out attempt is treated as "not visible
-yet" and is retried by the existing bounded backoff. Keep it short: raising it
-does not buy reliability, it just makes each hung `az acr repository show` stall
-that much longer before the retry can happen.
+`ACR_QUERY_TIMEOUT_MS` bounds a *single* attempt, not the whole wait. ACR digest
+lookups are read-only, so timed-out or transient failed attempts are retried
+before the deployment decides whether a tag is present, absent, or unknown. Keep
+the timeout short: raising it does not buy reliability, it just makes each hung
+`az acr repository show` stall that much longer before the retry can happen.
 
 The build and import limits behave differently from each other. A timed-out
 `az acr build` is **not** retried: a local CLI timeout leaves the remote build's
@@ -140,6 +140,15 @@ actually landed before the connection dropped. Deterministic errors (a missing
 source image, an authentication failure) still fail immediately rather than
 burning retries. Staging-tag cleanup never fails a deployment: a leaked
 preflight tag is harmless, an aborted deployment is not.
+
+When `--image-source ghcr` or `--image-source custom` promotes a staged image
+into a final release tag, a failed final-tag digest read is never treated as
+"tag absent". Without `--force`, the promotion first attempts a non-forced
+import; if ACR reports that the tag already exists, the deploy re-reads the tag
+and retries with `--force` only when the existing digest already matches the
+staged source digest. Differing tags still fail closed unless the operator
+explicitly requested `--force`, and that operator intent is honored even if the
+pre-promotion digest read remained unknown after retries.
 
 ### Resuming a failed deployment
 
