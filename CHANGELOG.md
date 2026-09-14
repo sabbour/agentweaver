@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.32.3
+
+### Patch Changes
+
+- 17f4b54: Fix GHCR/custom image promotion resume behavior when an ACR final-tag digest read times out or fails transiently.
+  
+  ACR repository digest reads now distinguish present, absent, and unknown states after retrying read-only failures. The default ACR digest-query budget is now 10 minutes, and retries widen shorter explicit budgets toward that default. Image promotion no longer treats an unknown digest as an absent tag, honors operator `--force` intent even when the pre-read failed, and recovers from ACR `Conflict` responses by retrying with `--force` only after confirming the existing tag already matches the staged digest.
+- a1482aa: Avoid starting the optional writable system root for ordinary sandboxed `run_command` calls so trivial shell commands no longer inherit the helper's 120-second failure wait.
+- 5bfab44: Guard the Topology panel's balanced-grid routing fix with two-engine geometry regression tests so future layout changes preserve card clearance and lane banding.
+
 ## 0.32.2
 
 ### Patch Changes
