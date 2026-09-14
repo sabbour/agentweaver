@@ -31,6 +31,15 @@ import {
   extractChangelogSection,
 } from "../changesets/shared.mjs";
 import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
+import {
+  checkpointKey,
+  clearCheckpoint,
+  completedStage,
+  loadCheckpoint,
+  newCheckpoint,
+  recordStage,
+  saveCheckpoint,
+} from "./lib/deploy-checkpoint.mjs";
 
 export class PublishedReleaseError extends Error {}
 
@@ -42,6 +51,8 @@ export function parseArgs(argv = []) {
   let help = false;
   let imageSource = "ghcr";
   let ghcrToken;
+  let resume = false;
+  let restart = false;
 
   const takeValue = (i, name) => {
     const raw = argv[i];
@@ -56,6 +67,10 @@ export function parseArgs(argv = []) {
     const arg = argv[i];
     if (arg === "--dry-run") {
       dryRun = true;
+    } else if (arg === "--resume") {
+      resume = true;
+    } else if (arg === "--restart") {
+      restart = true;
     } else if (["-h", "--help", "help"].includes(arg)) {
       help = true;
     } else if (arg === "--image-source" || arg.startsWith("--image-source=")) {
@@ -81,7 +96,11 @@ export function parseArgs(argv = []) {
     throw new Error(`--image-source must be one of: ${IMAGE_SOURCE_VALUES.join(", ")}.`);
   }
 
-  return { tag, dryRun, help, imageSource, ghcrToken };
+  if (!help && resume && restart) {
+    throw new Error("--resume and --restart are mutually exclusive.");
+  }
+
+  return { tag, dryRun, help, imageSource, ghcrToken, resume, restart };
 }
 
 export const HELP_TEXT = `deploy-from-release -- deploy an existing published Agentweaver release
@@ -89,6 +108,7 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --resume
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
 
 Requires an existing annotated git tag and matching GitHub Release. The
@@ -101,6 +121,13 @@ needed for private-package auth. Pass --image-source acr-build to build
 vX.Y.Z images from source into ACR instead. Either way, this deploys them,
 verifies live provenance against the tag, waits for the AgentHost warm pool,
 and runs health verification.
+
+Transient Azure CLI failures (connection resets, throttling, timeouts) are
+retried automatically for idempotent registry operations. Completed build and
+deploy stages are checkpointed outside the repository, so --resume continues a
+failed deployment from the stage that broke instead of repeating the whole
+run; --restart discards that state. Verification always re-runs, even on a
+resume. A successful deployment clears its own checkpoint.
 Soft-deleted canonical Repo App credentials remain inactive unless the explicit
 recovery operator flag is present.
 `;
@@ -195,6 +222,7 @@ export async function run(opts = {}) {
     validatedRelease,
     env: baseEnv = process.env,
     recoverRepoAppPrivateKey = false,
+    checkpointIo = {},
   } = opts;
   const parsed = parseArgs(argv);
   const dryRun = parsed.dryRun || baseEnv.DRY_RUN === "true";
@@ -274,7 +302,49 @@ export async function run(opts = {}) {
     const verifyStep = steps.verifyStep ?? verifyStepDefault;
 
     log.section(`Deploying published release ${tag}`);
-    const build = await buildImages.run(cfg, { exec, git, kubectl });
+
+    // Resume bookkeeping. Checkpoints are always written (so a later failure is
+    // recoverable) but only consulted with --resume, keeping the default a
+    // full, unconditional deployment.
+    const resumeKey = checkpointKey({
+      tag,
+      subscriptionId: cfg.SUBSCRIPTION_ID ?? "",
+      resourceGroup: cfg.RESOURCE_GROUP ?? "",
+      acrName: cfg.ACR_NAME ?? "",
+      clusterName: cfg.CLUSTER_NAME ?? "",
+      namespace: cfg.NAMESPACE ?? "",
+      imageSource: parsed.imageSource,
+    });
+    if (parsed.restart) {
+      clearCheckpoint(resumeKey, checkpointIo);
+    }
+    const priorCheckpoint = parsed.resume && !dryRun
+      ? loadCheckpoint(resumeKey, checkpointIo)
+      : null;
+    if (parsed.resume && !priorCheckpoint) {
+      log.warn("--resume: no usable checkpoint for this release and target; running every stage.");
+    }
+    let checkpoint = priorCheckpoint ?? newCheckpoint({ tag, key: resumeKey });
+    const persist = (stage, result) => {
+      if (dryRun) return;
+      checkpoint = recordStage(checkpoint, stage, result);
+      try {
+        saveCheckpoint(resumeKey, checkpoint, checkpointIo);
+      } catch (error) {
+        log.warn(`Could not persist deploy checkpoint (${error.message}); resume will be unavailable.`);
+      }
+    };
+    const resumedStage = (stage) => (priorCheckpoint ? completedStage(priorCheckpoint, stage) : null);
+
+    const resumedBuild = resumedStage("build");
+    let build;
+    if (resumedBuild) {
+      build = resumedBuild.result;
+      log.skip(`build: already completed at ${resumedBuild.completedAt} (resumed)`);
+    } else {
+      build = await buildImages.run(cfg, { exec, git, kubectl });
+      persist("build", build);
+    }
     const agentHostDigest = build?.expectedImageDigests?.["agentweaver-agent-host"];
     if (parsed.imageSource === "ghcr" && !dryRun && agentHostDigest) {
       validateImageDigest(agentHostDigest, "AgentHost ACR digest");
@@ -284,12 +354,22 @@ export async function run(opts = {}) {
     const deployCfg = parsed.imageSource === "ghcr" && !dryRun && agentHostDigest
       ? { ...cfg, AGENTHOST_IMAGE_DIGEST: agentHostDigest }
       : cfg;
-    const deploy = await deployStep.run(deployCfg, {
-      run: exec.run,
-      capture: exec.capture,
-      log,
-      repoRoot,
-    });
+    const resumedDeploy = resumedStage("deploy");
+    let deploy;
+    if (resumedDeploy) {
+      deploy = resumedDeploy.result;
+      log.skip(`deploy: already completed at ${resumedDeploy.completedAt} (resumed)`);
+    } else {
+      deploy = await deployStep.run(deployCfg, {
+        run: exec.run,
+        capture: exec.capture,
+        log,
+        repoRoot,
+      });
+      persist("deploy", deploy);
+    }
+    // Verification stages below are never resumed: they are the evidence that
+    // this deployment is correct, so a resumed run must still prove it.
     const provenance = await verifyProvenance.run(
       { ...deployCfg, VERIFY_GIT_REF: release.commit ?? tag },
       { exec, git, kubectl },
@@ -310,6 +390,12 @@ export async function run(opts = {}) {
     }
     const verify = await verifyStep.run(deployCfg, { exec, log });
 
+    // A fully verified deployment must not leave a checkpoint behind, or the
+    // next --resume for this tag would skip stages that should run again.
+    if (dryRun || verify.ok) {
+      clearCheckpoint(resumeKey, checkpointIo);
+    }
+
     return {
       ok: dryRun || verify.ok,
       tag,
@@ -323,6 +409,14 @@ export async function run(opts = {}) {
       verify,
       dryRun,
     };
+  } catch (error) {
+    if (!dryRun && parsed.tag) {
+      log.warn(
+        `Deployment stopped. Completed stages were checkpointed; re-run with --resume to continue:\n` +
+        `  node scripts/azure/cli.mjs deploy-from-release ${parsed.tag} --image-source ${parsed.imageSource} --resume`,
+      );
+    }
+    throw error;
   } finally {
     stagedRepoAppKey?.cleanup();
     if (dryRun) {

@@ -4,7 +4,7 @@
 
 `GET /api/diagnostics/cluster` returns a real-time Kubernetes snapshot. It includes dependency checks, agent-host pod inventory, SandboxWarmPool objects, and SandboxClaim objects.
 
-This endpoint requires bearer authentication. Non-AKS deployments return `404 Not Found`.
+This endpoint requires bearer authentication. Without a Kubernetes client the endpoint remains available: Kubernetes checks report unknown/unavailable conditions and inventories can be empty. Topology returns unavailable graph/layer results.
 
 ## Response
 
@@ -26,12 +26,7 @@ The response is a `ClusterDiagnosticsDto`:
   "orphaned_agent_pods": [],
   "pending_capacity_runs": [],
   "warm_pools": [],
-  "sandbox_claims": [],
-  "resource_graph": {
-    "nodes": [],
-    "edges": [],
-    "layers": []
-  }
+  "sandbox_claims": []
 }
 ```
 
@@ -45,7 +40,7 @@ The response is a `ClusterDiagnosticsDto`:
 | `pending_capacity_runs` | `PendingCapacityRunDto[]` | Capacity-waiting subtasks. New runs usually leave this legacy surface empty. |
 | `warm_pools` | `WarmPoolStatusDto[]` | SandboxWarmPool objects in the namespace. |
 | `sandbox_claims` | `SandboxClaimObjectDto[]` | SandboxClaim objects in the namespace. |
-| `resource_graph` | `ClusterTopologyResourceGraphDto` | Optional bounded Kubernetes infrastructure graph. Older/runtime-only responses can omit it. |
+| `details` | `TopologyResourceDetailsDto` | Optional bounded cluster-root metadata. |
 
 ## Checks
 
@@ -139,42 +134,9 @@ objects per resource type, the response is capped at 250 nodes and 500 edges, an
 The response never includes full manifests, Secret values, tokens, service cluster IPs,
 internal endpoint addresses, or container environment values.
 
-## Kubernetes resource graph contract
+## Relationship topology
 
-The web UI is ready to consume `resource_graph` when backend discovery is integrated.
-Its absence preserves the runtime-only graph and marks infrastructure discovery as
-unavailable.
-
-Each `nodes` entry contains:
-
-| Field | Type | Description |
-|---|---|---|
-| `id` | string | Stable snapshot identifier. Edges use this exact value. |
-| `kind` | string | Source Kubernetes kind, such as `Gateway`, `Service`, `NetworkPolicy`, `Deployment`, `Pod`, `PersistentVolumeClaim`, a scaling-policy kind, or an Agentweaver sandbox CRD. ReplicaSet, PersistentVolume, and StorageClass are excluded from discovery. |
-| `name` | string | Resource metadata name. |
-| `namespace` | string or null | Namespace, or null for a cluster-scoped resource. |
-| `status` | string | Concise machine-readable state used for card status treatment. |
-| `summary` | string or null | Short human-readable state summary. |
-| `layer` | string | `traffic`, `security`, `workloads`, `storage`, `scaling`, or `agentweaver`. |
-| `api_version` | string or null | Kubernetes API version when available. |
-| `details` | object | Optional small set of display-safe scalar details. Do not put secrets or unbounded payloads here. |
-
-Each `edges` entry contains `source`, `target`, a short `relationship`, and `authority`.
-`authority` is `authoritative` when Kubernetes ownership, references, or controller state
-establishes the edge. Use `inferred` for selector, label, naming, or other best-effort
-correlation. An edge can connect to a runtime card without depending on UI-generated
-identifiers by using one of these endpoint forms:
-
-- `runtime:cluster`
-- `runtime:pool:<pool-name>`
-- `runtime:instance:<pool-name>/<instance-name>`
-- `runtime:claim:<claim-name>`
-- `runtime:pod:<claim-name>/<pod-name>`
-
-Each optional `layers` entry contains `layer`, `status`, and an optional `message`.
-Status is `available`, `empty`, `forbidden`, or `unavailable`. Return per-layer failures
-instead of failing the full diagnostics response so the UI can keep usable layers
-interactive.
+Relationships come from `/api/diagnostics/cluster/topology`, not a `resource_graph` member on the runtime snapshot. Supported layers are `runtime`, `networking`, `workloads`, `storage`, `autoscaling` and `availability`. Requested layers report `available`, `partial` or `unavailable`; omitted layers report `not_requested`. Bounded discovery retains the limits of 100 objects per type, 250 nodes and 500 edges.
 
 ## Status codes
 
@@ -182,7 +144,6 @@ interactive.
 | --- | --- |
 | `200 OK` | The snapshot was returned. Individual checks can report a non-healthy status. |
 | `401 Unauthorized` | The bearer credential is missing or invalid. |
-| `404 Not Found` | Cluster diagnostics are unavailable in this deployment. |
 
 ## Source
 

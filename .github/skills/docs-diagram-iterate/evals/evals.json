@@ -1,0 +1,61 @@
+{
+  "skill_name": "docs-diagram-iterate",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The coordinator architecture pitch PNG is exported but still looks basic. Take it through the full publication-quality iteration workflow.",
+      "expected_output": "At least four post-pitch passes, with pass 1 meeting the 9x meaningful XML gate and passes 2-4 limited to orientation, overlap, and arrow corrections.",
+      "files": [],
+      "expectations": [
+        "The pitch itself is not counted as one of the four required passes.",
+        "Pass 1 compares meaningful non-whitespace XML excluding comments and embedded image data.",
+        "Pass 1 rejects invisible padding and reaches at least 9x the pitch count.",
+        "Passes 2 through 4 are correction-only.",
+        "Every pass saves a distinct draw.io source, PNG, and short change record.",
+        "Every newly exported PNG is actually inspected at A5 print size and enlarged detail.",
+        "Pass 4 traces every arrow source-to-target."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Fix overlapping labels and several backwards connectors in docs/diagrams/src/canonical-coordinator-architecture.drawio. It already completed the visual-upgrade pass.",
+      "expected_output": "Correction-only passes that preserve the visual design, trace connectors, save per-pass artifacts, and continue beyond pass 4 if defects remain.",
+      "files": [],
+      "expectations": [
+        "No new content or visual redesign is introduced after pass 1.",
+        "Direction, endpoints, routing, labels, crossings, and logical junctions are checked.",
+        "Native symbols and Agentweaver-specific custom components remain explicitly distinguished.",
+        "The workflow continues with correction-only passes when defects remain."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create a brand-new architecture diagram explaining Agentweaver memory.",
+      "expected_output": "The iteration skill should defer to docs-diagram-pitch for initial research and creation.",
+      "files": [],
+      "expectations": [
+        "The skill description excludes brand-new diagram pitches."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Please update the React Flow diagram renderer so labels wrap differently.",
+      "expected_output": "The docs-diagram-iterate skill should not trigger because this is renderer implementation work, not draw.io artifact refinement.",
+      "files": [],
+      "expectations": [
+        "The trigger description is scoped to existing draw.io artifacts."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Refine only the queued deep-dive diagrams named in the catalog manifest. Other agents are working on guide and reference diagrams in separate worktrees.",
+      "expected_output": "A name/area-selected batch that preserves stable output paths and does not touch diagrams owned by other workstreams.",
+      "files": [],
+      "expectations": [
+        "The selection is limited by owner area and queued status.",
+        "Each selected diagram is passed to the renderer by canonical name.",
+        "No source, output, review directory, or inventory entry is shared between active writers."
+      ]
+    }
+  ]
+}

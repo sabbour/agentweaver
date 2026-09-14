@@ -1,5 +1,9 @@
 # Events reference
 
+See Outcome, DAG, redispatch and collective assembly event families for the shared visual model.
+
+See Durable replay, nonterminal waits and child-human round trips for the shared visual model.
+
 Every run event uses the same envelope:
 
 | Field | Type | Notes |
@@ -61,13 +65,13 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.started` | When a coordinator run begins drafting an OutcomeSpec from the user's goal | `goal` |
 | `coordinator.recovered` | When an interrupted coordinator run is resumed after a process restart and its dispatch / collective-assembly engine is re-armed from the persisted work plan | `status` (the work-plan status it resumed from) |
 | `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
-| `coordinator.outcome_spec.confirmed` | When a human confirms the drafted OutcomeSpec and the coordinator run proceeds | `specId`, `confirmedBy` |
+| `coordinator.outcome_spec.confirmed` | When the drafted OutcomeSpec is confirmed through the normal seam, interactively or by launch Autopilot | `specId`, `confirmedBy` |
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
 | `coordinator.workflow_selected` | When the coordinator selects which workflow to run from a project's multi-workflow set (skipped silently when the project carries only one workflow) | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available` (`[{ id, name }]`) |
 | `coordinator.child_stall_detected` | When a child run emits no new events past the configured stall timeout and the coordinator marks that path as stalled | `childRunId`, `subtaskId`, `staleSinceUtc`, `stallTimeoutMinutes`, `lastEventSequence` |
 | `coordinator.subtask_redispatched` | When a stalled subtask still has recovery budget and is reset to `pending` for a fresh child (on a fresh pod) instead of dead-ending the run | `subtaskId`, `priorChildRunId`, `attempt`, `maxAttempts`, `reason` (`stall_redispatch`), `timestamp_utc` |
 | `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
-| `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
+| `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a state-bearing `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
 | `run.assemble_ready` | On a coordinator CHILD run's own stream when the child finishes its trimmed agent pipeline and is ready to be collected/assembled | `runId`, `subtaskId`, `parentRunId`, `worktreeBranch`, `treeHash`, `hasChanges`, `stepCount`, `raiSafetyFlagged` |
 | `run.no_changes_produced` | On a coordinator CHILD run when it reaches assemble-ready with no committed changes (the worker wrote no files) | `runId`, `subtaskId`, `parentRunId`, `message` |
@@ -135,6 +139,26 @@ This event records a successful tool execution. `content` carries the result the
 
 This event records every tool outcome that is not a success. It covers sandbox policy denials — an absolute path, `..` traversal, or a symlink escape — as well as non-policy failures such as a missing file or an I/O error. `errorMessage` explains what went wrong. It never carries the contents of a file outside the sandbox, because a denied tool never runs.
 
+### `tool.execution_pending`
+
+This event is an output-free heartbeat while a sandboxed `run_command` invocation is still active.
+It is correlated with the matching `tool.call` by `toolCallId`, and it stops when the command
+returns, fails, times out, is cancelled, or the sandbox tears down. The payload is limited to timing
+and correlation fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `runId` | string | The run that owns the command. |
+| `toolCallId` | string | Matches the `tool.call`/`tool.result`/`tool.error` correlation id. |
+| `toolName` | string | Always `run_command`. |
+| `startedAtUtc` | string | UTC time the active command slot opened. |
+| `deadlineUtc` | string \| null | Watchdog deadline when one is armed. |
+| `elapsedSeconds` | number | Wall-clock seconds observed when the heartbeat was emitted. |
+
+The heartbeat never carries command text, stdout, stderr, exit code, working directory, or
+environment data. Browser clients consume it from the existing run stream; they must not add
+separate polling.
+
 ### `run.completed`
 
 This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the
@@ -146,7 +170,7 @@ instead.
 
 ### `run.failed`
 
-This event marks a terminal failure. Public REST and SSE consumers receive only the bounded normalized `{ message, errorCode, retryable }` payload. The legacy `reason` and `detail` fields are deprecated and never serialized publicly. Authorized full consumers can request the separately redacted [`GET /api/runs/{id}/terminal-diagnostic`](../guide/runs.md#terminal-failure-diagnostics) projection. Content-safety, executor, infrastructure, and watch-loop causes are represented by the allowlisted `errorCode`, not untrusted failure text.
+This event marks a terminal failure. Public REST and SSE consumers receive only the bounded normalized `{ message, errorCode, retryable }` payload. The legacy `reason` and `detail` fields are deprecated and never serialized publicly. Authorized full consumers can request the separately redacted [`GET /api/runs/{id}/terminal-diagnostic`](../guide/runs.md#failed-run-diagnostics) projection. Content-safety, executor, infrastructure, and watch-loop causes are represented by the allowlisted `errorCode`, not untrusted failure text.
 
 ### `run.bounded`
 
@@ -283,7 +307,7 @@ Emitted once at run start, carrying a full snapshot of the run's workflow topolo
 - `nodes[].node_type`: self-declared category that drives the frontend's rendered shape — one of `"agent"` (an AI agent turn), `"action"` (a deterministic system op), `"gate"` (a human-in-the-loop decision/approval), `"terminal"` (a workflow endpoint/checkpoint), or `"subtask"` (a coordinator fan-out child reference). Required on every node. In the `full` variant: `agent`/`rai`/`scribe` are `agent`, `review` is `gate`, `merge` is `action`; in the `child` variant `assemble-ready` is `terminal`.
 - `edges[].cardinality`: `"direct"` | `"fanout"` | `"fanin"`. `loopback`: `true` for revision-cycle back-edges (the target is an ancestor of the source).
 
-Plumbing executors (input storers, adapters, terminals) are collapsed or hidden: hidden nodes are dropped and their edges are transitively re-stitched, and the scribe-path executors collapse into the single `scribe` node. The `full` variant nodes are `agent`, `rai`, `review`, `merge`, `scribe`; the `child` variant nodes are `agent`, `rai`, `assemble-ready`.
+Plumbing executors (input storers, adapters, terminals) are collapsed or hidden: hidden nodes are dropped and their edges are transitively re-stitched, and the scribe-path executors collapse into the single `scribe` node. The `full` variant nodes are `agent`, `rai`, `review`, `merge`, `scribe`; the `child` variant nodes are `agent`, `assemble-ready`.
 
 ### `coordinator.started`
 
@@ -295,13 +319,13 @@ Emitted when an interrupted coordinator run is resumed after an API process rest
 
 ### `coordinator.outcome_spec`
 
-Emitted when the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate (`coordinator-confirmation-gate`). The OutcomeSpec is persisted to the memory store with status `awaiting_confirmation` before this event fires. `specId` is the persisted row id; `status` is `awaiting_confirmation`. `desiredOutcome`, `scope`, and `assumptions` are the drafted strings; `clarifyingQuestions` is an optional array. No decomposition or child dispatch occurs before a human confirms — the run blocks here until the confirm or revise seam is called.
+Emitted when the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate (`coordinator-confirmation-gate`). The OutcomeSpec is persisted to the memory store with status `awaiting_confirmation` before this event fires. `specId` is the persisted row id; `status` is `awaiting_confirmation`. `desiredOutcome`, `scope`, and `assumptions` are the drafted strings; `clarifyingQuestions` is an optional array. Interactive defineOutcome waits here for confirm/revise; launch Autopilot can confirm unattended. Direct skips this drafted-spec gate.
 
-When autopilot is off on a pickup run (or on any interactive run), the SSE stream closes with a `done` frame after this event. This `done` is not a permanent terminal — the run remains `in_progress` at the confirmation gate. After the user confirms the spec, the frontend reopens the stream from the last received sequence and the run continues. When autopilot is on for a pickup run, `ScheduleUnattendedConfirm` fires automatically so the stream typically stays live without a manual reconnect.
+Outcome-definition and review waits are nonterminal. A connection may close at a gate; use run/spec state and reconnect with the last per-run sequence. Do not require `done` immediately after `coordinator.outcome_spec`: local SSE closure checks review-requested state, whereas durable subscribers use terminal events.
 
 ### `coordinator.outcome_spec.confirmed`
 
-Emitted when a human confirms the drafted OutcomeSpec through the confirm seam. The persisted OutcomeSpec advances to status `confirmed`. `specId` is the confirmed row id; `confirmedBy` is the confirming user. In Phase 1 the coordinator run terminates after confirmation (decomposition and child dispatch are Phase 2); a `run.completed` event follows.
+The spec becomes confirmed and `confirmedBy` identifies the accountable confirmer, including unattended normal-seam confirmation. Confirmation advances orchestration rather than inherently emitting `run.completed`; Direct skips the drafted-spec gate.
 
 ### `coordinator.work_plan`
 
@@ -318,14 +342,14 @@ Clients render directly from these events and never compute topology themselves.
 
 ### `coordinator.graph`
 
-The unified coordinator view in the shared `GraphDescriptor` contract (the same shape returned by `GET /api/runs/{id}/graph` and emitted per-run as `run.workflow_graph`), so the frontend's generic renderer draws the coordinator, its fan-out subtask children, and the PLANNED Phase 3 collective-assembly stage with one code path. Emitted on the coordinator stream as a FULL, shape-only snapshot whenever the topology shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot). It is built from the work plan (no reflection).
+The unified coordinator view in the shared `GraphDescriptor` contract (the same shape returned by `GET /api/runs/{id}/graph` and emitted per-run as `run.workflow_graph`), so the frontend's generic renderer draws the coordinator, its fan-out subtask children, and the PLANNED Phase 3 collective-assembly stage with one code path. Emitted on the coordinator stream as a FULL, state-bearing snapshot whenever the topology shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot). It is built from the work plan (no reflection).
 
-Unlike `coordinator.topology`, runtime status is NOT baked into the descriptor — it is shape only (consistent with `run.workflow_graph`); project status separately from the `subtask.*` / `coordinator.topology` streams. The payload is a `GraphDescriptor` with `variant: "coordinator"`, `graph_id: "coordinator:{coordinatorRunId}"`, `start_node_id: "coordinator"`:
+The descriptor includes optional persisted status/reason/terminal-stage fields. It is a `GraphDescriptor` with `variant: coordinator`, a Coordinator start node and `coordinator:{coordinatorRunId}` graph ID. Topology snapshot/delta events remain a separate projection.
 
 - Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
 - One `plan:subtask-{id}` node per subtask (`node_type: "subtask"`, `kind: "live"`) carrying optional `agent`, `model`, `phase`, `isolation`, `child_run_id` fields (omitted when null) and a `child_graph_ref` of `run:{childRunId}` once dispatched (null until then) so the child's own graph can be expanded via `GET /api/runs/{childRunId}/graph`.
-- PLANNED collective-assembly chain (`kind: "planned"`): gate nodes resolved from the selected workflow's assembly gates (for built-in software workflows, RAI before Build & Test before human review), then `planned:assembly-merge` (`action`) → `planned:assembly-scribe` (`agent`).
-- Edges: `coordinator` → each root subtask; dependency edges between subtasks; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain. Two loopback back-edges (`loopback: true`) close the cycle — `planned:assembly-rai` → `coordinator` and `planned:assembly-review` → `coordinator` — reflecting that an RAI flag or a review request-changes re-dispatches affected subtasks through the coordinator; all forward edges are `loopback: false`, and loopback edges are always `direct` and excluded from the fan-out/fan-in degree counts. `coordinator.topology` remains emitted alongside for existing consumers; `coordinator.graph` is the unified-contract event.
+- Selected-workflow assembly gates precede merge and Scribe. Their stable `planned:assembly-*` IDs become live as stages execute, with persisted status/reason/terminal-stage fields.
+- Coordinator connects to roots; prerequisite subtasks connect to dependents; leaves connect to the first selected gate (or merge). Every selected gate has a Coordinator loopback excluded from forward-degree/cardinality calculations. `coordinator.topology` remains available alongside the unified descriptor.
 
 ### `subtask.*`
 
@@ -375,7 +399,7 @@ A single background pipeline then drives the collective stages, each emitting a 
 8. **One scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — best-effort; a scribe failure does not fail the already-merged assembly.
 9. **Completion** — `coordinator.assembly_completed` with the `integrationBranch` and `commitHash`; the work plan reaches `complete`.
 
-Work-plan status flows `dispatching → awaiting_assembly → assembling → in_review → assembling` (during merge/scribe after approval) `→ complete`, plus the parked/terminal states `assembly_blocked`, `assembly_failed`, and `assembly_declined`. On every terminal assembly path the coordinator run itself is moved to a terminal `RunStatus` that carries a human-readable `result` (the reason): `assembly_blocked: <reason>` (Failed), `assembly_merge_failed: <reason>` (MergeFailed), `assembly_declined` (Declined), `assembly_error: <message>` (Failed, unexpected fault), or `assembly_complete` (Completed). This `result` is surfaced as the `statusReason` on `GET /api/runs/{coordinatorRunId}/work-plan` and as the `result` on the run summary/detail, so the UI never shows a bare "Failed" with no explanation. The collective `coordinator.assembly_rai_*` events remain distinct from child-run lifecycle events: the former is the single RAI pass over the combined output, while child runs now stop at `run.assemble_ready` without launching their own `-rai` sub-stream. All events carry a monotonic `seq` on the coordinator stream.
+Work-plan status and run terminal status differ. `assembly_blocked` can park a recoverable assembly and does not inherently terminate SSE. Actual terminal outcomes emit terminal events; durable replay drains its loaded batch before closing. Budget exhaustion escalates to `in_review` at human review, not terminal steering-budget exhaustion.
 
 Durable replay drains the full persisted batch before terminal handling. A `coordinator.assembly_failed`
 row is terminal, but if a diagnostic row was persisted just after it in the same replay batch, subscribers
@@ -383,7 +407,6 @@ still receive that row before `/api/runs/{id}/stream` completes. `coordinator.as
 intentionally not terminal: it represents a retryable park, so SSE subscribers stay attached until the plan
 recovers or reaches a real terminal event (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:153`,
 `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`).
-
 
 ## Model-assisted casting
 
@@ -403,5 +426,151 @@ The wait is resolved by `POST /api/runs/{id}/questions/{requestId}/answer` with 
 
 For a coordinator CHILD run, the coordinator's child watcher (`CoordinatorDispatchService.ObserveChildAsync`) re-projects the child's `agent.question_asked` onto the COORDINATOR stream as `coordinator.child_question`, and the child's `tool.approval_required` as `coordinator.child_approval_required`, each carrying `childRunId` + `subtaskId` + `requestId`. The answer/approval flows back to the CHILD run: answer via `POST /api/runs/{childRunId}/questions/{requestId}/answer`, approval via the existing `POST /api/runs/{childRunId}/tool-approvals` / `tool-denials`. Re-projection does not affect terminal-event mapping.
 
-
 Scenario-mode proposals resolve without a model run. The `run_id` field in their proposal response is `null`.
+
+Coordinator graph descriptors combine work-plan topology with persisted status. Nodes may include `status`, `status_reason`, and `terminal_stage`; subtask state also arrives through `coordinator.topology`. Selected-workflow assembly gates become `kind: "live"` when reached, even though their stable IDs start with `planned:assembly-`. Failure projection uses the terminal stage so failure-scribe does not mark never-run gates as executed. Delegated plans leave skipped nodes planned with delegated status.
+
+Leaf subtasks connect to the first selected gate (or merge if none); the gates form a chain followed by merge and Scribe. Each selected gate has a coordinator loopback, excluded from forward degree calculations. Fixed gate lists are examples for a particular workflow, not a universal RAI-only pipeline.
+
+The SSE envelope sequence is the per-run replay cursor. The `seq` inside `coordinator.topology` is a separate topology snapshot/delta counter, not a substitute for `Last-Event-ID`.
+
+<details id="diagram-context-canonical-durable-event-stream">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Postgres is the event relay</td></tr>
+<tr><td>subtitle</td><td>Any API replica can serve a cursor over durable RunEvents—no sticky session required.</td></tr>
+<tr><td>group-title0</td><td>Write path · replica A</td></tr>
+<tr><td>group-title1</td><td>Read path · replica B</td></tr>
+<tr><td>Run producer</td><td>Run producer</td></tr>
+<tr><td>Run producer</td><td>Append a structured event</td></tr>
+<tr><td>Run producer</td><td>runId + type + payload</td></tr>
+<tr><td>EF event stream</td><td>EF event stream</td></tr>
+<tr><td>EF event stream</td><td>Serialize writes per run</td></tr>
+<tr><td>EF event stream</td><td>pg_advisory_xact_lock</td></tr>
+<tr><td>RunEvents</td><td>RunEvents</td></tr>
+<tr><td>RunEvents</td><td>Shared PostgreSQL table</td></tr>
+<tr><td>RunEvents</td><td>(RunId, Sequence)</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web / MCP watcher</td></tr>
+<tr><td>Web / MCP watcher</td><td>Consume ordered events</td></tr>
+<tr><td>Web / MCP watcher</td><td>last delivered cursor</td></tr>
+<tr><td>SSE endpoint</td><td>SSE endpoint</td></tr>
+<tr><td>SSE endpoint</td><td>Emit id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>ordered response frames</td></tr>
+<tr><td>EF subscriber</td><td>EF subscriber</td></tr>
+<tr><td>EF subscriber</td><td>Read Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>idle poll: 250 ms</td></tr>
+<tr><td>e1</td><td>append</td></tr>
+<tr><td>e2</td><td>commit</td></tr>
+<tr><td>e3</td><td>ordered batch</td></tr>
+<tr><td>e4</td><td>yield</td></tr>
+<tr><td>e5</td><td>SSE frames</td></tr>
+<tr><td>assurance-title</td><td>POSTGRES LANE ONLY</td></tr>
+<tr><td>assurance-line1</td><td>SQLite register-channel / replay / tail is a separate implementation—not this architecture.</td></tr>
+<tr><td>assurance-line2</td><td>Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>Run producer</td><td>Input</td></tr>
+<tr><td>Run producer</td><td>RunStreamEntry</td></tr>
+<tr><td>Run producer</td><td>Identity</td></tr>
+<tr><td>Run producer</td><td>runId + event type</td></tr>
+<tr><td>Run producer</td><td>Body</td></tr>
+<tr><td>Run producer</td><td>Structured payload</td></tr>
+<tr><td>Run producer</td><td>Ack</td></tr>
+<tr><td>Run producer</td><td>After durable commit</td></tr>
+<tr><td>EF event stream</td><td>Lock</td></tr>
+<tr><td>EF event stream</td><td>Per-run advisory lock</td></tr>
+<tr><td>EF event stream</td><td>Next</td></tr>
+<tr><td>EF event stream</td><td>MAX(Sequence) + 1</td></tr>
+<tr><td>EF event stream</td><td>Write</td></tr>
+<tr><td>EF event stream</td><td>Save transaction</td></tr>
+<tr><td>EF event stream</td><td>Commit</td></tr>
+<tr><td>EF event stream</td><td>Before acknowledgement</td></tr>
+<tr><td>RunEvents</td><td>Table</td></tr>
+<tr><td>RunEvents</td><td>Key</td></tr>
+<tr><td>RunEvents</td><td>RunId + Sequence</td></tr>
+<tr><td>RunEvents</td><td>Order</td></tr>
+<tr><td>RunEvents</td><td>Ascending sequence</td></tr>
+<tr><td>RunEvents</td><td>Reuse</td></tr>
+<tr><td>RunEvents</td><td>Same type / payload</td></tr>
+<tr><td>Web / MCP watcher</td><td>Client</td></tr>
+<tr><td>Web / MCP watcher</td><td>Web or MCP</td></tr>
+<tr><td>Web / MCP watcher</td><td>Resume</td></tr>
+<tr><td>Web / MCP watcher</td><td>Last delivered cursor</td></tr>
+<tr><td>Web / MCP watcher</td><td>Replica</td></tr>
+<tr><td>Web / MCP watcher</td><td>No sticky requirement</td></tr>
+<tr><td>Web / MCP watcher</td><td>History</td></tr>
+<tr><td>Web / MCP watcher</td><td>Durable ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Frame</td></tr>
+<tr><td>SSE endpoint</td><td>id + event + data</td></tr>
+<tr><td>SSE endpoint</td><td>Cursor</td></tr>
+<tr><td>SSE endpoint</td><td>Last-Event-ID</td></tr>
+<tr><td>SSE endpoint</td><td>Delivery</td></tr>
+<tr><td>SSE endpoint</td><td>Yield ordered events</td></tr>
+<tr><td>SSE endpoint</td><td>Close</td></tr>
+<tr><td>SSE endpoint</td><td>After batch is drained</td></tr>
+<tr><td>EF subscriber</td><td>Query</td></tr>
+<tr><td>EF subscriber</td><td>Sequence &gt; cursor</td></tr>
+<tr><td>EF subscriber</td><td>Idle</td></tr>
+<tr><td>EF subscriber</td><td>Poll after 250 ms</td></tr>
+<tr><td>EF subscriber</td><td>State</td></tr>
+<tr><td>EF subscriber</td><td>Shared durable table</td></tr>
+<tr><td>EF subscriber</td><td>Blocked</td></tr>
+<tr><td>EF subscriber</td><td>Retryable: keep open</td></tr>
+<tr><td>producer</td><td>Coordinator or run execution; Acknowledgement follows commit</td></tr>
+<tr><td>append</td><td>Allocate MAX(Sequence) + 1; Save and commit transaction</td></tr>
+<tr><td>store</td><td>Cross-replica ordered history; Explicit duplicates must match payload</td></tr>
+<tr><td>client</td><td>Reconnect from the cursor; No local channel dependency</td></tr>
+<tr><td>sse</td><td>Cursor advances after delivery; Drain batch before terminal close</td></tr>
+<tr><td>reader</td><td>Query the shared durable table; Retryable assembly_blocked stays open</td></tr>
+<tr><td>notes</td><td>POSTGRES LANE ONLY; SQLite register-channel / replay / tail is a separate implementation—not this architecture.; Late-delta suppression is process-local; do not read it as a database-wide terminal fence.</td></tr>
+<tr><td>groups</td><td>Write path · replica A; Read path · replica B</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-resilient-assembly-review-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Rejected work keeps useful context</td></tr>
+<tr><td>takeaway</td><td>A steering decision chooses the effect; rejection does not always rotate the author.</td></tr>
+<tr><td>group-title-0</td><td>FEEDBACK AND SCOPE</td></tr>
+<tr><td>group-title-1</td><td>BOUNDED DIRECTION</td></tr>
+<tr><td>group-title-2</td><td>AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+<tr><td>Gate request-changes</td><td>Gate request-changes</td></tr>
+<tr><td>Gate request-changes</td><td>Structured target-file hints</td></tr>
+<tr><td>Gate request-changes</td><td>not prose-inferred blame</td></tr>
+<tr><td>Implicated + dependent</td><td>Implicated + dependent</td></tr>
+<tr><td>Implicated + dependent</td><td>Rebuild closure without blame</td></tr>
+<tr><td>Implicated + dependent</td><td>structured TARGET_FILES</td></tr>
+<tr><td>Signal + decision</td><td>Signal + decision</td></tr>
+<tr><td>Signal + decision</td><td>Persist explicit direction</td></tr>
+<tr><td>Signal + decision</td><td>accumulated context</td></tr>
+<tr><td>In-place revision</td><td>In-place revision</td></tr>
+<tr><td>In-place revision</td><td>Same author and session</td></tr>
+<tr><td>In-place revision</td><td>no reset-to-pending</td></tr>
+<tr><td>Fresh dispatch</td><td>Fresh dispatch</td></tr>
+<tr><td>Fresh dispatch</td><td>Scoped author selection</td></tr>
+<tr><td>Fresh dispatch</td><td>handoff with context</td></tr>
+<tr><td>No alternate author</td><td>No alternate author</td></tr>
+<tr><td>No alternate author</td><td>Context permits same author</td></tr>
+<tr><td>No alternate author</td><td>bounded conscious fallback</td></tr>
+<tr><td>Human escalation</td><td>Human escalation</td></tr>
+<tr><td>Human escalation</td><td>No context or budget left</td></tr>
+<tr><td>Human escalation</td><td>durable review request</td></tr>
+<tr><td>Human decision</td><td>Human decision</td></tr>
+<tr><td>Human decision</td><td>Approve, change or decline</td></tr>
+<tr><td>Human decision</td><td>no wall-clock timeout</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Fresh autonomous budget</td></tr>
+<tr><td>Fresh autonomous budget</td><td>Only human changes reset it</td></tr>
+<tr><td>Fresh autonomous budget</td><td>no human-round-trip cap</td></tr>
+<tr><td>e0</td><td>scope</td></tr>
+<tr><td>e1</td><td>signal</td></tr>
+<tr><td>e2</td><td>resume</td></tr>
+<tr><td>e3</td><td>fresh</td></tr>
+<tr><td>e4</td><td>no alt</td></tr>
+<tr><td>e5</td><td>context</td></tr>
+<tr><td>e6</td><td>no context</td></tr>
+<tr><td>e7</td><td>Proceed</td></tr>
+<tr><td>e8</td><td>await</td></tr>
+<tr><td>e9</td><td>changes</td></tr>
+<tr><td>e10</td><td>retry</td></tr>
+<tr><td>groups</td><td>FEEDBACK AND SCOPE; BOUNDED DIRECTION; AUTHOR CONTINUITY AND HUMAN ESCALATION</td></tr>
+</tbody></table>
+</details>

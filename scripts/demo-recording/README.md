@@ -15,13 +15,20 @@ npm run demo:record -- signin
 
 ## Microsoft Entra boundary for agents
 
-An agent may click Agentweaver's own **Sign in with Microsoft Entra ID** button to
-start its redirect. Cached SSO may complete authentication after that click. Once the
-redirect reaches Microsoft Entra, the agent must not interact with that UI: no account
-selection, credentials, MFA, consent, or access to tokens, cookies, session storage,
-browser profiles, or account data. If cached SSO does not complete authentication, stop
-and have a human complete sign-in privately and off camera. Agents must not run `signin`
-or inspect authentication artifacts to work around this boundary.
+An agent **must** click Agentweaver's own **Sign in with Microsoft Entra ID** button
+to start its redirect, and **must** run `signin` or `open` when recording auth is
+missing or expired. These are the normal, expected way to get a session — not a
+workaround. Cached SSO usually completes authentication after that click without any
+prompt. Do not stop and ask a human before trying; try first.
+
+The boundary is narrow and begins only if the redirect actually lands on a Microsoft
+Entra prompt: the agent must not type credentials, choose an account, satisfy MFA, or
+grant consent there, and must not exfiltrate tokens, cookies, session storage, browser
+profiles, or account data. Only if such a prompt appears and blocks progress should the
+agent stop and hand off to a human to complete sign-in privately and off camera.
+
+Treat "the token is expired" as a reason to run `signin`, never as a reason to declare
+the task blocked.
 
 The command uses **only** the literal Google Chrome `Default` work profile at
 `%LOCALAPPDATA%\Google\Chrome\User Data\Default`. Edge and every other Chrome
@@ -50,8 +57,7 @@ interactive sign-in path. Keep any planned media and fixtures unchanged:
 npm run demo:record -- close
 ```
 
-Close any remaining Google Chrome windows through their normal UI. If a human must complete Microsoft Entra sign-in, close any remaining Google Chrome
-windows through their normal UI, then run:
+Close any remaining Google Chrome windows through their normal UI, then run:
 
 ```powershell
 npm run demo:record -- signin

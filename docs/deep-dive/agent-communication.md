@@ -21,18 +21,11 @@ how the *team* coordinates. The third is how a *single* agent turn is *executed*
 Keeping them distinct is the most important idea in this document: **A2A is
 execution transport, not a way for two agents to talk.**
 
-![Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod](../diagrams/canonical-agent-communication-shared.png)
-
-<!-- Rendered from ../diagrams/src/canonical-agent-communication-shared.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## The three channels
 
 | Channel | What it coordinates | Direction | Carrier |
 | --- | --- | --- | --- |
-| Indirect / shared-state | The whole team's accepted truth and learnings | Read at spawn and mid-run; write via inbox | Decisions ledger + cross-agent memory |
+| Indirect / shared-state | Accepted boundaries and eligible context | Read during preparation and mid-run; inbox proposals or pending memory records | Decisions ledger + cross-agent memory |
 | Coordinator-mediated handoff | One goal decomposed into bounded subtasks | Coordinator → children; results flow up | WorkPlan / subtask DAG |
 | Direct transport (A2A) | A single agent turn's execution | Worker ↔ sandbox pod | claim warm AgentHost pod, one-time `/configure`, then A2A `message:stream` with per-run bearer auth |
 
@@ -64,13 +57,13 @@ Both are scoped to a project, and both are described in depth in the
 
 ### Reading: agents start from, and stay synced with, the shared state
 
-Before every turn, the context compiler assembles a structured block from four
-priority-ordered layers — decisions first, then core context, then
-high-importance learnings and patterns (including anything tagged `cross-team`),
-then the current session — and injects it into the agent's prompt. An agent
-therefore begins each turn already knowing the team's accepted boundaries and the
-relevant accumulated knowledge, without anyone having to *tell* it. The full
-layering logic lives in the [Memory reference](../reference/memory.md).
+During agent preparation, orchestration compiles eligible, budgeted context:
+approved active architectural/scope decisions, core context, high-importance
+learnings/patterns, approved cross-team contributions, and the current session.
+This is not an unconditional copy of every layer before every turn. Coordinator
+children use the decisions-only exception below. The structured context remains
+untrusted input, not an instruction-priority override. The full layering logic
+lives in the [Memory reference](../reference/memory.md).
 
 Reads are not limited to spawn time. Agents can also pull the latest decisions
 and memory **mid-run**, so a long-running agent picks up boundaries that were
@@ -84,7 +77,9 @@ Agents do not write team law directly. When an agent discovers something worth
 keeping — a learning, a reusable pattern, a correction, or a candidate boundary —
 it **drops a proposal into the decision inbox**. The inbox is a durable,
 reviewable drop-box in front of the canonical ledger. Proposing is not the same
-as deciding.
+as deciding. The `record_memory` tool also writes a **Pending** memory record
+directly through the API; not every memory write passes through the decision
+inbox, and a pending record is not approved team authority.
 
 ### Curating: the Scribe merges, conflict-free
 
@@ -107,13 +102,16 @@ safe at scale: no agent has to lock the blackboard to write to it.
 ### Coordinator children read decisions only
 
 A coordinator child run is a focused worker with a tight charter. It receives the
-team's **active architectural and scope decisions** plus its charter — but not the
-full memory stack, which would duplicate its charter and reference paths absent
-from its worktree. Decisions are the non-negotiable boundaries, so they are the
-one part of the shared brain that always reaches the agents doing the actual work.
+team's **approved active architectural and scope decisions** through
+`CompileDecisionsAsync`, not the full compiled memory/session stack. Charter,
+skills and capabilities are composed separately, so decisions are not the entire
+child prompt. Injection failures are logged and can leave a child without the
+compiled decision context; selection is not an unconditional delivery guarantee.
 This carve-out is detailed in the [Memory reference](../reference/memory.md).
 
 ---
+
+<a id="channel-b-coordinator-mediated-handoffs"></a>
 
 ## Channel B — Coordinator-mediated handoffs
 
@@ -133,13 +131,6 @@ agent, each bounded, ordered by explicit **dependency edges** that form a DAG. T
 full decomposition logic is in the
 [Orchestration deep dive](./orchestration.md) and
 [Coordinator Internals](./coordinator-internals.md).
-
-![Decompose: goal → OutcomeSpec → WorkPlan DAG: Goal, OutcomeSpec, WorkPlan, Subtask 1, Subtask 2, Subtask 3, Coordinator](../diagrams/canonical-agent-communication-handoff.png)
-
-<!-- Rendered from ../diagrams/src/canonical-agent-communication-handoff.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ### Dispatch: children run independently, in parallel where safe
 
@@ -194,15 +185,8 @@ hosts an `A2ATurnBridgeAgent` (MAF name `agentweaver-pod`) wrapping its singleto
 `CopilotAIAgent`. `RemoteWorkflowAgentFactory` remotes five workflow agents this
 way: worker, RAI, Rubberduck, Build/Test, and Scribe. The Operator Assistant also
 uses `RemoteAgentProxy` outside that factory. The orchestration graph never crosses the boundary; A2A carries one
-turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
+turn's setup, assistant output, and structured run events. A2A is the sole worker→AgentHost wire
 transport for that seam.
-
-![Sequence showing the orchestration graph invoking a RemoteAgentProxy, AgentHost executing one leaf agent turn in a sandbox pod, and streamed turn output returning to the worker](../diagrams/canonical-agent-communication-a2a.png)
-
-<!-- Rendered from ../diagrams/src/canonical-agent-communication-a2a.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram).
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Why this is **not** Channel A or B:
 
@@ -219,7 +203,7 @@ would still coordinate the same way, through the blackboard and the coordinator.
 The conceptual model of the transport lives in the
 [A2A bridge deep dive](./a2a-bridge.md); its surfaces are in the
 [A2A reference](../reference/a2a.md). For the distributed execution rationale,
-see the [distributed-execution spec](../../specs/018-distributed-agent-execution-scaling/spec.md).
+see the [distributed-execution deep dive](./distributed-execution-scaling.md).
 
 ---
 
@@ -273,12 +257,9 @@ is the price of keeping policy deliberate.
 
 ## Putting it together
 
-![Putting it together: Human, Coordinator, Worker tier, Sandbox pod (A2A), Shared brain](../diagrams/agent-communication-fig5.png)
-
-<!-- Rendered from ../diagrams/src/agent-communication-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+Refer back to the shared communication overview
+and the [coordinator handoff](#channel-b-coordinator-mediated-handoffs), rather than
+introducing a second recap diagram.
 
 The three channels never blur:
 
@@ -308,3 +289,166 @@ remoted to a pod.** They solve different problems and must not be conflated.
   concrete MCP tools and API endpoints behind each channel.
 - [Agent Communication experience](../experience/agent-communication.md) — what
   coordination looks like to a user watching a team work.
+
+<details id="diagram-context-canonical-agent-communication-handoff" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Handoffs, not peer chat</td></tr>
+<tr><td>subtitle</td><td>The Coordinator owns the dependency frontier and assembles child results.</td></tr>
+<tr><td>group-title0</td><td>Intent → execution contract</td></tr>
+<tr><td>group-title1</td><td>Children and assembly</td></tr>
+<tr><td>Human goal</td><td>Human goal</td></tr>
+<tr><td>Human goal</td><td>Define the desired outcome</td></tr>
+<tr><td>Human goal</td><td>intent input</td></tr>
+<tr><td>OutcomeSpec</td><td>OutcomeSpec</td></tr>
+<tr><td>OutcomeSpec</td><td>Confirm before dispatch</td></tr>
+<tr><td>OutcomeSpec</td><td>confirmation gate</td></tr>
+<tr><td>WorkPlan DAG</td><td>WorkPlan DAG</td></tr>
+<tr><td>WorkPlan DAG</td><td>Subtasks + dependencies</td></tr>
+<tr><td>WorkPlan DAG</td><td>eligible frontier</td></tr>
+<tr><td>Child run A</td><td>Child run A</td></tr>
+<tr><td>Child run A</td><td>One assigned subtask</td></tr>
+<tr><td>Child run A</td><td>isolated worktree</td></tr>
+<tr><td>Child run B</td><td>Child run B</td></tr>
+<tr><td>Child run B</td><td>Another eligible subtask</td></tr>
+<tr><td>Collective assembly</td><td>Collective assembly</td></tr>
+<tr><td>Collective assembly</td><td>Integrate settled work</td></tr>
+<tr><td>Collective assembly</td><td>one reviewed integration</td></tr>
+<tr><td>e1</td><td>draft</td></tr>
+<tr><td>e2</td><td>confirm</td></tr>
+<tr><td>e3</td><td>dispatch A</td></tr>
+<tr><td>e4</td><td>dispatch B</td></tr>
+<tr><td>e5</td><td>result A</td></tr>
+<tr><td>e6</td><td>result B</td></tr>
+<tr><td>assurance-title</td><td>DEPENDENCIES ARE CONTROL</td></tr>
+<tr><td>assurance-line1</td><td>A dependency edge is scheduling, not a conversation channel.</td></tr>
+<tr><td>assurance-line2</td><td>A2A transports one agent turn between worker and sandbox; it is not peer chat.</td></tr>
+<tr><td>Human goal</td><td>Input</td></tr>
+<tr><td>Human goal</td><td>Desired outcome</td></tr>
+<tr><td>Human goal</td><td>Scope</td></tr>
+<tr><td>Human goal</td><td>Human intent</td></tr>
+<tr><td>Human goal</td><td>Gate</td></tr>
+<tr><td>Human goal</td><td>Confirm or revise</td></tr>
+<tr><td>Human goal</td><td>Owner</td></tr>
+<tr><td>Human goal</td><td>Coordinator intake</td></tr>
+<tr><td>OutcomeSpec</td><td>State</td></tr>
+<tr><td>OutcomeSpec</td><td>Persisted contract</td></tr>
+<tr><td>OutcomeSpec</td><td>Fields</td></tr>
+<tr><td>OutcomeSpec</td><td>Scope / assumptions</td></tr>
+<tr><td>OutcomeSpec</td><td>Human confirmation</td></tr>
+<tr><td>OutcomeSpec</td><td>Next</td></tr>
+<tr><td>OutcomeSpec</td><td>Workflow selection</td></tr>
+<tr><td>WorkPlan DAG</td><td>Model</td></tr>
+<tr><td>WorkPlan DAG</td><td>Subtasks + edges</td></tr>
+<tr><td>WorkPlan DAG</td><td>Bounded assignee</td></tr>
+<tr><td>WorkPlan DAG</td><td>Ready</td></tr>
+<tr><td>WorkPlan DAG</td><td>Dependencies satisfied</td></tr>
+<tr><td>WorkPlan DAG</td><td>Store</td></tr>
+<tr><td>WorkPlan DAG</td><td>Persisted WorkPlan</td></tr>
+<tr><td>Child run A</td><td>Binding</td></tr>
+<tr><td>Child run A</td><td>ParentRunId / SubtaskId</td></tr>
+<tr><td>Child run A</td><td>Files</td></tr>
+<tr><td>Child run A</td><td>Per-child worktree</td></tr>
+<tr><td>Child run A</td><td>Charter + decisions</td></tr>
+<tr><td>Child run A</td><td>Output</td></tr>
+<tr><td>Child run A</td><td>Result to parent</td></tr>
+<tr><td>Child run B</td><td>Eligible frontier only</td></tr>
+<tr><td>Child run B</td><td>Failure</td></tr>
+<tr><td>Child run B</td><td>Blocks dependents</td></tr>
+<tr><td>Child run B</td><td>Chat</td></tr>
+<tr><td>Child run B</td><td>No sibling channel</td></tr>
+<tr><td>Collective assembly</td><td>Settled child branches</td></tr>
+<tr><td>Collective assembly</td><td>Action</td></tr>
+<tr><td>Collective assembly</td><td>Integrate collective work</td></tr>
+<tr><td>Collective assembly</td><td>Gates</td></tr>
+<tr><td>Collective assembly</td><td>Configured checks</td></tr>
+<tr><td>Collective assembly</td><td>Review</td></tr>
+<tr><td>Collective assembly</td><td>One human decision</td></tr>
+<tr><td>goal</td><td>Outcome, scope, assumptions; Coordinator drafts the contract</td></tr>
+<tr><td>spec</td><td>Human confirms or revises; Persisted intent, not execution</td></tr>
+<tr><td>plan</td><td>One owner per bounded subtask; Only satisfied dependencies run</td></tr>
+<tr><td>a</td><td>Active decisions + charter; Result returned to Coordinator</td></tr>
+<tr><td>b</td><td>Parallel only when eligible; No direct child-to-child chat</td></tr>
+<tr><td>assembly</td><td>Child results flow upward; Failed / RAI child blocks dependents</td></tr>
+<tr><td>notes</td><td>DEPENDENCIES ARE CONTROL; A dependency edge is scheduling, not a conversation channel.; A2A transports one agent turn between worker and sandbox; it is not peer chat.</td></tr>
+<tr><td>groups</td><td>Intent → execution contract; Isolated work → collective assembly</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-agent-communication-a2a" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>A2A remotes a leaf turn, not the graph</td></tr>
+<tr><td>takeaway</td><td>Setup and task cross to AgentHost; assistant output and structured events return.</td></tr>
+<tr><td>Workflow graph</td><td>Workflow graph</td></tr>
+<tr><td>Workflow graph</td><td>Host owns gates/checkpoints</td></tr>
+<tr><td>Workflow graph</td><td>Five factory-created leaf types</td></tr>
+<tr><td>RemoteAgentProxy</td><td>RemoteAgentProxy</td></tr>
+<tr><td>RemoteAgentProxy</td><td>Build setup DataContent</td></tr>
+<tr><td>RemoteAgentProxy</td><td>Task TextContent in same message</td></tr>
+<tr><td>AgentHost bridge</td><td>AgentHost bridge</td></tr>
+<tr><td>AgentHost bridge</td><td>message:stream over HTTP+JSON</td></tr>
+<tr><td>AgentHost bridge</td><td>Apply per-turn context</td></tr>
+<tr><td>Caller event pipeline</td><td>Caller event pipeline</td></tr>
+<tr><td>Caller event pipeline</td><td>Decoded structured events</td></tr>
+<tr><td>Caller event pipeline</td><td>Durable state outside pod</td></tr>
+<tr><td>Proxy stream decoder</td><td>Proxy stream decoder</td></tr>
+<tr><td>Proxy stream decoder</td><td>Output + RunEventDataPart</td></tr>
+<tr><td>Proxy stream decoder</td><td>Check definitive turn end</td></tr>
+<tr><td>Leaf runtime</td><td>Leaf runtime</td></tr>
+<tr><td>Leaf runtime</td><td>Execute provider/tool loop</td></tr>
+<tr><td>Leaf runtime</td><td>Stream updates and events</td></tr>
+<tr><td>arrow-1</td><td>invoke</td></tr>
+<tr><td>arrow-2</td><td>send</td></tr>
+<tr><td>arrow-3</td><td>run</td></tr>
+<tr><td>arrow-4</td><td>stream</td></tr>
+<tr><td>arrow-5</td><td>append</td></tr>
+<tr><td>note-0</td><td>Claim/configure is a separate lifecycle, completed before this exchange.</td></tr>
+<tr><td>note-1</td><td>EOF alone is not successful completion; structured failures remain failures.</td></tr>
+<tr><td>notes</td><td>Claim/configure is a separate lifecycle, completed before this exchange.; EOF alone is not successful completion; structured failures remain failures.</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-canonical-agent-communication-shared" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Three channels, three different jobs</td></tr>
+<tr><td>takeaway</td><td>Team context, coordinator handoff and A2A execution transport must not be conflated.</td></tr>
+<tr><td>Project state API</td><td>Project state API</td></tr>
+<tr><td>Project state API</td><td>Decisions and eligible memory</td></tr>
+<tr><td>Project state API</td><td>Pending writes are not authority</td></tr>
+<tr><td>Host compilation</td><td>Host compilation</td></tr>
+<tr><td>Host compilation</td><td>Approved scope/architecture</td></tr>
+<tr><td>Host compilation</td><td>Children: no full memory stack</td></tr>
+<tr><td>Prepared child context</td><td>Prepared child context</td></tr>
+<tr><td>Prepared child context</td><td>Charter + skills composed too</td></tr>
+<tr><td>Prepared child context</td><td>Injection failure is logged</td></tr>
+<tr><td>Coordinator</td><td>Coordinator</td></tr>
+<tr><td>Coordinator</td><td>Owns subtask structure</td></tr>
+<tr><td>Coordinator</td><td>No peer-chat protocol</td></tr>
+<tr><td>Child run</td><td>Child run</td></tr>
+<tr><td>Child run</td><td>Bounded assigned outcome</td></tr>
+<tr><td>Child run</td><td>Results return upward</td></tr>
+<tr><td>Assemble-ready result</td><td>Assemble-ready result</td></tr>
+<tr><td>Assemble-ready result</td><td>Parent integrates fragments</td></tr>
+<tr><td>Assemble-ready result</td><td>Not independent child merge</td></tr>
+<tr><td>Worker proxy</td><td>Worker proxy</td></tr>
+<tr><td>Worker proxy</td><td>One leaf execution request</td></tr>
+<tr><td>Worker proxy</td><td>Setup data + task text</td></tr>
+<tr><td>AgentHost pod</td><td>AgentHost pod</td></tr>
+<tr><td>AgentHost pod</td><td>Provider session and tools</td></tr>
+<tr><td>AgentHost pod</td><td>No prompt-compilation DB read</td></tr>
+<tr><td>Returned stream</td><td>Returned stream</td></tr>
+<tr><td>Returned stream</td><td>Output + structured RunEvents</td></tr>
+<tr><td>Returned stream</td><td>Caller owns persistence</td></tr>
+<tr><td>arrow-1</td><td>select</td></tr>
+<tr><td>arrow-2</td><td>inject</td></tr>
+<tr><td>arrow-3</td><td>dispatch</td></tr>
+<tr><td>arrow-4</td><td>report</td></tr>
+<tr><td>arrow-5</td><td>A2A</td></tr>
+<tr><td>arrow-6</td><td>stream</td></tr>
+<tr><td>note-0</td><td>Rows: shared context / coordinator handoff / execution transport.</td></tr>
+<tr><td>note-1</td><td>Agents can submit inbox proposals or record pending memory through the API.</td></tr>
+<tr><td>notes</td><td>Rows: shared context / coordinator handoff / execution transport.; Agents can submit inbox proposals or record pending memory through the API.</td></tr>
+</tbody></table>
+</details>

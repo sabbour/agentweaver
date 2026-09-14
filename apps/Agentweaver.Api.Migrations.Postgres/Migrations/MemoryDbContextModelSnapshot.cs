@@ -2157,6 +2157,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("parent_run_id");
 
+                    b.Property<DateTimeOffset?>("PreviewPublicationLeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("preview_publication_lease_until");
+
                     b.Property<string>("ProjectId")
                         .HasColumnType("text")
                         .HasColumnName("project_id");

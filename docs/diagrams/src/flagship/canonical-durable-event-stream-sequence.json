@@ -1,0 +1,128 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Durable events: commit, replay, then live tail",
+  "alt": "UML sequence showing events committed with a per-run sequence before local notification, SSE replay from Last-Event-ID, live polling with the same cursor, local snapshot delivery, and transport completion distinct from business success.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "producer",
+      "label": "Run producer",
+      "subLabel": "Creates lifecycle events",
+      "icon": "box",
+      "fluentIcon": "event",
+      "badge": "Participant"
+    },
+    {
+      "id": "stream",
+      "label": "PostgreSQL event stream",
+      "subLabel": "Commit, sequence allocation, and ordered reads",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": "Participant"
+    },
+    {
+      "id": "api",
+      "label": "SSE API",
+      "subLabel": "Authorized replay and live tail",
+      "icon": "box",
+      "fluentIcon": "api",
+      "badge": "Participant"
+    },
+    {
+      "id": "client",
+      "label": "Browser client",
+      "subLabel": "Cursor, reconnect, and dedupe",
+      "icon": "box",
+      "fluentIcon": "window",
+      "badge": "Participant"
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "producer",
+      "to": "stream",
+      "label": "Append event"
+    },
+    {
+      "type": "message",
+      "from": "stream",
+      "to": "stream",
+      "label": "Lock run, allocate MAX+1, insert, commit"
+    },
+    {
+      "type": "message",
+      "from": "stream",
+      "to": "stream",
+      "label": "Committed sequence n",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "client",
+      "to": "api",
+      "label": "Connect with Last-Event-ID = k"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "replay then live tail",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "api",
+              "to": "stream",
+              "label": "Subscribe after cursor k"
+            },
+            {
+              "type": "message",
+              "from": "stream",
+              "to": "stream",
+              "label": "SELECT sequence > k ORDER BY sequence"
+            },
+            {
+              "type": "message",
+              "from": "stream",
+              "to": "api",
+              "label": "Yield ordered batch",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "api",
+              "to": "client",
+              "label": "SSE id, event, JSON data"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "over": [
+        "stream",
+        "client"
+      ],
+      "label": "The same positive per-run cursor drives replay, dedupe, and reconnect."
+    },
+    {
+      "type": "message",
+      "from": "stream",
+      "to": "api",
+      "label": "Terminal-containing batch fully drained",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "client",
+      "label": "event: done — transport closure only"
+    }
+  ]
+}

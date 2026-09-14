@@ -1,0 +1,187 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "From intent to one accountable outcome",
+  "alt": "Activity flow showing intent proposal and confirmation, visible planning, dependency-aware execution, collective review, revision or intervention paths, application of the approved result, and explicit terminal outcomes.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "intent",
+      "label": "Express intent",
+      "subLabel": "Define Outcome or Direct",
+      "icon": "box",
+      "fluentIcon": "person",
+      "badge": "Human"
+    },
+    {
+      "id": "proposal",
+      "label": "Propose OutcomeSpec",
+      "subLabel": "Scope, assumptions, and questions",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "confirm",
+      "label": "Confirm or revise?",
+      "subLabel": "Confirmation authorizes work",
+      "icon": "box",
+      "fluentIcon": "approval",
+      "badge": "Gate",
+      "variant": "decision"
+    },
+    {
+      "id": "plan",
+      "label": "See the work plan",
+      "subLabel": "Tasks, owners, and dependencies",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "execute",
+      "label": "Watch and steer work",
+      "subLabel": "Answer questions and direct corrections",
+      "icon": "box",
+      "fluentIcon": "worker",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "candidate",
+      "label": "Assess one candidate",
+      "subLabel": "Integrated child results and checks",
+      "icon": "box",
+      "fluentIcon": "review",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "review",
+      "label": "Approve, revise, or decline?",
+      "subLabel": "No automatic timeout",
+      "icon": "box",
+      "fluentIcon": "approval",
+      "badge": "Human gate",
+      "variant": "decision"
+    },
+    {
+      "id": "apply",
+      "label": "Apply approved result",
+      "subLabel": "Merge and final recording",
+      "icon": "box",
+      "fluentIcon": "merge",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "attention",
+      "label": "Needs intervention",
+      "subLabel": "Blocked work retains a reason",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": {
+        "text": "Concept",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "outcome",
+      "label": "Terminal outcome",
+      "subLabel": "Completed, declined, stopped, or failed",
+      "icon": "box",
+      "fluentIcon": "outcome",
+      "badge": "Result",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "intent",
+      "to": "proposal",
+      "label": "Define Outcome"
+    },
+    {
+      "from": "intent",
+      "to": "plan",
+      "label": "Direct"
+    },
+    {
+      "from": "proposal",
+      "to": "confirm",
+      "label": "present"
+    },
+    {
+      "from": "confirm",
+      "to": "proposal",
+      "label": "revise",
+      "loopback": true
+    },
+    {
+      "from": "confirm",
+      "to": "plan",
+      "label": "confirmed"
+    },
+    {
+      "from": "plan",
+      "to": "execute",
+      "label": "start"
+    },
+    {
+      "from": "execute",
+      "to": "candidate",
+      "label": "eligible work ready"
+    },
+    {
+      "from": "candidate",
+      "to": "review",
+      "label": "present"
+    },
+    {
+      "from": "review",
+      "to": "execute",
+      "label": "request changes",
+      "loopback": true
+    },
+    {
+      "from": "review",
+      "to": "apply",
+      "label": "approve"
+    },
+    {
+      "from": "review",
+      "to": "outcome",
+      "label": "decline"
+    },
+    {
+      "from": "execute",
+      "to": "attention",
+      "label": "blocked"
+    },
+    {
+      "from": "attention",
+      "to": "execute",
+      "label": "correct and resume",
+      "loopback": true
+    },
+    {
+      "from": "apply",
+      "to": "outcome",
+      "label": "record result"
+    }
+  ]
+}

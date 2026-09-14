@@ -235,8 +235,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         "AGENTWEAVER_AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
         TimeSpan.FromMinutes(60));
 
-    /// <summary>Cadence for active-shell progress events. Settable for focused tests.</summary>
-    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>
+    /// Cadence for active-shell progress events. Five seconds keeps the trace UI visibly alive
+    /// without turning the run stream into an output channel. Settable for focused tests.
+    /// </summary>
+    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Test seam; production defaults to force-stopping the Copilot CLI process tree.</summary>
     internal Func<Task>? ShellTimeoutTerminator { get; set; }
@@ -453,6 +456,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            UnattendedRun = IsUnattendedRun(runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
@@ -1129,15 +1133,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private void EmitShellExecutionPending(ShellExecutionSnapshot snapshot)
     {
-        Emit(EventTypes.ToolExecutionPending, new
-        {
-            toolCallId = snapshot.ToolCallId,
-            commandHash = snapshot.CommandHash,
-            startedAtUtc = snapshot.StartedAt,
-            deadlineUtc = snapshot.Deadline,
-            elapsedSeconds = (DateTimeOffset.UtcNow - snapshot.StartedAt).TotalSeconds,
-        });
+        Emit(EventTypes.ToolExecutionPending, CreateShellExecutionPendingPayload(_runId, snapshot, DateTimeOffset.UtcNow));
     }
+
+    internal static object CreateShellExecutionPendingPayload(
+        string runId,
+        ShellExecutionSnapshot snapshot,
+        DateTimeOffset observedAt) => new
+        {
+            runId,
+            toolCallId = snapshot.ToolCallId,
+            toolName = "run_command",
+            startedAtUtc = snapshot.StartedAt,
+            deadlineUtc = snapshot.Deadline == DateTimeOffset.MaxValue ? null : (DateTimeOffset?)snapshot.Deadline,
+            elapsedSeconds = Math.Max(0, (observedAt - snapshot.StartedAt).TotalSeconds),
+        };
 
     internal async Task HandleShellExecutionTimeoutAsync(ShellExecutionSnapshot snapshot)
     {
@@ -2328,6 +2338,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 : null;
 
             var startTime = DateTimeOffset.UtcNow;
+            using var invocationScope = SandboxToolInvocation.PushToolCallId(callId);
             startToolSpan(callId, inner.Name, startTime);
             emitToolCallOnce(callId, inner.Name, argsDict);
 
@@ -2453,6 +2464,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// </summary>
+    /// <summary>
+    /// A run created with <c>auto-approve-tools</c> or <c>autopilot</c> has no operator watching
+    /// for approval prompts. Used to tailor the shell HITL refusal so an unattended run rewrites a
+    /// blocked destructive command instead of spinning on it (#1314).
+    /// </summary>
+    private bool IsUnattendedRun(string runId)
+    {
+        if (_runOptions is null) return false;
+        var options = _runOptions.Get(runId);
+        return options.AutoApproveTools || options.Autopilot;
+    }
+
     internal static string SanitizeUrl(string rawUrl)
     {
         if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))

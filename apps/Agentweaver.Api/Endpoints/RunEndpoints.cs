@@ -1084,7 +1084,11 @@ app.MapPost("/api/runs/{id}/review", async (
     // Return immediately — the watch loop will handle the terminal state transition.
     var expectedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
     return Results.Json(new ReviewResponse { RunId = id, Status = expectedStatus, MergeResult = null });
-});
+})
+    .RequiresAiExecutionContext(
+        "orchestration or agent_turn",
+        required: false,
+        condition: "when request_changes is set, or when approved resumes a suspended run");
 
 // POST /api/runs/{id}/commit — stages and commits any remaining uncommitted changes to the worktree
 // branch, then immediately merges that branch into the originating branch (commit-and-merge flow).
@@ -1441,7 +1445,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 
     return Results.Accepted($"/api/runs/{id}",
         new RequestChangesResponse { RunId = id, Status = RunStatus.InProgress.ToApiString() });
-});
+})
+    .RequiresAiExecutionContext("orchestration or agent_turn");
 
 // POST /api/runs/{id}/retry — retrigger a FAILED run as a fresh run (new run_id), linked back via
 // retried_from. Never mutates the source run. Owner-scoped (401 unauth via middleware, 403 non-owner,
@@ -1694,7 +1699,8 @@ app.MapPost("/api/runs/{id}/retry", async (
             RetriedFrom = run.Id.ToString(),
             Status = RunStatus.InProgress.ToApiString(),
         });
-});
+})
+    .RequiresAiExecutionContext("orchestration or agent_turn");
 
 // GET /api/runs/{id}/workspace — flat directory listing of all files in the worktree (not just changed).
 // Used by the Files tab in the artifact browser. Only available for runs with an active worktree.
@@ -3587,7 +3593,7 @@ private static string? PersistedEventStatus(string eventType) => eventType switc
     EventTypes.RunCompleted or EventTypes.MergeCompleted or EventTypes.ToolResult => "success",
     EventTypes.RunFailed or EventTypes.MergeFailed or EventTypes.ToolError or EventTypes.RunError => "error",
     EventTypes.RunDegraded => "degraded",
-    EventTypes.ToolApprovalRequired or EventTypes.ToolApprovalPending => "pending",
+    EventTypes.ToolApprovalRequired or EventTypes.ToolApprovalPending or EventTypes.ToolExecutionPending => "pending",
     EventTypes.ToolApprovalResolved or EventTypes.ToolAutoApproved => "approved",
     _ => null,
 };

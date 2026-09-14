@@ -46,7 +46,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", ConfirmOutcomeSpecAsync)
     {
         operation.Description ??= "Confirms the drafted outcome spec so the coordinator can decompose it into a work plan.";
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext("orchestration");
 
 // POST /api/runs/{id}/outcome-spec/revise — request a revision of the drafted outcome spec.
 // Body: { feedback }. The coordinator re-drafts and re-suspends at the gate.
@@ -57,7 +58,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", ReviseOutcomeSpecAsync)
     {
         operation.Description ??= "Requests a revised outcome spec while keeping the coordinator parked at the gate.";
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext("orchestration");
 
 // -----------------------------------------------------------------------
 // Coordinator orchestration (Feature 008 Phase 2) — work plan, children, steering.
@@ -100,7 +102,11 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", SteerCoordinatorAsync)
     {
         operation.Description ??= "Sends a steering directive to a running coordinator or one of its child runs.";
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext(
+        "orchestration",
+        required: false,
+        condition: "for the send, redirect, and amend verbs");
 
 // POST /api/runs/{coordinatorRunId}/assembly/review — the ONE collective human-review gate
 // (Feature 008 Phase 3, D5). Mirrors POST /api/runs/{id}/review (owner-scoped, at-most-once) but
@@ -114,7 +120,11 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", SubmitAssemblyReview
     {
         operation.Description ??= "Submits the single collective human review decision for an assembled coordinator run.";
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext(
+        "orchestration",
+        required: false,
+        condition: "when approved or request_changes is set");
 
 // GET /api/runs/{id}/assembly/files — the COLLECTIVE changed-file set for a coordinator run.
 // The coordinator owns no worktree; the assembled output lives on the integration branch

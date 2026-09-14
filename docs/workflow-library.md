@@ -1,218 +1,338 @@
 # Workflow Library
 
-Agentweaver ships a library of **functional, reusable workflow definitions** that any Blueprint may
-reference. Each workflow is a purpose-built pipeline named after what it does, not after the team
-that runs it. A Blueprint bundles a **set** of workflow ids; the coordinator selects the right one
-per task (Feature 015 US5), and the user may override the choice.
-
-Workflow YAML files live in `packages/Agentweaver.Squad/Catalog/Resources/workflows/` and are
-embedded in the `Agentweaver.Squad` assembly. They are loaded by `WorkflowRegistry` alongside the
-built-in default and any project-authored workflows in `.agentweaver/workflows/`.
-
----
+Agentweaver ships seven reusable workflow definitions in
+`packages/Agentweaver.Squad/Catalog/Resources/workflows/`. A blueprint declares a
+`workflows` set; the coordinator selects for process fit, with explicit overrides.
+`WorkflowRegistry` also loads the built-in default and project-authored definitions.
 
 ## Workflow index
 
-| Id | Name | Default for Blueprint(s) | Trigger | Binder status |
-|----|------|--------------------------|---------|---------------|
-| `software-delivery` | Software Delivery | Software Development, Product & Software Delivery | Event | ✅ Runnable |
-| `bug-fix` | Bug Fix | — (referenced by Software Development, Product & Software Delivery) | Event | ✅ Runnable |
-| `code-review` | Code Review | — (referenced by Software Development) | Manual | ✅ Runnable |
-| `content-authoring` | Content Authoring | Content Authoring, Product Management | Event | ✅ Runnable |
-| `pm-discovery` | Product Management Discovery | Product Management, Product & Software Delivery | Event | ✅ Runnable |
-| `agent-evaluation` | Agent Evaluation | AI Agent Engineering | Event | ⚠️ **Not runnable** — uses `fan_out`/`fan_in` |
-| `incident-response` | Incident Response | Platform Reliability / SRE | Event | ✅ Runnable |
+| ID | Purpose | Important gates |
+| --- | --- | --- |
+| `software-delivery` | Plan and implement software | QA test, RAI, rubberduck, Build/Test, human review |
+| `bug-fix` | Triage and fix a defect | QA verification, RAI, Build/Test, human review |
+| `content-authoring` | Research, draft, edit and publish text | RAI, human review |
+| `pm-discovery` | Research and synthesize a product proposal | Human review |
+| `agent-evaluation` | Run and report an agent evaluation | RAI safety |
+| `incident-response` | Investigate, mitigate and document an incident | Human review |
+| `infra-ops` | Plan and review infrastructure changes | Validation, RAI, infrastructure review, human review |
 
-> **Binder status** reflects whether the workflow binds onto the live MAF run graph today (see
-> [workflow-binder.md](workflow-binder.md)). Six of the seven library workflows bind and run: their
-> `peer_review` nodes are wired (as verdict gates or plain turns) and every transition has an executor
-> mapping. **`agent-evaluation` does not yet run** — its `fan_out`/`fan_in` nodes are accepted by the
-> loader but not yet wired to a runtime executor, so building it throws a `WorkflowBindException` at
-> build time. It remains in the catalog as the reference shape for the forthcoming parallel-dispatch
-> support.
+These are authored workflow graphs, not deployment topologies. Prompt steps and
+verdict-producing gates are distinct. The catalog no longer contains a standalone
+`code-review` identity; review remains a capability inside workflows.
 
----
+The YAML definitions do not author Merge, PR publication or Scribe nodes. Collective
+assembly owns integration, selected review gates, merge and final recording. The
+inspected collective path does **not** establish automatic PR publication. The separate
+built-in default explicitly contains a publish/reuse-PR action; that action is not proof
+that commits were pushed or publication succeeded.
+
+`CatalogWorkflowBindingTests` checks catalog gates and a bindability subset. Its
+bindability theory omits agent-evaluation; that is a test-coverage distinction, not
+evidence of unsupported fan-out nodes. The current evaluation graph uses prompt steps.
 
 ## `software-delivery`
 
-**Purpose**: Full software delivery pipeline for new features and significant changes.
-
-**When to use**: A task that requires planning, implementation, QA sign-off, RAI content safety
-check, and code review before merging. Use this when quality and safety gates are non-negotiable.
-
-**Node structure**:
-
-```
-plan (prompt)
-  → implement (prompt)
-    → test-gate (peer_review, agent: qa-engineer)
-        when: pass  → rai-check (check, gate_kind: rai)
-                          when: revise       → implement
-                          when: safety-failed → terminal-safety-failed
-                          when: no-changes   → scribe
-                          when: review       → code-review (peer_review)
-                                                 → review-gate (check, gate_kind: human-review)
-                                                       when: approved        → merge → scribe → done
-                                                       when: request-changes → implement
-                                                       when: declined        → terminal-declined
-        when: fail  → implement
-```
-
-**Key gates**: QA test gate (must pass before RAI check), RAI safety check, human review gate.
-
----
+Plan and implement, pass QA and RAI, receive rubberduck feedback and a code-review
+prompt, then pass Build/Test and human review. Revision branches return to implementation;
+decline and safety failure have explicit terminals.
 
 ## `bug-fix`
 
-**Purpose**: Lightweight pipeline for defects and patches with a quick QA verification cycle.
-
-**When to use**: A task that is clearly a bug fix, patch, or small targeted correction. Skips the
-heavyweight planning and code-review stages of `software-delivery`.
-
-**Node structure**:
-
-```
-triage (prompt)
-  → fix (prompt)
-    → verify (peer_review, agent: qa-engineer)
-        when: approved       → merge → scribe → done
-        when: request-changes → fix
-        when: declined        → terminal-declined
-```
-
-**Key characteristic**: No separate RAI or code-review gate — optimized for quick turnaround.
-
----
-
-## `code-review`
-
-**Purpose**: Standalone review that produces feedback without merging.
-
-**When to use**: A task that asks for a review of an existing change, draft PR, or proposed approach
-where the output is feedback only (no deployment or merge).
-
-**Node structure**:
-
-```
-review (peer_review)
-  → feedback (prompt)
-    → scribe → done
-```
-
-**Trigger**: Manual only (user explicitly initiates).
-
----
+Triage and fix, then QA peer verification, RAI, Build/Test and human review.
+The lighter intake does not remove safety or build gates.
 
 ## `content-authoring`
 
-**Purpose**: Content creation pipeline for articles, documentation, and long-form written output.
-
-**When to use**: A task that produces published text rather than merged code — e.g. a blog post,
-product documentation page, release notes, or feature specification.
-
-**Node structure**:
-
-```
-research (prompt)
-  → draft (prompt)
-    → edit (peer_review)
-      → rai-check (check, gate_kind: rai)
-            when: revise        → draft
-            when: safety-failed → terminal-safety-failed
-            when: no-changes    → scribe
-            when: review        → publish (merge) → scribe → done
-                                  when blocked    → edit
-```
-
-**Key characteristic**: `publish` is a `merge` node that delivers content. No code-review gate.
-
----
+Research, draft and edit are prompt steps. RAI precedes human review; approval proceeds
+to a **publish prompt**, not a merge executor. No-change and failure branches remain visible.
 
 ## `pm-discovery`
 
-**Purpose**: Product discovery pipeline for research, synthesis, and stakeholder sign-off.
-
-**When to use**: A task whose output is a document — requirements spec, feature definition, user
-research synthesis, or prototype brief — not deployable code.
-
-**Node structure**:
-
-```
-research (prompt)
-  → synthesis (prompt)
-    → review (peer_review)
-      → review-gate (check, gate_kind: human-review)
-            when: approved        → scribe → done
-            when: request-changes → synthesis
-            when: declined        → terminal-declined
-```
-
-**Key characteristic**: No `merge` stage — approved work goes directly to the scribe.
-
----
+Research, synthesis and stakeholder review are prompts, followed by a distinct human
+gate. Requested changes return to synthesis; approved work reaches the authored Done terminal.
 
 ## `agent-evaluation`
 
-> ⚠️ **Not runnable yet.** This workflow uses `fan_out`/`fan_in` nodes, which the loader accepts but the
-> binder does not yet wire to a runtime executor. Attempting to run it throws a `WorkflowBindException`
-> at build time. It is kept in the catalog as the canonical parallel-evaluation shape and as a few-shot
-> example for workflow generation. See [workflow-binder.md §5](workflow-binder.md).
-
-**Purpose**: AI agent evaluation with parallel evaluation runs and a mandatory safety gate.
-
-**When to use**: A task that evaluates an AI agent's capabilities, safety properties, or performance.
-The safety gate must clear before an evaluation report is produced.
-
-**Node structure**:
-
-```
-eval-setup (prompt)
-  → eval-run (fan_out)
-    → eval-collect (fan_in, target: eval-run)
-      → safety-gate (check, gate_kind: rai)
-            when: revise        → eval-setup
-            when: safety-failed → terminal-safety-failed
-            when: no-changes    → scribe
-            when: review        → report (prompt) → scribe → done
-```
-
-**Key characteristics**: `fan_out`/`fan_in` pair for parallel eval runs; safety gate blocks the
-report if content safety fails.
-
----
+Evaluation setup, runs and collection are **sequential prompt nodes**, not
+`fan_out`/`fan_in`. The safety gate can request revision, stop unsafe work, finish
+without changes, or allow the report prompt.
 
 ## `incident-response`
 
-**Purpose**: SRE incident response with an explicit postmortem step before the run closes.
+Triage, mitigation and verification are prompts. Human approval leads to the postmortem
+prompt; requested changes return to mitigation and decline terminates without a postmortem.
 
-**When to use**: A task representing a production incident, outage, or reliability event. Every run
-ends with a postmortem so the incident is retrospectively documented before the scribe records it.
+## `infra-ops`
 
-**Node structure**:
+Plan and implement, then DevOps peer validation (`pass`/`fail`), RAI, infrastructure
+peer review and human review (`approved`/`request-changes`/`declined`).
 
-```
-triage (prompt)
-  → mitigate (prompt)
-    → verify (peer_review)
-      → review-gate (check, gate_kind: human-review)
-            when: approved        → postmortem (prompt) → scribe → done
-            when: request-changes → mitigate
-            when: declined        → terminal-declined
-```
+## Blueprint workflow mappings
 
-**Key characteristic**: `postmortem` step is mandatory on the approval path before the scribe.
+| Blueprint | Declared workflow set, in source order |
+| --- | --- |
+| Software Development | `software-delivery`, `bug-fix` |
+| Product Management | `pm-discovery`, `content-authoring` |
+| Content Authoring | `content-authoring` |
+| Product & Software Delivery | `pm-discovery`, `software-delivery`, `bug-fix` |
+| AI Agent Engineering | `agent-evaluation`, `software-delivery`, `bug-fix` |
 
----
+These arrays come from the five embedded blueprint JSON files. Source order is not a
+guarantee that automatic selection always chooses the first entry. Incident response
+and infrastructure operations remain catalog workflows without a dedicated blueprint
+in that embedded set.
 
-## Blueprint → workflow mappings
+The built-in `default` supplies Agent -> RAI -> human Review -> Merge -> publish/reuse PR
+-> Scribe, with explicit no-change, revision, blocked and failure branches. See
+[workflow binding](workflow-binder.md) and [selection](workflow-selection.md).
 
-| Blueprint | Default workflow | Full workflow set |
-|-----------|-----------------|-------------------|
-| Software Development | `software-delivery` | `software-delivery`, `bug-fix`, `code-review` |
-| Product Management | `pm-discovery` | `pm-discovery`, `content-authoring` |
-| Content Authoring | `content-authoring` | `content-authoring` |
-| Product & Software Delivery | `pm-discovery` | `pm-discovery`, `software-delivery`, `bug-fix` |
+<details id="diagram-context-workflow-agent-evaluation" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Agent Evaluation workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Evaluation Runs and Collect Results are prompt steps, not fan-out / fan-in.</td></tr>
+<tr><td>Evaluation Setup</td><td>Evaluation Setup</td></tr>
+<tr><td>Evaluation Setup</td><td>Agent task</td></tr>
+<tr><td>Evaluation Setup</td><td>agent</td></tr>
+<tr><td>Evaluation Runs</td><td>Evaluation Runs</td></tr>
+<tr><td>Collect Results</td><td>Collect Results</td></tr>
+<tr><td>Safety Gate</td><td>Safety Gate</td></tr>
+<tr><td>Safety Gate</td><td>Verdict routing</td></tr>
+<tr><td>Safety Gate</td><td>rai</td></tr>
+<tr><td>Evaluation Report</td><td>Evaluation Report</td></tr>
+<tr><td>Safety Failed</td><td>Safety Failed</td></tr>
+<tr><td>Safety Failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-04-label</td><td>revise</td></tr>
+<tr><td>edge-05-label</td><td>safety- failed</td></tr>
+<tr><td>edge-06-label</td><td>no- changes</td></tr>
+<tr><td>edge-07-label</td><td>review</td></tr>
+<tr><td>sequential-prompts-title</td><td>Sequential evaluation</td></tr>
+<tr><td>sequential-prompts-sub</td><td>Setup, runs and collection are prompt tasks. No parallel split or join is declared.</td></tr>
+<tr><td>sequential-prompts-meta</td><td>agent_evaluation.yaml · nodes</td></tr>
+</tbody></table>
+</details>
 
-The built-in `default` workflow (agent → rai → review → merge → scribe) remains as a fallback
-for projects that pre-date the workflow library and for inline blueprints that do not reference a
-library workflow.
+<details id="diagram-context-workflow-bug-fix" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Bug Fix workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Triage</td><td>Triage</td></tr>
+<tr><td>Triage</td><td>Agent task</td></tr>
+<tr><td>Triage</td><td>agent</td></tr>
+<tr><td>Fix</td><td>Fix</td></tr>
+<tr><td>Verify</td><td>Verify</td></tr>
+<tr><td>Verify</td><td>Independent peer review</td></tr>
+<tr><td>Verify</td><td>qa-engineer</td></tr>
+<tr><td>RAI Check</td><td>RAI Check</td></tr>
+<tr><td>RAI Check</td><td>Verdict routing</td></tr>
+<tr><td>RAI Check</td><td>rai</td></tr>
+<tr><td>Build &amp; Test</td><td>Build &amp; Test</td></tr>
+<tr><td>Build &amp; Test</td><td>Build and test verification</td></tr>
+<tr><td>Human Review</td><td>Human Review</td></tr>
+<tr><td>Human Review</td><td>human-review</td></tr>
+<tr><td>Safety Failed</td><td>Safety Failed</td></tr>
+<tr><td>Safety Failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-03-label</td><td>approved</td></tr>
+<tr><td>edge-04-label</td><td>request-changes</td></tr>
+<tr><td>edge-05-label</td><td>declined</td></tr>
+<tr><td>edge-06-label</td><td>revise</td></tr>
+<tr><td>edge-07-label</td><td>safety- failed</td></tr>
+<tr><td>edge-08-label</td><td>no- changes</td></tr>
+<tr><td>edge-09-label</td><td>review</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-workflow-content-authoring" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Content Authoring workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Research</td><td>Research</td></tr>
+<tr><td>Research</td><td>Agent task</td></tr>
+<tr><td>Research</td><td>agent</td></tr>
+<tr><td>Draft</td><td>Draft</td></tr>
+<tr><td>Editorial Review</td><td>Editorial Review</td></tr>
+<tr><td>Editorial Review</td><td>review</td></tr>
+<tr><td>RAI Check</td><td>RAI Check</td></tr>
+<tr><td>RAI Check</td><td>Verdict routing</td></tr>
+<tr><td>RAI Check</td><td>rai</td></tr>
+<tr><td>Human Review</td><td>Human Review</td></tr>
+<tr><td>Human Review</td><td>human-review</td></tr>
+<tr><td>Publish</td><td>Publish</td></tr>
+<tr><td>Safety Failed</td><td>Safety Failed</td></tr>
+<tr><td>Safety Failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-04-label</td><td>revise</td></tr>
+<tr><td>edge-05-label</td><td>safety- failed</td></tr>
+<tr><td>edge-06-label</td><td>no- changes</td></tr>
+<tr><td>edge-08-label</td><td>approved</td></tr>
+<tr><td>edge-09-label</td><td>request-changes</td></tr>
+<tr><td>edge-10-label</td><td>declined</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-workflow-incident-response" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Incident Response workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Triage</td><td>Triage</td></tr>
+<tr><td>Triage</td><td>Agent task</td></tr>
+<tr><td>Triage</td><td>agent</td></tr>
+<tr><td>Mitigate</td><td>Mitigate</td></tr>
+<tr><td>Verify</td><td>Verify</td></tr>
+<tr><td>Verify</td><td>review</td></tr>
+<tr><td>Review Gate</td><td>Review Gate</td></tr>
+<tr><td>Review Gate</td><td>Verdict routing</td></tr>
+<tr><td>Review Gate</td><td>human-review</td></tr>
+<tr><td>Postmortem</td><td>Postmortem</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Declined</td><td>Workflow endpoint</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-04-label</td><td>approved</td></tr>
+<tr><td>edge-05-label</td><td>request-changes</td></tr>
+<tr><td>edge-06-label</td><td>declined</td></tr>
+<tr><td>Verify</td><td>Verify is a prompt</td></tr>
+<tr><td>Verify</td><td>The review role prepares evidence. Review Gate owns the approval, revision and decline routes.</td></tr>
+<tr><td>Verify</td><td>incident_response.yaml · nodes</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-workflow-infra-ops" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Infrastructure &amp; Operations workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Plan</td><td>Plan</td></tr>
+<tr><td>Plan</td><td>Agent task</td></tr>
+<tr><td>Plan</td><td>agent</td></tr>
+<tr><td>Implement</td><td>Implement</td></tr>
+<tr><td>Validate</td><td>Validate</td></tr>
+<tr><td>Validate</td><td>Independent peer review</td></tr>
+<tr><td>Validate</td><td>devops-engineer</td></tr>
+<tr><td>RAI Check</td><td>RAI Check</td></tr>
+<tr><td>RAI Check</td><td>Verdict routing</td></tr>
+<tr><td>RAI Check</td><td>rai</td></tr>
+<tr><td>Infra &amp; Config Review</td><td>Infra &amp; Config Review</td></tr>
+<tr><td>Infra &amp; Config Review</td><td>security-engineer</td></tr>
+<tr><td>Human Review</td><td>Human Review</td></tr>
+<tr><td>Human Review</td><td>human-review</td></tr>
+<tr><td>Safety Failed</td><td>Safety Failed</td></tr>
+<tr><td>Safety Failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-03-label</td><td>pass</td></tr>
+<tr><td>edge-04-label</td><td>fail</td></tr>
+<tr><td>edge-05-label</td><td>revise</td></tr>
+<tr><td>edge-06-label</td><td>safety- failed</td></tr>
+<tr><td>edge-07-label</td><td>no- changes</td></tr>
+<tr><td>edge-08-label</td><td>review</td></tr>
+<tr><td>edge-09-label</td><td>approved</td></tr>
+<tr><td>edge-10-label</td><td>request-changes</td></tr>
+<tr><td>edge-11-label</td><td>declined</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-workflow-pm-discovery" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Product discovery workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Research</td><td>Research</td></tr>
+<tr><td>Research</td><td>Agent task</td></tr>
+<tr><td>Research</td><td>agent</td></tr>
+<tr><td>Synthesis</td><td>Synthesis</td></tr>
+<tr><td>Stakeholder Review</td><td>Stakeholder Review</td></tr>
+<tr><td>Stakeholder Review</td><td>review</td></tr>
+<tr><td>Review Gate</td><td>Review Gate</td></tr>
+<tr><td>Review Gate</td><td>Verdict routing</td></tr>
+<tr><td>Review Gate</td><td>human-review</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Declined</td><td>Workflow endpoint</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-04-label</td><td>approved</td></tr>
+<tr><td>edge-05-label</td><td>request-changes</td></tr>
+<tr><td>edge-06-label</td><td>declined</td></tr>
+<tr><td>discovery-output-title</td><td>Discovery output</td></tr>
+<tr><td>discovery-output-sub</td><td>Research, requirements and feature definition produce documents and specs, not deployable code.</td></tr>
+<tr><td>discovery-output-meta</td><td>pm_discovery.yaml · description</td></tr>
+<tr><td>stakeholder-contract-title</td><td>Prepare, then decide</td></tr>
+<tr><td>stakeholder-contract-sub</td><td>Stakeholder Review prepares synthesis for approval. Only Review Gate emits verdicts.</td></tr>
+<tr><td>stakeholder-contract-meta</td><td>review prompt · human-review gate</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-workflow-software-delivery" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Software Delivery workflow</td></tr>
+<tr><td>subtitle</td><td>Authored graph • all YAML branches retained</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>Solid: advance / outcome Dashed marigold: revision / return</td></tr>
+<tr><td>Plan</td><td>Plan</td></tr>
+<tr><td>Plan</td><td>Agent task</td></tr>
+<tr><td>Plan</td><td>agent</td></tr>
+<tr><td>Implement</td><td>Implement</td></tr>
+<tr><td>Test Gate</td><td>Test Gate</td></tr>
+<tr><td>Test Gate</td><td>Independent peer review</td></tr>
+<tr><td>Test Gate</td><td>qa-engineer</td></tr>
+<tr><td>RAI Check</td><td>RAI Check</td></tr>
+<tr><td>RAI Check</td><td>Verdict routing</td></tr>
+<tr><td>RAI Check</td><td>rai</td></tr>
+<tr><td>Rubberduck Review</td><td>Rubberduck Review</td></tr>
+<tr><td>Rubberduck Review</td><td>rubberduck</td></tr>
+<tr><td>Code Review</td><td>Code Review</td></tr>
+<tr><td>Code Review</td><td>review</td></tr>
+<tr><td>Build &amp; Test</td><td>Build &amp; Test</td></tr>
+<tr><td>Build &amp; Test</td><td>Build and test verification</td></tr>
+<tr><td>Review Gate</td><td>Review Gate</td></tr>
+<tr><td>Review Gate</td><td>human-review</td></tr>
+<tr><td>Safety Failed</td><td>Safety Failed</td></tr>
+<tr><td>Safety Failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-03-label</td><td>pass</td></tr>
+<tr><td>edge-04-label</td><td>fail</td></tr>
+<tr><td>edge-05-label</td><td>revise</td></tr>
+<tr><td>edge-06-label</td><td>safety- failed</td></tr>
+<tr><td>edge-07-label</td><td>no- changes</td></tr>
+<tr><td>edge-12-label</td><td>approved</td></tr>
+<tr><td>edge-13-label</td><td>request-changes</td></tr>
+<tr><td>edge-14-label</td><td>declined</td></tr>
+</tbody></table>
+</details>
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Default workflow
+
+[![Flowchart of the six-stage default workflow: agent production, Responsible AI gate, human review, merge attempt, pull-request publication attempt, and Scribe recording, including revision, no-change, decline, safety, and blocked-merge paths.](diagrams/flagship/canonical-default-workflow.png)](diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-default-workflow.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-default-workflow.drawio)
+<!-- flagship-diagrams:end -->

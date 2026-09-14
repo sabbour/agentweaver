@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabbour.me/agentweaver/schemas/docs-diagram-inventory.schema.json",
+  "title": "Agentweaver documentation diagram inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "diagrams"],
+  "properties": {
+    "version": { "const": 1 },
+    "diagrams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagram" }
+    }
+  },
+  "$defs": {
+    "diagram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "source_path",
+        "source_kind",
+        "output_path",
+        "references",
+        "owner_area",
+        "disposition",
+        "status",
+        "rationale"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "source_path": {
+          "type": ["string", "null"]
+        },
+        "source_kind": {
+          "enum": ["drawio", "json", "missing"]
+        },
+        "output_path": {
+          "type": "string",
+          "pattern": "^docs/diagrams/[A-Za-z0-9][A-Za-z0-9._-]*\\.png$"
+        },
+        "references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "referenced_areas": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "owner_area": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disposition": {
+          "enum": ["unreviewed", "retain", "reuse", "merge", "remove", "redesign"]
+        },
+        "target": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "enum": ["queued", "in_progress", "blocked", "done"]
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": { "enum": ["reuse", "merge"] }
+            },
+            "required": ["disposition"]
+          },
+          "then": {
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

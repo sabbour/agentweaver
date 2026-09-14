@@ -15,15 +15,13 @@ From a project, go to **Skills** or open `/projects/:projectId/skills`. The page
 - **Catalog**: add, inspect, and delete skills.
 - **Assignments**: choose which agents receive each skill.
 
-![Skills Catalog tab with catalog toolbar and skill cards](/screenshots/skills-catalog.png)
-
-> 📸 **Screenshot — `skills-catalog.png`**
-> *Shows:* the **Skills** page **Catalog** tab with **Add Skill**, **Generate Skill**, **Import Skill**, **Sync connected repo**, catalog status/provenance badges, assigned-agent chips, and **View** / **Delete** actions.
-> *Path:* open a project → click **Skills** → `/projects/:projectId/skills`.
+Inspect the live Catalog for provenance, status, and assigned-agent chips. The current
+toolbar includes marketplace browsing alongside creation, generation, import, and repository
+sync (`apps/web/src/pages/SkillsPage.tsx:944-975`).
 
 ## Add skills
 
-The Catalog toolbar supports three acquisition paths:
+The Catalog supports five acquisition paths:
 
 1. **Add Skill**: write a command slug, description, and instructions. Agentweaver saves a standard
    `SKILL.md` with `name` and `description` frontmatter.
@@ -34,8 +32,14 @@ The Catalog toolbar supports three acquisition paths:
    folder URL, or a raw `https://raw.githubusercontent.com/.../SKILL.md` URL. Preview lists every
    candidate skill discovered at the source so you can select which ones to import.
 4. **Browse marketplaces**: select a trusted administrator-curated marketplace, search its available skills, then import selected candidates. Marketplace imports retain both the marketplace name and upstream GitHub repository/path in provenance.
-5. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
-   `.agents/skills` in the project repository.
+5. **Sync connected repo**: scans one level of `<skill-name>/SKILL.md` folders at the repo
+   root or under `.github/skills`, `.copilot/skills`, `.claude/skills`, and `.agents/skills`
+   in the already-connected workspace. Bundled resources are included; no separate fetch
+   is implied. Disappeared folders are marked Missing rather than silently deleted.
+
+The current toolbar also offers **Preview blueprint defaults**. This is a separate
+preview/apply control for bundled defaults; review the proposal before applying it
+(`apps/web/src/pages/SkillsPage.tsx:949-967`).
 
 Imports accept a single `SKILL.md`, a folder of `<name>/SKILL.md` directories, or recognized repo
 folders under `.github/skills`, `.copilot/skills`, `.claude/skills`, and `.agents/skills`.
@@ -53,11 +57,9 @@ Each catalog card shows status, provenance, updated time, source location, assig
 reported as unchanged, changed content updates the existing skill, and invalid content is rejected
 with validation errors.
 
-![Import Skill dialog with dropzones, trusted-source warning, URL field, and candidate preview controls](/screenshots/skill-import-dialog.png)
-
-> 📸 **Screenshot — `skill-import-dialog.png`**
-> *Shows:* the **Import Skill** dialog with the trusted-source warning, `.md` file and skill-folder dropzones, GitHub/raw URL field, **Preview candidates**, candidate selection, and **Import**.
-> *Path:* `/projects/:projectId/skills` → click **Import Skill**.
+In **Import Skill**, preview candidates and review their source before importing.
+Acquisition adds instructions to the catalog; it does not by itself assign them to every
+agent or establish that the instructions are trustworthy.
 
 ## Assign skills to agents
 

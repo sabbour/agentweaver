@@ -13,13 +13,6 @@ the [Agent Communication deep dive](../deep-dive/agent-communication.md); for th
 exact tools and endpoints, see the
 [Agent Communication reference](../reference/agent-communication.md).
 
-![Agent Communication — Experience: You, watching, Decisions page, Team Memory page, Coordinator graph](../diagrams/canonical-agent-communication-handoff.png)
-
-<!-- Rendered from ../diagrams/src/canonical-agent-communication-handoff.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ---
 
 ## What you watch: three views, no chat
@@ -65,10 +58,11 @@ stateDiagram-v2
     Rejected --> [*]
 ```
 
-The feel is deliberate and auditable: nothing an agent *says* becomes team law.
-Only what is **promoted** binds the team. And once a decision is finalized, it
-quietly becomes the highest-priority context every future agent reads — so the
-*next* agent simply knows the boundary without anyone repeating it. The mechanics
+Acceptance and rejection require a **project owner or verified Coordinator run**.
+Only **active, approved architectural and scope decisions** are eligible as compiled
+team boundaries; being in the finalized list is not sufficient by itself. The compiler
+serializes the content as **untrusted historical JSON data**, not executable instructions.
+The mechanics
 behind this are in the
 [Memory & Decisions deep dive](../deep-dive/memory-decisions.md) and the
 [Memory reference](../reference/memory.md).
@@ -87,13 +81,14 @@ The cross-agent part is what makes it coordination rather than private note-taki
 - **Search spans the whole project.** You (and agents) can search memory across
   *all* agents, not just one — so a useful learning is findable even if the agent
   that recorded it was later re-roled, renamed, or retired.
-- **`cross-team`-tagged memory travels.** A learning one agent tags for sharing
-  surfaces in *other* agents' context automatically, the next time they run.
+- **Cross-team sharing requires approval.** A `cross-team` tag alone is insufficient.
+  Cross-agent selection requires approved, high-importance learning or pattern records,
+  subject to selection budgets. Legacy records are excluded even for their named agent.
 
-So when a backend agent discovers "the sandbox blocks writes outside the
-worktree," you see that memory appear — and later a different agent behaves as if
-it already knew, because at its next turn that learning was compiled into its
-prompt. No message was ever sent between them. This is the
+Recording a useful observation makes it findable, not automatically authoritative.
+An eligible approved observation can later be selected for another agent's context
+without peer messaging. Coordinator children may receive the narrower decisions-only
+context instead of the full memory stack. This is the
 [Team, Casting & Memory experience](./team-casting-memory.md) in action; the
 read-side compilation is documented in the [Memory reference](../reference/memory.md).
 
@@ -102,10 +97,9 @@ read-side compilation is documented in the [Memory reference](../reference/memor
 ## The coordinator graph: handoffs you can see
 
 Start a coordinator run and open its **graph**. This is where the second channel —
-handoffs — becomes visual. You first watch the coordinator draft an **OutcomeSpec**
-and pause at a confirmation gate; nothing fans out until you confirm. After
-confirmation, the goal **decomposes into subtask nodes** connected by dependency
-edges, laid out left-to-right as a DAG.
+handoffs — becomes visual. **Define Outcome** drafts an **OutcomeSpec** and pauses
+for confirmation; **Direct** and unattended pickup skip that manual gate. The goal
+decomposes into subtask nodes connected by dependency edges in a top-down layout.
 
 As work runs, the graph animates:
 
@@ -122,10 +116,9 @@ As work runs, the graph animates:
   automation options are durable, so a different API replica can receive the
   click and the child worker still resumes with the same decision.
 
-The arrows only ever point **up to the coordinator and back down to a child** —
-never sideways between children. That is the visual proof that children don't chat
-with each other: each is a fragment, and the coordinator is the only place pieces
-come together, get reviewed, and get merged. The full topology, steering controls,
+Dependency arrows between subtasks mean **scheduling prerequisites**, not peer chat.
+The coordinator dispatches work and receives results for assembly; layout alone is
+not proof of communication or transport behavior. The full topology, steering controls,
 and assembly flow are covered in the
 [Coordinator orchestration experience](./coordinator-orchestration.md) and
 [Coordinator Internals](../deep-dive/coordinator-internals.md).
@@ -148,8 +141,8 @@ Put together, the experience makes the design legible:
   land in memory. You read state, not a transcript.
 - **The coordinator is the only meeting point.** Work fans out from it and results
   flow back to it. There is no side channel between workers.
-- **Boundaries propagate silently.** A finalized decision shows up as context in
-  the next agent's prompt — coordination by shared truth, not by conversation.
+- **Eligible boundaries inform future context.** Active approved architectural and
+  scope decisions can be compiled from the database without peer conversation.
 
 This is what makes a team's behavior **auditable and repeatable**: you can always
 answer "why did the team do that?" by looking at the decisions ledger, the memory
@@ -157,19 +150,19 @@ log, and the coordinator graph — three durable views instead of an ephemeral c
 
 ---
 
-## Where execution actually happens (and why it's invisible here)
+## Where execution happens is a separate concern
 
-One more thing you *won't* see on these pages: the **A2A transport**. When an agent
-turn runs in a distributed deployment (the opt-in `pod-per-run` execution mode), a
+When an agent turn uses `pod-per-run` execution, a
 single **leaf** turn is remoted from the worker to a sandbox pod over A2A, while the
 orchestration graph and its gates stay in the worker. That is execution plumbing —
 *where* a turn runs — and it has nothing to do with how the team coordinates. The
-Decisions page, the Team Memory page, and the coordinator graph look exactly the
-same whether a turn ran locally or in a remote pod. If you want to understand that
+governance model is the same, but the UI can show each node's executing pod and
+visible transport failures. A pod chip is placement information, not peer communication.
+If you want to understand that
 layer, see the
 [A2A bridge deep dive](../deep-dive/a2a-bridge.md) and
-[A2A reference](../reference/a2a.md) — but it is intentionally absent from the
-coordination experience, because **A2A is not how agents talk to each other.**
+[A2A reference](../reference/a2a.md). **A2A is leaf-turn execution transport,
+not peer chat between team members.**
 
 ## Related reading
 
@@ -181,3 +174,88 @@ coordination experience, because **A2A is not how agents talk to each other.**
   Team Memory pages in depth.
 - [Coordinator orchestration experience](./coordinator-orchestration.md) — the
   coordinator graph, steering, and assembly.
+
+<details id="diagram-context-canonical-agent-communication-handoff" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Handoffs, not peer chat</td></tr>
+<tr><td>subtitle</td><td>The Coordinator owns the dependency frontier and assembles child results.</td></tr>
+<tr><td>group-title0</td><td>Intent → execution contract</td></tr>
+<tr><td>group-title1</td><td>Children and assembly</td></tr>
+<tr><td>Human goal</td><td>Human goal</td></tr>
+<tr><td>Human goal</td><td>Define the desired outcome</td></tr>
+<tr><td>Human goal</td><td>intent input</td></tr>
+<tr><td>OutcomeSpec</td><td>OutcomeSpec</td></tr>
+<tr><td>OutcomeSpec</td><td>Confirm before dispatch</td></tr>
+<tr><td>OutcomeSpec</td><td>confirmation gate</td></tr>
+<tr><td>WorkPlan DAG</td><td>WorkPlan DAG</td></tr>
+<tr><td>WorkPlan DAG</td><td>Subtasks + dependencies</td></tr>
+<tr><td>WorkPlan DAG</td><td>eligible frontier</td></tr>
+<tr><td>Child run A</td><td>Child run A</td></tr>
+<tr><td>Child run A</td><td>One assigned subtask</td></tr>
+<tr><td>Child run A</td><td>isolated worktree</td></tr>
+<tr><td>Child run B</td><td>Child run B</td></tr>
+<tr><td>Child run B</td><td>Another eligible subtask</td></tr>
+<tr><td>Collective assembly</td><td>Collective assembly</td></tr>
+<tr><td>Collective assembly</td><td>Integrate settled work</td></tr>
+<tr><td>Collective assembly</td><td>one reviewed integration</td></tr>
+<tr><td>e1</td><td>draft</td></tr>
+<tr><td>e2</td><td>confirm</td></tr>
+<tr><td>e3</td><td>dispatch A</td></tr>
+<tr><td>e4</td><td>dispatch B</td></tr>
+<tr><td>e5</td><td>result A</td></tr>
+<tr><td>e6</td><td>result B</td></tr>
+<tr><td>assurance-title</td><td>DEPENDENCIES ARE CONTROL</td></tr>
+<tr><td>assurance-line1</td><td>A dependency edge is scheduling, not a conversation channel.</td></tr>
+<tr><td>assurance-line2</td><td>A2A transports one agent turn between worker and sandbox; it is not peer chat.</td></tr>
+<tr><td>Human goal</td><td>Input</td></tr>
+<tr><td>Human goal</td><td>Desired outcome</td></tr>
+<tr><td>Human goal</td><td>Scope</td></tr>
+<tr><td>Human goal</td><td>Human intent</td></tr>
+<tr><td>Human goal</td><td>Gate</td></tr>
+<tr><td>Human goal</td><td>Confirm or revise</td></tr>
+<tr><td>Human goal</td><td>Owner</td></tr>
+<tr><td>Human goal</td><td>Coordinator intake</td></tr>
+<tr><td>OutcomeSpec</td><td>State</td></tr>
+<tr><td>OutcomeSpec</td><td>Persisted contract</td></tr>
+<tr><td>OutcomeSpec</td><td>Fields</td></tr>
+<tr><td>OutcomeSpec</td><td>Scope / assumptions</td></tr>
+<tr><td>OutcomeSpec</td><td>Human confirmation</td></tr>
+<tr><td>OutcomeSpec</td><td>Next</td></tr>
+<tr><td>OutcomeSpec</td><td>Workflow selection</td></tr>
+<tr><td>WorkPlan DAG</td><td>Model</td></tr>
+<tr><td>WorkPlan DAG</td><td>Subtasks + edges</td></tr>
+<tr><td>WorkPlan DAG</td><td>Bounded assignee</td></tr>
+<tr><td>WorkPlan DAG</td><td>Ready</td></tr>
+<tr><td>WorkPlan DAG</td><td>Dependencies satisfied</td></tr>
+<tr><td>WorkPlan DAG</td><td>Store</td></tr>
+<tr><td>WorkPlan DAG</td><td>Persisted WorkPlan</td></tr>
+<tr><td>Child run A</td><td>Binding</td></tr>
+<tr><td>Child run A</td><td>ParentRunId / SubtaskId</td></tr>
+<tr><td>Child run A</td><td>Files</td></tr>
+<tr><td>Child run A</td><td>Per-child worktree</td></tr>
+<tr><td>Child run A</td><td>Charter + decisions</td></tr>
+<tr><td>Child run A</td><td>Output</td></tr>
+<tr><td>Child run A</td><td>Result to parent</td></tr>
+<tr><td>Child run B</td><td>Eligible frontier only</td></tr>
+<tr><td>Child run B</td><td>Failure</td></tr>
+<tr><td>Child run B</td><td>Blocks dependents</td></tr>
+<tr><td>Child run B</td><td>Chat</td></tr>
+<tr><td>Child run B</td><td>No sibling channel</td></tr>
+<tr><td>Collective assembly</td><td>Settled child branches</td></tr>
+<tr><td>Collective assembly</td><td>Action</td></tr>
+<tr><td>Collective assembly</td><td>Integrate collective work</td></tr>
+<tr><td>Collective assembly</td><td>Gates</td></tr>
+<tr><td>Collective assembly</td><td>Configured checks</td></tr>
+<tr><td>Collective assembly</td><td>Review</td></tr>
+<tr><td>Collective assembly</td><td>One human decision</td></tr>
+<tr><td>goal</td><td>Outcome, scope, assumptions; Coordinator drafts the contract</td></tr>
+<tr><td>spec</td><td>Human confirms or revises; Persisted intent, not execution</td></tr>
+<tr><td>plan</td><td>One owner per bounded subtask; Only satisfied dependencies run</td></tr>
+<tr><td>a</td><td>Active decisions + charter; Result returned to Coordinator</td></tr>
+<tr><td>b</td><td>Parallel only when eligible; No direct child-to-child chat</td></tr>
+<tr><td>assembly</td><td>Child results flow upward; Failed / RAI child blocks dependents</td></tr>
+<tr><td>notes</td><td>DEPENDENCIES ARE CONTROL; A dependency edge is scheduling, not a conversation channel.; A2A transports one agent turn between worker and sandbox; it is not peer chat.</td></tr>
+<tr><td>groups</td><td>Intent → execution contract; Isolated work → collective assembly</td></tr>
+</tbody></table>
+</details>

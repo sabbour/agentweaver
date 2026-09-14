@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "scope": "documentation-only",
+  "maintainedCount": 15,
+  "legacyPublicAssetsRemoved": true,
+  "checks": [
+    "structured JSON source present",
+    "editable uncompressed draw.io present",
+    "PNG and deterministic hash present",
+    "Fluent publication gate accepted",
+    "960px flagship raster gate accepted",
+    "documentation consumers restricted to flagship assets"
+  ],
+  "diagrams": [
+    {
+      "name": "canonical-coordinator-architecture",
+      "concept": "System architecture",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-coordinator-architecture.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-coordinator-architecture.drawio",
+      "png": "docs/diagrams/flagship/canonical-coordinator-architecture.png",
+      "hash": "docs/diagrams/flagship/canonical-coordinator-architecture.hash.txt",
+      "consumers": [
+        "README.md",
+        "docs/deep-dive/coordinator-internals.md"
+      ]
+    },
+    {
+      "name": "canonical-coordinator-runtime-sequence",
+      "concept": "Coordinator-to-agent communication and A2A runtime",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-coordinator-runtime-sequence.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-coordinator-runtime-sequence.drawio",
+      "png": "docs/diagrams/flagship/canonical-coordinator-runtime-sequence.png",
+      "hash": "docs/diagrams/flagship/canonical-coordinator-runtime-sequence.hash.txt",
+      "consumers": [
+        "docs/deep-dive/coordinator-internals.md",
+        "docs/deep-dive/a2a-bridge.md"
+      ]
+    },
+    {
+      "name": "canonical-coordinator-journey",
+      "concept": "Coordinator journey",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-coordinator-journey.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-coordinator-journey.drawio",
+      "png": "docs/diagrams/flagship/canonical-coordinator-journey.png",
+      "hash": "docs/diagrams/flagship/canonical-coordinator-journey.hash.txt",
+      "consumers": [
+        "docs/guide/runs.md"
+      ]
+    },
+    {
+      "name": "canonical-default-workflow",
+      "concept": "Default workflow",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-default-workflow.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-default-workflow.drawio",
+      "png": "docs/diagrams/flagship/canonical-default-workflow.png",
+      "hash": "docs/diagrams/flagship/canonical-default-workflow.hash.txt",
+      "consumers": [
+        "docs/guide/workflows.md",
+        "docs/workflow-library.md"
+      ]
+    },
+    {
+      "name": "canonical-workflow-authoring",
+      "concept": "Workflow authoring",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-workflow-authoring.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-workflow-authoring.drawio",
+      "png": "docs/diagrams/flagship/canonical-workflow-authoring.png",
+      "hash": "docs/diagrams/flagship/canonical-workflow-authoring.hash.txt",
+      "consumers": [
+        "docs/workflow-generation.md"
+      ]
+    },
+    {
+      "name": "canonical-workflow-selection",
+      "concept": "Workflow selection",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-workflow-selection.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-workflow-selection.drawio",
+      "png": "docs/diagrams/flagship/canonical-workflow-selection.png",
+      "hash": "docs/diagrams/flagship/canonical-workflow-selection.hash.txt",
+      "consumers": [
+        "docs/workflow-selection.md"
+      ]
+    },
+    {
+      "name": "canonical-workflow-invocation",
+      "concept": "Workflow invocation",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-workflow-invocation.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-workflow-invocation.drawio",
+      "png": "docs/diagrams/flagship/canonical-workflow-invocation.png",
+      "hash": "docs/diagrams/flagship/canonical-workflow-invocation.hash.txt",
+      "consumers": [
+        "docs/deep-dive/workflow-engine.md"
+      ]
+    },
+    {
+      "name": "canonical-durable-event-stream-sequence",
+      "concept": "Durable events",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-durable-event-stream-sequence.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-durable-event-stream-sequence.drawio",
+      "png": "docs/diagrams/flagship/canonical-durable-event-stream-sequence.png",
+      "hash": "docs/diagrams/flagship/canonical-durable-event-stream-sequence.hash.txt",
+      "consumers": [
+        "docs/deep-dive/events-observability.md"
+      ]
+    },
+    {
+      "name": "canonical-board-lifecycle",
+      "concept": "Board lifecycle",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-board-lifecycle.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-board-lifecycle.drawio",
+      "png": "docs/diagrams/flagship/canonical-board-lifecycle.png",
+      "hash": "docs/diagrams/flagship/canonical-board-lifecycle.hash.txt",
+      "consumers": [
+        "docs/guide/board.md"
+      ]
+    },
+    {
+      "name": "canonical-memory-context",
+      "concept": "Context compilation and progressive tool disclosure",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-memory-context.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-memory-context.drawio",
+      "png": "docs/diagrams/flagship/canonical-memory-context.png",
+      "hash": "docs/diagrams/flagship/canonical-memory-context.hash.txt",
+      "consumers": [
+        "docs/deep-dive/memory-decisions.md",
+        "docs/deep-dive/agent-runtime.md"
+      ]
+    },
+    {
+      "name": "canonical-provider-admission",
+      "concept": "Provider admission",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-provider-admission.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-provider-admission.drawio",
+      "png": "docs/diagrams/flagship/canonical-provider-admission.png",
+      "hash": "docs/diagrams/flagship/canonical-provider-admission.hash.txt",
+      "consumers": [
+        "docs/deep-dive/project-generation-model-settings.md"
+      ]
+    },
+    {
+      "name": "canonical-sandbox-boundary",
+      "concept": "Sandbox boundary",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-sandbox-boundary.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-sandbox-boundary.drawio",
+      "png": "docs/diagrams/flagship/canonical-sandbox-boundary.png",
+      "hash": "docs/diagrams/flagship/canonical-sandbox-boundary.hash.txt",
+      "consumers": [
+        "docs/deep-dive/sandbox.md"
+      ]
+    },
+    {
+      "name": "canonical-pod-process-boundaries",
+      "concept": "Pod and process boundaries",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-pod-process-boundaries.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-pod-process-boundaries.drawio",
+      "png": "docs/diagrams/flagship/canonical-pod-process-boundaries.png",
+      "hash": "docs/diagrams/flagship/canonical-pod-process-boundaries.hash.txt",
+      "consumers": [
+        "docs/deep-dive/sandbox-pod-execution.md"
+      ]
+    },
+    {
+      "name": "canonical-aks-components",
+      "concept": "AKS deployment",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-aks-components.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-aks-components.drawio",
+      "png": "docs/diagrams/flagship/canonical-aks-components.png",
+      "hash": "docs/diagrams/flagship/canonical-aks-components.hash.txt",
+      "consumers": [
+        "docs/guide/architecture-aks.md"
+      ]
+    },
+    {
+      "name": "canonical-blueprint-relationships",
+      "concept": "Blueprint relationships",
+      "status": "maintained",
+      "source": "docs/diagrams/src/flagship/canonical-blueprint-relationships.json",
+      "editable": "docs/diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio",
+      "png": "docs/diagrams/flagship/canonical-blueprint-relationships.png",
+      "hash": "docs/diagrams/flagship/canonical-blueprint-relationships.hash.txt",
+      "consumers": [
+        "docs/guide/blueprints.md",
+        "docs/catalog-groupings.md"
+      ]
+    }
+  ]
+}

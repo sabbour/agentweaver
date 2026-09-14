@@ -11,14 +11,10 @@ Related docs: [System overview](../deep-dive/00-system-overview.md), [Projects](
 The experience has two loops that reinforce each other:
 
 1. **Casting loop**: the user chooses a scenario, roles, goal, or project analysis path; Agentweaver proposes named agents with charters; the user confirms; the roster becomes the team.
-2. **Memory loop**: agents and coordinators record learnings and proposals; the decision inbox holds candidates; authorized acceptance turns entries into team decisions; exports mirror the state to `.squad/` and `.agentweaver/context/` files.
-
-![The experience in one picture: Project, Agents page, Cast a team, Catalog scenarios and roles, Proposal, Review names, roles, charters, warnings, Team roster, Agent work sessions, Agent memory, Decision inbox, Decision ledger, Rejected inbox entry, …](../diagrams/experience-team-casting-memory-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-team-casting-memory-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+2. **Memory loop**: agents and coordinators record learnings and proposals; the inbox holds
+   candidates; authorized acceptance records approved decisions. The compiler selects eligible
+   database records for future context; exports only mirror state to `.squad/` and
+   `.agentweaver/context/` files.
 
 The user-facing promise is simple: cast a team once, refer to agents by stable names, and let the team carry forward accepted decisions and useful memory instead of restarting from blank context every run.
 
@@ -41,11 +37,9 @@ Memory feels like a shared brain, but decisions are the authority layer. Memory 
 
 The project-level **Agents** page is the user's home for the team. It answers: "Who is working on this project, what are they responsible for, and can I trust their charter?"
 
-![Agents page roster with member cards and team actions](/screenshots/team-roster.png)
-
-> 📸 **Screenshot — `team-roster.png`**
-> *Shows:* the **Agents** page titled "Agents" / "The cast working on this project." with roster cards (avatar, agent name, role title, active/retired indicator, and **System agent** / **Project agent** badge), the **All** / **Active** / **Retired** filters, and the **Add member**, **Sync**, and **Cast team** actions.
-> *Path:* open a project → click **Agents** in the left rail → `/projects/:projectId/team`.
+Open `/projects/:projectId/team` to inspect the roster. Opening a member displays the
+detail drawer; close it again to compare roster cards. These are live controls, not a
+claim that an illustrative image captures the current full roster.
 
 The page title is **Agents** with the subtitle **The cast working on this project.** Its primary actions are:
 
@@ -67,12 +61,6 @@ Each roster card shows the avatar, agent name, role title, active or retired sta
 
 Clicking a roster card opens a drawer for that agent. The drawer has three tabs: **Overview**, **Charter**, and **Capabilities**.
 
-![Agent detail drawer with Overview, Charter, and Capabilities tabs](/screenshots/team-member-detail.png)
-
-> 📸 **Screenshot — `team-member-detail.png`**
-> *Shows:* the agent detail drawer (opened via `aria-label="Open details for {member.name}"`) with the **Overview**, **Charter**, and **Capabilities** tabs; the Overview tab shows **Model**, **Charter path**, and **Recent history**.
-> *Path:* `/projects/:projectId/team` → click a roster card.
-
 #### Overview
 
 **Overview** shows **Model**, **Charter path**, and **Recent history**. If there is no history, it says **No history yet**. This makes the agent inspectable before the user assigns or interprets work.
@@ -83,7 +71,9 @@ Clicking a roster card opens a drawer for that agent. The drawer has three tabs:
 
 #### Capabilities
 
-**Capabilities** repeats the role title and model, then states that capabilities are defined in the charter.
+**Capabilities** shows the role and model plus **Assigned skills**, with each skill's name
+and description or **No skills assigned**. Skills supplement the charter; catalog acquisition
+and assignment are separate steps (`apps/web/src/pages/TeamPage.tsx:563`).
 
 ### Adding a member
 
@@ -117,12 +107,6 @@ The experience keeps suggestion and commitment separate. Generating a proposal d
 
 The **Cast** step offers three tabs:
 
-![Casting wizard step 1 Cast with Formulate, Template, and Analyze tabs](/screenshots/casting-wizard-cast.png)
-
-> 📸 **Screenshot — `casting-wizard-cast.png`**
-> *Shows:* the **Cast a team** wizard on step **1. Cast** with the **Formulate**, **Template**, and **Analyze** tabs, the **Team size** control, the **Roles** checkboxes from the catalog, the **Universe** accordion (defaulting to "Random (any universe)"), and the primary action (**Formulate →**, **Analyze →**, or **Review**).
-> *Path:* `/projects/:projectId/team` → click **Cast team** → `/projects/:projectId/team/cast`.
-
 - **Formulate**: plain-language casting. The UI says **Sketch the team in plain language; AI picks a universe, team size, and required roles.** The user enters a goal, chooses **Team size**, optionally checks roles, and clicks **Formulate →**. MCP uses `team_cast` with `mode` of `free_text`.
 - **Template**: scenario casting. The wizard loads scenario templates, displays selectable cards, and selects the template's default roles. MCP discovers scenarios with `catalog_list_scenarios`, discovers roles with `catalog_list_roles`, and casts with `mode` of `scenario`.
 - **Analyze**: project-aware casting. The UI says **The system will analyze your project and suggest roles.** The user chooses **Team size** and clicks **Analyze →**. MCP uses `team_cast` with `mode` of `analysis`.
@@ -143,9 +127,8 @@ After **Review**, the wizard shows **Review proposal**. Each proposed member car
 
 ![Casting wizard Review proposal step with proposed member cards](/screenshots/casting-wizard-review.png)
 
-> 📸 **Screenshot — `casting-wizard-review.png`**
-> *Shows:* the **2. Review proposal** step heading "Review proposal" with proposed member cards (proposed name, role title, justification, **View charter** / **Hide charter**, **Remove**); when a team already exists, the **Augment — add new members to the existing team** vs **Recast — replace the existing team** choice; and the **Back** / **Cancel** / **Confirm** actions.
-> *Path:* in the casting wizard → complete step 1 → click **Review**.
+This retained example illustrates the proposal review and Augment/Recast choice.
+It is not evidence of current global shell styling or of a completed cast.
 
 If a project already has a team, the wizard asks: **An existing team is present. How would you like to proceed?** The choices are:
 
@@ -190,28 +173,20 @@ Users do not need to see every internal rule. They need to know that the proposa
 
 The **Team Memory** page is where the user reviews what the team has accepted and what agents have learned. The page title is **Team Memory** with the subtitle **Decisions and learnings the team has captured.**
 
-It has two tabs:
+It has three tabs (`apps/web/src/pages/MemoriesPage.tsx:342`):
 
 - **Decisions**
 - **Agent Memory**
+- **Session history**
 
 The UI makes memory feel collaborative without making every note authoritative.
 
-![Team Memory page Decisions tab with the decision inbox](/screenshots/memories-decisions.png)
-
-> 📸 **Screenshot — `memories-decisions.png`**
-> *Shows:* the **Team Memory** page titled "Team Memory" with the **Decisions** / **Agent Memory** tabs, the **Decisions** tab active showing finalized decisions and the proposed-decisions inbox (`aria-label="Proposed decisions awaiting Coordinator"`) with the **Merge**, **Promote**, and **Reject** actions.
-> *Path:* open a project → click **Memories** in the left rail → `/projects/:projectId/memories`.
+Open `/projects/:projectId/memories` to review the live records and their trust state.
+The decision inbox is a review surface, not an automatic route from any note to policy.
 
 ### Agent Memory tab
 
 The **Agent Memory** tab shows individual memory entries across the project. When there are no entries, it says **No agent memory recorded yet.** Each item shows agent name, importance, type, created time, content, and **Update**. The creation form is labeled **Create memory entry** and includes **Agent name**, **Type**, **Content**, and **Create memory**.
-
-![Agent Memory tab with memory entries and the Create memory entry form](/screenshots/memories-agent-memory.png)
-
-> 📸 **Screenshot — `memories-agent-memory.png`**
-> *Shows:* the **Agent Memory** tab with project-wide memory entries (agent name, importance, type, created time, content, **Update**) and the **Create memory entry** form (`aria-label="Create memory entry"`) with **Agent name**, **Type**, **Content** fields and the **Create memory** button.
-> *Path:* `/projects/:projectId/memories` → click the **Agent Memory** tab.
 
 Through MCP, this maps to `memory_record`, `memory_list`, `memory_get`, and `memory_search`. The web page presents project-wide memory and edit flow; MCP adds precise retrieval by agent, type, tags, and entry ID.
 
@@ -225,8 +200,9 @@ Each memory also has provenance (`human`, `run`, or `legacy`) and a trust state:
 
 - `pending` — a new record. It may be selected for its named agent, but not shared
   cross-agent.
-- `approved` — eligible for the normal selection rules, including cross-agent use when
-  tagged `cross-team`.
+- `approved` — eligible for normal selection rules. Cross-agent selection requires a
+  `cross-team` tag, **high** importance, and type `learning` or `pattern`; item and token
+  budgets still apply.
 - `legacy` — migrated from before provenance tracking. It is listed for review but
   excluded from all prompt compilation until approved.
 
@@ -307,7 +283,9 @@ Agentweaver memory is database-backed for filtering, status transitions, and tra
 
 ### Export
 
-`memory_export` exports project memory to `.squad/` and `.agentweaver/context/`: accepted decisions, pending inbox entries, agent histories, current session focus, architectural and scope boundaries, and reusable patterns. The product effect is transparency: users can inspect what future agents will see.
+`memory_export` exports project memory to `.squad/` and `.agentweaver/context/`: decisions,
+pending inbox entries, agent histories, session focus, boundaries, and patterns. These are
+inspectable mirrors, not a guarantee that every exported item is selected for a future prompt.
 
 ### Import
 
@@ -317,6 +295,12 @@ Agentweaver memory is database-backed for filtering, status transitions, and tra
 
 The structured store is authoritative for API and MCP reads and writes. Files are the inspectable, git-friendly mirror.
 
+The context compiler reads the database directly. It selects active, approved architectural
+and scope decisions; non-legacy agent context; eligible high-importance learnings; and
+the current project session. Coordinator child prompts use a narrower decisions-only
+compilation path, not necessarily the full memory/session stack
+(`apps/Agentweaver.Api/Memory/MemoryContextCompiler.cs:57-105`, `:159`).
+
 Existing memory and decision rows created before provenance tracking are migrated as
 `legacy`. They can still be listed, inspected, and audited, but they are inactive for
 prompt compilation. A project owner or verified Coordinator must explicitly approve
@@ -325,6 +309,11 @@ the relevant memory or decision before it can participate in future context.
 ## Sessions: the team's current work
 
 Sessions give the team a clear "now." They are not long-term memory by themselves, but they are included in the context story because agents need to know the current focus.
+
+**Session history** displays focus, session ID, start/end time, summary, and active issues.
+These are project work-focus records, not the personal conversations in global
+[Sessions & the Assistant](./assistant-sessions.md)
+(`apps/web/src/pages/MemoriesPage.tsx:536`).
 
 ### Starting a session
 
@@ -360,7 +349,7 @@ The web UI is optimized for review, confidence, and visible control. MCP is opti
 | Reject proposal (owner/verified Coordinator) | **Reject** | `decision_inbox_reject` |
 | Browse memory | **Team Memory** > **Agent Memory** | `memory_list`, `memory_search`, `memory_get` |
 | Record memory | **Create memory entry** | `memory_record` |
-| Work session | Current run context | `session_start`, `session_current`, `session_update` |
+| Work session | **Team Memory → Session history** | `session_start`, `session_current`, `session_update` |
 | File sync | memory and team files | `memory_export`, `memory_import` |
 
 The important product consistency is terminology. Whether the user clicks through the web UI or an assistant calls MCP, they are working with a team, roster, agent, charter, casting, universe, scenario, memory, decision inbox, decision ledger, and session.
@@ -446,3 +435,56 @@ Run `memory_export` when `.squad/` and `.agentweaver/context/` should reflect st
 - **One coherent roster**: one universe keeps the team memorable and deterministic.
 - **Memory helps; decisions bind**: memory informs future work, while the decision ledger sets boundaries.
 - **Files are a product surface**: structured state gives reliability, and readable files give transparency.
+
+<details id="diagram-context-experience-team-casting-memory-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Named teams, governed memory</td></tr>
+<tr><td>takeaway</td><td>Only eligible database records feed future context; exports are inspectable mirrors.</td></tr>
+<tr><td>group-title-0</td><td>TEAM AND KNOWLEDGE GOVERNANCE</td></tr>
+<tr><td>group-title-1</td><td>AUTHORITATIVE CONTEXT</td></tr>
+<tr><td>Cast proposal</td><td>Cast proposal</td></tr>
+<tr><td>Cast proposal</td><td>Roles, names, charters</td></tr>
+<tr><td>Cast proposal</td><td>new / augment / recast</td></tr>
+<tr><td>Cast proposal</td><td>Inspect the proposal; confirm the intended change.</td></tr>
+<tr><td>Named team</td><td>Named team</td></tr>
+<tr><td>Named team</td><td>Persist roster and work</td></tr>
+<tr><td>Named team</td><td>charters + team history</td></tr>
+<tr><td>Named team</td><td>Agents accumulate records; records are not auto-policy.</td></tr>
+<tr><td>Review knowledge</td><td>Review knowledge</td></tr>
+<tr><td>Review knowledge</td><td>Memory and decision inbox</td></tr>
+<tr><td>Review knowledge</td><td>approve / reject / retain</td></tr>
+<tr><td>Review knowledge</td><td>Authorized promotion; rejection remains auditable.</td></tr>
+<tr><td>Future context</td><td>Future context</td></tr>
+<tr><td>Future context</td><td>Untrusted structured data</td></tr>
+<tr><td>Future context</td><td>children: narrower scope</td></tr>
+<tr><td>Future context</td><td>Cross-agent memory requires approved high-value learning.</td></tr>
+<tr><td>Eligibility</td><td>Eligibility</td></tr>
+<tr><td>Eligibility</td><td>Filter and budget</td></tr>
+<tr><td>Eligibility</td><td>exclude legacy records</td></tr>
+<tr><td>Eligibility</td><td>Active approved boundaries; cross-team learning/pattern.</td></tr>
+<tr><td>Knowledge DB</td><td>Knowledge DB</td></tr>
+<tr><td>Knowledge DB</td><td>Authoritative records</td></tr>
+<tr><td>Knowledge DB</td><td>memory + decisions</td></tr>
+<tr><td>Knowledge DB</td><td>Exported files are mirrors, not the compiler authority.</td></tr>
+<tr><td>e0</td><td>confirm</td></tr>
+<tr><td>e1</td><td>record</td></tr>
+<tr><td>e2</td><td>persist</td></tr>
+<tr><td>e3</td><td>select</td></tr>
+<tr><td>e4</td><td>compile</td></tr>
+<tr><td>note</td><td>A cross-team tag alone is insufficient. Approved + high importance + learning/pattern are required.</td></tr>
+<tr><td>n0</td><td>Inspect the proposal;
+confirm the intended change.</td></tr>
+<tr><td>n1</td><td>Agents accumulate records;
+records are not auto-policy.</td></tr>
+<tr><td>n2</td><td>Authorized promotion;
+rejection remains auditable.</td></tr>
+<tr><td>n3</td><td>Cross-agent memory requires
+approved high-value learning.</td></tr>
+<tr><td>n4</td><td>Active approved boundaries;
+cross-team learning/pattern.</td></tr>
+<tr><td>n5</td><td>Exported files are mirrors,
+not the compiler authority.</td></tr>
+<tr><td>groups</td><td>TEAM AND KNOWLEDGE GOVERNANCE; AUTHORITATIVE CONTEXT</td></tr>
+</tbody></table>
+</details>

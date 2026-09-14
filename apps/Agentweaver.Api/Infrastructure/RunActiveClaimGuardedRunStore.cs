@@ -17,8 +17,11 @@ namespace Agentweaver.Api.Infrastructure;
 /// away from InProgress, terminal transitions from review/merging, and deletion.
 /// Every other member is a pure pass-through; this store introduces no other behavior change.
 /// </summary>
-public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClaimGuard guard) : IRunStore
+public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClaimGuard guard) : IRunStore, IRunStoreDecorator
 {
+    /// <inheritdoc />
+    public IRunStore Inner => inner;
+
     // SQLite's run and event databases are separate. Retain the existing lifecycle claim for the
     // entire conditional append, including any wait for the event database's write transaction.
     internal async Task<bool> TryWhileRunActiveAsync(

@@ -1,5 +1,13 @@
-import { createHash } from 'node:crypto';
-import { globSync, readFileSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  closeSync,
+  globSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +17,7 @@ import {
   npmInvocation,
 } from './shared-deps.mjs';
 
-const ALL_AREAS = ['node', 'harness', 'web', 'docs', 'dotnet'];
+const ALL_AREAS = ['node', 'harness', 'web', 'docs', 'diagrams', 'dotnet'];
 const VALIDATION_PROFILE_VERSION = 2;
 
 function run(command, args, cwd) {
@@ -92,6 +100,42 @@ function gitOutput(repoRoot, args) {
   return result.stdout;
 }
 
+function updateHashWithGitDiff(repoRoot, hash) {
+  const outputPath = path.join(
+    tmpdir(),
+    `agentweaver-validation-${process.pid}-${randomUUID()}.diff`,
+  );
+  try {
+    const result = spawnSync(
+      'git',
+      ['diff', '--binary', `--output=${outputPath}`, 'HEAD'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        shell: false,
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(result.stderr.trim() || 'git diff --binary HEAD failed');
+    }
+    const descriptor = openSync(outputPath, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      let bytesRead;
+      do {
+        bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+        if (bytesRead > 0) {
+          hash.update(buffer.subarray(0, bytesRead));
+        }
+      } while (bytesRead > 0);
+    } finally {
+      closeSync(descriptor);
+    }
+  } finally {
+    rmSync(outputPath, { force: true });
+  }
+}
+
 function commandVersion(command, args, repoRoot, shell = false) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
@@ -107,7 +151,7 @@ export function validationIdentity(repoRoot, profile, areas) {
     ['ls-files', '--others', '--exclude-standard'],
   ).sort();
   const dirtyHash = createHash('sha256');
-  dirtyHash.update(gitOutput(repoRoot, ['diff', '--binary', 'HEAD']));
+  updateHashWithGitDiff(repoRoot, dirtyHash);
   for (const filePath of untracked) {
     dirtyHash.update(filePath);
     dirtyHash.update(readFileSync(path.join(repoRoot, filePath)));
@@ -160,6 +204,14 @@ export function areasForPaths(paths) {
     }
     if (filePath.startsWith('docs/')) {
       areas.add('docs');
+    }
+    if (
+      filePath.startsWith('docs/diagrams/')
+      || filePath.startsWith('scripts/docs/')
+      || filePath === 'README.md'
+      || filePath === 'docs/guide/architecture-aks.md'
+    ) {
+      areas.add('diagrams');
     }
     if (
       filePath.startsWith('tests/')
@@ -241,6 +293,11 @@ function runHarness(repoRoot, isolated) {
 function runDocs(repoRoot, isolated) {
   ensureDependencies(repoRoot, 'docs', isolated);
   runNpm(['--prefix', 'docs', 'run', 'build'], repoRoot);
+}
+
+function runDiagrams(repoRoot) {
+  runNpm(['run', 'test:docs-diagrams'], repoRoot);
+  runNpm(['run', 'docs:check-diagrams'], repoRoot);
 }
 
 function pathIsWithin(parent, child) {
@@ -344,6 +401,9 @@ function main() {
     }
     if (areas.includes('docs')) {
       runDocs(repoRoot, options.isolatedDeps);
+    }
+    if (areas.includes('diagrams')) {
+      runDiagrams(repoRoot);
     }
     if (areas.includes('dotnet')) {
       runDotnet(repoRoot, options.profile, options.dotnetFilter);

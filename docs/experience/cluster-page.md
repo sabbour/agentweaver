@@ -8,11 +8,9 @@ The platform no longer pre-gates on quota. It submits the `SandboxClaim` and wai
 
 It is available under the **Cluster** nav item in the SYSTEM section of the project left rail. Route: `/projects/:projectId/cluster`. The page auto-refreshes every 30 seconds by default; you can toggle **Auto-refresh** off when you want to inspect a static snapshot.
 
-![Cluster page with KPI cards, health checks, sandbox claims, and capacity tables](/screenshots/cluster-page.png)
-
-> 📸 **Screenshot — `cluster-page.png`**
-> *Shows:* the **Cluster** page with Orphaned, Pending capacity, Checks OK, and Warm pool KPI cards plus Health checks, Sandbox claims, orphaned pods, pending capacity, and warm pools.
-> *Path:* open a project → click **Cluster** in the SYSTEM section of the left rail → `/projects/:projectId/cluster`.
+Read the health summary and Sandbox claims together: a claim waiting to bind is different from an
+orphaned pod. The live Resource topology provides the current inventory; no static capture is needed
+to infer which resources exist in your deployment.
 
 ## When to use the Cluster page
 
@@ -30,10 +28,10 @@ The KPI cards at the top of the page summarize the cluster signals the current U
 
 | Card | What it shows |
 |---|---|
-| **Orphaned** | Agent pods that no longer match an active run. |
+| **Orphaned pods** | Agent pods reported as orphaned by cluster diagnostics. |
 | **Pending capacity** | **Legacy.** Subtasks recorded in the historical `PendingCapacity` status; empty for new runs (Kubernetes now owns scheduling). |
-| **Checks OK** | Healthy checks divided by all reported cluster checks. |
-| **Warm pool** | Ready vs. desired warm sandbox replicas when warm-pool data is available. |
+| **Checks healthy** | Healthy checks divided by all reported cluster checks. |
+| **Warm pool ready** | Ready vs. desired warm sandbox replicas when warm-pool data is available. |
 
 Below the KPIs, the page shows **Health checks**, **Sandbox claims**, **Orphaned agent pods** when present, **Pending capacity**, and **Warm pools**.
 
@@ -46,7 +44,7 @@ Cluster checks run concurrently each time the page loads:
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
 | **Azure Key Vault** | CSI delivery of the required `mcp-api-key` | Managed identity misconfiguration, network policy, or a missing API authentication secret |
 | **Agent pod quota** | Effective admission headroom from the enforced `pods` and SandboxClaim object quotas. Healthy means plenty of room remains, warning means only a handful of starts remain, and critical means no new AgentHost can be admitted. | Namespace object-quota exhaustion |
-| **Warm pool** | Warm-pool agent-sandbox availability for generic sandboxes (`replicas: 3`) and AgentHost (`replicas: 2`) | Warm-pool replica count below target, SandboxTemplate CRD issue |
+| **Warm pool** | Readiness of the configured AgentHost warm pool (default `agentweaver-agent-host`, checked-in target 2) | Ready replicas below target, missing pool or template |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
 
 Each check shows:
@@ -55,24 +53,19 @@ Each check shows:
 - A detail message (visible on warn/fail) explaining the specific failure.
 - The duration the check took in milliseconds.
 
-All five checks have a **5-second individual timeout**. A timed-out check appears as `fail` with the detail `"timed out"`.
+All five checks have a **5-second individual timeout**. The guarded timeout result is `unknown` with
+the detail `"check timed out"`; it is not a healthy result.
 
 If the Key Vault row shows `critical: secret 'mcp-api-key' not found`,
 restore the required API authentication secret with `npm run azure:provision-infra`
 before redeploying.
 
-## Active agent pods table
+## Active execution placement
 
-Lists pods currently running that have a matching active run record:
-
-| Column | Meaning |
-|---|---|
-| **Pod name** | Kubernetes pod name |
-| **Run ID** | The run the pod is serving (links to an orchestration detail when available) |
-| **Node** | Kubernetes node the pod is scheduled on |
-| **Started at** | When the pod was created |
-
-A healthy system should show only pods with active runs here.
+The current page does not render a separate active-agent-pods table or CPU/memory quota bars.
+Use **Sandbox claims** and the **Runtime** topology layer for live execution resources, and the run's
+per-node pod indicator for recorded placement. Preview retention can keep resources alive beyond a run;
+do not infer that every retained pod is orphaned merely because the run is terminal.
 
 ## Orphaned agent pods table
 
@@ -84,9 +77,9 @@ If orphaned pods are not being cleaned up, check:
 
 ## Pending-capacity runs table
 
-Subtasks that could not get a sandbox immediately because the warm pool had no free capacity appear here until a slot frees up. Zero is healthy: it means every run got a sandbox right away.
-
-> **Legacy / back-compat.** Kubernetes now owns pod admission and scheduling (issue #217), so new runs rarely enter `PendingCapacity`. This table stays in the UI mainly to render historical records; for a live run whose pod is still being scheduled, look for `sandbox.provisioning_pending` heartbeats on the child run rather than an entry here.
+> **Legacy / back-compat.** This table renders historical `PendingCapacity` records from the removed
+> pre-gating loop. A zero count does not prove current pods scheduled immediately. For a live run whose
+> pod is still being scheduled, inspect its claim and `sandbox.provisioning_pending` heartbeats instead.
 
 Lists coordinator subtasks recorded in the historical `PendingCapacity` status:
 
@@ -107,9 +100,10 @@ Lists every SandboxWarmPool CRD object in the namespace. Each row represents one
 | **Desired** | Target number of pre-warmed sandboxes declared in the pool spec |
 | **Ready** | Sandboxes currently ready to accept a claim |
 | **Available** | Sandboxes that are ready and not yet claimed by a run |
-| **Status** | `healthy` when ready equals desired; `warning` when below desired; `critical` when none are ready |
+| **Status** | `healthy` when ready meets a positive desired count; `warning` when some are ready but below target; `critical` when none are ready |
 
-A pool in `warning` or `critical` means new run dispatches fall back to creating an ad-hoc sandbox, which adds latency to run startup.
+A pool below its target can increase claim-binding latency. Warm-pool availability is not an application
+reservation gate: the controller and Kubernetes still own provisioning and scheduling.
 
 ## Resource topology
 

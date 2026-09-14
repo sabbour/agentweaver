@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "embedWidthPx": 960,
+  "diagrams": [
+    { "name": "canonical-coordinator-architecture", "concept": "System architecture", "docs": ["README.md", "docs/deep-dive/coordinator-internals.md"] },
+    { "name": "canonical-coordinator-runtime-sequence", "concept": "Coordinator-to-agent communication and A2A runtime", "docs": ["docs/deep-dive/coordinator-internals.md", "docs/deep-dive/a2a-bridge.md"] },
+    { "name": "canonical-coordinator-journey", "concept": "Coordinator journey", "docs": ["docs/guide/runs.md"] },
+    { "name": "canonical-default-workflow", "concept": "Default workflow", "docs": ["docs/guide/workflows.md", "docs/workflow-library.md"] },
+    { "name": "canonical-workflow-authoring", "concept": "Workflow authoring", "docs": ["docs/workflow-generation.md"] },
+    { "name": "canonical-workflow-selection", "concept": "Workflow selection", "docs": ["docs/workflow-selection.md"] },
+    { "name": "canonical-workflow-invocation", "concept": "Workflow invocation", "docs": ["docs/deep-dive/workflow-engine.md"] },
+    { "name": "canonical-durable-event-stream-sequence", "concept": "Durable events", "docs": ["docs/deep-dive/events-observability.md"] },
+    { "name": "canonical-board-lifecycle", "concept": "Board lifecycle", "docs": ["docs/guide/board.md"] },
+    { "name": "canonical-memory-context", "concept": "Context compilation and progressive tool disclosure", "docs": ["docs/deep-dive/memory-decisions.md", "docs/deep-dive/agent-runtime.md"] },
+    { "name": "canonical-provider-admission", "concept": "Provider admission", "docs": ["docs/deep-dive/project-generation-model-settings.md"] },
+    { "name": "canonical-sandbox-boundary", "concept": "Sandbox boundary", "docs": ["docs/deep-dive/sandbox.md"] },
+    { "name": "canonical-pod-process-boundaries", "concept": "Pod and process boundaries", "docs": ["docs/deep-dive/sandbox-pod-execution.md"] },
+    { "name": "canonical-aks-components", "concept": "AKS deployment", "docs": ["docs/guide/architecture-aks.md"] },
+    { "name": "canonical-blueprint-relationships", "concept": "Blueprint relationships", "docs": ["docs/guide/blueprints.md", "docs/catalog-groupings.md"] }
+  ]
+}

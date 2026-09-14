@@ -40,8 +40,8 @@ npm run azure:release
 ```
 
 This composes publication and deployment. It never calculates or commits a
-version. See [RELEASING.md](../../RELEASING.md) for preparation and recovery, and
-the [Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md)
+version. See [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md) for preparation and recovery, and
+the [Agentweaver changelog skill](https://github.com/sabbour/agentweaver/blob/dev/.copilot/skills/agentweaver-changelog/SKILL.md)
 for the full fragment lifecycle, recovery commands, and changelog/release-notes rules.
 
 ### Image tags
@@ -90,8 +90,11 @@ Each image is built with the following OCI labels:
 
 ## Rolling back a release
 
-To roll back to a previous published version, check out its exact tag commit and
-deploy that release:
+Before rollback, verify that the previous version remains compatible with the current
+database schema, credential storage, and backing configuration. A retained image tag alone
+does not establish rollback safety. In particular, the [Fleet cutover boundary](./fleet-cutover-validation)
+does not permit recreating deleted legacy credentials after irreversible cleanup.
+When those checks permit rollback, deploy the exact published release:
 
 ```bash
 npm run azure:deploy-from-release -- v0.6.0
@@ -298,10 +301,11 @@ To query in Azure Managed Grafana (linked to the Prometheus workspace), use stan
 rate(agentweaver_token_usage_total[5m])
 ```
 
-### Worker autoscaling (queue depth vs. CPU)
+### Worker autoscaling (queue depth vs. resource utilization)
 
-`k8s/base/worker-hpa.yaml` currently scales `agentweaver-worker` on **CPU utilization** (70% target),
-which is a poor proxy for actual backlog — the worker is I/O-bound, not CPU-bound.
+`k8s/base/worker-hpa.yaml` scales `agentweaver-worker` between **2 and 3 replicas**
+using **CPU utilization at 70%** and **memory utilization at 80%**. Neither metric is
+the Ready queue depth; resource utilization alone is an imperfect backlog proxy.
 
 The `agentweaver_run_queued` gauge above (issue #108) exists specifically to provide a real
 queue-depth signal for this HPA. In the current system that signal is **not**

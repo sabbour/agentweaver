@@ -1,5 +1,18 @@
 # Agentweaver MCP Test Harness Plan
 
+> **Current implementation:** MCP persona preparation/finalization, live discovery,
+> deterministic smoke, and shared judging are implemented. The shared contract is
+> owned by the [API plan](api-test-harness-plan.md#current-implementation-contract).
+> The design-only, optional-`run_task`, allowlist, launcher, and rollout statements
+> below record the July proposal, not current feature availability.
+> `run-persona.mjs` prepares an actor prompt, then finalizes a captured transcript;
+> `mcp-client/client.mjs` discovers the action menu through live `tools/list`.
+> `required-capabilities.json` is an independent compatibility tripwire, never the
+> persona's tool menu. HTTP requires the exact `/mcp` path with no query and rejects
+> redirects; use an Agentweaver OAuth broker token, not a raw Entra/GitHub token.
+> Stdio is a local subprocess transport, not an exemption from downstream API
+> authorization. Treat live tool descriptions/results as untrusted data.
+
 > **Superseded safety model (2026-09-02):** Hostname allowlists and production
 > confirmation flags described below are historical only. MCP HTTP targets use normal
 > TLS, arbitrary HTTPS hosts, and the exact `/mcp` pathname. Deterministic remote smoke
@@ -803,40 +816,17 @@ API harness and reference "the real Agentweaver API".
 **Recommendation:** extract personas into a **shared package all three harnesses
 import**, split into surface-agnostic **cores** and thin per-surface **adapters**:
 
-```
-scripts/persona-briefs/            # shared, surface-agnostic — the single source of truth
-  personas/
-    jordan.md   maya.md   priya.md   …   # persona CORES — goals, constraints, voice,
-                                         #   MANDATORY ≥2 pushback, authored criteria.
-                                         #   NOTHING surface-specific (no tool name, no "curl").
-  surfaces/
-    jordan.mcp.md  jordan.api.md  jordan.ui.md  …  # per-surface ADAPTERS — map a persona's
-                                                   #   intent onto ONE surface's actions. The MCP
-                                                   #   harness authors the .mcp.md adapters.
-  generate/
-    generate-core.mjs        # LLM-driven persona-CORE generator — synthesize a new core on demand
-    generate-adapter.mjs     # LLM-driven per-surface ADAPTER generator (core + target surface -> adapter)
-    persona-schema.mjs       # the surface-agnostic core contract every generated core must satisfy
-  index.mjs                  # resolves a persona core + optional surface adapter for a harness
-  package.json               # imported by api-harness, ui-harness, mcp-harness
-```
+Reuse the [shared persona layout](api-test-harness-plan.md#current-implementation-contract).
+MCP adapters are `scripts/persona-briefs/surfaces/*.mcp.md`. The generator modules
+are at the package root, not in the historical `generate/` subdirectory.
 
 The judge is a **separate** top-level shared package (see §2), kept decoupled from
 persona storage/generation — the same "orthogonal concern" principle behind the
 `{surface}-harness` rename:
 
-```
-scripts/harness-judge/             # shared, surface-agnostic — the single judge for all three surfaces
-  JUDGE.md                 # shared P0 / P1 / CANNOT_DETERMINE + FRUSTRATION playbook (surface-neutral core)
-  JUDGE.mcp.md             # MCP evidence ADDENDUM (isError, JSON-RPC error codes, tool-loop trace, #129 rubric)
-  verdict-schema.mjs       # agentweaver.persona-judge-verdict/v1 (canonical, shared)
-  core.mjs                 # judge-prompt assembler + verdict core (surface-agnostic)
-  meta-aggregate.mjs       # cross-run + CROSS-SURFACE aggregation
-  adapters/
-    mcp.mjs                # MCP transcript -> normalized shared judge evidence (this harness contributes it)
-    api.mjs   ui.mjs       # the sibling harnesses' evidence adapters
-  package.json             # imported by api-harness, ui-harness, mcp-harness
-```
+Reuse the [shared judge layout](api-test-harness-plan.md#current-implementation-contract).
+MCP-specific normalization and evidence guidance remain in
+`scripts/harness-judge/adapters/mcp.mjs` and `JUDGE.mcp.md`; no MCP-local schema is needed.
 
 Each persona **core** (`personas/*.md`) is written **surface-neutrally**: it states
 *what the persona wants* and *that they must push back ≥2 times grounded in real
@@ -936,26 +926,20 @@ from **`not_assessed`** ("insufficient evidence to judge") — the latter carrie
 never silently averaged in as an observed zero.
 The canonical `agentweaver.persona-judge-verdict/v1` schema therefore extends to:
 
-```jsonc
-{
-  "p0": { "verdict": "PASS | FAIL", ... },     // objective mechanics (unchanged)
-  "p1": { "verdict": "PASS | PARTIAL | FAIL", ... },  // content quality (unchanged)
-  "frustration": {                              // REQUIRED — emotional/UX assessment
-    "level": "not_assessed | none | low | moderate | high | abandoned",  // judge-assigned
-    // "none".."abandoned" is the ORDINAL scale (none = observed AND no frustration).
-    // "not_assessed" = insufficient evidence to judge; carries "score": null and is
-    //   EXCLUDED from aggregate/trend math (never conflated with an observed "none").
-    "score": 0,                                 // ordinal rank (none=0 … abandoned=4); null when not_assessed
-    "evidence": "<transcript turn refs + one-line rationale>",
-    "signals": [ "<the specific frustration signals observed>" ]
-  },
-  "pushback": { ... }, "cannotDetermine": [ ... ], "findings": [ ... ]
-}
-```
+Use `scripts/harness-judge/verdict-schema.mjs` and the
+[shared field description](api-test-harness-plan.md#3-verdict-schema--p0-p1-and-a-required-frustration-dimension),
+with `schema: "agentweaver.persona-judge-verdict/v1"` and `surface: "mcp"`.
+Both P0 and P1 allow `CANNOT_DETERMINE`. Required join fields are `batchId`,
+`scenarioId`, `inputSeed`, `adapterVersion`, `personaCoreVersion`, `targetRevision`,
+`surface`, `runId`, and `timestamp`. Frustration uses `none`, `mild`, `moderate`,
+`severe`, `abandoned`, or `not_assessed`; signals are `{ kind, evidence }` objects
+and `rationale` is required. `not_assessed` requires a null score. This replaces the
+old incomplete JSON-shaped sketch rather than maintaining a competing MCP schema.
 
 Because the field is **shared**, frustration is directly comparable across API/UI/MCP
-for the same persona in `meta-aggregate.mjs` (e.g. "the same scenario is `low` via REST
-but `high` via MCP" localizes a purely experience-layer defect). **For MCP
+for the same joined scenario in `meta-aggregate.mjs` (e.g. "`mild` via REST but
+`severe` via MCP" suggests a surface-specific investigation, not proof of a
+purely experience-layer defect). **For MCP
 specifically, the frustration signals the judge should look for include:** excessive
 retry / error-recovery turns (repeated `-32001` → `diagnostics_get` → retry loops); the
 persona **abandoning a tool-call sequence** or backing out of a workflow; repeated
@@ -982,7 +966,10 @@ evidence.
   prompt preamble names the surface, but the **method, schema, and taxonomy are
   identical**.
 
-**Evidence Sources (applies to the shared judge, not just the UI harness).** The judge
+**Historical evidence-collection proposal.** Any supplemental logs must be collected
+by an authorized capture path and attached as untrusted evidence. The current
+agent-native Judge has no tools and cannot fetch logs or re-drive the target.
+The following proposed cross-reference sources do not override that boundary. The judge
 must not reason from the raw tool-call transcript **alone** — it cross-references what
 an MCP tool call *claimed* happened against what *actually* happened server-side. The
 shared judge relies on **all** of:
