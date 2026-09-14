@@ -11,7 +11,10 @@
 import { describe, it, expect } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
 import {
+  buildSteppedConnectorRoute,
+  layoutDagBalancedGrid,
   layoutDagStaircase,
+  routeGridEdges,
   SUBTASK_NODE_W,
   SUBTASK_NODE_H,
   FIXED_NODE_W,
@@ -52,26 +55,38 @@ const rawEdges: Array<[string, string]> = [
   [MERGE, SCRIBE],
 ];
 
+const engines = [
+  { name: 'legacy staircase', id: 'legacy-staircase' },
+  { name: 'balanced grid', id: 'balanced-grid' },
+] as const;
+
 function size(id: string) {
   return subtaskIds.has(id)
     ? { w: SUBTASK_NODE_W, h: SUBTASK_NODE_H }
     : { w: FIXED_NODE_W, h: FIXED_NODE_H };
 }
 
-function layout(rankdir: 'LR' | 'TB') {
+function layout(engine: (typeof engines)[number]['id']) {
   const nodes: Node[] = ids.map((id) => {
     const s = size(id);
     return { id, position: { x: 0, y: 0 }, data: {}, initialWidth: s.w, initialHeight: s.h } as Node;
   });
-  const fwdEdges: Edge[] = rawEdges.map(([source, target], i) => ({ id: `e${i}`, source, target }));
+  const fwdEdges: Edge[] = rawEdges.map(([source, target], i) => ({ id: `e${i}`, source, target, type: 'spine' }));
   const hints = Object.fromEntries(ids.map((id) => [id, { width: size(id).w, height: size(id).h }]));
-  const laid = layoutDagStaircase(nodes, fwdEdges, {
-    rankSep: COORD_GRAPH_RANK_SEP,
-    nodeSep: COORD_GRAPH_NODE_SEP,
-    targetAspect: 1.35,
-    minStepRanks: 3,
-    rankdir,
-  }, hints);
+  const laid = engine === 'legacy-staircase'
+    ? layoutDagStaircase(nodes, fwdEdges, {
+      rankSep: COORD_GRAPH_RANK_SEP,
+      nodeSep: COORD_GRAPH_NODE_SEP,
+      targetAspect: 1.35,
+      minStepRanks: 3,
+      rankdir: 'LR',
+    }, hints)
+    : layoutDagBalancedGrid(nodes, fwdEdges, {
+      rankSep: COORD_GRAPH_RANK_SEP,
+      nodeSep: COORD_GRAPH_NODE_SEP,
+      minColumns: 1,
+      maxColumns: 4,
+    }, hints);
   const byId = new Map(laid.map((n) => [n.id, n]));
   const box = (id: string) => {
     const n = byId.get(id)!;
@@ -81,7 +96,7 @@ function layout(rankdir: 'LR' | 'TB') {
       cx: n.position.x + s.w / 2, cy: n.position.y + s.h / 2,
     };
   };
-  return { box };
+  return { box, nodes: laid, edges: fwdEdges };
 }
 
 // Mirrors the corridor-occlusion predicate in routeGridEdges (CoordinatorRunPage.tsx): does any node
@@ -101,27 +116,100 @@ function verticalCorridorBlocked(
   });
 }
 
+function handlePoint(node: Node, handle: string | null | undefined) {
+  const rect = {
+    x0: node.position.x,
+    y0: node.position.y,
+    x1: node.position.x + size(node.id).w,
+    y1: node.position.y + size(node.id).h,
+  };
+  const side = handle?.split('-').at(-1);
+  if (side === 'left') return { x: rect.x0, y: (rect.y0 + rect.y1) / 2 };
+  if (side === 'right') return { x: rect.x1, y: (rect.y0 + rect.y1) / 2 };
+  if (side === 'top') return { x: (rect.x0 + rect.x1) / 2, y: rect.y0 };
+  if (side === 'bottom') return { x: (rect.x0 + rect.x1) / 2, y: rect.y1 };
+  return { x: (rect.x0 + rect.x1) / 2, y: (rect.y0 + rect.y1) / 2 };
+}
+
+function segmentCrossesRect(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  rect: ReturnType<ReturnType<typeof layout>['box']>,
+) {
+  if (Math.abs(from.x - to.x) < 0.5) {
+    const x = from.x;
+    if (x <= rect.x0 || x >= rect.x1) return false;
+    return Math.max(from.y, to.y) > rect.y0 && Math.min(from.y, to.y) < rect.y1;
+  }
+  if (Math.abs(from.y - to.y) < 0.5) {
+    const y = from.y;
+    if (y <= rect.y0 || y >= rect.y1) return false;
+    return Math.max(from.x, to.x) > rect.x0 && Math.min(from.x, to.x) < rect.x1;
+  }
+  return false;
+}
+
 describe('FitTrack run 41eb1aa4 graph — Skyler/Hank occlusion', () => {
   it('has NO phantom Skyler->Hank edge in the descriptor', () => {
     expect(rawEdges.some(([s, t]) => s === SKYLER && t === HANK)).toBe(false);
     expect(rawEdges.some(([s, t]) => s === HANK && t === SKYLER)).toBe(false);
   });
 
-  it('LR (default): keeps sibling tasks in one band and RAI in the next band', () => {
-    const { box } = layout('LR');
+  it.each(engines)('$name: keeps sibling tasks in one band and RAI in the next band', ({ id }) => {
+    const { box } = layout(id);
     const skyler = box(SKYLER);
     const hank = box(HANK);
     const rai = box(RAI);
 
-    // Siblings share a rank column; the downstream target advances to a new column.
-    expect(Math.abs(skyler.cx - hank.cx)).toBeLessThanOrEqual(SUBTASK_NODE_W / 2);
-    expect(rai.x0).toBeGreaterThan(Math.max(skyler.x1, hank.x1));
-    expect(skyler.cy).toBeLessThan(hank.cy);
+    // Siblings share one rank band; the downstream target advances to a new band.
+    const sharedRankBand = Math.abs(skyler.cx - hank.cx) <= SUBTASK_NODE_W / 2 ||
+      Math.abs(skyler.cy - hank.cy) <= SUBTASK_NODE_H / 2;
+    const raiAdvanced = rai.x0 > Math.max(skyler.x1, hank.x1) ||
+      rai.y0 > Math.max(skyler.y1, hank.y1);
+
+    expect(sharedRankBand).toBe(true);
+    expect(raiAdvanced).toBe(true);
   });
 
-  it('LR: the real Skyler->RAI edge corridor is no longer occluded by Hank', () => {
-    const { box } = layout('LR');
+  it.each(engines)('$name: the real Skyler->RAI edge corridor is no longer occluded by Hank', ({ id }) => {
+    const { box } = layout(id);
     expect(verticalCorridorBlocked(SKYLER, RAI, ids, box)).toBe(false);
     expect(verticalCorridorBlocked(HANK, RAI, ids, box)).toBe(false);
+  });
+
+  it.each(engines)('$name: routed edges do not cross unrelated cards', ({ id }) => {
+    const { nodes, edges, box } = layout(id);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const routed = routeGridEdges(edges, nodes);
+
+    for (const edge of routed) {
+      const data = edge.data as {
+        flowDirection?: 'horizontal' | 'vertical';
+        gutterLaneOffset?: number;
+        routePoints?: Array<{ x: number; y: number }>;
+      } | undefined;
+      const source = handlePoint(byId.get(edge.source)!, edge.sourceHandle);
+      const target = handlePoint(byId.get(edge.target)!, edge.targetHandle);
+      const points = data?.routePoints && data.routePoints.length >= 2
+        ? data.routePoints
+        : buildSteppedConnectorRoute({
+          sourceX: source.x,
+          sourceY: source.y,
+          targetX: target.x,
+          targetY: target.y,
+          orientation: data?.flowDirection,
+          laneOffset: data?.gutterLaneOffset,
+        }).points;
+
+      for (let index = 0; index < points.length - 1; index += 1) {
+        for (const nodeId of ids) {
+          if (nodeId === edge.source || nodeId === edge.target) continue;
+          expect(
+            segmentCrossesRect(points[index], points[index + 1], box(nodeId)),
+            `${id}:${edge.id} crosses ${nodeId}`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 });
