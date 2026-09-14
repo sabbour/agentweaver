@@ -29,6 +29,21 @@ public sealed record SandboxToolOptions(
     public bool RequireApprovalForAllShell { get; init; } = false;
 
     /// <summary>
+    /// Marks a run created with <c>auto-approve-tools</c> or <c>autopilot</c> — i.e. one with no
+    /// operator watching for approval prompts (#1314).
+    /// <para>
+    /// This does NOT relax the shell HITL gate: destructive shell is deliberately excluded from
+    /// run-level auto-approval by <c>ToolApprovalPolicySemantics.IsRunAutoApprovalEligible</c>, and
+    /// that decision stands. It only changes the guidance returned to the agent when approval is
+    /// required — an unattended run is told to rewrite the command into a non-destructive
+    /// equivalent instead of being told to retry and wait for an approval that will never arrive,
+    /// which otherwise leaves the run spinning on the same blocked command while reporting
+    /// <c>InProgress</c>.
+    /// </para>
+    /// </summary>
+    public bool UnattendedRun { get; init; } = false;
+
+    /// <summary>
     /// Allow outbound network inside the sandbox. Default: false.
     /// Mirrors <c>SandboxPolicy.NetworkEnabled</c>.
     /// </summary>

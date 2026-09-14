@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 
 namespace Agentweaver.AgentTools.Tools;
@@ -14,8 +15,15 @@ internal sealed class RunCommandTool : ISandboxTool
             async (
                 [Description("Shell command to execute inside the sandbox.")] string command,
                 [Description("Timeout in milliseconds (bounded by the runtime policy).")] int? timeout_ms = null,
+                // #1317: the native Copilot shell tool accepts a `description`, so the model
+                // frequently supplies one here too. Accepting and ignoring it keeps the call
+                // matching this sandboxed tool instead of falling through to the disabled native
+                // shell, which cost a full turn to a tool.error + run.degraded before the agent
+                // retried without it.
+                [Description("Optional human-readable description of the command. Accepted for compatibility and otherwise ignored.")] string? description = null,
                 CancellationToken ct = default) =>
             {
+                _ = description;
                 if (ctx.Options.RejectBackgroundCommands && ContainsBackgrounding(command))
                     return "Command rejected: background/detached shell execution is not allowed.";
 
@@ -62,24 +70,50 @@ internal sealed class RunCommandTool : ISandboxTool
                     }
                     else
                     {
-                        ctx.Logger.LogWarning(
-                            "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash}",
-                            requestId, command.Length, commandHash);
+                        // An unattended run (auto-approve-tools / autopilot) has nobody watching
+                        // for the approval card. Destructive shell is deliberately NOT eligible for
+                        // run-level auto-approval — see ToolApprovalPolicySemantics
+                        // .IsRunAutoApprovalEligible — so the gate still holds here and the command
+                        // does not execute. What changes is the guidance: telling an unattended run
+                        // to "retry after approval" makes it spin on the same blocked command while
+                        // the run reports InProgress, so instead it is told to rewrite the command
+                        // into a non-destructive equivalent and move on (#1314).
+                        var unattended = ctx.Options.UnattendedRun && !ctx.Options.RequireApprovalForAllShell;
 
-                        ctx.EmitEvent?.Invoke("shell.approval_required", new
+                        ctx.Logger.LogWarning(
+                            "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash} unattended={Unattended}",
+                            requestId, command.Length, commandHash, unattended);
+
+                        ctx.EmitEvent?.Invoke(EventTypes.ShellApprovalRequired, new
                         {
                             requestId,
                             commandLength = command.Length,
                             commandHash,
                             command,
+                            unattended,
                             message = "Shell command requires operator approval before execution.",
                         });
 
+                        var approvalInstructions =
+                            $"An operator can approve it via: POST /api/runs/{ctx.RunId}/shell-approvals " +
+                            $"with body {{\"command_hash\":\"{commandHash}\"}}.";
+
+                        if (unattended)
+                        {
+                            return $"This command matched a destructive pattern and requires operator " +
+                                   $"approval before it can execute (request ID: {requestId}). " +
+                                   $"This run is unattended, so no operator is watching and destructive " +
+                                   $"commands are never auto-approved. Do NOT retry this command as-is — " +
+                                   $"it will keep being blocked. Instead, achieve the same result without " +
+                                   $"the destructive operation: write into a new unique directory rather " +
+                                   $"than deleting an existing one, remove specific files individually, or " +
+                                   $"use the file tools. " + approvalInstructions;
+                        }
+
                         return $"This command requires operator approval before it can execute " +
                                $"(request ID: {requestId}). " +
-                               $"The operator can approve it via: POST /api/runs/{ctx.RunId}/shell-approvals " +
-                               $"with body {{\"command_hash\":\"{commandHash}\"}}. " +
-                               $"After approval, retry this command.";
+                               approvalInstructions +
+                               $" After approval, retry this command.";
                     }
                 }
 
