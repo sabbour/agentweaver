@@ -133,6 +133,54 @@ function needsCmdWrapper(resolvedPath) {
 }
 
 /**
+ * Terminates a spawned child *and everything it spawned*.
+ *
+ * On Windows this matters enormously: `az` is a `.cmd` shim that we launch
+ * through `cmd.exe`, which in turn launches `python.exe`. `child.kill()` only
+ * signals the `cmd.exe` wrapper, leaving the Python grandchild alive and still
+ * holding the inherited stdout/stderr pipes. The capture promise then never
+ * settles, so a `timeoutMs` breach silently fails to take effect and the caller
+ * hangs indefinitely -- observed in production as deployments stalling for 30+
+ * minutes against a 45s timeout, with orphaned `az` processes accumulating for
+ * over two hours.
+ *
+ * `taskkill /T` terminates the whole tree by PID (never by image name, which
+ * would be unsafe on a shared machine). POSIX needs no special handling: the
+ * spawned child is the real process, so a direct signal is sufficient.
+ */
+function killProcessTree(child) {
+  if (!child || child.pid === undefined) return;
+  if (!isWindows) {
+    try {
+      child.kill();
+    } catch {
+      // Already exited, or cannot be signaled; the timeout result stands.
+    }
+    return;
+  }
+  try {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      shell: false,
+      detached: false,
+    }).on("error", () => {
+      // taskkill unavailable: fall back to signaling the wrapper alone.
+      try {
+        child.kill();
+      } catch {
+        // Nothing further to do; the timeout result remains authoritative.
+      }
+    });
+  } catch {
+    try {
+      child.kill();
+    } catch {
+      // See above.
+    }
+  }
+}
+
+/**
  * Resolves `cmd`/`args` into the concrete `{ file, spawnArgs, spawnOpts }` that
  * must be passed to `child_process.spawn` for correct cross-platform launcher
  * resolution (see the module banner comment above). Exposed for callers that
@@ -287,12 +335,9 @@ export function run(cmd, args = [], opts = {}) {
       timer = setTimeout(() => {
         // Never retry here. Killing the local CLI cannot establish whether a
         // remote Azure operation completed, so callers must reconcile state.
-        try {
-          child.kill();
-        } catch {
-          // The timeout result remains authoritative even if the child has
-          // already exited or cannot be signaled on this platform.
-        }
+        // Retry belongs in lib/retry.mjs, at call sites that know the
+        // operation is idempotent.
+        killProcessTree(child);
         finish(() => reject(new ExecTimeoutError(
           `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
           { command: displayLine },
@@ -408,11 +453,7 @@ export function capture(cmd, args = [], opts = {}) {
     });
     if (timeoutMs) {
       timer = setTimeout(() => {
-        try {
-          child.kill();
-        } catch {
-          // See run(): never retry after an indeterminate remote operation.
-        }
+        killProcessTree(child);
         finish(() => reject(new ExecTimeoutError(
           `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
           { command: displayLine },

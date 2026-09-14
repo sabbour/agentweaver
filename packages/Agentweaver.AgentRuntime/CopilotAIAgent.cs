@@ -453,6 +453,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            UnattendedRun = IsUnattendedRun(runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
@@ -2453,6 +2454,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// </summary>
+    /// <summary>
+    /// A run created with <c>auto-approve-tools</c> or <c>autopilot</c> has no operator watching
+    /// for approval prompts. Used to tailor the shell HITL refusal so an unattended run rewrites a
+    /// blocked destructive command instead of spinning on it (#1314).
+    /// </summary>
+    private bool IsUnattendedRun(string runId)
+    {
+        if (_runOptions is null) return false;
+        var options = _runOptions.Get(runId);
+        return options.AutoApproveTools || options.Autopilot;
+    }
+
     internal static string SanitizeUrl(string rawUrl)
     {
         if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))

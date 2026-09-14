@@ -119,6 +119,20 @@ no code-enforced default-defer wrapper for approvals anymore; PersonaActor is
 explicitly instructed (in its own agent file) to never blind-approve a gate and
 to ground every approval decision in real observed content.
 
+**The OpenAPI spec is incomplete — do not treat it as exhaustive.** It lists only
+the top-level paths and omits the parameterized run endpoints. `/api/runs/{id}/children`,
+`/api/runs/{id}/preview`, `/api/runs/{id}/shell-approvals`, `/api/runs/{id}/steer`,
+and `/api/runs/{id}/events` all exist and work despite being absent from it. Probe
+before concluding an endpoint is missing.
+
+**Shell approvals are not covered by `auto_approve_tools`.** A run submitted with
+`auto_approve_tools: true` and `autopilot: true` still emits `shell.approval_required`
+and then stalls indefinitely — while its status stays `InProgress`, so it looks like
+slow work rather than a gate. Any unattended run needs a poller on
+`GET /api/runs/{id}/events` that answers each `shell.approval_required` with
+`POST /api/runs/{id}/shell-approvals` and body `{"command_hash": "<payload.commandHash>"}`.
+Without it the run will never finish. See `scripts/harness-shared/learnings.md`.
+
 **Transcript recording is PersonaActor's own responsibility.** It appends one
 JSON line per turn (thought + real request + real response) with
 `appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs` as it goes
