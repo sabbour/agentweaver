@@ -35,7 +35,8 @@ public static class BlueprintEndpoints
             {
                 operation.Description ??= "Generates a validated blueprint draft from prose, with optional project or repository grounding.";
                 return Task.CompletedTask;
-            });
+            })
+            .RequiresAiExecutionContext("blueprint_generation");
 
         // POST /api/blueprints/suggest — analyze a GitHub repository and recommend a catalog blueprint.
         app.MapPost("/api/blueprints/suggest", SuggestBlueprintAsync)

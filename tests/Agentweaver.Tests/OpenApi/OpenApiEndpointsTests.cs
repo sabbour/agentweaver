@@ -99,11 +99,75 @@ public sealed class OpenApiEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenApiJson_DeclaresProviderKeyHeaderOnEveryAiGuardedOperation()
+    {
+        var response = await _client.GetAsync("/openapi/v1.json");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+
+        // Every operation gated by AiExecutionPlanService. An OpenAPI-guided client can only satisfy
+        // the 409 ai_execution_context_required when the header is discoverable here (#1316).
+        var guarded = new (string Path, string Method, bool Required)[]
+        {
+            ("/api/projects/{id}/orchestrations", "post", true),
+            ("/api/runs/{id}/outcome-spec/confirm", "post", true),
+            ("/api/runs/{id}/outcome-spec/revise", "post", true),
+            ("/api/runs/{coordinatorRunId}/steer", "post", false),
+            ("/api/runs/{coordinatorRunId}/assembly/review", "post", false),
+            ("/api/runs/{id}/review", "post", false),
+            ("/api/runs/{id}/request-changes", "post", true),
+            ("/api/runs/{id}/retry", "post", true),
+            ("/api/assistant/runs", "post", false),
+            ("/api/assistant/runs/{id}/messages", "post", true),
+            ("/api/projects/{id}/backlog/decompose", "post", true),
+            ("/api/blueprints/generate", "post", true),
+            ("/api/projects/{id}/casting/proposals", "post", false),
+            ("/api/projects/{id}/skills/generate", "post", true),
+            ("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", "post", false),
+            ("/api/projects/{projectId}/workflows/{workflowId}/run", "post", true),
+            ("/api/projects/{projectId}/workflows/generate", "post", true),
+        };
+
+        var missing = new List<string>();
+        foreach (var (path, method, required) in guarded)
+        {
+            if (!paths.TryGetProperty(path, out var pathItem)
+                || !pathItem.TryGetProperty(method, out var operation))
+            {
+                missing.Add($"{method} {path} (route not in document)");
+                continue;
+            }
+
+            var header = operation.TryGetProperty("parameters", out var parameters)
+                ? parameters.EnumerateArray().FirstOrDefault(parameter =>
+                    parameter.GetProperty("name").GetString() == AiExecutionPlanHeaders.ProviderKey
+                    && parameter.GetProperty("in").GetString() == "header")
+                : default;
+            if (header.ValueKind != JsonValueKind.Object)
+            {
+                missing.Add($"{method} {path} (no {AiExecutionPlanHeaders.ProviderKey} header)");
+                continue;
+            }
+
+            var isRequired = header.TryGetProperty("required", out var requiredFlag)
+                && requiredFlag.GetBoolean();
+            if (isRequired != required)
+                missing.Add($"{method} {path} (required should be {required})");
+            var describes = header.TryGetProperty("description", out var headerDescription)
+                && headerDescription.GetString()?.Contains("/api/ai/execution-context") == true;
+            if (!describes)
+                missing.Add($"{method} {path} (description omits the prepare endpoint)");
+        }
+
+        missing.Should().BeEmpty("every AI-guarded operation must declare its precondition header");
+    }
+
+    [Fact]
     public async Task OpenApiYaml_UsesYamlRoute_AndExposesSameDocumentSurface()
     {
         var response = await _client.GetAsync("/openapi/v1.yaml");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("openapi:");
         body.Should().Contain("title: Agentweaver API");

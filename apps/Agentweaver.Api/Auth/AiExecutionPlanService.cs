@@ -341,10 +341,10 @@ public sealed class AiExecutionPlanService
                         : "model_provider_changed",
                 ToResponse(replacement, "prepared"),
                 missing
-                    ? "Prepare the AI execution context before starting this operation."
+                    ? "Prepare the AI execution context before starting this operation, then resend the request with the returned execution_key in the If-Model-Provider-Key header."
                     : expired
-                        ? "The prepared AI execution context expired. Review the provider and retry."
-                        : "The effective model provider changed. Review the replacement context and retry.");
+                        ? "The prepared AI execution context expired. Review the provider, then resend the request with the new execution_key in the If-Model-Provider-Key header."
+                        : "The effective model provider changed. Review the replacement context, then resend the request with its execution_key in the If-Model-Provider-Key header.");
         }
 
         if (replacement.Provider is EffectiveModelProviderResult.Unavailable)

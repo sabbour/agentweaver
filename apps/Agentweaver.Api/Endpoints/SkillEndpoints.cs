@@ -178,7 +178,8 @@ public static class SkillEndpoints
             {
                 return EndpointHelpers.AiExecutionError(ex);
             }
-        });
+        })
+            .RequiresAiExecutionContext("skill_generation");
 
         // DELETE /api/projects/{id}/skills/{skillId} — remove a skill + its assignments.
         app.MapDelete("/api/projects/{id}/skills/{skillId}", async (
@@ -373,7 +374,11 @@ public static class SkillEndpoints
                     ? executionPlans.ToResponse(acceptedPlan, "completed")
                     : null,
             });
-        }).WithName("BrowseSkillMarketplace").WithTags("Skills");
+        }).WithName("BrowseSkillMarketplace").WithTags("Skills")
+            .RequiresAiExecutionContext(
+                "marketplace_catalog_classification",
+                required: false,
+                condition: "when the marketplace source uses automatic catalog parsing");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
             HttpContext http, string id, string marketplace, MarketplaceImportRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
