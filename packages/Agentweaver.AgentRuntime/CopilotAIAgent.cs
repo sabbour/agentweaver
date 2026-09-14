@@ -11,6 +11,7 @@ using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -855,6 +856,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             category = providerFailure.FailureKind.ToString(),
             errorCode = providerFailure.ErrorCode,
             retryable = providerFailure.IsRetryable,
+            causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
         });
     }
 
