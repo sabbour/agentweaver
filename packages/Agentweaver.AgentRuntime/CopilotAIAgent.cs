@@ -445,12 +445,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var agentId = $"did:mesh:agentweaver:copilot:{runId}";
 
         var controlledBuildTestShell = purpose == AgentHostPurpose.AssemblyBuildTest;
+        var runCommandDefaultTimeoutMs = SandboxToolOptions.ResolveDefaultRunCommandTimeoutMs();
         _controlledBuildTestShell = controlledBuildTestShell;
         var toolOptions = new SandboxToolOptions(
             ShellEnabled: sandboxPolicy.ShellEnabled,
-            DefaultTimeoutMs: controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
-                : (int)TimeSpan.FromMinutes(5).TotalMilliseconds)
+            DefaultTimeoutMs: runCommandDefaultTimeoutMs)
         {
             RepositoryAccessToken = _repositoryCredentialProvider?.GetAccessToken(),
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
@@ -461,13 +460,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
             MaximumTimeoutMs = controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                ? runCommandDefaultTimeoutMs
                 : 0,
-            // #313: floor Build/Test command timeouts at 10 min so an optimistically short
-            // model-supplied timeout_ms (e.g. 3 min) can't kill a legitimate long build under
-            // scheduling contention. Only applied in the controlled Build/Test tool context.
+            // #313: floor Build/Test command timeouts at the configured run_command default so an
+            // optimistically short model-supplied timeout_ms (e.g. 3 min) can't kill a legitimate
+            // long build under scheduling contention. Only applied in the controlled Build/Test
+            // tool context.
             MinimumTimeoutMs = controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                ? runCommandDefaultTimeoutMs
                 : 0,
         };
         _shellExecutionTracker?.Dispose();
