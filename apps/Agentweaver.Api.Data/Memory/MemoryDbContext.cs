@@ -282,6 +282,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.SandboxClaimName).HasColumnName("sandbox_claim_name");
             e.Property(r => r.SandboxPodName).HasColumnName("sandbox_pod_name");
             e.Property(r => r.SandboxNamespace).HasColumnName("sandbox_namespace");
+            e.Property(r => r.PreviewPublicationLeaseUntil).HasColumnName("preview_publication_lease_until");
             e.HasIndex(r => new { r.ProjectId, r.Status }).HasDatabaseName("IX_runs_project_status");
             e.HasIndex(r => new { r.Origin, r.Status }).HasDatabaseName("IX_runs_origin_status");
             e.HasIndex(r => new { r.ParentRunId, r.SubtaskId }).HasDatabaseName("IX_runs_parent_subtask");
