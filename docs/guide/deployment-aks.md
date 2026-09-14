@@ -134,6 +134,13 @@ The build and import limits behave differently from each other. A timed-out
 state unknown. Inspect the target ACR tag/digest before deciding whether a
 manual retry is safe.
 
+A2A mTLS secret checks also distinguish present, absent, and unknown states.
+Deployment generates the three A2A certificate secrets only when all three
+secrets are confirmed absent. It skips generation when all three are present.
+If Kubernetes cannot confirm a secret state after retries, deployment stops
+with a read error. Do not use `force: true` to repair a read failure. Retry
+after the Kubernetes API read succeeds.
+
 ACR *import*, retag, and untag operations are retried automatically (three
 attempts, exponential backoff with jitter) on transient transport or service
 failures — connection resets, throttling, and timeouts. This is safe because
