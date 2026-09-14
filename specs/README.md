@@ -86,6 +86,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Self-host Agentweaver locally or on AKS](./deployment-platform/self-host-agentweaver.md) — [#37](https://github.com/sabbour/agentweaver/issues/37)
 - [Render Fluent-styled documentation diagrams](./deployment-platform/render-fluent-docs-diagrams.md) — [#1188](https://github.com/sabbour/agentweaver/issues/1188)
+- [Author editable documentation diagrams](./deployment-platform/author-editable-documentation-diagrams.md) — [#1305](https://github.com/sabbour/agentweaver/issues/1305)
 
 ## Personas & self-improvement testing
 

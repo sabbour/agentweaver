@@ -1,0 +1,188 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Sandbox declarations and enforcement boundaries",
+  "alt": "Deployment and trust-boundary view showing project sandbox declarations, Kubernetes SandboxClaim admission, the Kata AgentHost pod, point-of-use tool and filesystem checks, authenticated executor IPC, workspace mounts, network enforcement, and separate Key Vault authority.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [
+    {
+      "id": "declare",
+      "label": "Declarations and admission",
+      "tier": 1
+    },
+    {
+      "id": "mediate",
+      "label": "AgentHost mediation",
+      "tier": 1
+    },
+    {
+      "id": "execute",
+      "label": "Kata execution boundary",
+      "tier": 1
+    },
+    {
+      "id": "outside",
+      "label": "External authorities",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "icon": "box",
+      "id": "project-policy",
+      "label": "Project sandbox settings",
+      "subLabel": "Declared application policy",
+      "fluentIcon": "settings",
+      "badge": "Declare",
+      "group": "declare"
+    },
+    {
+      "icon": "box",
+      "id": "claim",
+      "label": "SandboxClaim",
+      "subLabel": "Warm-pool allocation request",
+      "fluentIcon": "sandbox",
+      "badge": "CRD",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.custom_resource",
+      "group": "declare"
+    },
+    {
+      "icon": "box",
+      "id": "network-policy",
+      "label": "NetworkPolicy",
+      "subLabel": "Additive network enforcement",
+      "fluentIcon": "network",
+      "badge": "Policy",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.network_policy",
+      "group": "declare"
+    },
+    {
+      "icon": "box",
+      "id": "agenthost",
+      "label": "AgentHost container",
+      "subLabel": "Credentials and tool mediation",
+      "fluentIcon": "agent",
+      "badge": "Pod",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.pod",
+      "group": "mediate"
+    },
+    {
+      "icon": "box",
+      "id": "governance",
+      "label": "Tool governance",
+      "subLabel": "Capabilities and known-tool checks",
+      "fluentIcon": "security",
+      "badge": "Point of use",
+      "group": "mediate"
+    },
+    {
+      "icon": "box",
+      "id": "file-shell",
+      "label": "File and shell checks",
+      "subLabel": "Path and command checks",
+      "fluentIcon": "test",
+      "badge": "Point of use",
+      "group": "mediate"
+    },
+    {
+      "icon": "box",
+      "id": "executor",
+      "label": "PodExec executor",
+      "subLabel": "Unix-socket dispatcher",
+      "fluentIcon": "security",
+      "badge": "Sidecar",
+      "group": "execute"
+    },
+    {
+      "icon": "box",
+      "id": "workload",
+      "label": "Model-controlled process",
+      "subLabel": "Bubblewrap-scoped process",
+      "fluentIcon": "code",
+      "badge": "Process",
+      "group": "execute"
+    },
+    {
+      "icon": "box",
+      "id": "workspace",
+      "label": "Workspace PVC",
+      "subLabel": "Per-run scoped projection",
+      "fluentIcon": "workspace",
+      "badge": "PVC",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.persistent_volume_claim",
+      "group": "execute"
+    },
+    {
+      "icon": "box",
+      "id": "destinations",
+      "label": "Permitted destinations",
+      "subLabel": "DNS, public HTTPS, selected API/MCP",
+      "fluentIcon": "network",
+      "badge": "Network",
+      "group": "outside"
+    },
+    {
+      "icon": "box",
+      "id": "vault",
+      "label": "Azure Key Vault",
+      "subLabel": "Platform-side secret authority",
+      "fluentIcon": "identity",
+      "badge": "Azure",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "group": "outside"
+    }
+  ],
+  "edges": [
+    {
+      "from": "project-policy",
+      "to": "agenthost",
+      "label": "declared policy"
+    },
+    {
+      "from": "claim",
+      "to": "agenthost",
+      "label": "bind warm pod"
+    },
+    {
+      "from": "agenthost",
+      "to": "governance",
+      "label": "tool request"
+    },
+    {
+      "from": "governance",
+      "to": "file-shell",
+      "label": "allowed operation"
+    },
+    {
+      "from": "file-shell",
+      "to": "executor",
+      "label": "IPC"
+    },
+    {
+      "from": "executor",
+      "to": "workload",
+      "label": "spawn / own"
+    },
+    {
+      "from": "workspace",
+      "to": "workload",
+      "label": "scoped mount"
+    },
+    {
+      "from": "network-policy",
+      "to": "destinations",
+      "label": "effective rules"
+    },
+    {
+      "from": "workload",
+      "to": "destinations",
+      "label": "allowed traffic"
+    }
+  ]
+}

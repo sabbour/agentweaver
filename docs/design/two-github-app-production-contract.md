@@ -7,6 +7,19 @@
 
 ## Product boundary
 
+> **Contract versus implementation:** this document specifies the intended boundary, not
+> a certification that every requirement is implemented. In the current code,
+> `KubernetesSandboxExecutor` sends `RepositoryAccessToken` through trusted `/configure`;
+> AgentHost retains it in memory and `CopilotAIAgent` supplies it to tool execution.
+> `RunCommandTool` permits scoped credential injection for parsed, restricted direct
+> `git status` and allowlisted `gh` commands, rather than unrestricted ambient shell
+> inheritance. This conflicts with the no-repository-token/no-direct-GitHub requirements
+> below. Those requirements remain normative; current diagrams must disclose the
+> discrepancy, not depict a credential-free sandbox. Sources:
+> `KubernetesSandboxExecutor.cs:697-705,1270-1279`,
+> `AgentHostRuntimeState.cs:172-174`, `CopilotAIAgent.cs:452`,
+> `RunCommandTool.cs:230-343`.
+
 Microsoft Entra is the sole Agentweaver product sign-in. GitHub is an optional connected
 capability implemented by exactly two GitHub Apps:
 
@@ -132,12 +145,10 @@ cryptographically random code, the caller subject, credential kind, exact Repo A
 authorization (for Entra mode), repository ID, expiry, and consumed marker. It verifies the
 selected full name against the caller's live browse result before minting.
 
-The documented `GitHubLegacy` mode preserves the same protocol for a non-internal,
-authenticated GitHub caller with an active caller-scoped legacy credential. Its code is bound to
-that caller and credential kind; it cannot be consumed in Entra mode or by another legacy caller.
-At consumption, the server re-resolves the caller's current legacy credential, so sign-out or
-credential invalidation fails closed. This compatibility path does not accept a repository URL,
-numeric ID, or any other client-provided repository authority.
+An earlier version of this design described a `GitHubLegacy` compatibility mode.
+That is historical, not an available product sign-in or fallback lane. Current selection
+starts from the authenticated Entra subject and purpose-bound Repo App authorization;
+the forward-only cutover contract below does not permit restoring legacy authentication.
 
 The code is caller-bound, expires after five minutes, and is atomically single-use. It is the
 only repository authority accepted by the later GitHub project-create operation. Repository

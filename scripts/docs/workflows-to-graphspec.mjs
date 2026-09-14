@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Converts the built-in workflow definitions in
 // packages/Agentweaver.Squad/Catalog/Resources/workflows/*.yaml into
-// docs/diagrams/src/workflow-<id>.json graph-specs, so the shipped workflows
-// are documented by the same renderer as every other diagram and cannot drift
-// from the YAML that actually drives them.
+// docs/diagrams/src/workflow-<id>.json graph-spec inputs. The draw.io pipeline
+// turns them into editable XML before export, keeping shipped workflow images
+// aligned with the YAML that actually drives them.
 //
 // Run with: node scripts/docs/workflows-to-graphspec.mjs
 // Then re-render: npm run docs:render-diagrams

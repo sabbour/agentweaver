@@ -33,24 +33,19 @@ drifting from the actual tool set.
 
 ## End-to-end flow
 
-![End-to-end flow: MCP tool source, gen-docs.mjs, docs/reference/mcp-tools.md, .github/agents/agentweaver.agent.md, Projects/Templates/agentweaver.agent.md, Agentweaver.Api assembly, ProjectService, {project}/.github/agents/agentweaver.agent.md, GitHub Copilot, docs-drift workflow](../diagrams/agent-definition-fig1.png)
-
-<!-- Rendered from ../diagrams/src/agent-definition-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 1. **Source.** Each MCP tool is a method annotated with `[McpServerTool(Name = ...)]` and `[Description(...)]`
    in `apps/Agentweaver.Mcp/Tools/*.cs`. One `Tools.cs` file per category (Backlog, Project, Run, …).
 2. **Generate.** `scripts/gen-docs.mjs` parses those files once (`parseGroups()`, `gen-docs.mjs:115`) into
-   the same category groups used by the tool index, then emits three targets (`computeTargets()`,
-   `gen-docs.mjs:208`):
+   the same category groups used by the tool index, then emits five targets (`computeTargets()`,
+   `gen-docs.mjs:266-273`):
    - the full **MCP tool index** `docs/reference/mcp-tools.md`;
    - the **Tool map block** of `.github/agents/agentweaver.agent.md` — only the bytes between the
      `<!-- BEGIN GENERATED:tool-map -->` / `<!-- END GENERATED:tool-map -->` markers are replaced
      (`applyToolMapBlock()`, `gen-docs.mjs:192`); all surrounding prose is read back from the file itself
      and preserved verbatim;
-   - a **byte-identical copy** at `apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md`.
+   - a **byte-identical copy** at `apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md`;
+   - a public documentation download at `docs/public/agents/agentweaver.agent.md`;
+   - a deployed web-host download at `apps/Agentweaver.Web/wwwroot/agents/agentweaver.agent.md`.
 3. **Embed.** That copy is compiled into the API as an `EmbeddedResource`
    (`apps/Agentweaver.Api/Agentweaver.Api.csproj:55`) and read at runtime by `AgentDefinitionTemplate`
    (`AgentDefinitionTemplate.cs:33`) via `GetManifestResourceStream`. Keeping it a *generated* copy means
@@ -62,7 +57,7 @@ drifting from the actual tool set.
    directories as needed — but only if that file does not already exist (`AgentDefinitionTemplate.cs:50`).
 5. **Use.** GitHub Copilot discovers the materialized file under `.github/agents/` and offers the
    **Agentweaver Driver** agent, which drives the project through the `agentweaver-*` MCP tools.
-6. **Guard.** CI re-runs `node scripts/gen-docs.mjs --check`, which validates all three generated targets and
+6. **Guard.** CI re-runs `node scripts/gen-docs.mjs --check`, which validates all five generated targets and
    exits non-zero on any drift (`.github/workflows/docs-drift.yml:37`).
 
 ## The materialized file
@@ -85,10 +80,10 @@ its own agent definition. The method catches only `IOException` / `UnauthorizedA
 
 ## Drift guards
 
-Two layers keep the three copies aligned:
+Two layers keep the tool index and four agent-definition copies aligned:
 
 - **CI `--check`.** `docs-drift.yml` runs the generator in check mode on every PR; a stale
-  `mcp-tools.md`, `.github/agents/agentweaver.agent.md`, or embedded template fails the job
+  tool index, repository definition, embedded template, or either download copy fails the job
   (`.github/workflows/docs-drift.yml:37`).
 - **Unit tests.** `AgentDefinitionTemplateTests` asserts the embedded API template equals the committed
   `.github` file (so the two copies never diverge) and that `TryMaterialize` is idempotent and
@@ -100,9 +95,10 @@ Two layers keep the three copies aligned:
 | Concern | Where |
 |---|---|
 | MCP tool source (the single source of truth) | `apps/Agentweaver.Mcp/Tools/*.cs` (`[McpServerTool]` + `[Description]`) |
-| Generator: parse + emit 3 targets + `--check` | `scripts/gen-docs.mjs` (`parseGroups` `:115`, `applyToolMapBlock` `:192`, `computeTargets` `:208`) |
+| Generator: parse + emit 5 targets + `--check` | `scripts/gen-docs.mjs` (`computeTargets`, targets at `:266-273`) |
 | Generated agent definition (repo copy) | `.github/agents/agentweaver.agent.md` |
 | Embedded copy compiled into the API | `apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md` |
+| Download copies | `docs/public/agents/agentweaver.agent.md`; `apps/Agentweaver.Web/wwwroot/agents/agentweaver.agent.md` |
 | `EmbeddedResource` registration | `apps/Agentweaver.Api/Agentweaver.Api.csproj:55` |
 | Load embedded template + `TryMaterialize` | `apps/Agentweaver.Api/Projects/AgentDefinitionTemplate.cs` (`LoadEmbedded` `:33`, `TryMaterialize` `:50`) |
 | Materialize on create (blank + GitHub) | `apps/Agentweaver.Api/Projects/ProjectService.cs` (`:90`, `:183`, `TryMaterializeAgentDefinition` `:485`) |
@@ -120,3 +116,45 @@ Two layers keep the three copies aligned:
 - [MCP server — Deep Dive](./mcp-server.md) — how the tools are served and authorized.
 - [Projects & workspaces — Deep Dive](./projects.md) — the project-creation flow this materialization rides on.
 - The generated-vs-curated split and the shared generator are described in `.github/DOCS_SYNC.md`.
+
+<details id="diagram-context-agent-definition-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Agent definition · five generated targets</td></tr>
+<tr><td>takeaway</td><td>One tool map is regenerated; handwritten prose stays intact and all five outputs are checked.</td></tr>
+<tr><td>group-0-title</td><td>GENERATOR INPUTS</td></tr>
+<tr><td>group-1-title</td><td>OUTPUTS + MATERIALIZATION</td></tr>
+<tr><td>MCP tool sources</td><td>MCP tool sources</td></tr>
+<tr><td>MCP tool sources</td><td>Parse and group tool declarations</td></tr>
+<tr><td>MCP tool sources</td><td>Handwritten agent template supplies prose</td></tr>
+<tr><td>MCP tool sources</td><td>gen-docs.mjs:243–273</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>scripts/gen-docs.mjs</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>Replace only the tool-map block</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>--check compares expected bytes for all five</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>gen-docs.mjs:266–300</td></tr>
+<tr><td>Tool reference</td><td>Tool reference</td></tr>
+<tr><td>Tool reference</td><td>docs/reference/mcp-tools.md</td></tr>
+<tr><td>Tool reference</td><td>Generated public tool index</td></tr>
+<tr><td>Tool reference</td><td>gen-docs.mjs:266–273</td></tr>
+<tr><td>Repository agent</td><td>Repository agent</td></tr>
+<tr><td>Repository agent</td><td>.github/agents/agentweaver.agent.md</td></tr>
+<tr><td>Repository agent</td><td>Handwritten text + generated map</td></tr>
+<tr><td>Embedded API template</td><td>Embedded API template</td></tr>
+<tr><td>Embedded API template</td><td>Projects/Templates/agentweaver.agent.md</td></tr>
+<tr><td>Embedded API template</td><td>Embedded resource for project initialization</td></tr>
+<tr><td>Documentation download</td><td>Documentation download</td></tr>
+<tr><td>Documentation download</td><td>docs/public/agents/agentweaver.agent.md</td></tr>
+<tr><td>Documentation download</td><td>Published agent-definition download</td></tr>
+<tr><td>Web-host download</td><td>Web-host download</td></tr>
+<tr><td>Web-host download</td><td>wwwroot/agents/agentweaver.agent.md</td></tr>
+<tr><td>Web-host download</td><td>Deployed static copy; anonymous consumer</td></tr>
+<tr><td>New project agent file</td><td>New project agent file</td></tr>
+<tr><td>New project agent file</td><td>AgentDefinitionTemplate</td></tr>
+<tr><td>New project agent file</td><td>Best effort; detected existing files are preserved</td></tr>
+<tr><td>New project agent file</td><td>AgentDefinitionTemplate:33–75</td></tr>
+<tr><td>MCP tool sources</td><td>compose</td></tr>
+<tr><td>scripts/gen-docs.mjs</td><td>write</td></tr>
+<tr><td>scope</td><td>Five outputs are siblings, not a copy chain. Only the embedded API copy materializes new project files.</td></tr>
+<tr><td>groups</td><td>GENERATOR INPUTS; OUTPUTS + MATERIALIZATION</td></tr>
+</tbody></table>
+</details>

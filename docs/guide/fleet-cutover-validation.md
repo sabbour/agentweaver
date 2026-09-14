@@ -4,16 +4,19 @@ title: GitHub connections cutover validation
 
 # GitHub connections cutover validation
 
-This is the release-validation matrix for the two-GitHub-App Fleet migration
+This is the **historical cutover** validation matrix for the two-GitHub-App Fleet migration
 ([#938](https://github.com/sabbour/agentweaver/issues/938)). It is a release
-gate, not a compatibility guide: Microsoft Entra remains the product sign-in,
+record, not a complete current-runtime contract or compatibility guide: Microsoft Entra remains the product sign-in,
 and the final cutover has no legacy browser authentication or device-flow lane.
 
 Run this matrix only against the exact integrated release candidate after
 [#951](https://github.com/sabbour/agentweaver/issues/951) has merged. Earlier
 Fleet layers have focused tests of their own; do not add final-cutover tests to
 those layers when they would assert an endpoint, tool, or sandbox adapter that
-has not shipped.
+has not shipped. For a current release, rebase the evidence requirements on the exact
+candidate's contracts, including platform/personal Copilot and the run-scoped
+repository process credential described below. This historical issue sequence is not
+a list of unimplemented current features.
 
 ## Entry criteria
 
@@ -52,21 +55,38 @@ Do not waive a lower-numbered incomplete gate by testing a higher layer.
 | F8 — residual cutover and rollback boundary | #951 | Run the residual-reference CI scan over shipping assemblies, configuration/deployment manifests, MCP manifests, and published docs. Separately inspect deployed configuration and Key Vault references. Verify legacy OAuth/device-flow endpoints, aliases, secret objects, grants, records, and docs are absent. Rehearse the only supported rollback boundary: stop rollout before destructive cleanup, preserve evidence/data, and redeploy the prior known-good candidate only when its required backing configuration still exists. | Any legacy runtime/configuration/documentation reference remains, a runtime switch or fallback survives, or the plan attempts to recreate deleted legacy credentials/storage after the irreversible cleanup. |
 | F9 — staged deployment and sign-off | F0–F8 | Deploy the immutable candidate through the normal deployment workflow, then run `npm run azure:verify` and inspect API, MCP, Web, Gateway, database, Key Vault access, and AgentHost/Kata readiness. Execute the F3–F7 smoke paths against the deployed origin. Monitor typed audit events, webhook outcomes, capability-denial rates, and sandbox startup failures during the agreed observation window; attach sanitized evidence to the release record. | Health/provenance verification fails, any Fleet security gate regresses in the deployed environment, unexpected credential-related diagnostics appear, or the observation window contains unexplained authorization/isolation failures. |
 
+### Current contract reconciliation
+
+F6's original blanket prohibition on every repository credential reaching any process
+is historical, not the current AgentHost contract. Current execution can supply a
+short-lived, run/repository-bound credential to a narrowly checked simple `git` or `gh`
+child process. That does not authorize ambient credentials, arbitrary shell exposure,
+model-visible secrets, or credentials in logs, events, responses, workspaces, or command lines.
+Validate the exact capability and cleanup boundary rather than claiming no process can
+ever receive a repository credential. Grounding: `AgentHostRuntimeState.cs` repository
+credential state, AgentHost `Program.cs` configuration contract, and the executor's
+credential issuance/revocation paths.
+
+F1's privileged identity is shared by API and Worker federation in current provisioning;
+it is not exclusive to API pods. AgentHost retains a separate identity with no vault
+roles. See [AKS credential authority](./architecture-aks#secrets-management).
+
 ## Executable regression coverage
 
 The current independent architecture regression is
 `GitHubConnectionsCredentialArchitectureTests.GitHubConnectionsContract_HasOnlyPurposeBoundRepoAndCopilotAppCapabilities`.
-It locks the foundational contract to exactly the Repo and Copilot Apps and
-their four explicit interactive/unattended purposes. It is intentionally
-limited to the merged foundation and does not predict #945, #949, #950, or
-#951 public surfaces.
+It locks the foundational Repo/Copilot capability contract. Current coverage extends
+beyond that foundation: `UnifiedCopilotCallbackEndpointsTests` checks project/platform
+callback integration and `UserCopilotBindingServiceTests` covers personal-user
+authorization and caller isolation. Run the relevant current tests as well as this
+historical matrix; the foundation test alone is not release sign-off.
 
 Existing focused coverage remains the release prerequisite for transaction
 single use, binding exclusivity, provider-derived numeric repository authority,
 permission-change invalidation, snapshot fencing/inheritance, broker operation
 separation, and run-bound repository credential cleanup. The final
-residual-reference test belongs to #951 because it must fail until that issue
-removes the legacy implementation.
+residual-reference gate belongs to the cutover history; its old pending status is not
+evidence that current public surfaces remain unimplemented.
 
 ## Deployment commands
 

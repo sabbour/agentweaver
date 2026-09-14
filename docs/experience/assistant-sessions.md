@@ -36,7 +36,14 @@ It's calling the same MCP tools an external client would use — see [Reference 
 
 ### Authentication
 
-The assistant inherits the current browser session on every message. With Microsoft Entra sign-in, Agentweaver keeps two credentials separate: the Entra token authorizes MCP and platform API calls, while the active linked GitHub token is used for GitHub and Copilot access. Refreshing the browser session therefore takes effect on the next assistant message; the token is never stored in the conversation transcript.
+The assistant uses the current authenticated browser caller on every message. Entra establishes
+the human's platform identity; it is **not** an MCP credential. For each turn, Agentweaver issues
+a renewable five-minute broker token for the exact MCP resource and `mcp:invoke` scope. MCP
+validates that token and forwards it to the API, which checks the caller's authority again.
+Provider access and GitHub repository access are resolved separately; neither grants project
+membership. Credentials are not conversation history
+(`apps/Agentweaver.Api/Assistant/AssistantRunService.cs:789`,
+`apps/Agentweaver.Api/Auth/OAuth/OperatorAssistantBrokerTokenIssuer.cs:29`).
 
 ### Suggested prompts
 
@@ -53,7 +60,15 @@ The submitting user can still delete that personal session if its incidental pro
 
 ## Resuming after a gap
 
-If you come back to a session after it's gone idle (30 minutes of inactivity closes it automatically) or after a deploy has cycled the pod that was holding it in memory, sending a new message just works — the assistant's history is rebuilt from the persisted transcript before your message is processed. You won't see any difference in behavior; the only user-visible signal is that the conversation's status flips back from *completed* to *in progress*.
+After the default 30-minute idle timeout, the conversation is parked in non-terminal
+**Idle**, not completed or ended. A new message wakes the same run; after a deployment
+restart it rehydrates from the persisted transcript. This restores history, not credentials:
+the current caller and any selected project context must still be authorized, and a model
+provider must be ready. A successful resume moves the conversation back into progress
+(`apps/Agentweaver.Api/Assistant/AssistantRunService.cs:1122`).
+
+These personal conversations are distinct from **Memories → Session history**, which records
+the project's work focus through `session_start`, `session_current`, and `session_update`.
 
 ## See also
 

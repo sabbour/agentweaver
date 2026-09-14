@@ -54,7 +54,7 @@ Source: `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:263`, `:270`, `:274`
 |---|---|---|
 | `blueprint_generation_model` | `POST /api/blueprints/generate` resolves it with `GenerationModelOptions.ResolveBlueprintModel` before `BlueprintService.GenerateAsync`. | `BlueprintEndpoints.cs:58` |
 | `workflow_generation_model` | `BlueprintService.GenerateAsync` places it in `WorkflowGenerationRequest.GenerationModel` for `IWorkflowGenerator` fallback. | `BlueprintService.cs:554` |
-| `outcome_spec_generation_model` | `CoordinatorRunService.ActivateAsync` resolves it and passes it to `CoordinatorDraftInput`. | `CoordinatorRunService.cs:247` |
+| `outcome_spec_generation_model` | `CoordinatorRunService` passes the project override into `CoordinatorDraftInput`; `CopilotCoordinatorSpecDrafter` applies it or the resolved generation default. | `CoordinatorRunService`, `CopilotCoordinatorSpecDrafter` |
 
 ## Provider failure surface
 
@@ -66,3 +66,5 @@ Blueprint generation returns classified provider errors when the configured mode
 - [Project generation model settings — Experience](../experience/project-generation-model-settings.md)
 - [Repository blueprint suggestions — Reference](./repo-blueprint-suggestions.md)
 - [Coordinator reference](./coordinator.md)
+
+Model selection order is `project override → per-flow Generation setting → Generation.Model → gpt-5.6-sol`. These are generation-flow settings, not run-model pins. Syntactic model-family validation does not prove provider availability or executability.

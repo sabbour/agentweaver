@@ -9,3 +9,9 @@ Promote a decision here from `.squad/decisions/inbox/` when it needs to outlive 
 operational ledger's normal compaction, or write it here directly when its significance is
 already clear. Routine execution, rollout, and one-off coordination decisions remain in
 `.squad/decisions.md`.
+
+These are repository contribution records, not the product's database-backed decision
+inbox. ADR statuses (`Proposed`, `Accepted`, `Superseded`) do not map to product inbox
+states (`pending`, `merged`, `rejected`) or grant prompt-policy eligibility. Product
+boundaries require active, approved architectural/scope decisions; see
+[Memory & Decisions](../../deep-dive/memory-decisions.md#the-inbox-to-promotion-model).

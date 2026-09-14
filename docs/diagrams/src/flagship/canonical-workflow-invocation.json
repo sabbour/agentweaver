@@ -1,0 +1,148 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Workflow invocation: admission, durable handoff, and dispatch",
+  "alt": "Flow showing interactive starts, library workflow runs, and authorized event or schedule automation converging on durable task staging, atomic coordinator pickup, planning, dependency-aware dispatch, and child execution.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "interactive",
+      "label": "Interactive start",
+      "subLabel": "Create a parent run directly",
+      "icon": "box",
+      "fluentIcon": "person",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "library",
+      "label": "Library Run",
+      "subLabel": "Publish a workflow-pinned task",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "trigger",
+      "label": "Event or schedule match",
+      "subLabel": "Server-owned occurrence",
+      "icon": "box",
+      "fluentIcon": "event",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "authorize",
+      "label": "Authorize automation",
+      "subLabel": "Fence activation and bind identity",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Admission",
+      "variant": "decision"
+    },
+    {
+      "id": "ready",
+      "label": "Publish Ready task",
+      "subLabel": "Durable queue handoff",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "pickup",
+      "label": "Atomic claim and reservation",
+      "subLabel": "Winning pickup links one parent run",
+      "icon": "box",
+      "fluentIcon": "coordinator",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Activate and plan parent",
+      "subLabel": "Confirmed intent and persisted WorkPlan",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "dispatch",
+      "label": "Dispatch eligible children",
+      "subLabel": "Dependencies and base branch satisfied",
+      "icon": "box",
+      "fluentIcon": "dispatch",
+      "badge": {
+        "text": "Concept",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "children",
+      "label": "Child execution",
+      "subLabel": "Scoped AgentHost turns",
+      "icon": "box",
+      "fluentIcon": "worker",
+      "badge": "Execution",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "interactive",
+      "to": "plan",
+      "label": "direct admission"
+    },
+    {
+      "from": "library",
+      "to": "ready",
+      "label": "task ID"
+    },
+    {
+      "from": "trigger",
+      "to": "authorize",
+      "label": "matched occurrence"
+    },
+    {
+      "from": "authorize",
+      "to": "ready",
+      "label": "authorized"
+    },
+    {
+      "from": "ready",
+      "to": "pickup",
+      "label": "heartbeat polling"
+    },
+    {
+      "from": "pickup",
+      "to": "plan",
+      "label": "commit then activate"
+    },
+    {
+      "from": "plan",
+      "to": "dispatch",
+      "label": "nonempty plan"
+    },
+    {
+      "from": "dispatch",
+      "to": "children",
+      "label": "A2A dependency-ready turn"
+    }
+  ]
+}

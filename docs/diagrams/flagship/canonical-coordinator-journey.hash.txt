@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-coordinator-journey.json",
+    "sha256": "076a7e2d526fc30316bdd231ea82f2a5d5f8dae04caf04ed90d7589f1188e2d3"
+  },
+  "drawio": {
+    "file": "canonical-coordinator-journey.drawio",
+    "sha256": "37fea2e6b2eedc6aa6ebc9a0aaa5bc7b63358261560f5d79783086960c03d244"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-coordinator-journey.png",
+    "sha256": "143ca3bf551311b124d77f7e174d4727131580eeb46590851ae837e9dc7607ba"
+  }
+}

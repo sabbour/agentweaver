@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "schema": "./schema.json",
+  "areas": [
+    "canonical",
+    "deep-dive",
+    "experience",
+    "guide",
+    "reference",
+    "workflows"
+  ]
+}

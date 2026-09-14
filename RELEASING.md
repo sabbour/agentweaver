@@ -75,15 +75,13 @@ from its exact matching section; do not run another changelog generator.
 6. Promote the prepared branch to `main` through a green PR, merged with
    **"Rebase and merge"** (not squash — see note below).
 
-> **Merge strategy for the promotion PR: use "Rebase and merge", not
-> "Squash and merge."** Squashing a release PR into `main` gives the
-> resulting `main` commit a single parent on `main`'s own line, so `main`
-> and `dev` never share real git ancestry — every subsequent release then
-> requires the manual `merge -X ours origin/main` conflict-resolution step
-> above just to make the next promotion PR mergeable (its diff otherwise
-> balloons to the entire repository, since git falls back to an ancient
-> merge-base). Rebasing (or a real merge commit) preserves ancestry going
-> forward, so future releases won't need that workaround.
+> **Promotion history is not release identity.** The operating recommendation above
+> uses "Rebase and merge," but rebasing rewrites commits; it does not preserve the
+> original release-branch commits or guarantee that later promotions are conflict-free.
+> A merge commit preserves both parent histories when repository policy permits it.
+> Inspect the actual merge base and review every conflict resolution; do not treat
+> `-X ours` as proof that conflicts are cosmetic. Regardless of merge method,
+> `release:publish` requires the exact fetched `origin/main` SHA.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the
@@ -169,7 +167,14 @@ publishes container images to GitHub's container/artifact registry via the
 | Push to `release/vX.Y.Z` | `sha-<short>`, `rc-X.Y.Z` |
 | Push to `main` | `sha-<short>`, `main` |
 | Published GitHub Release `vX.Y.Z` | `sha-<short>`, `X.Y.Z`, `vX.Y.Z`, `latest` (not for prereleases) |
-| Manual run on any ref | `sha-<short>` |
+| Manual run on `dev`, `main`, or `release/vX.Y.Z` | `sha-<short>` plus that ref's `dev`, `main`, or `rc-X.Y.Z` channel tag |
+| Manual run on another ref | `sha-<short>` |
+
+This table follows `scripts/ci/ghcr-plan.mjs`: `workflow_dispatch` is classified
+by its selected ref, not forced into a commit-only channel. The checked-in workflow
+skips docs/specs/Markdown-only **pushes**; release events and manual runs have their
+own triggers. These are repository configuration facts, not evidence that any
+particular image, release, or deployment has already been published.
 
 Release images are published from the `release: published` event, i.e. as a
 consequence of `npm run release:publish`, so the tag, the GitHub Release, and the

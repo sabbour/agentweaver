@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-blueprint-relationships.json",
+    "sha256": "8e35690f50afca8df5f09bc254c84f9a822053fc50b7ccd62f1923359b1dd4ce"
+  },
+  "drawio": {
+    "file": "canonical-blueprint-relationships.drawio",
+    "sha256": "081e73582582695d039fee13b724751d1cb7dbc9bb3e1141e7dc8ab64fe0b737"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-blueprint-relationships.png",
+    "sha256": "f6b09e7b0c9c6c56b28235ed597d32cd6369dfa319117443d657e0e95822bc16"
+  }
+}

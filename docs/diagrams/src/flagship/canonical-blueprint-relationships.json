@@ -1,0 +1,86 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Blueprints become project teams and runtime configuration",
+  "alt": "UML component view showing catalog selection, repository suggestion, or model generation producing a Blueprint; the Blueprint owning roster and role definitions while referencing workflows, review policy, and sandbox profile; explicit validation and apply materializing project configuration and a cast team consumed by the coordinator.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "icon": "box",
+      "id": "sources",
+      "label": "Catalog, suggestion, or generation",
+      "subLabel": "Select, suggest, or generate; never auto-apply",
+      "fluentIcon": "archive",
+      "badge": "Acquisition"
+    },
+    {
+      "icon": "box",
+      "id": "blueprint",
+      "label": "Blueprint",
+      "subLabel": "Roster, charters, skills, workflows, review, and sandbox settings",
+      "fluentIcon": "document",
+      "badge": "Definition"
+    },
+    {
+      "icon": "box",
+      "id": "apply",
+      "label": "Validate and apply",
+      "subLabel": "Resolve, persist, cast, synchronize",
+      "fluentIcon": "test",
+      "badge": "Explicit action"
+    },
+    {
+      "icon": "box",
+      "id": "materialized",
+      "label": "Materialized project and cast team",
+      "subLabel": "Workspace defaults, named members, and charters",
+      "fluentIcon": "workspace",
+      "badge": "Configuration"
+    },
+    {
+      "icon": "box",
+      "id": "coordinator",
+      "label": "Coordinator",
+      "subLabel": "Selects workflow and assigns members",
+      "fluentIcon": "coordinator",
+      "badge": "Runtime"
+    },
+    {
+      "icon": "box",
+      "id": "execution",
+      "label": "Children and collective assembly",
+      "subLabel": "Children, gates, review, and merge",
+      "fluentIcon": "merge",
+      "badge": "Outcome"
+    }
+  ],
+  "edges": [
+    {
+      "from": "sources",
+      "to": "blueprint",
+      "label": "select / recommend / generate"
+    },
+    {
+      "from": "blueprint",
+      "to": "apply",
+      "label": "validated definition"
+    },
+    {
+      "from": "apply",
+      "to": "materialized",
+      "label": "persist and cast"
+    },
+    {
+      "from": "materialized",
+      "to": "coordinator",
+      "label": "configuration + members"
+    },
+    {
+      "from": "coordinator",
+      "to": "execution",
+      "label": "plan / dispatch / assemble"
+    }
+  ]
+}

@@ -154,7 +154,7 @@ npm run azure:provision-infra</code></pre>
 <span class="aw-mcp-ret">  → project_id: 4b1a9e…  state: active</span>
 <span class="aw-mcp-call">● coordinator_start({ project_id: "4b1a9e…", goal: "…" })</span>
 <span class="aw-mcp-ret">  → run_id: 9c2f31…  status: drafting</span>
-<span class="aw-mcp-out">Drafted an OutcomeSpec for your review — nothing runs until you confirm it.</span></code></pre>
+<span class="aw-mcp-out">Drafted an OutcomeSpec for your review — no child work is dispatched until you confirm it.</span></code></pre>
         <p class="aw-mcp-panel-caption">
           Read <a href="./guide/mcp-cli">Connect an MCP client</a> for setup and
           OAuth sign-in details.

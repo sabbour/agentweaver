@@ -11,17 +11,10 @@ Agentweaver separates **work intake** from **run execution**.
 - A **task** is an item on the project board. It may sit in **Backlog** or **Ready** before the coordinator claims it.
 - A **run** is active execution. It has a run id, status, event stream, timeline, artifacts, review state, and lifecycle history.
 - The **board** is the shared operational view. It shows tasks that have not started and run cards that are moving through execution, review, and completion.
-- The **watch page** is the live run view. It shows the event stream as turn groups, agent messages, tool calls, lifecycle cards, approvals, and terminal status.
+- The **embedded live timeline** shows the event stream as turn groups, agent messages, tool calls, lifecycle cards, approvals, and terminal status inside the orchestration/session experience.
 - **MCP tools** provide parity for assistants and automations: start with `coordinator_start`, inspect with `run_status`, stream with `run_watch`, manage intake with `backlog_*`, and clean up with `run_archive` or `backlog_archive_task`.
 
 The product shape is intentionally simple: capture work, rank it, let the coordinator claim Ready work, watch live execution, review the result, then archive what no longer needs attention.
-
-![The mental model: Submit run or capture task, Project board, Backlog, Ready, Active run, Live Watch timeline, Human Review, Done, Problems, Archived](../diagrams/experience-runs-board-watch-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-runs-board-watch-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ## Submitting work
 
@@ -51,15 +44,13 @@ MCP starts the supported run flow with `coordinator_start`. Use backlog tools wh
 
 ## The board experience
 
-The board is a six-column Kanban surface:
+The board has **six logical buckets**, rendered as four main lanes — **Backlog**, **Ready**, **Active**, **Done** — and a separate **Needs attention / review** section for **Human Review** and **Problems**.
 
-![Project board with Backlog, Ready, Problems, Human Review, Active, and Done columns](/screenshots/project-board.png)
+![Cropped project board capture showing the four main flow lanes, without the separate attention and review section](/screenshots/project-board.png)
 
-> 📸 **Screenshot — `project-board.png`**
-> *Shows:* the **Board** page (title is the project name, subtitle "Backlog, Ready, and in-flight work.") with the six Kanban columns **Backlog**, **Ready**, **Problems**, **Human Review**, **Active**, and **Done**, the **Runs** section, and the start-orchestration action.
-> *Path:* open a project → click **Board** in the left rail → `/projects/:projectId/board`.
+This existing capture is cropped to the main flow. It does not show the separate Human Review/Problems area and is not evidence of six side-by-side columns.
 
-| Column | What the user sees | Who moves cards there |
+| Logical bucket | What the user sees | Who moves cards there |
 | --- | --- | --- |
 | **Backlog** | Captured work that is not yet committed. | The user. |
 | **Ready** | Ranked work the coordinator may pick up next. | The user, then the heartbeat claims from it. |
@@ -68,7 +59,7 @@ The board is a six-column Kanban surface:
 | **Active** | Runs currently moving through coordinator workflow. | The coordinator and heartbeat. |
 | **Done** | Completed or merged work. | The coordinator, review, and merge flow. |
 
-The UI presents the columns in that fixed order, with counts in each header and column descriptions beneath the labels:
+The bucket definitions are independent of their main-flow or attention-section placement:
 
 - **Backlog** — "Captured but not yet committed to. Things you're considering."
 - **Ready** — "Committed work that the coordinator and Ralph monitor may pick up next."
@@ -105,12 +96,6 @@ Dragging to **Problems**, **Human Review**, **Active**, or **Done** is rejected 
 
 Run cards appear once work is claimed or submitted as execution. They are read-only from a workflow-position perspective: the coordinator owns their movement across Problems, Human Review, Active, and Done.
 
-![Run card showing Workflow, Abandon, and Delete actions](/screenshots/run-card-actions.png)
-
-> 📸 **Screenshot — `run-card-actions.png`**
-> *Shows:* a run card in a workflow column with its **Workflow** (or **Topology** for coordinator runs) button, the **Abandon** button (`aria-label="Abandon run"`, opens the **Abandon run?** dialog), and the delete icon button (`aria-label="Delete run"`, opens the **Delete run?** dialog).
-> *Path:* `/projects/:projectId/board` → hover a run card in the **Runs** section.
-
 A run card shows:
 
 - the task or run title,
@@ -137,9 +122,7 @@ Archive removes a task or run from active board projections. Archive is not revi
 
 ### Retry from a card
 
-Failed and merge-failed run cards show **Retry**. Retry creates a fresh run from the original inputs and navigates to the new run's orchestration view. The new card records where it came from through **Retried from**, so the user can compare the old failure with the new attempt.
-
-Retry is not "continue the same process." The failed run remains a complete record, and the retried run gets its own event stream and lifecycle.
+Failed and merge-failed run cards show **Retry**. Eligible coordinators can resume **in place**, retaining their run id and history; other retries create a **fresh linked run**. The card navigates to the returned `run_id`, which may therefore be the same id. Only a fresh retry adds a new run and **Retried from** relationship.
 
 ### MCP board tools
 
@@ -182,11 +165,7 @@ Selecting a file opens its diff or content. Because the coordinator run now uses
 its assembled collective artifacts are inspectable in the same way as any child run's, rather than
 only through the timeline.
 
-![Sandbox Preview dialog proxying the running pod preview](/screenshots/sandbox-preview-dialog.png)
-
-> 📸 **Screenshot — `sandbox-preview-dialog.png`**
-> *Shows:* the **Sandbox Preview** dialog opened from the coordinator run page's **Preview Sandbox** button, with the text "Preview traffic is proxied through the Agentweaver API server.", the "Preview active for port {port} on pod {pod_name}." status, and the **Cancel** / **Start preview** / **Stop preview** / **Close** actions.
-> *Path:* on `/projects/:projectId/orchestrations/:runId` (Kubernetes sandbox, active run) → click **Preview Sandbox**.
+For an available sandbox preview, follow the run's preview controls. The API manages preview registration and lifecycle; browser application traffic uses **Gateway routing** to the sandbox, not an API data-plane proxy. See [Sandbox browser preview](./sandbox-browser-preview.md). The former preview-dialog image was a placeholder and is omitted.
 
 Stream status is not the entire lifecycle. A run can be **awaiting_review** while the stream is done; lifecycle cards provide the domain meaning.
 
@@ -202,11 +181,7 @@ The timeline is a projection of the run event stream. It is not a chat transcrip
 
 The timeline announces itself as **Run timeline** and behaves like a live log while the run is active. If the local buffer drops older entries during a very long run, the page shows how many older events are not currently shown.
 
-![Live Watch page showing the execution timeline](/screenshots/watch-timeline.png)
-
-> 📸 **Screenshot — `watch-timeline.png`**
-> *Shows:* an embedded run timeline with stream status (**Connecting** / **Streaming** / **done** / **error**), turn groups, agent message bubbles, tool-call cards, and lifecycle cards.
-> *Path:* open a coordinator run → `/projects/:projectId/orchestrations/:runId` → select a child/session detail.
+Open an orchestration, then select a task or session to read this timeline. No standalone Watch/Execution page or placeholder timeline capture is needed to explain that navigation.
 
 ### Turn groups
 
@@ -267,28 +242,11 @@ Agentweaver uses both stream statuses and run lifecycle statuses. Users mostly s
 | **No Changes** | The run completed but produced no file changes. | Done |
 | **Failed** | Execution hit an unrecoverable failure. | Problems |
 | **Merge Failed** | Execution completed, but integration failed. | Problems |
-| **Declined** | A human rejected the changes. | Problems or Done depending on the workflow projection |
+| **Declined** | Review rejected the candidate. | Problems |
 | **Blocked** | The coordinator cannot proceed without intervention. | Problems |
 | **Archived** | The task or run is hidden from active board projections. | Not shown on the active board |
 
-The board projects these statuses into the six columns. Embedded timelines and MCP `run_watch` provide the detailed explanation through events.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Submitted: Submit or Ready pickup
-    Submitted --> Active: run starts
-    Active --> Active: tool calls, turns, subtasks
-    Active --> HumanReview: review requested
-    Active --> Problems: failed or blocked
-    HumanReview --> Active: request changes
-    HumanReview --> Done: approved and completed
-    HumanReview --> Problems: merge failed
-    HumanReview --> Done: declined terminal
-    Problems --> Active: retry creates fresh run
-    Done --> Archived: archive
-    Problems --> Archived: archive
-    Active --> Archived: archive after user cleanup
-```
+The [shared lifecycle above](#the-mental-model) is the single state diagram. The server projects persisted run state first, then work-plan state/stage: failed, declined, and merge-failed runs go to **Problems**; completed, merged, or assemble-ready runs go to **Done**; awaiting-review runs go to **Human Review**. A still-active coordinator's plan can also place it in review or Problems. **Merging** is not a separate bucket and can remain in Human Review while its plan still says review; otherwise it is Active. Archive is a visibility flag, not an execution transition.
 
 ## The event stream behind live inspection
 
@@ -308,6 +266,8 @@ The stream has two user-visible guarantees:
 2. **Tail**: while the run is active, new events arrive live without polling.
 
 The backend writes events durably before live fan-out. Live channel delivery is a low-latency path, not the source of truth. If a browser disconnects, reconnects, or opens the run after completion, it can resume from the last sequence it saw.
+
+For the implementation-backed replay/tail model, see the shared [durable event stream](../run-event-stream.md). Replaying persisted events restores the explanation of a run; it does **not** guarantee transparent re-execution of an interrupted remote A2A model turn.
 
 ### Reconnect and replay
 
@@ -339,7 +299,7 @@ When streaming ends, `run_watch` fetches and returns the final run state. Use it
 `run_status` returns the current run detail. It is the right tool for:
 
 - checking whether a known run is still active,
-- confirming that a retry produced a new run,
+- inspecting the same or new run returned by retry,
 - reading final state after `run_watch`,
 - deciding whether to hand off to review, retry, or archive.
 
@@ -351,15 +311,15 @@ Retry and archive are the two main run-management actions after something has ha
 
 ### Retry
 
-Use retry when the original intent is still valid but the attempt failed. `run_retry` creates a fresh run from the original inputs; the web card does the same with **Retry** on failed or merge-failed runs.
+Use retry when the original intent is still valid but the attempt failed. `run_retry` and web **Retry** share the server's recovery choice for eligible failed or merge-failed runs.
 
 Retry behavior:
 
-- creates a new run id,
-- links the new run back to the failed source,
-- preserves the old run timeline,
-- starts a clean event stream for the new attempt,
-- navigates the user to the new orchestration view in the web UI.
+- eligible in-place coordinator recovery retains the run id and its history;
+- fresh retry creates a new id and event stream linked to the failed source;
+- the original history remains inspectable;
+- the UI follows the returned id, rather than assuming a new orchestration;
+- server eligibility, provider authorization, and retry-chain limits still apply.
 
 Retry is especially useful for transient failures, stale branches, merge failures after the target moved, or execution issues that are fixed by updated context.
 
@@ -374,7 +334,7 @@ Archive behavior:
 - can be applied to run cards directly,
 - can archive a linked run card when archiving a claimed backlog task.
 
-Archive is not retry and not review. Use it when the board should stop showing the item.
+Archive is not retry, review, cancellation, or deletion. It hides the item without stopping active execution. Use Stop/cancel when work must halt, and Delete only when the run and workspace should be removed.
 
 ## Edge cases and attention states
 
@@ -421,4 +381,83 @@ Tool-call details can be large. The watch page truncates very large argument or 
 - [Run event stream](../run-event-stream.md)
 - [Events & Observability](../deep-dive/events-observability.md)
 - [Sandbox browser preview](./sandbox-browser-preview.md) — open a live HTTPS preview of a server an agent started inside its run's sandbox pod, from the run/watch view.
-- [Token usage monitoring](./token-usage-monitoring.md) — the live token counter that appears on the Watch page and how to read AI Credit values.
+- [Token usage monitoring](./token-usage-monitoring.md) — current run/graph and selected-range telemetry surfaces, including how to read AI Credit values.
+
+<details id="diagram-context-canonical-board-lifecycle" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>The board is a projection</td></tr>
+<tr><td>subtitle</td><td>Columns reflect persisted task and run state—not a separate workflow engine.</td></tr>
+<tr><td>group-title0</td><td>Before and during execution</td></tr>
+<tr><td>group-title1</td><td>Review / terminal outcomes</td></tr>
+<tr><td>Backlog</td><td>Backlog</td></tr>
+<tr><td>Backlog</td><td>Captured task; not queued</td></tr>
+<tr><td>Backlog</td><td>task: backlog</td></tr>
+<tr><td>Ready</td><td>Ready</td></tr>
+<tr><td>Ready</td><td>Queued task</td></tr>
+<tr><td>Ready</td><td>task: ready</td></tr>
+<tr><td>Active</td><td>Active</td></tr>
+<tr><td>Active</td><td>Work is in progress</td></tr>
+<tr><td>Active</td><td>default non-review bucket</td></tr>
+<tr><td>Problems</td><td>Problems</td></tr>
+<tr><td>Problems</td><td>Failed / declined / merge failed</td></tr>
+<tr><td>Problems</td><td>or assembly blocked / failed</td></tr>
+<tr><td>Human Review</td><td>Human Review</td></tr>
+<tr><td>Human Review</td><td>AwaitingReview / InReview</td></tr>
+<tr><td>Human Review</td><td>or assembly stage: Review</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>Done</td><td>Completed / Merged / AssembleReady</td></tr>
+<tr><td>Done</td><td>or plan Complete / stage Done</td></tr>
+<tr><td>e1</td><td>queue</td></tr>
+<tr><td>e2</td><td>claim + start</td></tr>
+<tr><td>e3</td><td>await review</td></tr>
+<tr><td>e4</td><td>finish</td></tr>
+<tr><td>e5</td><td>problem</td></tr>
+<tr><td>assurance-title</td><td>DEFAULT BUCKETS · NOT A NEW STATE MACHINE</td></tr>
+<tr><td>assurance-line1</td><td>Configured workflow stages may replace the default run columns. Arrows summarize typical changes, not every path.</td></tr>
+<tr><td>assurance-line2</td><td>The board polls persisted state. Ready tasks with unmet dependencies stay Ready; blocked is a flag.</td></tr>
+<tr><td>Backlog</td><td>Entity</td></tr>
+<tr><td>Backlog</td><td>BacklogTask</td></tr>
+<tr><td>Backlog</td><td>State</td></tr>
+<tr><td>Backlog</td><td>Run</td></tr>
+<tr><td>Backlog</td><td>Not required</td></tr>
+<tr><td>Backlog</td><td>Action</td></tr>
+<tr><td>Backlog</td><td>Move to Ready</td></tr>
+<tr><td>Ready</td><td>Blocked</td></tr>
+<tr><td>Ready</td><td>Dependency metadata</td></tr>
+<tr><td>Ready</td><td>Pickup</td></tr>
+<tr><td>Ready</td><td>Atomic claim</td></tr>
+<tr><td>Active</td><td>Input</td></tr>
+<tr><td>Active</td><td>Coordinator run</td></tr>
+<tr><td>Active</td><td>Status</td></tr>
+<tr><td>Active</td><td>Non-review default</td></tr>
+<tr><td>Active</td><td>Plan</td></tr>
+<tr><td>Active</td><td>Dispatch / assembly</td></tr>
+<tr><td>Active</td><td>Approval</td></tr>
+<tr><td>Active</td><td>Separate pending flag</td></tr>
+<tr><td>Problems</td><td>Failed / Declined</td></tr>
+<tr><td>Problems</td><td>Merge</td></tr>
+<tr><td>Problems</td><td>MergeFailed</td></tr>
+<tr><td>Problems</td><td>Assembly</td></tr>
+<tr><td>Problems</td><td>Blocked / Failed</td></tr>
+<tr><td>Problems</td><td>Also</td></tr>
+<tr><td>Problems</td><td>AssemblyDeclined</td></tr>
+<tr><td>Human Review</td><td>AwaitingReview</td></tr>
+<tr><td>Human Review</td><td>InReview</td></tr>
+<tr><td>Human Review</td><td>Review stage</td></tr>
+<tr><td>Human Review</td><td>Approve</td></tr>
+<tr><td>Human Review</td><td>Resumes execution</td></tr>
+<tr><td>Done</td><td>Completed / Merged</td></tr>
+<tr><td>Done</td><td>AssembleReady</td></tr>
+<tr><td>Done</td><td>Complete</td></tr>
+<tr><td>Done</td><td>Done stage</td></tr>
+<tr><td>backlog</td><td>No run is required yet; Move to Ready to queue work</td></tr>
+<tr><td>ready</td><td>Unresolved dependencies stay here; Blocked is a flag, not a column</td></tr>
+<tr><td>progress</td><td>Claimed tasks link to their run; Pending approval is a separate flag</td></tr>
+<tr><td>failed</td><td>Blocked assembly is recoverable; Not every problem is terminal</td></tr>
+<tr><td>review</td><td>Approval resumes the workflow; Approval alone is not Done</td></tr>
+<tr><td>done</td><td>Persisted-state mapping; Not merely a clicked approval</td></tr>
+<tr><td>notes</td><td>DEFAULT BUCKETS · NOT A NEW STATE MACHINE; Configured workflow stages may replace the default run columns. Arrows summarize typical changes, not every path.; The board polls persisted state. Ready tasks with unmet dependencies stay Ready; blocked is a flag.</td></tr>
+<tr><td>groups</td><td>Before and during execution; Review and terminal outcomes</td></tr>
+</tbody></table>
+</details>

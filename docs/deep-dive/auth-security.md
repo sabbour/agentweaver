@@ -25,6 +25,8 @@ Agentweaver is an OAuth 2.1 authorization server for MCP clients. A client uses 
 
 The authorization server authenticates the user with Entra before issuing an Agentweaver broker token. The MCP server accepts only a valid broker token with its expected issuer, resource audience, signature, lifetime, subject, and `mcp:invoke` scope. It forwards that token to the API, which still enforces project authorization.
 
+Discovery, consent, and token lifecycle are explained in the [MCP authorization flow](./mcp-server.md#_3-standards-based-discovery-how-an-unauthenticated-client-learns-where-to-log-in). Assistant turns obtain a separate API-issued broker token and renewal callback; the browser's Entra bearer is not forwarded to MCP.
+
 ## GitHub capabilities
 
 GitHub is brokered after platform authentication. The API creates a capability handoff for a permitted project and uses the resulting capability only for the required repository or Copilot operation.

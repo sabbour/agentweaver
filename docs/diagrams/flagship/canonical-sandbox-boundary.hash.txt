@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-sandbox-boundary.json",
+    "sha256": "11ffd4925e66808a44bfad1f9cd1ad946d69ca7862b91b08d0f82af261c1f6ed"
+  },
+  "drawio": {
+    "file": "canonical-sandbox-boundary.drawio",
+    "sha256": "c3054326931f00fa55e4314b8dbf19671c0aefb010009774ef7ce6ff54eff158"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-sandbox-boundary.png",
+    "sha256": "cd9e8c5cbb3d24d717da8c4f6d157537bd5939c1f3e7ab2353e30bfac49e7270"
+  }
+}

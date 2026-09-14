@@ -185,7 +185,7 @@ npm run setup
 existing file. It does **not** start servers or touch Azure.
 
 Before first sign-in, complete [Configure local authentication and model
-access](#1-configure-local-authentication-and-model-access). Then start both
+access](#_1-configure-local-authentication-and-model-access). Then start both
 servers from the repo root:
 
 ```bash
@@ -240,13 +240,15 @@ feature branch/worktree
 
 GitHub Merge Queue is unavailable while this repository is owned by the
 personal `sabbour` account. The enforceable fallback is standard protection:
-every normal change uses a PR, the branch must be up to date with `dev`, and the four
-blocking checks rerun before squash merge. Concurrent PRs may need repeated
+every normal change uses a PR, the branch must be up to date with `dev`, and the
+[required CI suites](https://github.com/sabbour/agentweaver/blob/dev/CONTRIBUTING.md#continuous-integration) rerun before squash
+merge. That policy defines the seven .NET shards and conditional Node, web, docs, and
+changeset checks; do not infer a fixed four-check gate. Concurrent PRs may need repeated
 updates/retests when another PR merges first. The
-[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology)
+[Branch Topology Activation Plan](https://github.com/sabbour/agentweaver/blob/dev/CONTRIBUTING.md#branch-topology)
 describes retained growth guidance. Official releases are cut from an exact promoted
 `main` commit; see
-[RELEASING.md](../../RELEASING.md).
+[RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 
 ---
 

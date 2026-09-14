@@ -1,5 +1,16 @@
 # Agentweaver UI Test Harness Plan (Playwright)
 
+> **Current implementation:** the UI driver is implemented. Shared persona layout,
+> evidence/judge isolation, network rules, and schema are owned by the
+> [API plan's current contract](api-test-harness-plan.md#current-implementation-contract).
+> The rollout, dependency-pool, Chromium, and migration proposals below are historical.
+> Current login uses `scripts/ui-harness/login-chrome-default.mjs` with installed
+> Google Chrome's `chrome` channel and a disposable copy of the closed Default profile.
+> It never automates Entra account selection, credentials, MFA, or consent. Captured,
+> origin-filtered `storageState` plus a sessionStorage sidecar support reuse; expired
+> state stops with `AUTH_EXPIRED`. Same-origin automated browsing is distinct from
+> the explicit trusted-identity-provider login flow.
+
 > **Superseded safety model (2026-09-02):** Hostname allowlists, production
 > confirmation flags, TLS bypasses, and authenticated cross-origin preview navigation
 > described below are historical only. The implementation is host-agnostic, requires
@@ -155,28 +166,10 @@ harnesses don't overlap or contradict):
 persona through a thin per-surface adapter. Do NOT duplicate or re-adapt briefs
 per harness.**
 
-Layout of the shared package:
-
-```
-scripts/persona-briefs/
-  package.json                 Zero heavy deps; imported by all three harnesses
-  personas/
-    priya.md                   Persona CORE — identity, goal, voice, constraints,
-    jordan.md                  the mandatory ≥2-pushback rule, and the authored
-    maya.md                    "Success looks like" / "Failure signals" criteria.
-    ...                        NOTHING surface-specific (no "click", no "curl", no tool name).
-  surfaces/
-    priya.api.md               Per-surface ADAPTER — how THIS persona's intent maps to
-    priya.ui.md                the surface's actions ONLY (e.g. UI: "the messy batch is
-    priya.mcp.md               pasted into the coordinator composer"; API: "submit-goal";
-    ...                        MCP: "the tool the persona would reach for"). Additive, thin.
-  generate-core.mjs            LLM PROMPT ASSEMBLER — packages constraints (target JTBD/domain,
-                               exclusion list of existing archetypes) so an LLM proposes a NEW
-                               persona core in the personas/*.md shape. Does not call an LLM itself.
-  generate-adapter.mjs         LLM PROMPT ASSEMBLER — given a persona core + a target surface,
-                               assembles a prompt for an LLM to propose that surface's adapter.
-  index.mjs                    Resolves persona core + optional surface adapter for a harness
-```
+The [shared layout](api-test-harness-plan.md#current-implementation-contract) is
+maintained once in the API plan. UI adapters live in
+`scripts/persona-briefs/surfaces/*.ui.md`; the browser-specific implementation
+remains in `scripts/ui-harness/agent-driver-ui/` and `scripts/ui-harness/lib/`.
 
 - The **persona core** carries everything that must be identical across surfaces —
   who they are, what they want, their voice, their low-tolerance triggers, and the
@@ -214,25 +207,9 @@ canonical verdict schema + the JUDGE.md methodology) with three thin per-surface
 evidence adapters (API call/response, UI DOM/screenshot/console/network, MCP
 protocol/tool-call). NOT three separate judges.**
 
-```
-scripts/harness-judge/
-  package.json
-  JUDGE.md                     Canonical methodology: P0 objective / P1 subjective / CANNOT_DETERMINE,
-                               pushback rules, two-layer (per-run + meta-aggregation). Surface-neutral core
-                               + short per-surface appendices (JUDGE.api.md / JUDGE.ui.md / JUDGE.mcp.md).
-  core.mjs                     Assembles the judge prompt from: persona core + authored criteria +
-                               run metadata + a normalized EVIDENCE bundle. Emits the canonical
-                               verdict schema `agentweaver.persona-judge-verdict/v1` (P0 + P1 +
-                               REQUIRED frustration dimension).
-  meta-aggregate.mjs           Cross-run + CROSS-SURFACE rollup (moved here from the API harness).
-  adapters/
-    api.mjs                    API transcript  -> normalized evidence (calls, bodies, outcome spec)
-    ui.mjs                     UI transcript   -> normalized evidence (DOM snapshot, screenshot ref, console, network, log cross-ref)
-    mcp.mjs                    MCP transcript  -> normalized evidence (tool calls, protocol frames)   [Morpheus]
-  test/
-    core.test.mjs              Verdict schema + prompt assembly
-    adapters.*.test.mjs        Each adapter's evidence normalization
-```
+Reuse the [shared judge package](api-test-harness-plan.md#current-implementation-contract).
+The UI-specific pieces are `scripts/harness-judge/adapters/ui.mjs` and `JUDGE.ui.md`;
+there is no separate UI schema or judge implementation.
 
 Each adapter's only job is to turn its surface's raw transcript into the **same
 normalized evidence shape** (`{ turns:[{intent, action, objectiveFacts, evidence[]}],
@@ -283,26 +260,14 @@ evidence**, alongside the existing P0 (objective mechanics) and P1 (subjective
 quality) blocks. It is shared across all three surfaces so frustration is comparable
 API-vs-UI-vs-MCP in meta-aggregation.
 
-```jsonc
-{
-  "schema": "agentweaver.persona-judge-verdict/v1",
-  "persona": "jordan",
-  "surface": "ui",                       // api | ui | mcp — which harness produced the evidence
-  "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
-  "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
-  "frustration": {                        // REQUIRED — emotional/UX assessment from evidence
-    "level": "none | low | moderate | high | abandoned | not_assessed",   // ordinal; "abandoned" = persona gave up; "not_assessed" = insufficient evidence to judge
-    "score": 0,                          // 0-4 mirror of level for meta-aggregate trend math; null for "not_assessed" (excluded from aggregate stats)
-    "signals": [                         // the OBSERVED evidence the level is grounded in (never invented)
-      { "kind": "<signal>", "evidence": "<transcript turn refs / quote>" }
-    ],
-    "rationale": "<one line: why this level, tied to the signals above>"
-  },
-  "pushback": { "count": 0, "requirementMet": true, "each": [ ] },
-  "cannotDetermine": [ ],
-  "findings": [ ]
-}
-```
+Use `scripts/harness-judge/verdict-schema.mjs` and the
+[shared field description](api-test-harness-plan.md#3-verdict-schema--p0-p1-and-a-required-frustration-dimension),
+with `surface: "ui"`. Both P0 and P1 allow `CANNOT_DETERMINE`. All nine join fields
+are required: `batchId`, `scenarioId`, `inputSeed`, `adapterVersion`,
+`personaCoreVersion`, `targetRevision`, `surface`, `runId`, and `timestamp`.
+Frustration signals are `{ kind, evidence }` objects, with a nonempty `rationale`;
+levels are `none`, `mild`, `moderate`, `severe`, `abandoned`, and `not_assessed`.
+There is no UI-local JSON schema.
 
 - **`frustration` is REQUIRED** (never omitted). `none` means the judge **genuinely
   observed no frustration**; if the evidence genuinely **can't support a read**, the
@@ -333,9 +298,8 @@ API-vs-UI-vs-MCP in meta-aggregation.
   the API harness's verdict for the same persona/scenario.
 - **Meta-aggregation uses it cross-surface.** `meta-aggregate.mjs` can trend
   frustration by persona and by surface — e.g. "Jordan is `abandoned` via UI but
-  `low` via API for the same scenario" pinpoints a browser-experience defect with a
-  working backend; a persona frustrated on **every** surface points at a core
-  product/model problem.
+  `mild` via API for the same joined scenario" suggests a browser-experience
+  investigation; it does not establish causality or complete backend correctness.
 
 ### 4. How this UI harness consumes the shared layer
 
@@ -607,6 +571,12 @@ The reporter's console banner reflects the **driver** verdict only —
 ---
 
 ## Architecture
+
+The compact sketch below is historical navigation. Current capture uses the
+installed Chrome channel and shared persona adapters. Screenshots, DOM/network
+facts, and any explicitly collected cross-reference logs are untrusted supporting
+evidence; the driver cannot diagnose or self-certify quality, and the Judge cannot
+fetch additional evidence. Current paths and authentication are defined above.
 
 ```
 persona brief (briefs/*.md, shared format)

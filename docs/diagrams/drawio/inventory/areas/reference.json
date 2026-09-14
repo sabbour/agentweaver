@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "area": "reference",
+  "diagrams": [
+    {
+      "name": "reference-a2a-fig1",
+      "area": "reference",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/reference-a2a-fig1.drawio",
+        "drawio": "docs/diagrams/src/reference-a2a-fig1.drawio",
+        "png": "docs/diagrams/reference-a2a-fig1.png",
+        "hash": "docs/diagrams/reference-a2a-fig1.hash.txt"
+      }
+    },
+    {
+      "name": "reference-scaling-data-layer-fig1",
+      "area": "reference",
+      "disposition": "redesign",
+      "owner": "gpt-6-astra-sole-agent",
+      "replacement": null,
+      "notes": "Completed Fluent catalog migration. Stable canonical paths; reviewed export and iteration evidence in docs/diagrams/reviews/catalog-integration/completion-reconciliation.json.",
+      "paths": {
+        "input": "docs/diagrams/src/reference-scaling-data-layer-fig1.drawio",
+        "drawio": "docs/diagrams/src/reference-scaling-data-layer-fig1.drawio",
+        "png": "docs/diagrams/reference-scaling-data-layer-fig1.png",
+        "hash": "docs/diagrams/reference-scaling-data-layer-fig1.hash.txt"
+      }
+    }
+  ]
+}

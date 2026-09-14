@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Converts Mermaid *flowchart* blocks into the docs/diagrams graph-spec JSON
-// shape (see docs/diagrams/src/graph-spec.schema.json), so the deep-dive/etc.
-// docs can render through the same Fluent-styled @xyflow/react + dagre pipeline
-// as the AKS architecture diagrams instead of raw ```mermaid fences.
+// shape (see docs/diagrams/src/graph-spec.schema.json). The render pipeline
+// converts this structured input to editable draw.io XML before export.
 //
 // Only `flowchart` / `graph` diagrams are convertible -- the graph-spec is a
 // node/edge/group model. `sequenceDiagram`, `stateDiagram`, `classDiagram` and

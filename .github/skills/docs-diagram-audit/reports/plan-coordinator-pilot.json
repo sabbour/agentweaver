@@ -1,0 +1,20 @@
+{
+  "area": "coordinator-pilot",
+  "status": "done",
+  "diagram_names": [
+    "canonical-coordinator-architecture"
+  ],
+  "proposed_diagram_names": [],
+  "document_paths": [],
+  "concept_ids": [],
+  "exclusive_asset_paths": [
+    "docs/diagrams/canonical-coordinator-architecture.hash.txt",
+    "docs/diagrams/canonical-coordinator-architecture.png",
+    "docs/diagrams/reviews/canonical-coordinator-architecture.md",
+    "docs/diagrams/reviews/canonical-coordinator-architecture/",
+    "docs/diagrams/src/canonical-coordinator-architecture.drawio"
+  ],
+  "report_entry_owner": "coordinator-pilot",
+  "consumer_changes": [],
+  "completion_evidence": "docs/diagrams/reviews/catalog-integration/integration-result.json"
+}
