@@ -51,6 +51,7 @@ function normalizeToolValue(value: unknown, depth: number): { value: unknown; re
   if (depth > maxDepth) return { value: '[Nested value omitted]', redacted: false };
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return { value, redacted: false };
   if (typeof value === 'string') {
+    if (value.includes(REDACTED)) return { value, redacted: true };
     if (value === REDACTED || hasSensitiveValue(value)) return { value: REDACTED, redacted: true };
     if (value.length > maxStringLength) return { value: '[Value omitted: exceeds display limit]', redacted: false };
     const parsed = parseStructuredText(value);

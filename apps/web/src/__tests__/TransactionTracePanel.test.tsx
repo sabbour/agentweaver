@@ -125,6 +125,13 @@ describe('buildToolCallIndex', () => {
       expect(value.text).not.toContain('secret-value');
     });
 
+    it('marks already-redacted strings while preserving safe surrounding context', () => {
+      expect(formatSafeToolValue('provider returned ***REDACTED***')).toEqual({
+        state: 'redacted',
+        text: 'provider returned ***REDACTED***',
+      });
+    });
+
     it('truncates oversize values with an explicit marker', () => {
       const value = formatSafeToolValue(`prefix-${'x'.repeat(200)}`, 80);
 
