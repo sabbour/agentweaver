@@ -51,7 +51,7 @@ For that reason, `run_command` is treated as a privileged capability:
 5. The command is packaged with the run workspace, timeout, filesystem policy, network flag, and optional run ID.
 6. The selected executor runs it and returns only bounded, redacted stdout/stderr plus an exit code.
 
-This design does not try to parse every shell command into safe and unsafe subcommands. That would be brittle. Instead, the system validates the shell envelope, requires approval for dangerous patterns, and relies on the executor boundary to contain whatever the shell actually does.
+This design does not try to parse every shell command into safe and unsafe subcommands. That would be brittle. Instead, the system validates the shell envelope, requires approval for dangerous patterns, and relies on the executor boundary to contain whatever the shell actually does. The executor does use a narrow, non-security-critical package-manager hint to decide whether to prepare an optional writable system root; a miss only makes `/usr`, `/etc`, and `/var` read-only for that command.
 
 Where this lives: `packages/Agentweaver.AgentTools/Tools/RunCommandTool.cs`, `packages/Agentweaver.SandboxExec`
 
@@ -167,6 +167,12 @@ Agentweaver installs the controller and its three CRDs (API group `extensions.ag
 - **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, workload identity, and the `agentweaver-exec` **executor sidecar** — a second container from the same image that owns every model-controlled process in its own PID namespace (see [sandbox pod execution](./sandbox-pod-execution.md#why-a-sidecar-and-not-a-nested-pid-namespace)).
 - **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
 - **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/reference/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path) and `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`. The AgentHost claim omits `spec.env`; static values belong to the template/config map. Per-run identity, workspace, credentials, turn authentication, purpose, and approval values arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
+- **Model-controlled `run_command` calls do not create a Kubernetes claim or pod exec session.**
+  After the AgentHost pod is configured, the tool uses the pod-private `agentweaver-exec`
+  sidecar over authenticated IPC. The sidecar only starts the optional per-run writable system
+  root for package-manager commands (`apt`, `apt-get`, `dpkg`, etc.); ordinary commands run
+  directly in the read-only system-root bubblewrap view so they do not pay package-manager setup
+  latency on the happy path.
 
 The executor's provisioning loop is the concrete contract with the controller:
 
