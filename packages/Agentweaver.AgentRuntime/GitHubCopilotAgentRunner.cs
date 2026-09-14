@@ -342,7 +342,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: sandboxPolicy.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled,
+            DefaultTimeoutMs: SandboxToolOptions.ResolveDefaultRunCommandTimeoutMs())
         {
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
