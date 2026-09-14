@@ -233,3 +233,72 @@ for a `LogWarning` from `ProjectCopilotBindingService` immediately after the nex
 real underlying reason (e.g. "PKCE verifier secret was not found or had expired", "Token exchange with GitHub did
 not return a usable credential or login", etc.) instead of the current dead end. Whatever that reveals should be
 the next concrete fix target — this PR intentionally does not guess at a fix without evidence.
+
+## 2026-09-14: Preview publication loses a structural race against run terminalization (#1315) — decision needed
+
+**Reported problem:** A worker subtask that publishes a preview frequently fails with
+`409 "The run ended before preview publication completed."`, or produces a preview URL that never
+becomes reachable. Surfaced while driving a multi-task travel-booking project through the API harness
+on auto-approve; the preview only succeeded after being nursed by hand.
+
+**Root cause (confirmed in code):** Preview publication is scoped to the lifetime of the run that
+requested it. Both publication paths link their lifetime to the run's completion token —
+`SandboxEndpoints.cs` and `Coordinator/Preview/PreviewStep.cs` both do
+`CancellationTokenSource.CreateLinkedTokenSource(ct, runCt)`. Registration takes ~90–120s (gateway
+route + port-forward + DNS convergence + readiness probing) and a worker subtask routinely finishes
+inside that window. When it does, `runCt` fires, publication is cancelled, and the `finally` block
+tears the preview process down as `preview_not_published`. **The agent's own success destroys its
+preview.**
+
+**Why no agent or prompt can fix this:** the cancellation *is* the terminal transition, so by the
+time the 409 exists the run is terminal and the agent has no turn left to observe or react. The
+failing action is also the *correct* action — the agent started a server, published, and completed
+its task. Any prompt-side "fix" amounts to telling the agent not to finish. (The goal wording
+"stay alive 30 minutes" used during the harness run appeared to work; it merely kept the run
+non-terminal long enough to win the race. That is an accidental hack, not a fix.) This is platform
+lifetime ownership, not prompting.
+
+**Where the pin actually lives:** the invariant is enforced at the database level, deliberately and
+replica-safely. `RunStreamEntry.TryRecordPreviewReadyAsync`
+(`apps/Agentweaver.Api/Infrastructure/RunStreamStore.cs`) commits the `sandbox.preview_ready` +
+`coordinator.preview_ready` pair through `AppendWhileRunActiveAsync`, conditional on the run row
+still being active, in one transaction. `PublicationWins_TerminalUpdateWaitsUntilBothEventsCommit`
+asserts that `TrySetTerminalStatusAsync` blocks while that batch is open — *"publication owns the run
+row until the batch commits"*. The design is sound; the defect is purely **when the lock is taken**:
+at the very end of publication. Everything before it runs unpinned, so terminalization wins by
+default.
+
+**Naive fix rejected:** decoupling publication from `runCt` (and gating the liveness checks on
+`SandboxPreviewOptions.KeepAfterRun`, which already defaults to `true`) builds clean but breaks
+exactly six tests that encode the current ordering on purpose —
+`PreviewStepTests.RunEndsDuringPostApprovalHealth_DoesNotRegister`,
+`RunEndsDuringHttpsOrPersistenceWait_CannotPublish`, and three
+`PreviewApprovalRetryEndpointsTests` cases. (Six `PreviewPublicationPostgresTests` failures seen in
+the same run are pre-existing and need a live Postgres.) That change was implemented, evaluated, and
+reverted rather than landed.
+
+**Decision required — is a `preview_ready` event committed *after* a run's terminal event
+acceptable?** The three candidate fixes trade directly against that question:
+
+1. *Hold the run-row lock for the whole publication.* Correct, but a 90–120s open transaction holding
+   a DB connection. Operationally unacceptable.
+2. *Add a `preview_publication_lease_until` column; let `AppendWhileRunActiveAsync` accept "run active
+   OR valid lease".* Replica-safe and integrates naturally with the existing predicate, but it
+   permits ready events to commit after the terminal event — exactly what the six tests prevent.
+3. *Defer terminalization while a lease is valid.* Preserves ordering and every existing test, at the
+   cost of coupling run completion to preview timing; needs a bounded, crash-safe expiry.
+
+Recommendation: option 2, on the grounds that `KeepAfterRun` already defaults to `true` — previews are
+*designed* to outlive their run — which suggests the current strict ordering is over-constrained. But
+this contradicts tests written on purpose, needs a migration and an EF model change, and is a product
+call rather than a bug fix, so it is recorded here instead of being slipped into a PR.
+
+**Fixed and merged this session (PR #1321):** the two issues from the same batch that were safely
+fixable — #1314 (`run_command` told unattended runs to "retry after approval", so autopilot runs spun
+on the same blocked destructive command forever while reporting `InProgress`; the gate is unchanged,
+only the guidance) and #1317 (the sandboxed `run_command` did not declare the `description` argument
+the native shell tool accepts, so those calls fell through to the disabled native shell and cost a
+full turn to `tool.error` + `run.degraded`).
+
+**Still open:** #1315 (this entry), #1316 (run steering unreachable — the `execution_key` nonce
+rotates on every response), #1320 (live `run_command` progress heartbeat).
