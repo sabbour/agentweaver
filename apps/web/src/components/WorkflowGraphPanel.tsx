@@ -22,6 +22,7 @@ import {
   buildSteppedConnectorRoute,
   buildBridgedOrthogonalPath,
   COMPACT_CARD_H,
+  connectorRouteLabelPoint,
   findConnectorBridges,
   findConnectorJunctions,
   findLoopbackContinuationJoin,
@@ -1372,15 +1373,21 @@ export function SpineEdge({
   const spineData = data as {
     flowDirection?: 'horizontal' | 'vertical';
     gutterLaneOffset?: number;
+    routePoints?: Array<{ x: number; y: number }>;
   } | undefined;
-  const route = buildSteppedConnectorRoute({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    orientation: spineData?.flowDirection,
-    laneOffset: spineData?.gutterLaneOffset,
-  });
+  const routedLabelPoint = spineData?.routePoints && spineData.routePoints.length >= 2
+    ? connectorRouteLabelPoint(spineData.routePoints)
+    : undefined;
+  const route = spineData?.routePoints && spineData.routePoints.length >= 2 && routedLabelPoint
+    ? { points: spineData.routePoints, path: '', labelX: routedLabelPoint.x, labelY: routedLabelPoint.y }
+    : buildSteppedConnectorRoute({
+      sourceX,
+      sourceY,
+      targetX,
+      targetY,
+      orientation: spineData?.flowDirection,
+      laneOffset: spineData?.gutterLaneOffset,
+    });
   const markerIdValue = markerId('spine-arrow', id);
   const bridges = findConnectorBridges(allEdges, allNodes).get(id) ?? [];
   const junctions = findConnectorJunctions(allEdges, allNodes).get(id) ?? [];
