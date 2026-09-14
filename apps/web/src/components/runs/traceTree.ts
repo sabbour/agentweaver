@@ -19,7 +19,7 @@ export interface ToolCallDetail {
 }
 
 export interface SafeToolValue {
-  state: 'available' | 'redacted' | 'unavailable';
+  state: 'available' | 'redacted' | 'truncated' | 'unavailable';
   text?: string;
 }
 
@@ -97,7 +97,10 @@ export function formatSafeToolValue(value: unknown, maximumLength = maxRenderedL
     ? normalized.value
     : JSON.stringify(normalized.value, null, 2);
   if (text.length > maximumLength)
-    return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
+    return {
+      state: 'truncated',
+      text: `${text.slice(0, Math.max(0, maximumLength - 37))}\n… [truncated because too large]`,
+    };
   return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
 

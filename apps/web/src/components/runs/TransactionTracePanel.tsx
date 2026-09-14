@@ -581,36 +581,55 @@ function SpanStatus({ span, styles }: { span: RunTraceSpanDto; styles: ReturnTyp
 function ToolValue({
   title,
   value,
-  emptyLabel,
+  captureState,
   error,
   styles,
 }: {
   title: string;
   value: unknown;
-  emptyLabel: string;
+  captureState?: string | null;
   error?: boolean;
   styles: ReturnType<typeof useStyles>;
 }) {
   const formatted = formatSafeToolValue(value, error ? maxToolErrorDetailLength : undefined);
+  const payloadName = title.toLowerCase();
+  const normalizedState = (captureState ?? '').toLowerCase();
+  const unavailableText = normalizedState === 'truncated'
+    ? `${title} was truncated because it was too large.`
+    : normalizedState === 'redacted'
+      ? `${title} was redacted by policy.`
+      : `${title} was not captured in telemetry.`;
   if (formatted.state === 'unavailable') {
     return (
       <div>
         <Text className={styles.sectionTitle}>{title}</Text>
-        <Text className={styles.toolValueState}>{formatted.text ?? emptyLabel}</Text>
+        <Text className={styles.toolValueState}>{formatted.text ?? unavailableText}</Text>
       </div>
     );
   }
+  const stateLabel = normalizedState === 'truncated' || formatted.state === 'truncated'
+    ? 'Truncated because too large'
+    : normalizedState === 'redacted' || formatted.state === 'redacted'
+      ? 'Redacted by policy'
+      : null;
   return (
     <div>
       <div className={styles.toolValueHeader}>
         <Text className={styles.sectionTitle}>{title}</Text>
-        {formatted.state === 'redacted' && <Badge appearance="tint" color="warning" size="small">Redacted</Badge>}
+        {stateLabel && <Badge appearance="tint" color="warning" size="small">{stateLabel}</Badge>}
       </div>
       {formatted.text
         ? <pre className={mergeClasses(styles.codeBlock, error && styles.codeBlockError)}>{formatted.text}</pre>
-        : <Text className={styles.toolValueState}>Recorded empty {title.toLowerCase()}</Text>}
+        : <Text className={styles.toolValueState}>Recorded empty {payloadName}</Text>}
     </div>
   );
+}
+
+function toolValueOrSpanAttribute(
+  eventValue: unknown,
+  attributeValue: string | null | undefined,
+): unknown {
+  return eventValue !== undefined ? eventValue : attributeValue ?? undefined;
 }
 
 function TraceRow({
@@ -755,6 +774,12 @@ function TraceInspector({
   const { span, type } = node;
   const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
   const toolName = span.toolName ?? span.name;
+  const toolInput = toolValueOrSpanAttribute(toolDetail?.arguments, span.attributes?.toolInput);
+  const toolOutput = toolValueOrSpanAttribute(toolDetail?.errorMessage ?? toolDetail?.content, span.attributes?.toolOutput);
+  const toolInputState = toolDetail?.arguments !== undefined ? undefined : span.attributes?.toolInputState;
+  const toolOutputState = (toolDetail?.errorMessage ?? toolDetail?.content) !== undefined
+    ? undefined
+    : span.attributes?.toolOutputState;
   const liveCommand = activeRunCommand(toolDetail);
   const nodeCost = aggregateNanoAiu(node);
   const costLabel = type === 'invoke-agent' ? 'AIC (invocation)' : type === 'llm' ? 'AIC (model call)' : 'AIC';
@@ -830,14 +855,14 @@ function TraceInspector({
             <summary className={styles.commandDetailsSummary}>Command details</summary>
             <ToolValue
               title="Input"
-              value={toolDetail?.arguments}
-              emptyLabel="No input"
+              value={toolInput}
+              captureState={toolInputState}
               styles={styles}
             />
             <ToolValue
               title="Output"
-              value={toolDetail?.errorMessage ?? toolDetail?.content}
-              emptyLabel="No output"
+              value={toolOutput}
+              captureState={toolOutputState}
               error={toolDetail?.errorMessage !== undefined}
               styles={styles}
             />
@@ -846,14 +871,14 @@ function TraceInspector({
           <>
             <ToolValue
               title="Input"
-              value={toolDetail?.arguments}
-              emptyLabel="No input"
+              value={toolInput}
+              captureState={toolInputState}
               styles={styles}
             />
             <ToolValue
               title="Output"
-              value={toolDetail?.errorMessage ?? toolDetail?.content}
-              emptyLabel="No output"
+              value={toolOutput}
+              captureState={toolOutputState}
               error={toolDetail?.errorMessage !== undefined}
               styles={styles}
             />
@@ -921,6 +946,8 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
     ['tool.name', recorded(attributes?.toolName ?? span.toolName)],
     ['tool.call.id', recorded(attributes?.toolCallId ?? span.toolCallId)],
     ['tool.success', boolean(attributes?.toolSuccess ?? span.success)],
+    ['tool.input.state', recorded(attributes?.toolInputState)],
+    ['tool.output.state', recorded(attributes?.toolOutputState)],
     ['policy.decision', recorded(attributes?.policyDecision)],
     ['authorization.decision', recorded(attributes?.authorizationDecision)],
     ['policy.shell.enabled', boolean(attributes?.policyShellEnabled)],
