@@ -13,6 +13,7 @@ import {
   navigateAndStartAgentweaverSignIn,
   refreshDisposableChromeProfile,
   resolveChromeDefaultProfile,
+  waitForAgentweaverSession,
 } from './lib/chrome-default-profile.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +38,7 @@ export function parseLoginOptions(argv, environment = process.env) {
   if (!baseUrl) throw new Error('Provide --base-url <staging-url> or set AGENTWEAVER_STAGING_URL.');
   const target = new URL(baseUrl);
   if (target.protocol !== 'https:') throw new Error('--base-url must use HTTPS.');
-  return { baseUrl: target.toString() };
+  return { baseUrl: target.toString(), manual: argv.includes('--manual') };
 }
 
 export async function captureState(page, context, baseUrl) {
@@ -60,6 +61,7 @@ export async function captureState(page, context, baseUrl) {
 export async function runWithDisposableProfile(baseUrl, dependencies = {}) {
   const browser = dependencies.chromium ?? chromium;
   const authDir = dependencies.authDir ?? AUTH_DIR;
+  const manual = dependencies.manual ?? false;
   const automationUserDataDir = path.join(authDir, 'chrome-default-automation');
   const chromeProfile = dependencies.chromeProfile ?? resolveChromeDefaultProfile();
   await refreshDisposableChromeProfile({
@@ -78,8 +80,12 @@ export async function runWithDisposableProfile(baseUrl, dependencies = {}) {
     page.setDefaultTimeout(180_000);
     page.setDefaultNavigationTimeout(180_000);
     await navigateAndStartAgentweaverSignIn(page, baseUrl);
-    console.log('When the authenticated Agentweaver app is visible, press Resume in the Playwright Inspector.');
-    await page.pause();
+    if (manual) {
+      console.log('When the authenticated Agentweaver app is visible, press Resume in the Playwright Inspector.');
+      await page.pause();
+    } else {
+      await waitForAgentweaverSession(page, baseUrl);
+    }
     await captureState(page, context, baseUrl);
   } finally {
     await context?.close().catch(() => {});
@@ -88,8 +94,8 @@ export async function runWithDisposableProfile(baseUrl, dependencies = {}) {
 }
 
 async function main() {
-  const { baseUrl } = parseLoginOptions(process.argv.slice(2));
-  await runWithDisposableProfile(baseUrl);
+  const { baseUrl, manual } = parseLoginOptions(process.argv.slice(2));
+  await runWithDisposableProfile(baseUrl, { manual });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
