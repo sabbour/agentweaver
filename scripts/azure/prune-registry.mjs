@@ -211,6 +211,12 @@ export async function readInUseImages(loginServer, { exec = execDefault } = {}) 
     );
   }
   if (result.code !== 0) {
+    if (result.timedOut) {
+      throw new PruneError(
+        "Refusing to prune: reading running images from the cluster timed out. " +
+        "That set is what protects in-use digests from deletion.",
+      );
+    }
     throw new PruneError(
       "Refusing to prune: could not read running images from the cluster " +
       `(kubectl exited ${result.code}). That set is what protects in-use digests from deletion.`,

@@ -61,17 +61,23 @@ from its exact matching section; do not run another changelog generator.
 
 4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
-5. Before opening the promotion PR, merge `main` into the release branch so
-   the branch carries real ancestry from `main`:
+5. Push the release branch.
+
+   `release:prepare` fetches `origin/main` before it changes release files. If
+   `origin/main` is not an ancestor, it runs:
 
    ```bash
    git merge -X ours origin/main --no-ff -m "merge: resolve main into release/vX.Y.Z"
    ```
 
-   `-X ours` resolves the (expected, cosmetic) conflicts in favor of the
-   release branch's content; review the resulting diff (`git show --stat
-   HEAD`) to confirm it only carries forward genuinely main-only files (e.g.
-   docs assets added directly on `main`), then push the release branch.
+   The merge runs on a clean tree, before Changesets changes release files.
+   This keeps the release metadata commit separate from the ancestry merge. If
+   Git reports conflicts, the command stops and leaves the merge for manual
+   repair. To inspect without the merge, run
+   `npm run release:prepare -- --expected X.Y.Z --no-ancestry-merge`. The command
+   fails and prints the same `git merge` command.
+
+   CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR, merged with
    **"Rebase and merge"** (not squash — see note below).
 
