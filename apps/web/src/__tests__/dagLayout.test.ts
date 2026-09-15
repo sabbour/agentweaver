@@ -827,7 +827,7 @@ describe('layoutDagStaircase', () => {
     expect(new Set(returns.map((edge) => (edge.data as { returnLaneOffset: number }).returnLaneOffset)).size).toBe(1);
   });
 
-  it('marks exact source splits, shared tees, and merge trunks, not terminal arrowheads, plain elbows, or crossings', () => {
+  it('marks real shared junctions without duplicating separated lane stubs, terminal arrowheads, plain elbows, or crossings', () => {
     const nodes: Node[] = [
       { ...makeNode('split'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
       { ...makeNode('upper'), position: { x: 300, y: -80 }, initialWidth: 100, initialHeight: 100 },
@@ -852,10 +852,9 @@ describe('layoutDagStaircase', () => {
     const junctions = findConnectorJunctions(edges, nodes);
     const points = [...junctions.values()].flat();
 
-    expect(points).toHaveLength(3);
+    expect(points).toHaveLength(2);
     expect(points).toContainEqual({ x: 100, y: 50 });
-    expect(points).toContainEqual({ x: 183, y: 50 });
-    expect(junctions.get('merge-right')).toEqual([{ x: 267, y: 450 }]);
+    expect(points).not.toContainEqual({ x: 110, y: 50 });
     expect(points).not.toContainEqual({ x: 400, y: 450 });
     expect(junctions.has('cross-horizontal')).toBe(false);
     expect(junctions.has('cross-vertical')).toBe(false);

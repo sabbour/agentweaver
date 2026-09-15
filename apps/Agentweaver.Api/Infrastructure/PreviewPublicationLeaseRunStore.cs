@@ -6,7 +6,7 @@ namespace Agentweaver.Api.Infrastructure;
 /// <summary>
 /// Defers a run's terminal transition while a preview publication holds the run's lease (#1315).
 ///
-/// Publishing a preview takes 90-120 s: port-forward, DNS convergence, then an HTTP health probe.
+/// Publishing a preview takes 90-120 s: port-forward, infrastructure convergence, then an HTTP health probe.
 /// Its final <c>sandbox.preview_ready</c> batch commits only while the run row is still active. An
 /// agent that finishes its work inside that window therefore cancels its own preview, and the
 /// publication path tears the preview process down as <c>preview_not_published</c>.

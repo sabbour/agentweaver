@@ -32,6 +32,8 @@ public sealed class StartPreviewToolTests
     private const string ProjectId = "test-project-id";
     private const string AgentName = "tank";
     private const string RunId = "run-abc-123";
+    private static readonly TimeSpan DefaultServerPreviewPublicationBudget =
+        TimeSpan.FromSeconds(600 + 90);
 
     private static AIFunction GetStartPreview(CapturingHandler handler, string runId = RunId)
     {
@@ -187,9 +189,9 @@ public sealed class StartPreviewToolTests
     public void CreateHttpClient_TimeoutIsNotShorterThanTheRegistrationBudget()
     {
         // Regression guard for the defect where HttpClient's 100 s default silently pre-empted the
-        // 3-minute RegistrationTimeout. Publishing a preview routinely takes 90-120 s, so the client
-        // aborted a POST that was still succeeding and then reported a 180 s timeout that had never
-        // elapsed. RegistrationTimeout became unreachable dead code.
+        // RegistrationTimeout. Publishing a preview can take the server infrastructure convergence
+        // plus publication windows, so the client aborted a POST that was still succeeding and then
+        // reported a timeout that had never elapsed. RegistrationTimeout became unreachable dead code.
         using var http = PreviewPublishTool.CreateHttpClient("http://localhost", null);
 
         var effectiveBudget = http.Timeout == Timeout.InfiniteTimeSpan ? TimeSpan.MaxValue : http.Timeout;
@@ -197,6 +199,30 @@ public sealed class StartPreviewToolTests
         effectiveBudget.Should().BeGreaterThanOrEqualTo(
             PreviewPublishTool.RegistrationTimeout,
             because: "an agent told it has N seconds to register a preview must actually get N seconds");
+    }
+
+    [Fact]
+    public void RegistrationTimeout_ExceedsDefaultServerPublicationBudget()
+    {
+        PreviewPublishTool.RegistrationTimeout.Should().BeGreaterThan(
+            DefaultServerPreviewPublicationBudget,
+            because: "the agent-side registration timeout must lose the race after the API convergence and publication budgets");
+    }
+
+    [Fact]
+    public async Task StartPreview_DefaultTimeoutMessageNamesRegistrationTimeout()
+    {
+        using var http = new HttpClient(new HangingPreviewHandler())
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Timeout = TimeSpan.FromMilliseconds(1),
+        };
+        var tool = PreviewPublishTool.Build("http://localhost", null, RunId, http);
+
+        var result = (await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
+
+        result.Should().Contain($"within {PreviewPublishTool.RegistrationTimeout.TotalSeconds:n0} seconds");
     }
 
     [Fact]
