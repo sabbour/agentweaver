@@ -10,7 +10,7 @@
 //   1. Which publishing *channel* does this trigger represent?
 //        dev      -- push to the protected `dev` integration branch
 //        rc       -- push to a `release/vX.Y.Z` soak branch
-//        release  -- a published GitHub Release (annotated vX.Y.Z tag)
+//        release  -- a vX.Y.Z tag push or a published GitHub Release
 //        main     -- push to `main` (post-promotion, pre-tag)
 //        commit   -- any other ref, i.e. a manual workflow_dispatch build of
 //                    an arbitrary commit/branch
@@ -69,6 +69,7 @@ export function resolveChannel({ eventName, ref = "", releaseTag = "" } = {}) {
   if (name === "dev") return "dev";
   if (name === "main") return "main";
   if (name.startsWith("release/v")) return "rc";
+  if (versionFromRef(name)) return "release";
   return "commit";
 }
 
