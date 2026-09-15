@@ -136,6 +136,13 @@ The build and import limits behave differently from each other. A timed-out
 state unknown. Inspect the target ACR tag/digest before deciding whether a
 manual retry is safe.
 
+A2A mTLS secret checks also distinguish present, absent, and unknown states.
+Deployment generates the three A2A certificate secrets only when all three
+secrets are confirmed absent. It skips generation when all three are present.
+If Kubernetes cannot confirm a secret state after retries, deployment stops
+with a read error. Do not use `force: true` to repair a read failure. Retry
+after the Kubernetes API read succeeds.
+
 Best-effort ACR hardening steps can also use a local timeout. The provenance
 tag lock is one of these steps. If its Azure CLI process times out, the
 deployment warns and continues. The registry can already have applied the
