@@ -49,11 +49,15 @@ When the user clicks **Preview** and picks a port, `StartPreviewAsync`
    ([`SandboxPreviewService.cs:184`](#source)).
 6. **Validate publication through the generated hostname.** App Routing owns the managed DNS zone and creates
    the per-preview record. The API probes immediately; a fresh name may be NXDOMAIN while that record
-   converges, so it retries only name-resolution failures with bounded backoff until the configured
-   `DnsConvergenceTimeoutSeconds` deadline (ten minutes by default). Existing records succeed on the
-   initial probe. After DNS resolves, non-DNS Gateway and application failures use the shorter
+   converges, so it retries name-resolution failures with bounded backoff until the configured
+   `GatewayConvergenceTimeoutSeconds` deadline (ten minutes by default). The legacy
+   `DnsConvergenceTimeoutSeconds` key remains supported. Gateway `502`, `503`, and `504` responses
+   stay in this same infrastructure convergence window because they can mean the HTTPRoute is not
+   programmed yet. This environment's App Routing `external-dns` reconciles every 3 minutes, so the
+   convergence budget must exceed that interval. Existing records succeed on the initial probe. A
+   `404`, a `500`, or any other status outside `502`/`503`/`504` starts the shorter
    `PublicationTimeoutSeconds` readiness window. The API neither creates wildcard records nor otherwise
-   mutates DNS.
+   mutates DNS, and it does not patch the managed App Routing addon.
 
 The API returns `preview_url` and a relative `keepalive_url`; the browser opens the URL (in an iframe with
 `referrerPolicy="no-referrer"`) and pings keepalive every 60 s. The API does **not** prove readiness by
@@ -338,7 +342,7 @@ introduce a separate approval path. Omitted/false policy remains human-gated.
 <tr><td>relation-3</td><td>4 HTTPS</td></tr>
 <tr><td>relation-4</td><td>5 route</td></tr>
 <tr><td>relation-5</td><td>6 public port</td></tr>
-<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; infrastructure convergence has a bounded retry window.</td></tr>
 <tr><td>assurance-0-label</td><td>Public readiness</td></tr>
 <tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
 <tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>

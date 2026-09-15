@@ -177,11 +177,14 @@ retry guidance appear only after the run reaches a failed terminal status.
 
 The **Topology layout** control is available on the live run graph. **Balanced grid
 (current)** is the default layout engine. It reserves the full rendered card footprint,
-including pod chips, and routes connector lines through gutters around cards so arrows
-remain readable at dense zoom levels. Choose **Legacy staircase (comparison)** only to
-compare card placement while diagnosing a rollout; it does not alter the run, its nodes,
-dependencies, edge direction, or status data. The selection is remembered locally and is
-also available in workflow graph viewer and editor canvases.
+including pod chips. It routes connector lines through gutters around cards. Each line
+keeps a clear gap from cards that it does not terminate at. Lines that use the same
+corridor move into separate lanes. Long row-wrap edges use the reserved channel between
+rows and show in-path direction markers, so the flow stays readable at dense zoom levels.
+Choose **Legacy staircase (comparison)** only to compare card placement while diagnosing a
+rollout. It does not alter the run, its nodes, dependencies, edge direction, or status
+data. The selection is remembered locally and is also available in workflow graph viewer
+and editor canvases.
 
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 

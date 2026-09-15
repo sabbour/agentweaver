@@ -63,8 +63,10 @@ Click a workflow to expand it and see its full YAML definition, a visual graph o
 
 The visual graph and visual editor include a **Topology layout** comparison control.
 They default to **Balanced grid (current)**, which keeps card footprints reserved and
-routes connectors around occupied cards. **Legacy staircase (comparison)** changes only
-the visual arrangement, never the workflow YAML, nodes, or edges.
+routes connectors around occupied cards. Shared corridors use separate lanes. Long
+row-wrap connectors use the channel between rows and show in-path direction markers.
+**Legacy staircase (comparison)** changes only the visual arrangement, never the workflow
+YAML, nodes, or edges.
 
 ### Setting the default workflow
 

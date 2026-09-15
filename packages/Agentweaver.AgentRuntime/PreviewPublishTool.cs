@@ -25,7 +25,19 @@ namespace Agentweaver.AgentRuntime;
 /// </remarks>
 public static class PreviewPublishTool
 {
-    internal static readonly TimeSpan RegistrationTimeout = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// Client-side preview registration deadline. Keep this strictly greater than the API server's
+    /// default publication budget: <c>SandboxPreviewOptions.EffectiveGatewayConvergenceTimeoutSeconds</c>
+    /// plus <c>SandboxPreviewOptions.PublicationTimeoutSeconds</c>. The defaults are 600 s plus
+    /// 90 s, so this client gets 14 minutes 30 seconds and loses the server timeout race last.
+    /// </summary>
+    /// <remarks>
+    /// Agentweaver.AgentRuntime cannot reference the API project or its SandboxPreviewOptions type.
+    /// Keep this constant coupled to those server defaults during preview timeout changes. If this
+    /// value is less than or equal to the server-side sum, the agent can get a timeout message naming
+    /// a duration the server never actually exceeded while the server is still converging.
+    /// </remarks>
+    internal static readonly TimeSpan RegistrationTimeout = TimeSpan.FromSeconds(870);
 
     /// <summary>
     /// Builds the <c>start_preview</c> tool for the given run. The model supplies ONLY the port; the
@@ -142,8 +154,8 @@ public static class PreviewPublishTool
     /// </summary>
     /// <remarks>
     /// HttpClient's default timeout is 100 seconds, which is SHORTER than
-    /// <see cref="RegistrationTimeout"/> (3 minutes). Publishing a preview routinely takes 90-120 seconds
-    /// end to end (port-forward, DNS convergence, health probe), so the default aborted the POST while the
+    /// <see cref="RegistrationTimeout"/> (14 minutes 30 seconds). Publishing a preview can take up to the server
+    /// infrastructure convergence plus publication windows, so the default aborted the POST while the
     /// server was still publishing successfully. The tool then reported "did not complete within 180
     /// seconds" — a duration that could never actually elapse, because the client always gave up first.
     /// That made the configured <see cref="RegistrationTimeout"/> unreachable dead code and produced a
