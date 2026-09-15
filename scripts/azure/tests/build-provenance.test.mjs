@@ -449,7 +449,7 @@ test("waitForAcrRepositoryDigest: keeps retrying past a hung CLI call and return
   assert.equal(attempts, 3);
 });
 
-test("stampProvenance: imports the source digest into prov-<sha> and then locks it read-only", async () => {
+test("stampProvenance: imports the source digest into prov-<sha> and verifies the result", async () => {
   const git = { revParseCommit: async () => "c".repeat(40) };
   const sourceDigest = "sha256:" + "d".repeat(64);
   const exec = fakeExec({
@@ -476,47 +476,8 @@ test("stampProvenance: imports the source digest into prov-<sha> and then locks 
   assert.equal(result.tag, `prov-${"c".repeat(40)}`);
   const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
   assert.ok(importCall, "expected an `az acr import` invocation to stamp the provenance tag");
-  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
-  assert.ok(lockCall, "expected an `az acr repository update` invocation to lock the provenance tag");
-  assert.ok(lockCall.args.includes("--write-enabled"), "lock call must set --write-enabled");
-  assert.ok(lockCall.args.includes("false"), "lock call must set --write-enabled false");
-  assert.ok(lockCall.args.includes(`agentweaver-api:prov-${"c".repeat(40)}`), "lock call must target the stamped provenance tag");
-});
-
-test("stampProvenance: a timed-out provenance lock warns and returns", async () => {
-  const git = { revParseCommit: async () => "c".repeat(40) };
-  const sourceDigest = "sha256:" + "d".repeat(64);
-  let provReadCount = 0;
-  const exec = fakeExec({
-    captureImpl: async (_cmd, args) => {
-      if (args.includes("show-metadata")) {
-        const ref = manifestMetadataRef(args);
-        if (ref.endsWith(":v1.2.3")) return { stdout: sourceDigest, stderr: "", code: 0 };
-        if (ref.includes(":prov-")) {
-          provReadCount += 1;
-          return { stdout: provReadCount === 1 ? "" : sourceDigest, stderr: "", code: 0 };
-        }
-      }
-      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
-      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
-        return {
-          stdout: "",
-          stderr: "Command timed out after 600000ms; remote operation state is unknown and was not retried: az acr repository update",
-          code: 124,
-          timedOut: true,
-        };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    },
-  });
-
-  const { result, stderr } = await collectStderr(() =>
-    stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, { exec, git, sleep: async () => {} }),
-  );
-
-  assert.equal(result.tag, `prov-${"c".repeat(40)}`);
-  assert.match(stderr, /WARNING:.*provenance tag agentweaver-api:prov-c+ lock timed out/i);
-  assert.match(stderr, /deployment will continue/i);
+  const repositoryUpdate = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.equal(repositoryUpdate, undefined, "provenance stamping must not add a second CLI mutation after verification");
 });
 
 test("stampProvenance: is a no-op when the provenance tag already points at the expected digest", async () => {
@@ -530,8 +491,8 @@ test("stampProvenance: is a no-op when the provenance tag already points at the 
 
   const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
   assert.equal(importCall, undefined, "must not re-import an already-stamped, matching provenance tag");
-  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
-  assert.equal(lockCall, undefined, "must not attempt to re-lock a tag that was never (re-)imported this run");
+  const repositoryUpdate = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.equal(repositoryUpdate, undefined, "must not issue a separate repository update");
 });
 
 test("retagImage: skips when source and target tags are identical", async () => {

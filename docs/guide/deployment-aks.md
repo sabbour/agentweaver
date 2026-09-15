@@ -290,10 +290,11 @@ Two safety properties are worth understanding before you trust it:
   that set is exactly what protects in-use digests. Check your `kubectl`
   context before running it.
 
-Release provenance tags are deliberately write-locked (`writeEnabled=false`),
-so deleting one returns `405 REGISTRY_DISALLOWED_OPERATION`. The prune lifts
-that lock only for a manifest it has already decided to retire, then retries
-the delete once.
+Older release provenance tags may be write-locked (`writeEnabled=false`), in
+which case deleting one returns `405 REGISTRY_DISALLOWED_OPERATION`. The prune
+lifts that legacy lock only for a manifest it has already decided to retire,
+then retries the delete once. Current deployments verify provenance by exact
+manifest digest and do not add a separate per-tag lock operation.
 
 Useful flags:
 

@@ -486,32 +486,6 @@ export async function stampProvenance(
     );
   }
 
-  // Lock the provenance tag as read-only immediately after it's verified to
-  // resolve to the expected digest. Without this, 'prov-<sha>' is just a
-  // mutable ACR tag: anyone with registry write access (or a compromised
-  // credential) could re-point it at a different, unreviewed digest later,
-  // and 25-verify-image-provenance.mjs's tag-based check would have no way
-  // to detect that. Locking makes the tag immutable going forward -- a
-  // later `az acr import --force` against the *same* tag now fails loudly
-  // instead of silently overwriting it, which is the desired behavior: a
-  // given commit's provenance tag should only ever point at one digest.
-  const lockResult = await log.withTiming(
-    `ACR provenance lock ${image}:${provTag}`,
-    () => exec.capture(
-      "az",
-      ["acr", "repository", "update", "--name", cfg.ACR_NAME, "--image", `${image}:${provTag}`, "--write-enabled", "false"],
-      { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
-    ),
-  );
-  if (lockResult.code !== 0) {
-    const reason = firstLine(lockResult.stderr) || firstLine(lockResult.stdout) || `exit code ${lockResult.code}`;
-    if (lockResult.timedOut) {
-      log.warn(`  provenance tag ${image}:${provTag} lock timed out. Remote state is unknown. The deployment will continue: ${reason}`);
-    } else {
-      log.warn(`  could not lock provenance tag ${image}:${provTag} as read-only: ${reason}`);
-    }
-  }
-
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${provTag} (commit ${resolvedCommit})`);
   return { image, tag: provTag, commit: resolvedCommit };
 }
