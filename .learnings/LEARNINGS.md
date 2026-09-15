@@ -1,5 +1,37 @@
 # Learnings
 
+## [LRN-20260915-RELEASE-FORWARD-PORT] correction
+
+**Logged**: 2026-09-15T01:25:24-07:00
+**Priority**: critical
+**Status**: promoted
+**Area**: infra
+
+### Summary
+Every published release preparation must be forward-ported to `dev` before planning the next release.
+
+### Details
+The release workflow repeatedly omitted `release:sync-dev`. Prior sessions show
+the omission caused `dev`/`main` divergence across v0.18.x, and the current
+release attempt planned v0.32.5 even though that tag was already published.
+Documentation alone did not prevent recurrence.
+
+### Suggested Action
+Enforce the invariant in `release:plan` and `release:prepare` by comparing the
+repository version with published semver tags and failing with explicit
+`release:sync-dev` guidance when `dev` is stale.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/changesets/plan-release.mjs, scripts/changesets/prepare-release.mjs, RELEASING.md, AGENTS.md
+- Tags: release, changesets, sync-dev, forward-port, automation
+- Promoted: AGENTS.md, RELEASING.md, executable release guards
+- Pattern-Key: release.forward_port_preparation
+- Recurrence-Count: 3
+- First-Seen: 2026-08-24
+- Last-Seen: 2026-09-15
+
+---
 
 ## [LRN-20260709-A1] knowledge_gap
 

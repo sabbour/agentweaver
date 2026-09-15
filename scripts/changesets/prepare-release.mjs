@@ -5,8 +5,10 @@ import { execFileSync } from "node:child_process";
 import {
   assertVersionMirrors,
   extractChangelogSection,
+  latestPublishedVersion,
   releaseBranchVersion,
   synchronizePackageLockVersion,
+  validatePublishedReleaseState,
   validateReleasePreparation,
   getUnexpectedIgnoredFiles,
   ensureReleaseBranchHasMainAncestry,
@@ -41,7 +43,11 @@ if (releaseBranchVersion(branch) !== expected) {
   throw new Error(`release:prepare must run on release/v${expected}, not ${branch || "detached HEAD"}`);
 }
 
-assertVersionMirrors(root);
+const currentVersion = assertVersionMirrors(root);
+const publishedVersion = latestPublishedVersion(
+  git("ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"),
+);
+validatePublishedReleaseState(currentVersion, expected, publishedVersion);
 ensureReleaseBranchHasMainAncestry(root, branch, { allowMerge: !noAncestryMerge });
 
 // Changesets owns package/changelog generation. Normalize the root npm lock

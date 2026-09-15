@@ -23,6 +23,15 @@ The exact per-area build/test commands live in
 workflow). Run only the suite(s) relevant to what you changed; use the commands there
 rather than guessing, so the two don't drift.
 
+## Release invariant
+
+Never cut a release unless `npm run release:plan` succeeds against current
+`origin/dev`. The command intentionally blocks when a published release
+preparation was not forward-ported to `dev`; run
+`npm run release:sync-dev -- <release-preparation-sha>` on a short-lived branch,
+merge it to `dev`, and rerun the plan. Do not bypass or manually reconcile the
+version mirrors.
+
 ## Diagram impact gate
 
 Whenever documentation changes introduce, update, invalidate, consolidate, or remove an

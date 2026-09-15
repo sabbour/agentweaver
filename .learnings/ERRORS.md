@@ -810,3 +810,34 @@ Bound searches to one HTML comment with a tempered body such as
 - **Notes**: Restored the affected prose, replaced the matcher with a comment-bounded pattern, and reran consolidation successfully.
 
 ---
+## [ERR-20260915-APPLY-PATCH] apply_patch context mismatch
+
+**Logged**: 2026-09-15T01:30:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+A multi-file patch partially applied because `prepare-release.mjs` had gained an ancestry guard since the previously viewed version.
+
+### Error
+```
+Failed to find expected lines around assertVersionMirrors(root).
+```
+
+### Context
+- The first two file edits applied; remaining hunks were not attempted.
+- The file was reread and the remaining patch was applied against current context.
+
+### Suggested Fix
+Use smaller patches after cross-context repository changes and reread files that changed on `dev`.
+
+### Metadata
+- Reproducible: no
+- Related Files: scripts/changesets/prepare-release.mjs
+
+### Resolution
+- **Resolved**: 2026-09-15T01:31:00-07:00
+- **Notes**: Retried only the unapplied hunks against current file content.
+
+---
