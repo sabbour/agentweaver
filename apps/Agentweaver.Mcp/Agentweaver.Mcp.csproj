@@ -7,7 +7,6 @@
     <StartupObject>Agentweaver.Mcp.McpProgram</StartupObject>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Agentweaver.Api.Data\Agentweaver.Api.Data.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.AspNetCore\Agentweaver.AspNetCore.csproj" />
   </ItemGroup>
   <ItemGroup>

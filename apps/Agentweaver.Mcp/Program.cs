@@ -1,6 +1,5 @@
 namespace Agentweaver.Mcp;
 
-using Agentweaver.Api.Data.Memory;
 using Agentweaver.AspNetCore.DataProtection;
 using Agentweaver.Mcp.Tools;
 using Microsoft.AspNetCore.Authentication;
@@ -10,7 +9,6 @@ public sealed class McpProgram
 {
     public static async Task<int> Main(string[] args)
     {
-        _ = typeof(MemoryDbContext);
         var useStdio = args.Contains("--stdio");
 
         var builder = WebApplication.CreateBuilder(args);
