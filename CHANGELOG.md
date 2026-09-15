@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.32.6
+
+### Patch Changes
+
+- 59f835f: Make A2A mTLS secret reads fail closed during Azure deployments.
+
+  The deploy tool now checks Kubernetes Secret state as present, absent, or unknown. It retries transient read failures. It generates the A2A certificate secrets only after it confirms that all three secrets are absent. If the read state stays unknown, it stops with a read error and does not suggest `force: true`.
+- 065128a: Block release planning and preparation when `dev` is missing the previous published release metadata forward-port, preventing duplicate version plans and tag collisions.
+- 390216a: Stop the demo recorder reporting an expired session token as ready. `demo:record status` printed "Recording authentication: ready" based only on the auth directory existing and being git-ignored — it never decoded the cached token, so it reported ready against a token that had expired hours earlier while every authenticated endpoint returned 401. `getSessionToken` had no expiry check either, so the API harness's `recorder-session` auth provider handed out a dead bearer indefinitely.
+
+  `status` now prints the token's actual expiry (or how long ago it expired, with the `demo:record -- signin` command that fixes it), and no longer claims "ready" for an expired token. `getSessionToken` refuses a provably expired token rather than returning it; `{ allowExpired: true }` opts out, and tokens without a decodable `exp` are unaffected.
+- 7522478: Document the target release milestone convention. Contributors now set a milestone on
+  each issue and pull request. The release manager reconciles the milestones against the
+  changesets a release consumes, because merge order decides the real contents.
+- 5690c4a: Keep preview publication alive throughout DNS and Gateway convergence. The API now renews a short
+  durable publication lease, coordinator stall detection honors that active work, and explicit run
+  cancellation still interrupts publication immediately.
+- 5bdd5d8: Add pull request image dry builds and block release creation until tag images publish.
+- 84595be: The UI-harness Chrome login completes without a human. It clicks the Entra button, then waits for the cached SSO session to return. Use `--manual` for the previous Playwright Inspector flow.
+
 ## 0.32.5
 
 ### Patch Changes
