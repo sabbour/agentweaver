@@ -3,8 +3,11 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY ["apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj", "apps/Agentweaver.Mcp/"]
+COPY ["packages/", "packages/"]
+COPY Directory.Build.props .
 
 COPY apps/Agentweaver.Mcp/ apps/Agentweaver.Mcp/
+COPY packages/ packages/
 
 RUN dotnet restore "apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj"
 RUN dotnet publish "apps/Agentweaver.Mcp/Agentweaver.Mcp.csproj" \

@@ -398,13 +398,21 @@ function routeLength(points: Array<{ x: number; y: number }>): number {
   }, 0);
 }
 
-function routedSegments(edge: Edge, points: Array<{ x: number; y: number }>) {
-  return points.slice(1).flatMap((point, index) => {
+type RoutedSegment = {
+  edge: Edge;
+  orientation: 'vertical' | 'horizontal';
+  constant: number;
+  start: number;
+  end: number;
+};
+
+function routedSegments(edge: Edge, points: Array<{ x: number; y: number }>): RoutedSegment[] {
+  return points.slice(1).flatMap((point, index): RoutedSegment[] => {
     const from = points[index];
     if (Math.abs(from.x - point.x) < 0.5 && Math.abs(from.y - point.y) > 0.5) {
       return [{
         edge,
-        orientation: 'vertical' as const,
+        orientation: 'vertical',
         constant: from.x,
         start: Math.min(from.y, point.y),
         end: Math.max(from.y, point.y),
@@ -413,7 +421,7 @@ function routedSegments(edge: Edge, points: Array<{ x: number; y: number }>) {
     if (Math.abs(from.y - point.y) < 0.5 && Math.abs(from.x - point.x) > 0.5) {
       return [{
         edge,
-        orientation: 'horizontal' as const,
+        orientation: 'horizontal',
         constant: from.y,
         start: Math.min(from.x, point.x),
         end: Math.max(from.x, point.x),
