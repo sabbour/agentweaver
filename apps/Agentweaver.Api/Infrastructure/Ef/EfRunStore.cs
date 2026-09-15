@@ -265,6 +265,39 @@ public sealed class EfRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryBeginPreviewPublicationAsync(
+        RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && !terminalStatuses.Contains(r.Status))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PreviewPublicationLeaseUntil, (DateTimeOffset?)leaseUntil), ct);
+        return rows > 0;
+    }
+
+    public async Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Runs
+            .Where(r => r.RunId == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PreviewPublicationLeaseUntil, (DateTimeOffset?)null), ct);
+    }
+
+    public async Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(RunId runId, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.Runs.AsNoTracking()
+            .Where(r => r.RunId == id)
+            .Select(r => r.PreviewPublicationLeaseUntil)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default)
     {
         var id = runId.ToString();

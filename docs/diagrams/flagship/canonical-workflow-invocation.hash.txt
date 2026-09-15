@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-workflow-invocation.json",
+    "sha256": "e25a8f775509494be9f1949a49ecac6ce844905f7ba083ff58e75de11f06db68"
+  },
+  "drawio": {
+    "file": "canonical-workflow-invocation.drawio",
+    "sha256": "8fb4978bbd209585e1583daf67e9de38186139bffd8ee1ced84bfcbe5982b82f"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-workflow-invocation.png",
+    "sha256": "bb582b33a8463b2ce9947cf88df7df4c94a3bf4bc3bce9f72e2e5b8a3bc5881c"
+  }
+}

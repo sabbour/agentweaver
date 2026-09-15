@@ -6,7 +6,9 @@ and was ready, but no human could reach it for review. This page explains what c
 now, and how the new behavior affects your day-to-day review workflow.
 
 For the technical design see the [deep dive](../deep-dive/resilient-assembly-review.md); for config knobs
-see the [reference](../reference/resilient-assembly-review.md).
+see the [reference](../reference/resilient-assembly-review.md). The deep dive's existing
+[resilient-review state diagram](../deep-dive/resilient-assembly-review.md#end-to-end-resilient-assembly-flow)
+is the shared model for escalation and recovery; this experience page explains the user decisions.
 
 ## What used to happen vs. what happens now
 
@@ -15,7 +17,7 @@ see the [reference](../reference/resilient-assembly-review.md).
 | Assembly-gate steering budget exhausted | Run writes `assembly_blocked`, parks forever. No review card. | Run opens the **human-review gate** automatically. The assembled work is immediately reviewable. |
 | Reviewer requests changes across rounds | Revising agent received only the latest feedback; earlier rounds silently discarded. | Revising agent receives **all accumulated round feedback** (structured by gate source and round). |
 | Reviewer rejects an artifact | Author could be re-dispatched again on the same artifact. | Author is **locked out** for that subtask; a **different** eligible agent picks up the revision, reusing the prior committed work and the full feedback history. |
-| Post-turn commit stuck on a stale `.git/index.lock` | All three retry attempts fail the same way; child run silently wedges. | Lock is cleared between retries (if stale and unowned); commit succeeds on retry. On a persistent fault the child fails with a **visible structured event** instead of a silent stream drain. |
+| Post-turn commit stuck on a stale `.git/index.lock` | Retry could remain wedged. | The runtime checks lock age and attempts cleanup between retries; success is not guaranteed. Persistent faults produce a **visible structured event** instead of a silent stream drain. |
 
 ## Human-review gate: what the UI shows now
 
@@ -23,26 +25,19 @@ When the autonomous steering budget is exhausted, the coordinator transitions th
 same state as the normal happy-path human-review gate) and emits a review-requested event with reason
 `steering_budget_exhausted`. In the web UI:
 
-- The **review card opens** on the run detail page, exactly as it would if the gate had been reached
-  organically — the same Approve / Decline / Request changes actions are available.
-- The review card includes a **"Why are you seeing this?"** context panel showing all accumulated gate
-  feedback from the autonomous rounds, so you can understand why the system could not converge before
-  escalating to you.
-- The **preview** (if the coordinator run started a Build & Test live-preview) remains accessible from
-  the review gate — preview pod binding is unaffected by the escalation.
+- The normal assembly review actions become available in the orchestration's review surface —
+  Approve / Decline / Request changes.
+- The persisted review request and steering events explain why review was escalated. Accumulated
+  feedback is retained for subsequent revision dispatch; do not depend on an unverified,
+  separately titled context panel to find the reason.
+- An existing **preview** from the platform PreviewStep can remain accessible at the review gate;
+  escalation does not itself replace its pod binding. Availability still depends on the preview
+  resource lifetime and health.
 
-📸 **Screenshot — `assembly-review-escalation.png`**
-*Shows:* the coordinator run review card with `reason: steering_budget_exhausted`, accumulated autonomous
-gate feedback, and the Approve / Decline / Request changes actions.
-*Path:* let an assembly gate exhaust its steering budget on a project with a non-trivial plan → the review
-card opens automatically at `/projects/:projectId/orchestrations/:runId`.
-
-:::info Screenshot is a placeholder
-This screenshot is not yet captured. The image below is a placeholder until the feature is recorded
-against a live AKS environment.
-:::
-
-![Assembly-review escalation — review card opens automatically](/screenshots/assembly-review-escalation.png)
+Inspect the coordinator at `/projects/:projectId/orchestrations/:runId`: the persisted review
+request and `steering_budget_exhausted` reason distinguish escalation from normal review.
+The former screenshot was explicitly a placeholder and has been removed; no live escalation
+capture is asserted here.
 
 ## What to expect when you review an escalated run
 
@@ -91,8 +86,8 @@ and round number. On every subsequent revision dispatch the revising agent recei
 of feedback, not just the most recent complaint. This eliminates the amnesia that previously caused agents
 to re-violate earlier feedback they had never seen.
 
-The accumulated feedback appears in the review card context panel and is included in the revision task
-handed to the agent.
+The accumulated feedback is included in the revision task handed to the agent. Use the run's
+persisted steering/review events to inspect the correction history.
 
 ## Reviewer-rejection lockout: how author rotation works
 
@@ -130,15 +125,17 @@ or when there is genuinely nothing to carry — does the run escalate to the hum
 dead-ends to a terminal state (#233).
 
 This mirrors the warm-pool path, where a resumable target is steered in place with the same author. A
-single-role rejection now converges on its own instead of interrupting you on round one.
+single-role rejection can now attempt a bounded revision instead of necessarily interrupting you
+on round one; convergence is not guaranteed.
 
 ## Reliable commit and visible failure
 
 The coordinator child pipeline no longer silently drops a commit fault. When a commit fails:
 
 1. Between retry attempts, the runtime checks whether a stale `.git/index.lock` is blocking the commit
-   and removes it if it is genuinely stale (older than `Coordinator:StaleLockThresholdSeconds`, default
-   15 seconds) and unowned by a live `git` process.
+   and attempts removal when older than `Coordinator:StaleLockThresholdSeconds` (default
+   15 seconds). The current guard is **age-based**, not a live-process ownership probe;
+   choose a conservative threshold when other writers can share the worktree.
 2. If the commit still fails after all retries, the child run terminates with a **visible structured
    `run.failed` event** (`reason=commit_failed_persistent`, plus per-attempt lock diagnostics). This
    surfaces in the run timeline instead of a silent stream-drain failure.

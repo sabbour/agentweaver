@@ -133,6 +133,54 @@ function needsCmdWrapper(resolvedPath) {
 }
 
 /**
+ * Terminates a spawned child *and everything it spawned*.
+ *
+ * On Windows this matters enormously: `az` is a `.cmd` shim that we launch
+ * through `cmd.exe`, which in turn launches `python.exe`. `child.kill()` only
+ * signals the `cmd.exe` wrapper, leaving the Python grandchild alive and still
+ * holding the inherited stdout/stderr pipes. The capture promise then never
+ * settles, so a `timeoutMs` breach silently fails to take effect and the caller
+ * hangs indefinitely -- observed in production as deployments stalling for 30+
+ * minutes against a 45s timeout, with orphaned `az` processes accumulating for
+ * over two hours.
+ *
+ * `taskkill /T` terminates the whole tree by PID (never by image name, which
+ * would be unsafe on a shared machine). POSIX needs no special handling: the
+ * spawned child is the real process, so a direct signal is sufficient.
+ */
+function killProcessTree(child) {
+  if (!child || child.pid === undefined) return;
+  if (!isWindows) {
+    try {
+      child.kill();
+    } catch {
+      // Already exited, or cannot be signaled; the timeout result stands.
+    }
+    return;
+  }
+  try {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      shell: false,
+      detached: false,
+    }).on("error", () => {
+      // taskkill unavailable: fall back to signaling the wrapper alone.
+      try {
+        child.kill();
+      } catch {
+        // Nothing further to do; the timeout result remains authoritative.
+      }
+    });
+  } catch {
+    try {
+      child.kill();
+    } catch {
+      // See above.
+    }
+  }
+}
+
+/**
  * Resolves `cmd`/`args` into the concrete `{ file, spawnArgs, spawnOpts }` that
  * must be passed to `child_process.spawn` for correct cross-platform launcher
  * resolution (see the module banner comment above). Exposed for callers that
@@ -219,6 +267,10 @@ function normalizeTimeoutMs(timeoutMs) {
   return Math.floor(parsed);
 }
 
+function timeoutMessage(timeoutMs, displayLine) {
+  return `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`;
+}
+
 /**
  * Run a command with inherited stdio, streaming output directly to the
  * console. Use for long-running/interactive operations (builds, deploys).
@@ -227,7 +279,7 @@ function normalizeTimeoutMs(timeoutMs) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
  */
 export function run(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -265,15 +317,27 @@ export function run(cmd, args = [], opts = {}) {
         stdio: "inherit",
       });
     } catch (err) {
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: 127, stderr: redact(err.message) }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
     child.on("error", (err) => {
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: 127, stderr: redact(err.message) }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
     });
     child.on("close", (code, signal) => {
       if (code === 0) {
         finish(() => resolve({ code: 0 }));
+        return;
+      }
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: code ?? 1, signal: signal ?? undefined }));
         return;
       }
       finish(() => reject(
@@ -287,16 +351,15 @@ export function run(cmd, args = [], opts = {}) {
       timer = setTimeout(() => {
         // Never retry here. Killing the local CLI cannot establish whether a
         // remote Azure operation completed, so callers must reconcile state.
-        try {
-          child.kill();
-        } catch {
-          // The timeout result remains authoritative even if the child has
-          // already exited or cannot be signaled on this platform.
+        // Retry belongs in lib/retry.mjs, at call sites that know the
+        // operation is idempotent.
+        killProcessTree(child);
+        const stderr = timeoutMessage(timeoutMs, displayLine);
+        if (opts.allowFailure) {
+          finish(() => resolve({ code: 124, stderr, timedOut: true }));
+          return;
         }
-        finish(() => reject(new ExecTimeoutError(
-          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
-          { command: displayLine },
-        )));
+        finish(() => reject(new ExecTimeoutError(stderr, { command: displayLine })));
       }, timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     }
@@ -312,7 +375,7 @@ export function run(cmd, args = [], opts = {}) {
  * @param {string} cmd
  * @param {string[]} args
  * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, input?: string|Buffer }} [opts]
- * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown }>}
+ * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown, timedOut?: boolean }>}
  */
 export function capture(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -349,6 +412,10 @@ export function capture(cmd, args = [], opts = {}) {
         stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (err) {
+      if (opts.allowFailure) {
+        finish(() => resolve({ stdout: "", stderr: redact(err.message), code: 127 }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
@@ -408,15 +475,20 @@ export function capture(cmd, args = [], opts = {}) {
     });
     if (timeoutMs) {
       timer = setTimeout(() => {
-        try {
-          child.kill();
-        } catch {
-          // See run(): never retry after an indeterminate remote operation.
+        killProcessTree(child);
+        const stderr = timeoutMessage(timeoutMs, displayLine);
+        if (opts.allowFailure) {
+          const trimmedStdout = opts.trim === false ? stdout : stdout.trim();
+          finish(() => resolve({
+            stdout: trimmedStdout,
+            stderr,
+            code: 124,
+            json: opts.json ? null : undefined,
+            timedOut: true,
+          }));
+          return;
         }
-        finish(() => reject(new ExecTimeoutError(
-          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
-          { command: displayLine },
-        )));
+        finish(() => reject(new ExecTimeoutError(stderr, { command: displayLine })));
       }, timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     }

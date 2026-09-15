@@ -2,15 +2,21 @@
 
 ## Flow
 
-After a model turn, the runtime emits a durable `agent.turn.usage` run event. The payload includes input tokens, output tokens, total tokens, nano-AIU, and the response model when available.
+After a model turn, the runtime emits `agent.turn.usage` into the caller's durable
+event pipeline. AgentHost does not itself own the database. The payload includes
+input tokens, output tokens, total tokens, nano-AIU, and the response model when available.
 
 The runtime also creates an `Agentweaver` activity for the model turn and records the `agentweaver.token.usage` metric. It adds run, project, agent, model, token, nano-AIU, duration, and first-token data when the provider supplies it.
+
+**The metric named `agentweaver.token.usage` measures nano-AIU cost, not token
+count.** Its counter is incremented only for positive cost; token counts are
+separate event fields, span attributes and metric dimensions.
 
 In production, run events use the EF/Postgres durable event stream. Local development can use the SQLite event stream. Subscribers replay events by cursor, so a web replica can show work performed by another replica.
 
 ## Queries
 
-Application Insights provides project metrics and run traces when telemetry is available. Stored data supplies fallback model and agent usage where supported.
+Application Insights provides project metrics and run traces when telemetry is available. Stored data supplies fallback model and agent usage where supported; it does not reconstruct all missing telemetry charts or traces.
 
 | Endpoint | Purpose |
 | --- | --- |

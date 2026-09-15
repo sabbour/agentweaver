@@ -9,15 +9,15 @@ Open a project, go to **Observability** then **Traces**, and choose **Preview tr
 
 The trace detail opens on the **Timeline** tab. Its summary row shows the agent, run ID,
 measured trace-window duration, recorded input/output tokens when they exist, and the
-aggregate trace status. Agentweaver does not currently return a session identifier in its
-trace DTO, so the UI deliberately shows the run ID rather than presenting invented session
-telemetry.
+aggregate trace status. The typed trace attributes include an optional `sessionId`; the
+panel shows a recorded session identity when available. Missing session telemetry remains
+**Not recorded** in span detail rather than being invented from the run ID.
 
 The timeline reconstructs hierarchy from parent/child relationships, shows each span against
 the measured trace window, and uses distinct agent, model, and tool visuals. Failed spans use
 error styling. The summary status follows the root agent/coordinator spans, so a failed tool
 attempt that a later retry recovers from remains visible without marking the whole trace failed.
-error styling. Select a span to inspect its status, timing, correlation IDs, operation, model
+Select a span to inspect its status, timing, correlation IDs, operation, model
 usage, and tool-call context. Long timelines scroll inside their own bounded region, keeping the
 selected-span inspector visible beside the rows on wide screens. On narrower screens the layout
 stacks so both the timeline and inspector remain usable.
@@ -36,9 +36,10 @@ trace data for the run yet, the panel shows an empty state.
 The **Attributes** tab lists the typed, allow-listed dimensions returned by the run-traces API for
 the selected span: session/run/project identity; agent and workflow-run identity; operation,
 model, provider, and routing; tool and policy/authorization decisions; sandbox/runtime; token
-usage; and status/error type. Every field is explicit: **Not recorded** means the span predates the
-dimension or Agentweaver did not truthfully have that fact. The API never returns arbitrary
-OpenTelemetry custom dimensions, prompt text, credentials, raw tokens, or raw tool input/output.
+usage; tool-payload capture state; and status/error type. Every field is explicit: **Not
+recorded** means the span predates the dimension or Agentweaver did not truthfully have that fact.
+The API never returns arbitrary OpenTelemetry custom dimensions, prompt text, credentials, raw
+tokens, or unbounded raw tool input/output.
 
 The **Events** tab lists persisted run events using their actual sequence number and type. Every
 newly persisted event has a server-side UTC append timestamp. The API projects that as
@@ -49,12 +50,20 @@ also withheld while their event sequence/type/time remain visible. Expand a payl
 recorded fields are needed.
 
 For an **Execute Tool** span, the detail panel also shows the tool's **Input** and **Output**. These
-come from the persisted `tool.call` / `tool.result` / `tool.error` run events (matched to the span
-by `callId`), not from Application Insights. Objects and JSON-string output are formatted as
-readable JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane
-says **No input** or **No output**; if a value is redacted, it is explicitly marked **Redacted**.
-The UI applies a second, bounded redaction pass before displaying legacy event data, so credentials
-and oversized or deeply nested payloads cannot leak through the inspector.
+prefer the persisted `tool.call` / `tool.result` / `tool.error` run events when they are available
+(matched to the span by `callId`), and otherwise fall back to bounded, redacted payload previews
+carried on the Application Insights span. Objects and JSON-string output are formatted as readable
+JSON. A failed tool call appears as an error-formatted output. If data is missing, the pane says why:
+the payload was not captured, was truncated because it was too large, or was redacted by policy.
+For `run_command`, these command details start collapsed and require an explicit expansion. The
+runtime and UI both redact credentials before displaying payloads, and large payloads are truncated
+with an explicit marker instead of being silently dropped.
+
+While a sandboxed `run_command` is still executing, the same run stream carries
+`tool.execution_pending` heartbeats. The trace row and inspector use those correlated,
+output-free events to show **Running** elapsed time for the matching command span until a
+`tool.result` or `tool.error` arrives. The heartbeat deliberately contains only run id, tool-call id,
+tool name, start/deadline timestamps, and elapsed seconds — never command text or command output.
 
 When a tool attempt fails, its inspector shows a bounded, redacted error detail and explains the
 outcome in the context of the run: **Recovered** means the run later completed, **Run active**
@@ -63,9 +72,19 @@ recorded. The summary keeps failed-tool-attempt count separate from run state, s
 attempt is never presented as a failed run. The events API also redacts legacy error payloads and
 limits an individual error detail to 2,048 characters before the UI receives it.
 
+Command progress is not inferred from the absence of a terminal result. The current sandbox tool
+uses the executor's buffered `ExecuteAsync` contract, while `StreamAsync` carries output-bearing
+chunks. Replacing one with the other merely to make a timer appear active could alter buffering or
+expose output prematurely. Live progress therefore uses a correlated, output-free server-side
+heartbeat only while the exact command invocation is active, stops on every terminal path, and
+delivers over the existing run stream rather than browser polling. The command text and final
+output are captured only as bounded, redacted previews or as redacted persisted events.
+
 Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
 cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call
-nested beneath it; the panel header shows the total cost across the whole run. The underlying value
+nested beneath it; the panel header sums model cost across the currently loaded trace tree,
+not an independently verified full-run billing total. Agent/tool nodes do not double-count
+cost already attributed to their model leaves. The underlying value
 is `agentweaver.aiu.nano` (nano-AIU), sourced from the model turn's `agent.turn.usage` event and
 formatted with the same `AIC` unit used elsewhere in the app (see `formatAic`/`CostChip`).
 
@@ -76,33 +95,27 @@ If the trace query itself fails, the run-traces API response instead includes a 
 `queryError` value. The API also writes an Error-level log containing the query context and the
 truncated failing KQL, so operators can distinguish a query failure from a genuinely empty trace.
 
-![Observability Traces page listing recent coordinator runs](/screenshots/observability-traces.png)
-
-> 📸 **Screenshot — `observability-traces.png`**
-> *Shows:* the **Observability** Traces tab listing recent coordinator runs with status badges, **Open run**, **Preview trace**, and **Refresh**.
-> *Path:* open a project → click **Observability** → **Traces** → `/projects/:projectId/observability/traces`.
-
-![Expanded transaction trace preview with span details](/screenshots/observability-trace-preview.png)
-
-> 📸 **Screenshot — `observability-trace-preview.png`**
-> *Shows:* the expanded **Preview trace** panel with the hierarchical transaction trace, span rows, and selected span details when AppInsights has data.
-> *Path:* `/projects/:projectId/observability/traces` → click **Preview trace**.
+On `/projects/:projectId/observability/traces`, **Open run** opens the orchestration;
+**Preview trace** expands the trace panel in place. Inspect the real loaded spans and
+query state before drawing conclusions. The two former screenshot embeds were placeholders,
+not evidence of a populated trace or selected-span inspector, and are omitted.
 
 ## Source
 
 | Concern | Source |
 | --- | --- |
-| Traces page route and preview action | `apps/web/src/pages/observability/ObservabilityTracesPage.tsx:69` |
-| Hierarchical trace panel | `apps/web/src/components/runs/TransactionTracePanel.tsx:294` |
-| Parent/child reconstruction and synthetic LLM leaf | `apps/web/src/components/runs/traceTree.ts:22` |
-| Tool call argument/output correlation by `callId` | `apps/web/src/components/runs/traceTree.ts:1` (`buildToolCallIndex`) |
+| Traces page preview action | `apps/web/src/pages/observability/ObservabilityTracesPage.tsx:76`, `:327–333` |
+| Hierarchical trace panel and recorded session identity | `apps/web/src/components/runs/TransactionTracePanel.tsx:511`, `:743`, `:1081–1084` |
+| Parent/child reconstruction and synthetic LLM leaf | `apps/web/src/components/runs/traceTree.ts:171`, `:271` |
+| Tool call argument/output correlation by `callId` | `apps/web/src/components/runs/traceTree.ts:102` (`buildToolCallIndex`) |
 | AIC cost aggregation per span/agent invocation/run | `apps/web/src/components/runs/traceTree.ts` (`aggregateNanoAiu`, `totalNanoAiu`) |
-| Trace DTO | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133` |
-| Trace endpoint | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:130` |
-| AppInsights trace query and span classification | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:522` |
+| Trace DTO, query error, and optional session ID | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133`, `:137`, `:175` |
+| Trace endpoint | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:161` |
+| AppInsights trace query and span classification | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs` |
 | Safe trace-dimension names | `packages/Agentweaver.Domain/TraceTelemetry.cs` |
-| Trace-query error response and Error-level logging | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:585`, `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:662` |
-| Persisted run event log (source of `tool.call`/`tool.result`/`tool.error`) | `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:503` |
+| Truthful query-error display | `apps/web/src/components/runs/TransactionTracePanel.tsx:1153–1167` |
+| Recovered failed tool versus terminal failure | `apps/web/src/components/runs/TransactionTracePanel.tsx:768–771`; `apps/web/src/__tests__/TransactionTraceDetail.test.tsx:233`, `:325`, `:355` |
+| Persisted run event log (source of `tool.call`/`tool.result`/`tool.error`) | `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs` |
 
 ## See also
 

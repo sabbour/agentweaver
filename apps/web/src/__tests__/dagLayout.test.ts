@@ -15,6 +15,8 @@ import {
   layoutWorkflowDefinitionNodes,
   NODE_H,
   NODE_W,
+  graphNodeSize,
+  buildSteppedConnectorRoute,
   routeGridEdges,
   WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_LONG_LINEAR_MIN_RANKS,
@@ -282,6 +284,199 @@ describe('layoutDagBalancedGrid', () => {
         expect(separated).toBe(true);
       }
     }
+  });
+});
+
+type Rect = { x0: number; y0: number; x1: number; y1: number };
+
+function topologyNode(id: string): Node {
+  return { id, position: { x: 0, y: 0 }, data: {}, type: 'workflow' };
+}
+
+function topologyEdge(source: string, target: string): Edge {
+  return { id: `${source}-${target}`, source, target, type: 'spine' };
+}
+
+function nodeRect(node: Node): Rect {
+  const size = graphNodeSize(node);
+  return {
+    x0: node.position.x,
+    y0: node.position.y,
+    x1: node.position.x + size.width,
+    y1: node.position.y + size.height,
+  };
+}
+
+function center(node: Node): { x: number; y: number } {
+  const rect = nodeRect(node);
+  return {
+    x: (rect.x0 + rect.x1) / 2,
+    y: (rect.y0 + rect.y1) / 2,
+  };
+}
+
+function handlePointForTest(node: Node, handle: string | null | undefined): { x: number; y: number } {
+  const rect = nodeRect(node);
+  const side = handle?.split('-').at(-1);
+  if (side === 'left') return { x: rect.x0, y: (rect.y0 + rect.y1) / 2 };
+  if (side === 'right') return { x: rect.x1, y: (rect.y0 + rect.y1) / 2 };
+  if (side === 'top') return { x: (rect.x0 + rect.x1) / 2, y: rect.y0 };
+  if (side === 'bottom') return { x: (rect.x0 + rect.x1) / 2, y: rect.y1 };
+  return center(node);
+}
+
+function routePointsForTest(edge: Edge, nodes: Map<string, Node>) {
+  const source = nodes.get(edge.source)!;
+  const target = nodes.get(edge.target)!;
+  const data = edge.data as {
+    flowDirection?: 'horizontal' | 'vertical';
+    gutterLaneOffset?: number;
+    routePoints?: Array<{ x: number; y: number }>;
+  } | undefined;
+  if (data?.routePoints && data.routePoints.length >= 2) return data.routePoints;
+  const from = handlePointForTest(source, edge.sourceHandle);
+  const to = handlePointForTest(target, edge.targetHandle);
+  return buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: data?.flowDirection,
+    laneOffset: data?.gutterLaneOffset,
+  }).points;
+}
+
+function segmentCrossesRect(from: { x: number; y: number }, to: { x: number; y: number }, rect: Rect): boolean {
+  if (Math.abs(from.x - to.x) < 0.5) {
+    const x = from.x;
+    if (x <= rect.x0 || x >= rect.x1) return false;
+    return Math.max(from.y, to.y) > rect.y0 && Math.min(from.y, to.y) < rect.y1;
+  }
+  if (Math.abs(from.y - to.y) < 0.5) {
+    const y = from.y;
+    if (y <= rect.y0 || y >= rect.y1) return false;
+    return Math.max(from.x, to.x) > rect.x0 && Math.min(from.x, to.x) < rect.x1;
+  }
+  return false;
+}
+
+describe('topology geometry invariants', () => {
+  const ids = [
+    'coordinator',
+    'outcome-plan',
+    'work-plan',
+    'define-spec',
+    'build-api',
+    'start-stack',
+    'rai',
+    'rubberduck-review',
+    'build-test',
+    'review-gate',
+    'merge',
+    'scribe',
+  ];
+  const edges: Edge[] = [
+    topologyEdge('coordinator', 'outcome-plan'),
+    topologyEdge('outcome-plan', 'work-plan'),
+    topologyEdge('work-plan', 'define-spec'),
+    topologyEdge('work-plan', 'build-api'),
+    topologyEdge('define-spec', 'start-stack'),
+    topologyEdge('build-api', 'rai'),
+    topologyEdge('start-stack', 'rai'),
+    topologyEdge('rai', 'rubberduck-review'),
+    topologyEdge('rubberduck-review', 'build-test'),
+    topologyEdge('build-test', 'review-gate'),
+    topologyEdge('review-gate', 'merge'),
+    topologyEdge('merge', 'scribe'),
+  ];
+  const hints: Record<string, NodeSizeHint> = Object.fromEntries(ids.map((id) => [
+    id,
+    {
+      width: id === 'define-spec' || id === 'build-api' || id === 'start-stack' ? 250 : 184,
+      height: id === 'define-spec' || id === 'build-api' || id === 'start-stack' ? 112 : 72,
+    },
+  ]));
+
+  const engines = [
+    {
+      name: 'balanced grid',
+      layout: () => layoutDagBalancedGrid(
+        ids.map(topologyNode),
+        edges,
+        { rankSep: 40, nodeSep: 20, minColumns: 1, maxColumns: 4 },
+        hints,
+      ),
+    },
+    {
+      name: 'legacy staircase',
+      layout: () => layoutDagStaircase(
+        ids.map(topologyNode),
+        edges,
+        { rankdir: 'LR', rankSep: 40, nodeSep: 20, targetAspect: 1.35, minStepRanks: 3 },
+        hints,
+      ),
+    },
+  ] as const;
+
+  it.each(engines)('$name: does not overlap any realistic coordinator topology cards', ({ layout }) => {
+    const nodes = layout();
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const left = nodeRect(nodes[i]);
+        const right = nodeRect(nodes[j]);
+        const separated =
+          left.x1 <= right.x0 ||
+          right.x1 <= left.x0 ||
+          left.y1 <= right.y0 ||
+          right.y1 <= left.y0;
+        expect(separated, `${nodes[i].id} overlaps ${nodes[j].id}`).toBe(true);
+      }
+    }
+  });
+
+  it.each(engines)('$name: routes realistic coordinator topology edges without crossing unrelated cards', ({ layout }) => {
+    const nodes = layout();
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const routed = routeGridEdges(edges, nodes);
+
+    for (const edge of routed) {
+      const points = routePointsForTest(edge, byId);
+      for (let index = 0; index < points.length - 1; index += 1) {
+        for (const node of nodes) {
+          if (node.id === edge.source || node.id === edge.target) continue;
+          expect(
+            segmentCrossesRect(points[index], points[index + 1], nodeRect(node)),
+            `${edge.id} crosses ${node.id}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it.each(engines)('$name: keeps topology edges from pointing leftward', ({ layout }) => {
+    const nodes = layout();
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const routed = routeGridEdges(edges, nodes);
+
+    for (const edge of routed) {
+      const sourceCenter = center(byId.get(edge.source)!);
+      const targetCenter = center(byId.get(edge.target)!);
+      const data = edge.data as { flowDirection?: 'horizontal' | 'vertical' } | undefined;
+      expect(
+        data?.flowDirection === 'horizontal' && targetCenter.x < sourceCenter.x,
+        `${edge.id} points leftward`,
+      ).toBe(false);
+    }
+  });
+
+  it.each(engines)('$name: drops invalid graph edges instead of rendering dangling stubs', ({ layout }) => {
+    const nodes = layout();
+    const routed = routeGridEdges([
+      ...edges,
+      topologyEdge('coordinator', 'missing-node'),
+    ], nodes);
+
+    expect(routed.some((edge) => edge.source === 'coordinator' && edge.target === 'missing-node')).toBe(false);
   });
 });
 
@@ -632,7 +827,7 @@ describe('layoutDagStaircase', () => {
     expect(new Set(returns.map((edge) => (edge.data as { returnLaneOffset: number }).returnLaneOffset)).size).toBe(1);
   });
 
-  it('marks exact source splits, shared tees, and merge trunks, not terminal arrowheads, plain elbows, or crossings', () => {
+  it('marks real shared junctions without duplicating separated lane stubs, terminal arrowheads, plain elbows, or crossings', () => {
     const nodes: Node[] = [
       { ...makeNode('split'), position: { x: 0, y: 0 }, initialWidth: 100, initialHeight: 100 },
       { ...makeNode('upper'), position: { x: 300, y: -80 }, initialWidth: 100, initialHeight: 100 },
@@ -657,10 +852,9 @@ describe('layoutDagStaircase', () => {
     const junctions = findConnectorJunctions(edges, nodes);
     const points = [...junctions.values()].flat();
 
-    expect(points).toHaveLength(3);
+    expect(points).toHaveLength(2);
     expect(points).toContainEqual({ x: 100, y: 50 });
-    expect(points).toContainEqual({ x: 183, y: 50 });
-    expect(junctions.get('merge-right')).toEqual([{ x: 267, y: 450 }]);
+    expect(points).not.toContainEqual({ x: 110, y: 50 });
     expect(points).not.toContainEqual({ x: 400, y: 450 });
     expect(junctions.has('cross-horizontal')).toBe(false);
     expect(junctions.has('cross-vertical')).toBe(false);

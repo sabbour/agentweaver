@@ -8,16 +8,25 @@ When all agents finish their work and the coordinator assembles the combined out
 
 ## The review pipeline
 
-![The review pipeline: All agents complete, Results assembled, RAI check, Human review, Agent revises, Merged, Agent revises, Declined, Scribe records session](../diagrams/guide-review-fig1.png)
+Children hand off assemble-ready output. The coordinator combines it and evaluates
+the selected workflow's collective gates. Built-in software workflows run **RAI →
+Build & Test → Human Review** before merge and Scribe. These gates do not run per child.
+Feedback returns to coordinator steering and any required reassembly, not straight
+from an agent revision to another human-review screen.
 
-<!-- Rendered from ../diagrams/src/guide-review-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+The single-run default below makes the review, revision, merge and PR-publication
+branches explicit. It is not the collective workflow definition: collective input,
+applicable Build & Test gates and coordinator-directed revision follow the
+[coordinator journey](../experience/coordinator-orchestration.md), rather than an invented per-child merge.
+
+<!-- guide-review-fig1 merged into canonical-default-workflow; collective behavior is explained separately above. -->
 
 ### Automatic RAI check
 
-Before your review step, a **Responsible AI (RAI)** check runs on the assembled output. If the check flags the output, the agent is automatically sent back for revision — this loopback is visible as a "Revise" edge in the run's workflow pipeline graph. The human review step is only presented when the RAI check passes.
+When selected by the workflow, **RAI** checks the assembled output. Gate outcomes
+determine whether execution can advance or requires coordinator-directed correction.
+The coordinator decides whether to steer an existing child, dispatch fresh work,
+proceed, or record an advisory no-op.
 
 ### Build & Test preview
 
@@ -80,8 +89,6 @@ The panel has two tabs:
 - **Changes** — lists every file the agents modified, with added/removed line counts. Click a file to open a diff viewer.
 - **Files** — full workspace browser showing all files in the agent's worktree.
 
-![Run diff view](/guide/images/run-diff.png)
-
 Take your time. There is no timeout on the review step.
 
 ::: tip Check the event timeline
@@ -106,7 +113,9 @@ If the output needs revision:
 2. Describe what the agent should change in the text field.
 3. Click **Send**.
 
-The feedback is delivered to the agent, which revises and re-runs. The run re-enters the agent execution phase and you'll review again when the revisions are ready.
+Feedback enters the coordinator's unified steering path. Its recorded decision
+determines the next work and any required reassembly; a submitted request is not
+proof that a child has already revised the output.
 
 ::: tip Be specific
 The more specific your feedback ("The error message in `auth.ts` line 42 should describe the specific validation failure, not a generic error"), the more targeted the revision.
@@ -146,3 +155,44 @@ The default workflow places an automatic RAI gate before the run reaches you, fo
 ::: tip Human review is always present
 The human approval gate before merge is mandatory. The platform enforces it regardless of how a workflow's other gates are configured.
 :::
+
+<details id="diagram-context-canonical-default-workflow">
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Generic default workflow</td></tr>
+<tr><td>subtitle</td><td>Built-in template • merge → PR publication → Scribe</td></tr>
+<tr><td>returns-heading</td><td>SOURCE / RETURN</td></tr>
+<tr><td>outcomes-heading</td><td>OUTCOMES</td></tr>
+<tr><td>footer</td><td>PR action can skip / fail and still reach Scribe. No-changes also reaches Scribe.</td></tr>
+<tr><td>Agent work</td><td>Agent</td></tr>
+<tr><td>Agent work</td><td>Agent task</td></tr>
+<tr><td>Agent work</td><td>agent</td></tr>
+<tr><td>RAI gate</td><td>Rai</td></tr>
+<tr><td>RAI gate</td><td>Verdict routing</td></tr>
+<tr><td>RAI gate</td><td>rai</td></tr>
+<tr><td>Human review</td><td>Review</td></tr>
+<tr><td>Human review</td><td>human-review</td></tr>
+<tr><td>Merge</td><td>Merge</td></tr>
+<tr><td>Merge</td><td>Merge outcome routing</td></tr>
+<tr><td>Merge</td><td>merge</td></tr>
+<tr><td>Publish / reuse PR</td><td>Publish / reuse PR</td></tr>
+<tr><td>Publish / reuse PR</td><td>Create / reuse; not git push</td></tr>
+<tr><td>Publish / reuse PR</td><td>action</td></tr>
+<tr><td>Scribe</td><td>Scribe</td></tr>
+<tr><td>Scribe</td><td>Record the run outcome</td></tr>
+<tr><td>Scribe</td><td>scribe</td></tr>
+<tr><td>Safety failed</td><td>Safety failed</td></tr>
+<tr><td>Safety failed</td><td>Workflow endpoint</td></tr>
+<tr><td>Declined</td><td>Declined</td></tr>
+<tr><td>Done</td><td>Done</td></tr>
+<tr><td>edge-02-label</td><td>revise</td></tr>
+<tr><td>edge-03-label</td><td>safety- failed</td></tr>
+<tr><td>edge-04-label</td><td>no- changes</td></tr>
+<tr><td>edge-05-label</td><td>review</td></tr>
+<tr><td>edge-06-label</td><td>approved</td></tr>
+<tr><td>edge-07-label</td><td>request-changes</td></tr>
+<tr><td>edge-08-label</td><td>declined</td></tr>
+<tr><td>edge-09-label</td><td>merged</td></tr>
+<tr><td>edge-10-label</td><td>blocked</td></tr>
+</tbody></table>
+</details>

@@ -9,11 +9,13 @@ import {
   synchronizePackageLockVersion,
   validateReleasePreparation,
   getUnexpectedIgnoredFiles,
+  ensureReleaseBranchHasMainAncestry,
 } from "./shared.mjs";
 
 const root = process.cwd();
 const expectedIndex = process.argv.indexOf("--expected");
 const expected = expectedIndex >= 0 ? process.argv[expectedIndex + 1] : undefined;
+const noAncestryMerge = process.argv.includes("--no-ancestry-merge");
 const changesetsCli = path.join(root, "node_modules", "@changesets", "cli", "bin.js");
 
 if (!expected || !/^\d+\.\d+\.\d+$/.test(expected)) {
@@ -40,6 +42,7 @@ if (releaseBranchVersion(branch) !== expected) {
 }
 
 assertVersionMirrors(root);
+ensureReleaseBranchHasMainAncestry(root, branch, { allowMerge: !noAncestryMerge });
 
 // Changesets owns package/changelog generation. Normalize the root npm lock
 // mirrors afterward because Changesets can leave them stale for a private package.

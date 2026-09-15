@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabbour.me/agentweaver/schemas/docs-diagram-audit.schema.json",
+  "title": "Agentweaver documentation diagram audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "scope", "ground_truth", "concepts", "diagrams", "integrity"],
+  "properties": {
+    "version": { "const": 1 },
+    "scope": { "const": "docs-only" },
+    "ground_truth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_sources", "current_docs", "legacy_diagrams_role"],
+      "properties": {
+        "repository_sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "current_docs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "legacy_diagrams_role": {
+          "const": "assessment-only"
+        }
+      }
+    },
+    "concepts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/concept" }
+    },
+    "diagrams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagram" }
+    },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "disposition": {
+      "enum": ["unreviewed", "retain", "reuse", "merge", "remove", "redesign"]
+    },
+    "status": {
+      "enum": ["queued", "in_progress", "blocked", "done"]
+    },
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "disposition",
+        "target",
+        "canonical_diagram",
+        "member_diagrams",
+        "owner_area",
+        "status",
+        "rationale",
+        "evidence",
+        "pitch_skill_completed",
+        "iterate_skill_completed",
+        "tombstone"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "disposition": { "$ref": "#/$defs/disposition" },
+        "target": { "type": ["string", "null"] },
+        "canonical_diagram": { "type": ["string", "null"] },
+        "member_diagrams": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "owner_area": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/status" },
+        "rationale": { "type": "string" },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "pitch_skill_completed": { "type": "boolean" },
+        "iterate_skill_completed": { "type": "boolean" },
+        "tombstone": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "disposition": { "enum": ["reuse", "merge"] } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": { "target": { "type": "string", "minLength": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "tombstone": { "const": true } },
+            "required": ["tombstone"]
+          },
+          "then": {
+            "properties": {
+              "disposition": { "enum": ["remove", "reuse", "merge"] }
+            }
+          }
+        }
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line", "alt", "target"],
+      "properties": {
+        "path": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "alt": { "type": "string" },
+        "target": { "type": "string" }
+      }
+    },
+    "diagram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "concept_id",
+        "source_paths",
+        "image_path",
+        "hash_path",
+        "references",
+        "owner_area",
+        "disposition",
+        "target",
+        "status",
+        "stable_output_path",
+        "path_change_reason",
+        "legacy_assessment",
+        "tombstone"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "concept_id": { "type": "string", "minLength": 1 },
+        "source_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "image_path": { "type": ["string", "null"] },
+        "hash_path": { "type": ["string", "null"] },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reference" }
+        },
+        "owner_area": { "type": "string", "minLength": 1 },
+        "disposition": { "$ref": "#/$defs/disposition" },
+        "target": { "type": ["string", "null"] },
+        "status": { "$ref": "#/$defs/status" },
+        "stable_output_path": { "type": "boolean" },
+        "path_change_reason": { "type": ["string", "null"] },
+        "legacy_assessment": { "type": "string" },
+        "tombstone": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "disposition": { "enum": ["reuse", "merge"] } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": { "target": { "type": "string", "minLength": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "stable_output_path": { "const": false } },
+            "required": ["stable_output_path"]
+          },
+          "then": {
+            "properties": { "path_change_reason": { "type": "string", "minLength": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "tombstone": { "const": true } },
+            "required": ["tombstone"]
+          },
+          "then": {
+            "properties": {
+              "disposition": { "enum": ["remove", "reuse", "merge"] }
+            }
+          }
+        }
+      ]
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orphan_sources",
+        "orphan_images",
+        "orphan_hashes",
+        "broken_references",
+        "ambiguous_sources"
+      ],
+      "properties": {
+        "orphan_sources": { "type": "array", "items": { "type": "string" } },
+        "orphan_images": { "type": "array", "items": { "type": "string" } },
+        "orphan_hashes": { "type": "array", "items": { "type": "string" } },
+        "broken_references": { "type": "array", "items": { "type": "string" } },
+        "ambiguous_sources": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

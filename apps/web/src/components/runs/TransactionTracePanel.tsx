@@ -22,6 +22,7 @@ import {
   WrenchRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
+import { useRunStream } from '../../api/sse';
 import type { PersistedRunEvent, RunTraceDto, RunTraceSpanDto } from '../../api/types';
 import { formatModelLabel } from '../../utils/agentIdentity';
 import { AgentIdentity } from '../AgentIdentity';
@@ -45,6 +46,36 @@ import type { ReactNode } from 'react';
 
 type TraceTab = 'timeline' | 'attributes' | 'events';
 type BadgeColor = 'subtle' | 'success' | 'warning' | 'danger';
+
+const initialTraceLoadRetryDelaysMs = [500, 1_500] as const;
+
+function shouldAutoRetryInitialTraceFailure(queryError: string | null | undefined): boolean {
+  return !!queryError && /temporarily unavailable|retry shortly|did not respond|dependency failure/i.test(queryError);
+}
+
+function waitForInitialTraceRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(true);
+    }, delayMs);
+    function cleanup() {
+      window.clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+    }
+    function onAbort() {
+      cleanup();
+      resolve(false);
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 const useStyles = makeStyles({
   panel: {
@@ -331,6 +362,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
+  commandDetails: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  commandDetailsSummary: {
+    cursor: 'pointer',
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
   attributes: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr)',
@@ -436,6 +477,19 @@ function formatDurationMs(durationMs: number): string {
   const seconds = ms / 1000;
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
   return `${(seconds / 60).toFixed(1)} min`;
+}
+
+function activeRunCommand(detail: ToolCallDetail | undefined): ToolCallDetail['activeExecution'] | undefined {
+  if (!detail?.activeExecution || detail.outcome !== 'pending') return undefined;
+  const toolName = detail.activeExecution.toolName?.toLowerCase();
+  return !toolName || toolName === 'run_command' ? detail.activeExecution : undefined;
+}
+
+function activeRunCommandLabel(detail: ToolCallDetail | undefined): string | null {
+  const active = activeRunCommand(detail);
+  if (!active) return null;
+  const elapsedMs = Math.max(0, (active.elapsedSeconds ?? 0) * 1000);
+  return `Running · ${formatDurationMs(elapsedMs)}`;
 }
 
 function formatNumber(value: number | null | undefined): string {
@@ -557,36 +611,55 @@ function SpanStatus({ span, styles }: { span: RunTraceSpanDto; styles: ReturnTyp
 function ToolValue({
   title,
   value,
-  emptyLabel,
+  captureState,
   error,
   styles,
 }: {
   title: string;
   value: unknown;
-  emptyLabel: string;
+  captureState?: string | null;
   error?: boolean;
   styles: ReturnType<typeof useStyles>;
 }) {
   const formatted = formatSafeToolValue(value, error ? maxToolErrorDetailLength : undefined);
+  const payloadName = title.toLowerCase();
+  const normalizedState = (captureState ?? '').toLowerCase();
+  const unavailableText = normalizedState === 'truncated'
+    ? `${title} was truncated because it was too large.`
+    : normalizedState === 'redacted'
+      ? `${title} was redacted by policy.`
+      : `${title} was not captured in telemetry.`;
   if (formatted.state === 'unavailable') {
     return (
       <div>
         <Text className={styles.sectionTitle}>{title}</Text>
-        <Text className={styles.toolValueState}>{formatted.text ?? emptyLabel}</Text>
+        <Text className={styles.toolValueState}>{formatted.text ?? unavailableText}</Text>
       </div>
     );
   }
+  const stateLabel = normalizedState === 'truncated' || formatted.state === 'truncated'
+    ? 'Truncated because too large'
+    : normalizedState === 'redacted' || formatted.state === 'redacted'
+      ? 'Redacted by policy'
+      : null;
   return (
     <div>
       <div className={styles.toolValueHeader}>
         <Text className={styles.sectionTitle}>{title}</Text>
-        {formatted.state === 'redacted' && <Badge appearance="tint" color="warning" size="small">Redacted</Badge>}
+        {stateLabel && <Badge appearance="tint" color="warning" size="small">{stateLabel}</Badge>}
       </div>
       {formatted.text
         ? <pre className={mergeClasses(styles.codeBlock, error && styles.codeBlockError)}>{formatted.text}</pre>
-        : <Text className={styles.toolValueState}>Recorded empty {title.toLowerCase()}</Text>}
+        : <Text className={styles.toolValueState}>Recorded empty {payloadName}</Text>}
     </div>
   );
+}
+
+function toolValueOrSpanAttribute(
+  eventValue: unknown,
+  attributeValue: string | null | undefined,
+): unknown {
+  return eventValue !== undefined ? eventValue : attributeValue ?? undefined;
 }
 
 function TraceRow({
@@ -596,6 +669,7 @@ function TraceRow({
   selectedKey,
   roleByAgent,
   timeline,
+  toolCallIndex,
   onToggle,
   onSelect,
   styles,
@@ -606,6 +680,7 @@ function TraceRow({
   selectedKey: string | null;
   roleByAgent?: Record<string, string>;
   timeline: TraceTimeline | null;
+  toolCallIndex: Map<string, ToolCallDetail>;
   onToggle: (key: string) => void;
   onSelect: (node: TraceNode) => void;
   styles: ReturnType<typeof useStyles>;
@@ -615,6 +690,9 @@ function TraceRow({
   const isSelected = selectedKey === node.key;
   const name = nodeName(node);
   const placement = timelinePlacement(node.span, timeline);
+  const liveCommandLabel = node.type === 'tool' && node.span.toolCallId
+    ? activeRunCommandLabel(toolCallIndex.get(node.span.toolCallId))
+    : null;
   const barStyle = {
     left: `${placement.left}%`,
     width: `${placement.width}%`,
@@ -666,7 +744,7 @@ function TraceRow({
               <Text className={styles.nameText} title={name}>{name}</Text>
             )}
             <Text className={styles.nameMeta}>
-              {node.span.success ? 'Success' : (node.span.resultCode?.trim() || 'Failed')}
+              {liveCommandLabel ?? (node.span.success ? 'Success' : (node.span.resultCode?.trim() || 'Failed'))}
               {node.synthetic ? ' · derived model call' : ''}
             </Text>
           </span>
@@ -681,7 +759,7 @@ function TraceRow({
             data-span-width={placement.width.toFixed(2)}
           />
         </span>
-        <Text className={styles.duration}>{formatDurationMs(node.span.durationMs)}</Text>
+        <Text className={styles.duration}>{liveCommandLabel ? liveCommandLabel.replace('Running · ', '~') : formatDurationMs(node.span.durationMs)}</Text>
       </button>
       {hasChildren && isExpanded && node.children.map((child) => (
         <TraceRow
@@ -692,6 +770,7 @@ function TraceRow({
           selectedKey={selectedKey}
           roleByAgent={roleByAgent}
           timeline={timeline}
+          toolCallIndex={toolCallIndex}
           onToggle={onToggle}
           onSelect={onSelect}
           styles={styles}
@@ -724,6 +803,14 @@ function TraceInspector({
 
   const { span, type } = node;
   const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
+  const toolName = span.toolName ?? span.name;
+  const toolInput = toolValueOrSpanAttribute(toolDetail?.arguments, span.attributes?.toolInput);
+  const toolOutput = toolValueOrSpanAttribute(toolDetail?.errorMessage ?? toolDetail?.content, span.attributes?.toolOutput);
+  const toolInputState = toolDetail?.arguments !== undefined ? undefined : span.attributes?.toolInputState;
+  const toolOutputState = (toolDetail?.errorMessage ?? toolDetail?.content) !== undefined
+    ? undefined
+    : span.attributes?.toolOutputState;
+  const liveCommand = activeRunCommand(toolDetail);
   const nodeCost = aggregateNanoAiu(node);
   const costLabel = type === 'invoke-agent' ? 'AIC (invocation)' : type === 'llm' ? 'AIC (model call)' : 'AIC';
   return (
@@ -772,6 +859,16 @@ function TraceInspector({
                   styles={styles}
                 />
               )}
+              {liveCommand && (
+                <DetailRow
+                  label="Live progress"
+                  value={`Running for ${formatDurationMs(Math.max(0, (liveCommand.elapsedSeconds ?? 0) * 1000))}`}
+                  styles={styles}
+                />
+              )}
+              {liveCommand?.startedAtUtc && (
+                <DetailRow label="Started" value={formatDateTime(liveCommand.startedAtUtc)} styles={styles} />
+              )}
             </>
           ) : (
             <>
@@ -783,21 +880,40 @@ function TraceInspector({
         </div>
       </div>
       {type === 'tool' && (
-        <>
-          <ToolValue
-            title="Input"
-            value={toolDetail?.arguments}
-            emptyLabel="No input"
-            styles={styles}
-          />
-          <ToolValue
-            title="Output"
-            value={toolDetail?.errorMessage ?? toolDetail?.content}
-            emptyLabel="No output"
-            error={toolDetail?.errorMessage !== undefined}
-            styles={styles}
-          />
-        </>
+        toolName === 'run_command' ? (
+          <details className={styles.commandDetails} data-testid="run-command-details">
+            <summary className={styles.commandDetailsSummary}>Command details</summary>
+            <ToolValue
+              title="Input"
+              value={toolInput}
+              captureState={toolInputState}
+              styles={styles}
+            />
+            <ToolValue
+              title="Output"
+              value={toolOutput}
+              captureState={toolOutputState}
+              error={toolDetail?.errorMessage !== undefined}
+              styles={styles}
+            />
+          </details>
+        ) : (
+          <>
+            <ToolValue
+              title="Input"
+              value={toolInput}
+              captureState={toolInputState}
+              styles={styles}
+            />
+            <ToolValue
+              title="Output"
+              value={toolOutput}
+              captureState={toolOutputState}
+              error={toolDetail?.errorMessage !== undefined}
+              styles={styles}
+            />
+          </>
+        )
       )}
     </aside>
   );
@@ -860,6 +976,8 @@ function TraceAttributes({ node, styles }: { node: TraceNode | null; styles: Ret
     ['tool.name', recorded(attributes?.toolName ?? span.toolName)],
     ['tool.call.id', recorded(attributes?.toolCallId ?? span.toolCallId)],
     ['tool.success', boolean(attributes?.toolSuccess ?? span.success)],
+    ['tool.input.state', recorded(attributes?.toolInputState)],
+    ['tool.output.state', recorded(attributes?.toolOutputState)],
     ['policy.decision', recorded(attributes?.policyDecision)],
     ['authorization.decision', recorded(attributes?.authorizationDecision)],
     ['policy.shell.enabled', boolean(attributes?.policyShellEnabled)],
@@ -916,7 +1034,7 @@ function getEventString(payload: Record<string, unknown>, key: string): string |
 }
 
 function eventContext(event: PersistedRunEvent): string {
-  const callId = getEventString(event.payload, 'callId');
+  const callId = getEventString(event.payload, 'callId') ?? getEventString(event.payload, 'toolCallId');
   const toolName = getEventString(event.payload, 'toolName');
   const parts = [`Sequence ${event.sequence}`];
   const timestamp = event.timestamp_utc
@@ -940,7 +1058,23 @@ function eventBadge(event: PersistedRunEvent): { label: string; color: BadgeColo
   if (/error|fail/i.test(eventType)) return { label: 'Error', color: 'danger' };
   if (/tool\.call/i.test(eventType)) return { label: 'Call', color: 'warning' };
   if (/tool\.result/i.test(eventType)) return { label: 'Result', color: 'success' };
+  if (/tool\.execution_pending/i.test(eventType)) return { label: 'Pending', color: 'warning' };
   return { label: 'Recorded', color: 'subtle' };
+}
+
+function mergeTraceEvents(seed: PersistedRunEvent[], live: PersistedRunEvent[]): PersistedRunEvent[] {
+  if (seed.length === 0) return live;
+  const merged = [...seed];
+  const seen = new Set(seed.filter((event) => event.sequence > 0).map((event) => event.sequence));
+  for (const event of live) {
+    if (event.sequence > 0) {
+      if (seen.has(event.sequence)) continue;
+      seen.add(event.sequence);
+    }
+    merged.push(event);
+  }
+  return merged.sort((left, right) =>
+    (left.sequence || Number.MAX_SAFE_INTEGER) - (right.sequence || Number.MAX_SAFE_INTEGER));
 }
 
 function eventPayload(event: PersistedRunEvent): string {
@@ -1006,57 +1140,87 @@ export function TransactionTracePanel({
 }) {
   const styles = useStyles();
   const [trace, setTrace] = useState<RunTraceDto>({ runId, spans: [] });
-  const [events, setEvents] = useState<PersistedRunEvent[]>([]);
+  const [seedEvents, setSeedEvents] = useState<PersistedRunEvent[]>([]);
   const [eventsAvailability, setEventsAvailability] = useState<'idle' | 'loading' | 'loaded' | 'unavailable'>('idle');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
   const [nextPageError, setNextPageError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
-  const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TraceTab>('timeline');
   const loadingMoreRef = useRef(false);
   const traceLoadGeneration = useRef(0);
+  const { events: liveEvents } = useRunStream(runId);
 
   useEffect(() => {
-    let cancelled = false;
+    const abortController = new AbortController();
+    const isCancelled = () => abortController.signal.aborted;
     traceLoadGeneration.current++;
     const loadTrace = async () => {
       setTraceError(null);
       setNextPageError(null);
       setLoading(true);
       setTrace({ runId, spans: [] });
-      setEvents([]);
-      setToolCallIndex(new Map());
+      setSeedEvents([]);
       setEventsAvailability('idle');
       setSelectedKey(null);
       setExpanded(new Set());
-      try {
-        const next = await apiClient.getRunTraces(runId);
-        if (!cancelled) {
+      for (let attempt = 0; attempt <= initialTraceLoadRetryDelaysMs.length; attempt++) {
+        try {
+          const next = await apiClient.getRunTraces(runId);
+          if (isCancelled()) return;
+          if (shouldAutoRetryInitialTraceFailure(next.queryError) && attempt < initialTraceLoadRetryDelaysMs.length) {
+            const shouldRetry = await waitForInitialTraceRetry(
+              initialTraceLoadRetryDelaysMs[attempt],
+              abortController.signal,
+            );
+            if (!shouldRetry) return;
+            continue;
+          }
           const nextTree = buildTraceTree(next.spans);
           setTrace(next);
           setExpanded(collectExpandableKeys(nextTree, new Set<string>()));
           setSelectedKey(nextTree[0]?.key ?? null);
-        }
-      } catch {
-        if (!cancelled) {
+          setLoading(false);
+          return;
+        } catch {
+          if (isCancelled()) return;
+          if (attempt < initialTraceLoadRetryDelaysMs.length) {
+            const shouldRetry = await waitForInitialTraceRetry(
+              initialTraceLoadRetryDelaysMs[attempt],
+              abortController.signal,
+            );
+            if (!shouldRetry) return;
+            continue;
+          }
           setTrace({ runId, spans: [] });
           setTraceError('The transaction trace could not be loaded. Retry to request it again.');
+          setLoading(false);
+          return;
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     };
     void loadTrace();
-    return () => { cancelled = true; };
+    return () => { abortController.abort(); };
   }, [runId, reloadNonce]);
+
+  const traceFailureMessage = trace.queryError ?? traceError;
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
   const selectedNode = findNode(tree, selectedKey);
   const shouldLoadEvents = activeTab === 'events' || selectedNode?.type === 'tool';
+  const liveTraceEvents = useMemo<PersistedRunEvent[]>(
+    () => liveEvents.map((event) => ({
+      sequence: event.sequence,
+      type: event.type,
+      payload: event.payload,
+    })),
+    [liveEvents],
+  );
+  const events = useMemo(() => mergeTraceEvents(seedEvents, liveTraceEvents), [seedEvents, liveTraceEvents]);
+  const toolCallIndex = useMemo(() => buildToolCallIndex(events), [events]);
 
   useEffect(() => {
     if (!shouldLoadEvents || eventsAvailability === 'loading' || eventsAvailability === 'loaded') return;
@@ -1067,8 +1231,7 @@ export function TransactionTracePanel({
     void apiClient.getRunEvents(runId)
       .then((nextEvents) => {
         if (cancelled) return;
-        setEvents(nextEvents);
-        setToolCallIndex(buildToolCallIndex(nextEvents));
+        setSeedEvents(nextEvents);
         setEventsAvailability('loaded');
       })
       .catch(() => {
@@ -1150,9 +1313,9 @@ export function TransactionTracePanel({
         <Body tone="muted">{subtitle}</Body>
       </header>
 
-      {!loading && (trace.queryError || traceError) && (
+      {!loading && traceFailureMessage && (
         <MessageBar intent="warning">
-          <MessageBarBody>{trace.queryError ?? traceError}</MessageBarBody>
+          <MessageBarBody>{traceFailureMessage}</MessageBarBody>
           <Button appearance="transparent" onClick={() => setReloadNonce((value) => value + 1)}>Retry</Button>
         </MessageBar>
       )}
@@ -1161,10 +1324,10 @@ export function TransactionTracePanel({
         <Spinner label="Loading transaction trace" />
       ) : tree.length === 0 ? (
         <EmptyState
-          title={trace.queryError
+          title={traceFailureMessage
             ? 'Trace spans are temporarily unavailable.'
             : 'No trace data available for this run yet.'}
-          description={trace.queryError
+          description={traceFailureMessage
             ? 'The telemetry source did not return a trace page. This does not mean the run produced no trace data; retry shortly.'
             : undefined}
         />
@@ -1275,6 +1438,7 @@ export function TransactionTracePanel({
                       selectedKey={selectedKey}
                       roleByAgent={roleByAgent}
                       timeline={timeline}
+                      toolCallIndex={toolCallIndex}
                       onToggle={toggle}
                       onSelect={(selected) => setSelectedKey(selected.key)}
                       styles={styles}

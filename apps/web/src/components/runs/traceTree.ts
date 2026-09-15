@@ -8,10 +8,18 @@ export interface ToolCallDetail {
   content?: unknown;
   errorMessage?: unknown;
   outcome: 'pending' | 'succeeded' | 'failed';
+  activeExecution?: {
+    runId?: string;
+    toolCallId: string;
+    toolName?: string;
+    startedAtUtc?: string;
+    deadlineUtc?: string;
+    elapsedSeconds?: number;
+  };
 }
 
 export interface SafeToolValue {
-  state: 'available' | 'redacted' | 'unavailable';
+  state: 'available' | 'redacted' | 'truncated' | 'unavailable';
   text?: string;
 }
 
@@ -43,6 +51,7 @@ function normalizeToolValue(value: unknown, depth: number): { value: unknown; re
   if (depth > maxDepth) return { value: '[Nested value omitted]', redacted: false };
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return { value, redacted: false };
   if (typeof value === 'string') {
+    if (value.includes(REDACTED)) return { value, redacted: true };
     if (value === REDACTED || hasSensitiveValue(value)) return { value: REDACTED, redacted: true };
     if (value.length > maxStringLength) return { value: '[Value omitted: exceeds display limit]', redacted: false };
     const parsed = parseStructuredText(value);
@@ -89,7 +98,10 @@ export function formatSafeToolValue(value: unknown, maximumLength = maxRenderedL
     ? normalized.value
     : JSON.stringify(normalized.value, null, 2);
   if (text.length > maximumLength)
-    return { state: 'unavailable', text: 'Recorded value exceeds the display limit.' };
+    return {
+      state: 'truncated',
+      text: `${text.slice(0, Math.max(0, maximumLength - 37))}\n… [truncated because too large]`,
+    };
   return { state: normalized.redacted ? 'redacted' : 'available', text };
 }
 
@@ -103,17 +115,33 @@ export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, Too
   const index = new Map<string, ToolCallDetail>();
   for (const event of events) {
     const payload = event.payload;
-    const callId = typeof payload?.['callId'] === 'string' ? payload['callId'] : undefined;
+    const callId = typeof payload?.['callId'] === 'string'
+      ? payload['callId']
+      : typeof payload?.['toolCallId'] === 'string'
+        ? payload['toolCallId']
+        : undefined;
     if (!callId) continue;
     const entry: ToolCallDetail = index.get(callId) ?? { outcome: 'pending' };
     if (event.type === 'tool.call') {
       if (Object.hasOwn(payload, 'arguments')) entry.arguments = payload['arguments'];
     } else if (event.type === 'tool.result') {
       entry.outcome = 'succeeded';
+      entry.activeExecution = undefined;
       if (Object.hasOwn(payload, 'content')) entry.content = payload['content'];
     } else if (event.type === 'tool.error') {
       entry.outcome = 'failed';
+      entry.activeExecution = undefined;
       if (Object.hasOwn(payload, 'errorMessage')) entry.errorMessage = payload['errorMessage'];
+    } else if (event.type === 'tool.execution_pending') {
+      if (entry.outcome !== 'pending') continue;
+      entry.activeExecution = {
+        runId: typeof payload['runId'] === 'string' ? payload['runId'] : undefined,
+        toolCallId: callId,
+        toolName: typeof payload['toolName'] === 'string' ? payload['toolName'] : undefined,
+        startedAtUtc: typeof payload['startedAtUtc'] === 'string' ? payload['startedAtUtc'] : undefined,
+        deadlineUtc: typeof payload['deadlineUtc'] === 'string' ? payload['deadlineUtc'] : undefined,
+        elapsedSeconds: typeof payload['elapsedSeconds'] === 'number' ? payload['elapsedSeconds'] : undefined,
+      };
     } else {
       continue;
     }

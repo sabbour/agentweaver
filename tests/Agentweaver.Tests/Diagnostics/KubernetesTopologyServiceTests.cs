@@ -30,6 +30,7 @@ public sealed class KubernetesTopologyServiceTests
             " requests=" + string.Join(",", handler.Requests.Select(r => r.Path)));
         handler.Requests.Should().OnlyContain(r =>
             r.Path.Contains("/pods") ||
+            r.Path.Contains("/sandboxes") ||
             r.Path.Contains("/sandboxclaims") ||
             r.Path.Contains("/sandboxwarmpools") ||
             r.Path.Contains("/sandboxtemplates"));
@@ -221,6 +222,97 @@ public sealed class KubernetesTopologyServiceTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_ProjectsBoundedOperationalDetailsForClusterTopologyPanel()
+    {
+        var handler = EmptyHandler(
+            "/api/v1/namespaces/agentweaver/pods",
+            "/apis/apps/v1/namespaces/agentweaver/deployments",
+            "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes",
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxtemplates");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods", List("PodList", """
+          {
+            "apiVersion":"v1","kind":"Pod",
+            "metadata":{
+              "name":"agentweaver-agent-host-abc12",
+              "namespace":"agentweaver",
+              "labels":{"app":"agentweaver-agent-host"}
+            },
+            "spec":{
+              "nodeName":"aks-katapool-1",
+              "runtimeClassName":"kata-vm-isolation",
+              "containers":[
+                {"name":"agentweaver-agent-host","image":"registry/agentweaver-agent-host@sha256:1234567890abcdef1234"},
+                {"name":"agentweaver-exec","image":"registry/agentweaver-agent-host@sha256:1234567890abcdef1234"}
+              ]
+            },
+            "status":{
+              "phase":"Running",
+              "containerStatuses":[
+                {"name":"agentweaver-agent-host","ready":true,"restartCount":0},
+                {"name":"agentweaver-exec","ready":true,"restartCount":2}
+              ],
+              "conditions":[{"type":"Ready","status":"True","lastTransitionTime":"2026-09-14T19:53:22Z"}]
+            }
+          }
+          """));
+        handler.OnGet("/apis/apps/v1/namespaces/agentweaver/deployments", List("DeploymentList", """
+          {
+            "apiVersion":"apps/v1","kind":"Deployment",
+            "metadata":{"name":"agentweaver-api","namespace":"agentweaver"},
+            "spec":{"replicas":2,"template":{"spec":{"containers":[{"name":"api","image":"registry/agentweaver-api:v0.32.2"}]}}},
+            "status":{"readyReplicas":1,"availableReplicas":1,"conditions":[{"type":"Progressing","status":"True","lastTransitionTime":"2026-09-14T18:00:00Z"}]}
+          }
+          """));
+        handler.OnGet("/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes", List("SandboxList", """
+          {
+            "apiVersion":"agents.x-k8s.io/v1beta1","kind":"Sandbox",
+            "metadata":{"name":"agentweaver-agent-host-abc12","namespace":"agentweaver","annotations":{"agents.x-k8s.io/pod-name":"agentweaver-agent-host-abc12"}},
+            "spec":{"podTemplate":{"spec":{"runtimeClassName":"kata-vm-isolation","containers":[{"name":"agentweaver-agent-host","image":"registry/agentweaver-agent-host:v1"},{"name":"agentweaver-exec","image":"registry/agentweaver-agent-host:v1"}]}}},
+            "status":{"nodeName":"aks-katapool-1","conditions":[{"type":"Ready","status":"True"}]}
+          }
+          """));
+        handler.OnGet("/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxtemplates", List("SandboxTemplateList", """
+          {
+            "apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxTemplate",
+            "metadata":{"name":"agentweaver-agent-host","namespace":"agentweaver"},
+            "spec":{
+              "envVarsInjectionPolicy":"Allowed",
+              "networkPolicyManagement":"Managed",
+              "volumeClaimTemplatesPolicy":"Disallowed",
+              "podTemplate":{"spec":{
+                "runtimeClassName":"kata-vm-isolation",
+                "containers":[{
+                  "name":"agentweaver-agent-host",
+                  "image":"registry/agentweaver-agent-host:v1",
+                  "resources":{"requests":{"cpu":"300m","memory":"1Gi"},"limits":{"cpu":"800m","memory":"2Gi"}},
+                  "volumeMounts":[{"name":"workspace","mountPath":"/workspace"}]
+                }]
+              }}
+            }
+          }
+          """));
+
+        var graph = await Service(handler).DiscoverAsync(["runtime", "workloads"]);
+
+        var pod = graph.Nodes.Single(node => node.Type == "Pod");
+        pod.Details.Should().Contain(new KeyValuePair<string, string>("ready", "2/2"));
+        pod.Details.Should().Contain(new KeyValuePair<string, string>("restartCount", "2"));
+        pod.Details.Should().Contain(new KeyValuePair<string, string>("runtimeClassName", "kata-vm-isolation"));
+        pod.Details.Should().Contain(new KeyValuePair<string, string>("containers", "agentweaver-agent-host, agentweaver-exec"));
+
+        var deployment = graph.Nodes.Single(node => node.Type == "Deployment");
+        deployment.Details.Should().Contain(new KeyValuePair<string, string>("imageTags", "v0.32.2"));
+        deployment.Details.Should().ContainKey("lastRolloutUtc");
+
+        var sandbox = graph.Nodes.Single(node => node.Type == "Sandbox");
+        sandbox.Details.Should().Contain(new KeyValuePair<string, string>("isolationBackend", "Kata VM isolation"));
+
+        var template = graph.Nodes.Single(node => node.Type == "SandboxTemplate");
+        template.Details.Should().Contain(new KeyValuePair<string, string>("policy", "env injection Allowed; network Managed; volume claims Disallowed"));
+        template.Details.Should().ContainKey("resourceRequests");
+    }
+
+    [Fact]
     public async Task DiscoverAsync_BoundsLargeListsAndMarksTruncation()
     {
         var handler = EmptyHandler("/api/v1/namespaces/agentweaver/pods");
@@ -290,6 +382,7 @@ public sealed class KubernetesTopologyServiceTests
             "/apis/autoscaling.k8s.io/v1/namespaces/agentweaver/verticalpodautoscalers",
             "/apis/keda.sh/v1alpha1/namespaces/agentweaver/scaledobjects",
             "/apis/policy/v1/namespaces/agentweaver/poddisruptionbudgets",
+            "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes",
             "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
             "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
             "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxtemplates",

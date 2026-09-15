@@ -5,8 +5,22 @@ namespace Agentweaver.AgentTools;
 /// </summary>
 public sealed record SandboxToolOptions(
     bool ShellEnabled,
-    int DefaultTimeoutMs = 300_000)
+    int DefaultTimeoutMs = SandboxToolOptions.DefaultRunCommandTimeoutMs)
 {
+    public const int DefaultRunCommandTimeoutMs = 30 * 60 * 1_000;
+    public const string DefaultRunCommandTimeoutSecondsEnvironmentVariable =
+        "AGENTWEAVER_RUN_COMMAND_DEFAULT_TIMEOUT_SECONDS";
+
+    public static int ResolveDefaultRunCommandTimeoutMs()
+    {
+        var raw = Environment.GetEnvironmentVariable(DefaultRunCommandTimeoutSecondsEnvironmentVariable);
+        if (!long.TryParse(raw, out var seconds) || seconds <= 0)
+            return DefaultRunCommandTimeoutMs;
+
+        var milliseconds = seconds * 1_000;
+        return milliseconds > int.MaxValue ? int.MaxValue : (int)milliseconds;
+    }
+
     /// <summary>
     /// Short-lived credential for the run's selected repository. The shell tool gives it only to a
     /// simple <c>git</c> or <c>gh</c> child process. It is never written to disk or an event.
@@ -27,6 +41,21 @@ public sealed record SandboxToolOptions(
 
     /// <summary>When true, ALL shell commands require human approval (not just destructive ones).</summary>
     public bool RequireApprovalForAllShell { get; init; } = false;
+
+    /// <summary>
+    /// Marks a run created with <c>auto-approve-tools</c> or <c>autopilot</c> — i.e. one with no
+    /// operator watching for approval prompts (#1314).
+    /// <para>
+    /// This does NOT relax the shell HITL gate: destructive shell is deliberately excluded from
+    /// run-level auto-approval by <c>ToolApprovalPolicySemantics.IsRunAutoApprovalEligible</c>, and
+    /// that decision stands. It only changes the guidance returned to the agent when approval is
+    /// required — an unattended run is told to rewrite the command into a non-destructive
+    /// equivalent instead of being told to retry and wait for an approval that will never arrive,
+    /// which otherwise leaves the run spinning on the same blocked command while reporting
+    /// <c>InProgress</c>.
+    /// </para>
+    /// </summary>
+    public bool UnattendedRun { get; init; } = false;
 
     /// <summary>
     /// Allow outbound network inside the sandbox. Default: false.

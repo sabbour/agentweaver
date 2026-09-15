@@ -23,7 +23,10 @@ Agentweaver ships five predefined Blueprints. Pick the one that most closely mat
 
 ### Software Development
 
-A team for software engineering tasks: coding, testing, debugging, review, and architecture. Roles cover engineering, quality assurance, and technical direction. The default workflow is `software-delivery`. The catalog also includes `bug-fix` and `infra-ops`.
+A team for software engineering tasks: coding, testing, debugging, review, and architecture.
+Roles cover engineering, quality assurance, and technical direction. The blueprint allows
+`software-delivery` (default) and `bug-fix`. `infra-ops` is in the global workflow catalog,
+not this blueprint's allowed set.
 
 **Best for:** Software engineers and tech leads shipping code changes, features, and refactors.
 
@@ -84,22 +87,22 @@ Every project team includes a built-in **Coordinator** agent. The Coordinator is
 The Coordinator:
 
 - **Scopes** your goal using team memories and decisions, then drafts an OutcomeSpec
-- **Confirms** the spec with you before dispatching any work
+- **Confirms** the spec in define-outcome mode; direct mode skips drafting and explicit autopilot can confirm unattended
 - **Plans** — decomposes the confirmed spec into a WorkPlan with a dependency graph
 - **Dispatches** — assigns subtasks to roster agents; a run's model pin (explicit `modelId` or the project default) selects the model for every subtask, otherwise each uses its role's default model; runs independent subtasks in parallel
 - **Steers** — monitors each agent via a read-only timeline; relays your direction (stop, redirect, amend)
 - **Assembles** — collects each agent's output into one combined result
-- **Routes review feedback** — if RAI flags an issue or you request changes, the Coordinator dispatches fixes
+- **Routes review feedback** — evaluates whether to steer existing children, dispatch fresh work, proceed, or record an advisory no-op
 
-::: tip The Coordinator always confirms before dispatching
-No agent work starts until you confirm the OutcomeSpec. If the spec doesn't match your intent, give feedback — the Coordinator revises as many times as needed.
+::: tip Review the intended launch mode
+With define-outcome and autopilot off, confirm the OutcomeSpec before dispatch.
+If it does not match your intent, give feedback. Direct and autopilot launches have
+different confirmation behavior; human merge approval remains separate.
 :::
 
 ## The Team page
 
 Navigate to **Team** from a project to see the squad roster.
-
-![Team page](/guide/images/team-page.png)
 
 Filter tabs: **All**, **Active**, **Retired**. Retired members were cast in a previous configuration.
 

@@ -17,6 +17,9 @@ import {
 } from "../changesets/shared.mjs";
 
 export const RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
+export const IMAGE_WORKFLOW_FILE = "publish-images.yml";
+export const DEFAULT_IMAGE_WORKFLOW_TIMEOUT_MS = 120 * 60 * 1000;
+export const DEFAULT_IMAGE_WORKFLOW_POLL_INTERVAL_MS = 15 * 1000;
 
 export function isReleaseTag(tag) {
   return RELEASE_TAG_PATTERN.test((tag ?? "").trim());
@@ -24,6 +27,7 @@ export function isReleaseTag(tag) {
 
 export class DirtyWorkingTreeError extends Error {}
 export class ReleaseResumeError extends Error {}
+export class ImagePublishError extends Error {}
 
 export function parseArgs(argv = []) {
   let resumeTag;
@@ -56,9 +60,9 @@ Usage:
   node scripts/azure/cli.mjs publish-release [--dry-run]
   node scripts/azure/cli.mjs publish-release --resume vX.Y.Z [--dry-run]
 
-Validates the prepared VERSION/package.json/package-lock.json/CHANGELOG.md
-release on the exact origin/main SHA, then creates the annotated tag and
-GitHub Release. It never bumps, writes, builds, or deploys.
+Validates the prepared VERSION/package.json/package-lock.json/CHANGELOG.md.
+Then it creates the annotated tag, waits for GHCR images, and creates the
+GitHub Release. It never bumps, writes version files, builds locally, or deploys.
 `;
 
 export async function isWorkingTreeClean({ cwd, capture }) {
@@ -125,6 +129,104 @@ export async function releaseExists(tag, { cwd, capture, repo = "sabbour/agentwe
   return result.code === 0;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function selectImageWorkflowRun(runs = [], { tag, commit } = {}) {
+  const targetCommit = (commit ?? "").trim();
+  const candidates = runs.filter((run) => (
+    run?.event === "push"
+    && run?.headSha === targetCommit
+    && run?.headBranch === tag
+  ));
+  candidates.sort((left, right) => String(right.createdAt ?? "").localeCompare(String(left.createdAt ?? "")));
+  return candidates[0] ?? null;
+}
+
+export async function findImageWorkflowRun({
+  tag,
+  commit,
+  cwd,
+  exec,
+  repo = "sabbour/agentweaver",
+} = {}) {
+  const result = await exec.capture(
+    "gh",
+    [
+      "run",
+      "list",
+      "--repo",
+      repo,
+      "--workflow",
+      IMAGE_WORKFLOW_FILE,
+      "--json",
+      "databaseId,headBranch,headSha,status,conclusion,event,createdAt,url",
+      "--limit",
+      "50",
+    ],
+    { cwd, allowFailure: true, json: true },
+  );
+  if (result.code !== 0 || !Array.isArray(result.json)) {
+    throw new ImagePublishError(`Could not read ${IMAGE_WORKFLOW_FILE} runs for ${tag}.`);
+  }
+  return selectImageWorkflowRun(result.json, { tag, commit });
+}
+
+export async function waitForImageWorkflow({
+  tag,
+  commit,
+  cwd,
+  exec,
+  log = logDefault,
+  repo = "sabbour/agentweaver",
+  timeoutMs = DEFAULT_IMAGE_WORKFLOW_TIMEOUT_MS,
+  pollIntervalMs = DEFAULT_IMAGE_WORKFLOW_POLL_INTERVAL_MS,
+  sleep: sleepImpl = sleep,
+} = {}) {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let lastLoggedAt = 0;
+
+  while (Date.now() < deadline) {
+    const run = await findImageWorkflowRun({ tag, commit, cwd, exec, repo });
+    if (!run) {
+      if (Date.now() - lastLoggedAt >= pollIntervalMs) {
+        log.info(`Waiting for ${IMAGE_WORKFLOW_FILE} to start for ${tag}.`);
+        lastLoggedAt = Date.now();
+      }
+      await sleepImpl(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+      continue;
+    }
+
+    if (run.status === "completed") {
+      if (run.conclusion === "success") {
+        log.info(`${IMAGE_WORKFLOW_FILE} succeeded for ${tag}: ${run.url ?? run.databaseId}`);
+        return run;
+      }
+      throw new ImagePublishError(`${IMAGE_WORKFLOW_FILE} failed for ${tag}: ${run.conclusion ?? "unknown"}.`);
+    }
+
+    log.info(`Waiting for ${IMAGE_WORKFLOW_FILE} run ${run.databaseId} for ${tag}.`);
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const watched = await exec.capture(
+      "gh",
+      ["run", "watch", String(run.databaseId), "--repo", repo, "--exit-status"],
+      { cwd, allowFailure: true, timeoutMs: remainingMs },
+    );
+    if (watched.code === 0) {
+      log.info(`${IMAGE_WORKFLOW_FILE} succeeded for ${tag}: ${run.url ?? run.databaseId}`);
+      return { ...run, status: "completed", conclusion: "success" };
+    }
+    if (watched.timedOut) {
+      break;
+    }
+    throw new ImagePublishError(`${IMAGE_WORKFLOW_FILE} failed for ${tag}: run ${run.databaseId}.`);
+  }
+
+  throw new ImagePublishError(`Timed out after ${timeoutMs}ms waiting for ${IMAGE_WORKFLOW_FILE} for ${tag}.`);
+}
+
 export async function run(opts = {}) {
   const {
     argv = [],
@@ -132,6 +234,8 @@ export async function run(opts = {}) {
     exec = execDefault,
     log = logDefault,
     readFile = fs.readFileSync,
+    repo = "sabbour/agentweaver",
+    waitForImages = waitForImageWorkflow,
   } = opts;
   const { resumeTag, dryRun: dryRunFlag, help } = parseArgs(argv);
   const dryRun = dryRunFlag || process.env.DRY_RUN === "true";
@@ -203,8 +307,17 @@ export async function run(opts = {}) {
     const githubReleaseExists = tagAlreadyExists && await releaseExists(tag, {
       cwd: repoRoot,
       capture: exec.capture,
+      repo,
     });
     if (!githubReleaseExists) {
+      await runOrLog(`Wait for ${IMAGE_WORKFLOW_FILE} to publish ${tag} images`, () => waitForImages({
+        tag,
+        commit: mainSha,
+        cwd: repoRoot,
+        exec,
+        log,
+        repo,
+      }));
       await runOrLog(`Create GitHub Release ${tag}`, () => {
         return exec.run("gh", ["release", "create", tag, "--title", tag, "--notes", notes], { cwd: repoRoot });
       });

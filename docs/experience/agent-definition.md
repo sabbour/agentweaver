@@ -1,8 +1,9 @@
 # Agent definition
 
-Every project you create in Agentweaver comes with a **ready-to-use GitHub Copilot agent** that knows how to
-drive the platform. You don't write it, register it, or keep it up to date — Agentweaver generates it from
-the live MCP tool set and drops it into your project automatically.
+When creating a project, Agentweaver attempts to add a **GitHub Copilot agent definition**
+that knows how to drive the platform. The shipped definition is generated from the MCP
+tool source. Materialization is best-effort: a filesystem failure does not fail project
+creation, and an existing definition is left unchanged.
 
 This page covers the experience: where the file shows up, how to use it with GitHub Copilot, and why it
 won't fight your edits. For the generation mechanics see the
@@ -11,7 +12,7 @@ won't fight your edits. For the generation mechanics see the
 
 ## What you get when you create a project
 
-When you create a project — blank or cloned from GitHub — Agentweaver writes a single file into it:
+For a blank or GitHub-cloned project, the intended file is:
 
 ```
 .github/agents/agentweaver.agent.md
@@ -22,8 +23,9 @@ blueprints, runs, the Coordinator, backlog, memory), operating principles, a **T
 `agentweaver-*` MCP tool grouped by category, and step-by-step playbooks (submit and supervise a run, stand
 up a project and team, work the backlog, curate memory and decisions).
 
-It is written **once, only if the file is not already there.** A blank project always gets it; a cloned repo
-gets it unless that repo already ships its own `.github/agents/agentweaver.agent.md`.
+It is written **only if the file is not already there** and the workspace is writable.
+Check that it exists before selecting the agent. The non-overwrite and non-fatal failure
+contracts are implemented in `apps/Agentweaver.Api/Projects/AgentDefinitionTemplate.cs:50`.
 
 ## Using it with GitHub Copilot
 
@@ -51,21 +53,22 @@ current definition from the repo's own `.github/agents/agentweaver.agent.md`).
 
 ## How the shipped definition stays correct
 
-You never have to worry about the agent's Tool map going stale against the real tools:
+The shipped template has a generated Tool map:
 
-- The Tool map is **generated** from the MCP server source, so it always lists the tools that actually exist.
+- The Tool map is **generated** from the MCP server source for that release.
 - The copy embedded in the app and the copy in the repo are kept **byte-identical**, and CI fails the build
   if either drifts.
-- New projects always get the **current** definition.
+- New materializations use that release's definition; existing project copies are not upgraded.
 
-So the agent a fresh project ships with is always in step with the platform it drives. For the full list of
-tools it can call, see the [MCP tool index](../reference/mcp-tools.md).
+An older project copy can therefore lag a newer server. For the generated tool list, see the
+[MCP tool index](../reference/mcp-tools.md); the connected server's `tools/list` describes
+the tools actually available to the client.
 
 ## What to expect
 
-- **It's automatic.** No registration step — create a project and the agent is there.
-- **It's per-project.** Each project gets its own copy under that project's `.github/agents/`, so it travels
-  with the repo and is committed alongside your code.
+- **It's best-effort.** No registration step is needed, but check the file after creation.
+- **It's per-project.** A materialized copy lives under that project's `.github/agents/`
+  and can be committed alongside your code.
 - **It's non-destructive.** Existing agent files are never overwritten.
 - **It's not a web-UI feature.** There's no button or dialog to manage it — it's a file that appears in your
   project. Manage it like any other file in your repo.

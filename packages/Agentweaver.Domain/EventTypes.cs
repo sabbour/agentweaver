@@ -75,8 +75,8 @@ public static class EventTypes
     /// <summary>
     /// Heartbeat emitted while an approved shell command remains active. It keeps the child event
     /// stream moving so the coordinator's stall window measures real inactivity rather than a
-    /// healthy silent command. Payload: { toolCallId, commandHash, startedAtUtc, deadlineUtc,
-    /// elapsedSeconds }.
+    /// healthy silent command. Payload is output-free and command-free:
+    /// { runId, toolCallId, toolName, startedAtUtc, deadlineUtc, elapsedSeconds }.
     /// </summary>
     public const string ToolExecutionPending = "tool.execution_pending";
     /// <summary>
@@ -526,6 +526,21 @@ public static class EventTypes
     /// rejected upstream by governance and never reach the gate). Payload: { requestId, toolName, url? }.
     /// </summary>
     public const string ToolAutoApproved = "tool.auto_approved";
+
+    /// <summary>
+    /// Emitted when a shell command matched a destructive pattern (or the sandbox policy requires
+    /// approval for all shell) and needs an operator decision before it can execute. Approve via
+    /// <c>POST /api/runs/{runId}/shell-approvals</c>. Payload:
+    /// { requestId, commandLength, commandHash, command, unattended, message }.
+    /// <para>
+    /// <c>unattended</c> marks a run created with <c>auto-approve-tools</c>/<c>autopilot</c>, which
+    /// has no operator watching. Destructive shell is deliberately NOT eligible for run-level
+    /// auto-approval (see <c>ToolApprovalPolicySemantics.IsRunAutoApprovalEligible</c>), so such a
+    /// run is told to rewrite the command rather than to retry and wait for an approval that will
+    /// never arrive (#1314).
+    /// </para>
+    /// </summary>
+    public const string ShellApprovalRequired = "shell.approval_required";
     public const string RunApprovalPolicySelected = "run.approval_policy_selected";
 
     /// <summary>

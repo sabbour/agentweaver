@@ -17,15 +17,17 @@ Where the [guide](../guide/) tells you the steps to accomplish a task and the [d
 
 | Journey | What it covers |
 |---|---|
-| [Onboarding & authentication](./onboarding-auth.md) | First-run sign-in, GitHub sessions, connecting an MCP client, and the OAuth/bearer flow. |
+| [Onboarding & authentication](./onboarding-auth.md) | Entra sign-in, separate GitHub capabilities, model readiness, and MCP broker consent. |
 | [Projects](./projects.md) | The project gallery, creating and linking projects, the project dashboard, and settings. |
 | [Runs, board & watch](./runs-board-watch.md) | Submitting work, the board buckets, and watching a run unfold live. |
-| [Coordinator & orchestration](./coordinator-orchestration.md) | Stating a goal, the confirmation gate, live topology, child runs, and steering. |
+| [Coordinator & orchestration](./coordinator-orchestration.md) | Define Outcome versus Direct start, live topology, child runs, and steering. |
 | [Review, workspace & merge](./review-workspace-merge.md) | Human review, artifact diffs, browsing the workspace, and local merge. |
 | [Team, casting & memory](./team-casting-memory.md) | The agent roster, the casting wizard, decisions, and durable memory. |
-| [Workflows & backlog](./workflows-backlog.md) | The workflow library, per-run workflow graphs, the backlog board, and pickup. |
+| [Workflows & backlog](./workflows-backlog.md) | Workflow definitions, the backlog board, and unattended pickup. |
 | [Operations](./operations.md) | Settings, diagnostics, heartbeat, flow, and sandbox policy. |
-| [MCP client](./mcp-client.md) | An end-to-end MCP session and the full grouped tool catalog. |
+| [MCP client](./mcp-client.md) | An end-to-end assistant journey, representative tools, and generated catalog discovery. |
+| [Assistant sessions](./assistant-sessions.md) | Personal conversations, durable history, and renewable MCP broker access. |
+| [Project skills](./project-skills.md) | Acquiring trusted instructions and assigning them to team members. |
 
 ## How to read this section
 

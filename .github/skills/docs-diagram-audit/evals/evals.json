@@ -1,0 +1,48 @@
+{
+  "skill_name": "docs-diagram-audit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Audit every architecture and process diagram in the Agentweaver docs, consolidate duplicates, and prepare the retained concepts for a complete visual revamp.",
+      "expected_output": "A GPT-6 Astra-orchestrated docs-only audit with complete inventory, concept dispositions, canonical consolidation, downstream pitch/iterate work, integrity checks, JSON report, and human summary.",
+      "files": [],
+      "expectations": [
+        "Repository implementation and current written docs are treated as ground truth.",
+        "Existing diagrams are treated as legacy assessment inputs only.",
+        "Every diagram source, PNG, hash, and Markdown reference is inventoried.",
+        "Every concept is classified retain, reuse, merge, remove, or redesign.",
+        "Every surviving concept invokes docs-diagram-pitch and docs-diagram-iterate using GPT-6 Astra.",
+        "Stable paths are preserved unless consolidation records an intentional change.",
+        "Final validation rejects orphaned artifacts and broken links.",
+        "Both machine-readable and human-readable reports are emitted."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "This docs rewrite removes an architecture section and adds a new process description. Check whether the repository's diagrams need to change.",
+      "expected_output": "The audit skill is considered because the docs change can invalidate, remove, or introduce architectural/process visuals.",
+      "files": [],
+      "expectations": [
+        "The trigger covers documentation changes with indirect diagram impact."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Fix one overlapping arrow in docs/diagrams/src/coordinator.drawio.",
+      "expected_output": "The repo-wide audit skill should defer to docs-diagram-iterate for a single routine diagram correction.",
+      "files": [],
+      "expectations": [
+        "The trigger description excludes one-diagram routine fixes."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Change the coordinator topology behavior in the web application.",
+      "expected_output": "The docs-diagram-audit skill should not trigger because shipped product behavior is outside its docs-only scope.",
+      "files": [],
+      "expectations": [
+        "The skill explicitly excludes product surface and runtime changes."
+      ]
+    }
+  ]
+}

@@ -22,6 +22,8 @@ import {
   buildSteppedConnectorRoute,
   buildBridgedOrthogonalPath,
   COMPACT_CARD_H,
+  connectorDirectionMarkers,
+  connectorRouteLabelPoint,
   findConnectorBridges,
   findConnectorJunctions,
   findLoopbackContinuationJoin,
@@ -1372,19 +1374,26 @@ export function SpineEdge({
   const spineData = data as {
     flowDirection?: 'horizontal' | 'vertical';
     gutterLaneOffset?: number;
+    routePoints?: Array<{ x: number; y: number }>;
   } | undefined;
-  const route = buildSteppedConnectorRoute({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    orientation: spineData?.flowDirection,
-    laneOffset: spineData?.gutterLaneOffset,
-  });
+  const routedLabelPoint = spineData?.routePoints && spineData.routePoints.length >= 2
+    ? connectorRouteLabelPoint(spineData.routePoints)
+    : undefined;
+  const route = spineData?.routePoints && spineData.routePoints.length >= 2 && routedLabelPoint
+    ? { points: spineData.routePoints, path: '', labelX: routedLabelPoint.x, labelY: routedLabelPoint.y }
+    : buildSteppedConnectorRoute({
+      sourceX,
+      sourceY,
+      targetX,
+      targetY,
+      orientation: spineData?.flowDirection,
+      laneOffset: spineData?.gutterLaneOffset,
+    });
   const markerIdValue = markerId('spine-arrow', id);
   const bridges = findConnectorBridges(allEdges, allNodes).get(id) ?? [];
   const junctions = findConnectorJunctions(allEdges, allNodes).get(id) ?? [];
   const edgePath = buildBridgedOrthogonalPath(route.points, bridges);
+  const directionMarkers = connectorDirectionMarkers(route.points);
 
   return (
     <>
@@ -1404,6 +1413,16 @@ export function SpineEdge({
         strokeLinejoin="round"
         markerEnd={`url(#${markerIdValue})`}
       />
+      {directionMarkers.map((marker, index) => (
+        <path
+          key={`${marker.x}-${marker.y}-${index}`}
+          data-testid="workflow-spine-direction-marker"
+          d="M -4 -3 L 3 0 L -4 3 Z"
+          fill={SPINE_STROKE}
+          transform={`translate(${marker.x} ${marker.y}) rotate(${marker.angle})`}
+          style={{ pointerEvents: 'none' }}
+        />
+      ))}
       {junctions.map((junction, index) => (
         <circle
           key={`${junction.x}-${junction.y}-${index}`}

@@ -124,6 +124,21 @@ describe('buildToolCallIndex', () => {
       expect(value.text).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
       expect(value.text).not.toContain('secret-value');
     });
+
+    it('marks already-redacted strings while preserving safe surrounding context', () => {
+      expect(formatSafeToolValue('provider returned ***REDACTED***')).toEqual({
+        state: 'redacted',
+        text: 'provider returned ***REDACTED***',
+      });
+    });
+
+    it('truncates oversize values with an explicit marker', () => {
+      const value = formatSafeToolValue(`prefix-${'x'.repeat(200)}`, 80);
+
+      expect(value.state).toBe('truncated');
+      expect(value.text).toContain('prefix-');
+      expect(value.text).toContain('truncated because too large');
+    });
   });
 
   it('pairs tool.call arguments with a matching tool.error message by callId', () => {
@@ -136,6 +151,44 @@ describe('buildToolCallIndex', () => {
     expect(detail?.arguments).toEqual({ port: 9090 });
     expect(detail?.errorMessage).toBe('Tool execution failed');
     expect(detail?.content).toBeUndefined();
+  });
+
+  it('tracks an output-free run_command heartbeat until a terminal event clears it', () => {
+    const active = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        deadlineUtc: '2026-09-14T09:10:00.000Z',
+        elapsedSeconds: 12,
+      }),
+    ]);
+
+    expect(active.get('c3')?.activeExecution).toEqual({
+      runId: 'run-1',
+      toolCallId: 'c3',
+      toolName: 'run_command',
+      startedAtUtc: '2026-09-14T09:00:00.000Z',
+      deadlineUtc: '2026-09-14T09:10:00.000Z',
+      elapsedSeconds: 12,
+    });
+
+    const settled = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        elapsedSeconds: 12,
+      }),
+      event('tool.result', { callId: 'c3', content: 'ok' }),
+    ]);
+
+    expect(settled.get('c3')?.outcome).toBe('succeeded');
+    expect(settled.get('c3')?.activeExecution).toBeUndefined();
   });
 
   it('ignores events without a callId and ignores unrelated event types', () => {

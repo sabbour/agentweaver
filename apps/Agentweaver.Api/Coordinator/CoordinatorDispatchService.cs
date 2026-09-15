@@ -513,12 +513,54 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, result.SubtaskId, result.ChildRunId, seq, ct);
+                    inFlight[result.SubtaskId] = ObserveChildAsync(
+                        context.CoordinatorRunId,
+                        workPlanId.Value,
+                        result.SubtaskId,
+                        result.ChildRunId,
+                        seq,
+                        ct,
+                        fromSequence: result.TerminalSequence ?? 0);
                     continue;
                 }
             }
             // A redirect directive targeting this child can also apply when the child was force-cancelled
-            // (by the steering service or the proactive reconciler sweep) to unblock a stuck child.
+            // by the steering service to unblock a stuck child. This cancellation is a steering control
+            // signal, not child failure: never let it fall through to ApplyChildResultAsync, because that
+            // would mark the subtask failed and cascade dependency failures to unrelated children.
+            else if (!coordinatorStopped && result.Outcome == ChildOutcome.Redirected)
+            {
+                var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
+                    .ConfigureAwait(false);
+                if (redirect is not null
+                    && await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
+                {
+                    inFlight[result.SubtaskId] = ObserveChildAsync(
+                        context.CoordinatorRunId,
+                        workPlanId.Value,
+                        result.SubtaskId,
+                        result.ChildRunId,
+                        seq,
+                        ct,
+                        fromSequence: result.TerminalSequence ?? 0);
+                    continue;
+                }
+
+                if (redirect is not null)
+                {
+                    await UpdateDirectiveStatusAsync(
+                        redirect.DirectiveId, SteeringStatus.NeedsAttention, DateTimeOffset.UtcNow, ct)
+                        .ConfigureAwait(false);
+                    EmitSteering(context.CoordinatorRunId, redirect, SteeringStatus.NeedsAttention);
+                }
+
+                _logger.LogWarning(
+                    "Steering redirect for child {ChildRunId} in coordinator {RunId} did not launch a revision; " +
+                    "leaving the subtask running and stopping this dispatch pass without cascading failure",
+                    result.ChildRunId, context.CoordinatorRunId);
+                return;
+            }
             // Amend is not applied on failure — it is additive and requires a clean boundary.
             else if (!coordinatorStopped && result.Outcome == ChildOutcome.Failed)
             {
@@ -528,7 +570,14 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && await TryInjectSteeringRevisionAsync(
                         context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, result.SubtaskId, result.ChildRunId, seq, ct);
+                    inFlight[result.SubtaskId] = ObserveChildAsync(
+                        context.CoordinatorRunId,
+                        workPlanId.Value,
+                        result.SubtaskId,
+                        result.ChildRunId,
+                        seq,
+                        ct,
+                        fromSequence: result.TerminalSequence ?? 0);
                     continue;
                 }
             }
@@ -1830,7 +1879,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         int subtaskId,
         string childRunId,
         SeqCounter topologySeq,
-        CancellationToken ct)
+        CancellationToken ct,
+        int fromSequence = 0)
     {
         // Fast path: child already reached a terminal state before observation begins.
         if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } alreadyDone)
@@ -1850,10 +1900,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // legacy RunStreamStore snapshot+poll path so existing tests that do not inject the stream
         // continue to work without modification.
         if (_eventStream is not null)
-            return await ObserveViaEventStreamAsync(coordinatorRunId, workPlanId, subtaskId, childRunId, topologySeq, ct)
+            return await ObserveViaEventStreamAsync(
+                    coordinatorRunId, workPlanId, subtaskId, childRunId, topologySeq, ct, fromSequence)
                 .ConfigureAwait(false);
 
-        return await ObserveViaStreamStoreAsync(coordinatorRunId, subtaskId, childRunId, ct)
+        return await ObserveViaStreamStoreAsync(coordinatorRunId, subtaskId, childRunId, ct, fromSequence)
             .ConfigureAwait(false);
     }
 
@@ -1868,9 +1919,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         int subtaskId,
         string childRunId,
         SeqCounter topologySeq,
-        CancellationToken ct)
+        CancellationToken ct,
+        int fromSequence = 0)
     {
-        var lastSeq = 0;
+        var lastSeq = fromSequence;
         object? lastPartialOutput = null;
         // Tracks the requestId of an unresolved tool-approval gate the child is blocked on, so the
         // stall path can distinguish a legitimate human-paced approval wait from a true stall (#212).
@@ -1925,7 +1977,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
                     if (TryMapTerminalEvent(evt, out var mapped))
                     {
-                        terminal = mapped;
+                        terminal = mapped with { Sequence = evt.Sequence };
                         break;
                     }
 
@@ -1997,6 +2049,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     continue;
                 }
 
+                // Preview publication can legitimately remain silent while App Routing DNS and the
+                // Gateway converge. The publication path renews this short durable lease while it is
+                // actively polling; a current lease is therefore proof of live work across replicas.
+                // If the publisher crashes, renewal stops and the lease expires quickly, restoring
+                // ordinary stall detection without extending the TTL for unrelated child work.
+                var publicationLease = RunId.TryParse(childRunId, out var leaseRunId)
+                    ? await _runStore.GetPreviewPublicationLeaseAsync(leaseRunId, ct).ConfigureAwait(false)
+                    : null;
+                if (publicationLease > DateTimeOffset.UtcNow)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed during active preview publication (lease until {LeaseUntil}) — " +
+                        "treating as live work, not stalled",
+                        childRunId, subtaskId, _stallTimeout, publicationLease);
+                    continue;
+                }
+
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
@@ -2046,10 +2116,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// Retains the original stall detection (via DB last-activity) for orphaned children.
     /// </summary>
     private async Task<ChildResult> ObserveViaStreamStoreAsync(
-        string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct)
+        string coordinatorRunId, int subtaskId, string childRunId, CancellationToken ct, int fromSequence = 0)
     {
         var entry = _streamStore.Get(childRunId);
-        var lastSeq = 0;
+        var lastSeq = fromSequence;
         object? lastPartialOutput = null;
 
         while (!ct.IsCancellationRequested)
@@ -2074,7 +2144,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (IsPartialOutputEvent(evt))
                     lastPartialOutput = evt.Payload;
                 if (TryMapTerminalEvent(evt, out var terminal))
-                    return terminal.ToResult(subtaskId, childRunId);
+                    return (terminal with { Sequence = evt.Sequence }).ToResult(subtaskId, childRunId);
             }
 
             if (snapshot.IsCompleted)
@@ -2380,7 +2450,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     FailureMessage: ReadString(evt.Payload, "message"));
                 return true;
             case EventTypes.RunCancelled:
-                terminal = new ChildTerminal(ChildOutcome.Failed);
+                var cancelReason = ReadString(evt.Payload, "reason");
+                terminal = new ChildTerminal(
+                    string.Equals(cancelReason, "steering_redirect", StringComparison.Ordinal)
+                        ? ChildOutcome.Redirected
+                        : ChildOutcome.Failed);
                 return true;
             case EventTypes.RunCompleted:
                 terminal = new ChildTerminal(ChildOutcome.Completed);
@@ -2482,7 +2556,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
 
             if (TryMapTerminalEvent(new RunEvent(row.Sequence, row.EventType, payload), out var terminal))
-                return terminal.ToResult(subtaskId, childRunId);
+                return (terminal with { Sequence = row.Sequence }).ToResult(subtaskId, childRunId);
         }
 
         return null;
@@ -2978,17 +3052,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             : null;
     }
 
-    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Stalled }
+    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Stalled, Redirected }
 
     private sealed record ChildTerminal(
         ChildOutcome Outcome,
         bool Retryable = false,
         string? FailureReason = null,
-        string? FailureMessage = null)
+        string? FailureMessage = null,
+        int? Sequence = null)
     {
         public ChildResult ToResult(int subtaskId, string childRunId) =>
             new(subtaskId, childRunId, Outcome, Retryable: Retryable,
-                FailureReason: FailureReason, FailureMessage: FailureMessage);
+                FailureReason: FailureReason, FailureMessage: FailureMessage,
+                TerminalSequence: Sequence);
     }
 
     private sealed record ChildResult(
@@ -2998,7 +3074,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         DateTimeOffset? StaleSince = null,
         bool Retryable = false,
         string? FailureReason = null,
-        string? FailureMessage = null);
+        string? FailureMessage = null,
+        int? TerminalSequence = null);
 
     /// <summary>Monotonic topology sequence: snapshot is <c>Current</c> (0), each delta is <c>Next()</c>.</summary>
     internal sealed class SeqCounter

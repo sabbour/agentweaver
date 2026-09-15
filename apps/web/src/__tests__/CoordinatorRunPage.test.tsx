@@ -199,6 +199,75 @@ function LocationProbe() {
 }
 
 describe('CoordinatorRunPage — unified coordinator graph view', () => {
+  it('clamps a long run prompt by default and expands without losing content', async () => {
+    const longPrompt = [
+      'Audit the preview stack from API routes through the deployed UI and identify the smallest safe fix.',
+      'Validate with the existing web tests, avoid cluster mutations, and keep the run evidence copyable for handoff.',
+      "If you need a live check, use 'node src/server.js & pid=$!; sleep 2; curl -s localhost:5173/health; kill $pid' and report the exact command output.",
+      'Then summarize the user impact, the validation evidence, and the risks that remain for the release captain.',
+      'Coordinate with sibling agents only through the issue thread and do not touch their worktrees.',
+      'This intentionally long prompt should not bury the actual run status, run id, or start time.',
+    ].join('\n\n');
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: longPrompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      started_at: '2026-07-07T00:01:00.000Z',
+      ended_at: null,
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('false');
+    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('4');
+    expect(screen.getByTestId('run-metadata').textContent).toContain('Run coord-run-1');
+    expect(screen.getByTestId('run-metadata').textContent).toContain('Started');
+    expect((screen.getByTestId('run-header').textContent ?? '').indexOf('Run coord-run-1')).toBeLessThan(
+      (screen.getByTestId('run-header').textContent ?? '').indexOf(longPrompt.slice(0, 40)),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more run prompt' }));
+
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('true');
+    expect(promptBody.hasAttribute('data-collapsed-lines')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Show less run prompt' })).toBeDefined();
+  });
+
+  it('does not show a prompt disclosure for a short run prompt', async () => {
+    const shortPrompt = 'Fix the preview button copy.';
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: shortPrompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect((await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 })).textContent).toBe(shortPrompt);
+    expect(screen.queryByRole('button', { name: 'Show more run prompt' })).toBeNull();
+  });
+
+  it('preserves run prompt newlines and renders inline shell snippets as code', async () => {
+    const shellSnippet = "'node src/server.js & pid=$!; sleep 2; curl -s localhost:5173/health; kill $pid'";
+    const prompt = `Check the local preview.\n\nRun ${shellSnippet}\nThen report readiness.`;
+    mockRunStreamState.current.events = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: prompt } },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
+    expect(promptBody.textContent).toBe(prompt);
+    expect(getComputedStyle(promptBody).whiteSpace).toBe('pre-wrap');
+    expect(within(promptBody).getByText(shellSnippet, { selector: 'code' })).toBeDefined();
+  });
+
   it('navigates to the run trace deep link from the "View trace" header button', async () => {
     render(
       <AzureFluentProvider density="compact">
@@ -256,9 +325,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       message: `${instruction} BlobEndpoint=https://agentweaver.blob.core.windows.net/;SharedAccessSignature=sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D`,
       component: 'agent_host',
       timestamp: '2026-09-09T00:00:00Z',
-      retryable: true,
+      retryable: false,
       correlation_ids: {},
-      cause_chain: [],
+      cause_chain: ['step:preview:started', 'tool:start_preview:failed:3', '******example.test/trace'],
     });
 
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -269,7 +338,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
         payload: {
           errorCode: 'agent_turn_internal_error',
           message: "Run failed with code 'agent_turn_internal_error'.",
-          retryable: true,
+          retryable: false,
         },
       },
     ];
@@ -283,7 +352,10 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
     expect((await screen.findByTestId('terminal-failure-diagnostic')).textContent).toContain(
-      "Failure in agent_host. Run failed with code 'agent_host_turn_incomplete'. Retry is available.",
+      "Failure in agent_host. Run failed with code 'agent_host_turn_incomplete'. Retry is not available.",
+    );
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain(
+      'Cause chain: step:preview:started -> tool:start_preview:failed:3.',
     );
     expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
     expect(screen.getByTestId('run-header').textContent).not.toContain('Expected provider: GitHub Copilot');
@@ -291,12 +363,165 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(screen.getByTestId('coordinator-retry-button').getAttribute('aria-label')).toContain(
       'Expected provider: GitHub Copilot. Model: gpt-5.',
     );
+    expect((screen.getByTestId('coordinator-retry-button') as HTMLButtonElement).disabled).toBe(true);
     expect(document.body.textContent).not.toContain('abc%2Bdef%3D');
     expect(document.body.textContent).not.toContain(secret);
     expect(document.body.textContent).not.toContain('Authorization');
     expect(document.body.textContent).not.toContain(instruction);
     await expandRunControls();
     expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+
+  it('keeps an active coordinator waiting on an in-progress child out of failed projection', async () => {
+    const waitingReason = 'assembly_blocked: ineligible_subtasks [370]';
+    const runningTitle = 'Start full stack and publish live preview URL';
+    const workPlan = {
+      workPlanId: 1344,
+      coordinatorRunId: 'coord-run-1',
+      outcomeSpecId: 1,
+      status: 'dispatching',
+      statusReason: waitingReason,
+      assemblyStage: null,
+      assemblyTerminalStage: null,
+      subtasks: [367, 368, 369].map((subtaskId) => ({
+        subtaskId,
+        title: `Assemble-ready task ${subtaskId}`,
+        scope: 's',
+        assignedAgent: 'Neo',
+        selectedModelId: 'gpt-5',
+        phase: 'execution',
+        isolationStrategy: 'worktree',
+        status: 'assemble_ready',
+        childRunId: `child-run-${subtaskId}`,
+      })).concat({
+        subtaskId: 370,
+        title: runningTitle,
+        scope: 's',
+        assignedAgent: 'Trinity',
+        selectedModelId: 'gpt-5',
+        phase: 'execution',
+        isolationStrategy: 'worktree',
+        status: 'running',
+        childRunId: 'child-run-370',
+      }),
+      dependencies: [],
+    };
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      coordinator_status: 'dispatching',
+      coordinator_status_reason: waitingReason,
+      ended_at: null,
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      graph_id: 'coordinator:coord-run-1',
+      variant: 'coordinator',
+      start_node_id: 'coordinator',
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        ...workPlan.subtasks.map((subtask) => ({
+          id: `plan:subtask-${subtask.subtaskId}`,
+          label: subtask.title,
+          role: 'subtask',
+          kind: 'live',
+          node_type: 'subtask',
+          child_graph_ref: `run:${subtask.childRunId}`,
+          child_run_id: subtask.childRunId,
+          agent: subtask.assignedAgent,
+          model: subtask.selectedModelId,
+          phase: subtask.phase,
+        })),
+        { id: 'planned:assembly-rai', label: 'RAI Review', role: 'rai', kind: 'planned', node_type: 'gate' },
+        { id: 'planned:assembly-review', label: 'Human Review', role: 'review', kind: 'planned', node_type: 'gate' },
+        { id: 'planned:assembly-merge', label: 'Merge', role: 'merge', kind: 'planned', node_type: 'action' },
+        { id: 'planned:assembly-scribe', label: 'Scribe', role: 'scribe', kind: 'planned', node_type: 'action' },
+      ],
+      edges: [
+        ...workPlan.subtasks.map((subtask) => ({
+          from: 'coordinator',
+          to: `plan:subtask-${subtask.subtaskId}`,
+          cardinality: 'fanout',
+          loopback: false,
+        })),
+        ...workPlan.subtasks.map((subtask) => ({
+          from: `plan:subtask-${subtask.subtaskId}`,
+          to: 'planned:assembly-rai',
+          cardinality: 'fanin',
+          loopback: false,
+        })),
+        { from: 'planned:assembly-rai', to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+        { from: 'planned:assembly-review', to: 'planned:assembly-merge', cardinality: 'direct', loopback: false },
+        { from: 'planned:assembly-merge', to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
+      ],
+    } as never);
+    vi.mocked(apiClient.getWorkPlan).mockResolvedValue(workPlan as never);
+    vi.mocked(apiClient.getCoordinatorChildren).mockResolvedValue([
+      { subtaskId: 367, childRunId: 'child-run-367', subtaskStatus: 'assemble_ready', assignedAgent: 'Neo', selectedModelId: 'gpt-5', childRunStatus: 'AssembleReady', stepCount: 3 },
+      { subtaskId: 368, childRunId: 'child-run-368', subtaskStatus: 'assemble_ready', assignedAgent: 'Neo', selectedModelId: 'gpt-5', childRunStatus: 'AssembleReady', stepCount: 2 },
+      { subtaskId: 369, childRunId: 'child-run-369', subtaskStatus: 'assemble_ready', assignedAgent: 'Neo', selectedModelId: 'gpt-5', childRunStatus: 'AssembleReady', stepCount: 4 },
+      { subtaskId: 370, childRunId: 'child-run-370', subtaskStatus: 'running', assignedAgent: 'Trinity', selectedModelId: 'gpt-5', childRunStatus: 'InProgress', stepCount: 14 },
+    ] as never);
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 10, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        { sequence: 11, type: 'coordinator.work_plan', payload: {} },
+        {
+          sequence: 12,
+          type: 'coordinator.assembly_blocked',
+          payload: {
+            workPlanId: 1344,
+            reason: 'ineligible_subtasks',
+            ineligibleSubtaskIds: [370],
+            ineligibleSubtasks: [{ id: 370, title: runningTitle, status: 'running', agent: 'Trinity' }],
+          },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'streaming',
+      error: null,
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect((await screen.findByTestId('run-status-chip', undefined, { timeout: 4000 })).textContent).toContain('Dispatching');
+    expect(screen.getByTestId('run-status-chip').getAttribute('data-state-color')).toBe('running');
+    const runningRow = await screen.findByRole('treeitem', { name: /Select Start full stack and publish live preview URL: Running/i }, { timeout: 4000 });
+    expect(within(runningRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('running');
+    expect(screen.queryByRole('treeitem', { name: /Start full stack and publish live preview URL: Failed/i })).toBeNull();
+    expect(screen.queryByTestId('terminal-failure-diagnostic')).toBeNull();
+    expect(document.body.textContent).not.toContain('No failure detail was recorded for this run.');
+    expect(apiClient.getRunTerminalDiagnostic).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: 'Stop run' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps a genuinely failed coordinator run failed with its diagnostic banner', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'failed',
+      coordinator_status: 'assembly_failed',
+      coordinator_status_reason: 'assembly_failed: integration_conflict',
+      ended_at: '2026-09-14T19:00:00Z',
+    } as never);
+    vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
+      code: 'assembly_failed',
+      message: "Run failed with code 'assembly_failed'. Retry is available.",
+      component: 'coordinator',
+      timestamp: '2026-09-14T19:00:00Z',
+      retryable: true,
+      correlation_ids: {},
+      cause_chain: ['phase:assembly_failed'],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect((await screen.findByTestId('run-status-chip', undefined, { timeout: 4000 })).textContent).toContain('Failed');
+    const diagnostic = await screen.findByTestId('terminal-failure-diagnostic', undefined, { timeout: 4000 });
+    expect(diagnostic.textContent).toContain("Failure in coordinator. Run failed with code 'assembly_failed'. Retry is available.");
+    expect(diagnostic.textContent).toContain('Cause chain: phase:assembly_failed.');
+    expect((screen.getByTestId('coordinator-retry-button') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('identifies a missing capability snapshot without claiming provider mismatch or unavailability', async () => {

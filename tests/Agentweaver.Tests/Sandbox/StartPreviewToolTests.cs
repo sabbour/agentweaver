@@ -32,6 +32,8 @@ public sealed class StartPreviewToolTests
     private const string ProjectId = "test-project-id";
     private const string AgentName = "tank";
     private const string RunId = "run-abc-123";
+    private static readonly TimeSpan DefaultServerPreviewPublicationBudget =
+        TimeSpan.FromSeconds(600 + 90);
 
     private static AIFunction GetStartPreview(CapturingHandler handler, string runId = RunId)
     {
@@ -173,6 +175,67 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
+    public void CreateHttpClient_DisablesItsOwnTimeout_SoTheRegistrationBudgetIsReachable()
+    {
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost", null);
+
+        http.Timeout.Should().Be(
+            Timeout.InfiniteTimeSpan,
+            because: "the linked CancellationTokenSource in Build is the single authority on the " +
+                "registration budget; a finite HttpClient.Timeout races it and wins when it is shorter");
+    }
+
+    [Fact]
+    public void CreateHttpClient_TimeoutIsNotShorterThanTheRegistrationBudget()
+    {
+        // Regression guard for the defect where HttpClient's 100 s default silently pre-empted the
+        // RegistrationTimeout. Publishing a preview can take the server infrastructure convergence
+        // plus publication windows, so the client aborted a POST that was still succeeding and then
+        // reported a timeout that had never elapsed. RegistrationTimeout became unreachable dead code.
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost", null);
+
+        var effectiveBudget = http.Timeout == Timeout.InfiniteTimeSpan ? TimeSpan.MaxValue : http.Timeout;
+
+        effectiveBudget.Should().BeGreaterThanOrEqualTo(
+            PreviewPublishTool.RegistrationTimeout,
+            because: "an agent told it has N seconds to register a preview must actually get N seconds");
+    }
+
+    [Fact]
+    public void RegistrationTimeout_ExceedsDefaultServerPublicationBudget()
+    {
+        PreviewPublishTool.RegistrationTimeout.Should().BeGreaterThan(
+            DefaultServerPreviewPublicationBudget,
+            because: "the agent-side registration timeout must lose the race after the API convergence and publication budgets");
+    }
+
+    [Fact]
+    public async Task StartPreview_DefaultTimeoutMessageNamesRegistrationTimeout()
+    {
+        using var http = new HttpClient(new HangingPreviewHandler())
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Timeout = TimeSpan.FromMilliseconds(1),
+        };
+        var tool = PreviewPublishTool.Build("http://localhost", null, RunId, http);
+
+        var result = (await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
+
+        result.Should().Contain($"within {PreviewPublishTool.RegistrationTimeout.TotalSeconds:n0} seconds");
+    }
+
+    [Fact]
+    public void CreateHttpClient_StillAppliesBaseAddressAndBearerCredential()
+    {
+        using var http = PreviewPublishTool.CreateHttpClient("http://localhost/api-root/", "secret-key");
+
+        http.BaseAddress.Should().Be(new Uri("http://localhost/api-root/"));
+        http.DefaultRequestHeaders.Authorization!.Scheme.Should().Be("Bearer");
+        http.DefaultRequestHeaders.Authorization.Parameter.Should().Be("secret-key");
+    }
+
+    [Fact]
     public void BuildSessionConfigTools_WrapsEveryExecutableCustomTool_WhenInstrumentationSupplied()
     {
         // Custom API tools and provider tools must both be routed through the instrumentation
@@ -252,7 +315,7 @@ public sealed class StartPreviewToolTests
 
         var calls = new List<(string CallId, string ToolName, object? Args)>();
         var results = new List<(string CallId, string Content)>();
-        var spanStarts = new List<(string CallId, string ToolName, DateTimeOffset? Timestamp)>();
+        var spanStarts = new List<(string CallId, string ToolName, object? Args, DateTimeOffset? Timestamp)>();
         var spanCompletes = new List<(string CallId, bool Success, string? Error, DateTimeOffset? Timestamp)>();
 
         var wrapped = new CopilotAIAgent.InstrumentedCustomAIFunction(
@@ -260,7 +323,7 @@ public sealed class StartPreviewToolTests
             emitToolCallOnce: (callId, toolName, args) => calls.Add((callId, toolName, args)),
             emitToolResultOnce: (callId, content) => results.Add((callId, content)),
             emitToolErrorOnce: (_, _) => throw new InvalidOperationException("should not error on success"),
-            startToolSpan: (callId, toolName, timestamp) => spanStarts.Add((callId, toolName, timestamp)),
+            startToolSpan: (callId, toolName, args, timestamp) => spanStarts.Add((callId, toolName, args, timestamp)),
             completeToolSpan: (callId, success, error, timestamp, _) => spanCompletes.Add((callId, success, error, timestamp)));
 
         var result = (await wrapped.InvokeAsync(new AIFunctionArguments(
@@ -275,6 +338,7 @@ public sealed class StartPreviewToolTests
         callId.Should().NotBeNullOrEmpty();
         results[0].CallId.Should().Be(callId, because: "the span tag and RunEvents must share one id for frontend correlation");
         spanStarts[0].CallId.Should().Be(callId);
+        spanStarts[0].Args.Should().NotBeNull();
         spanCompletes[0].CallId.Should().Be(callId);
         spanStarts[0].Timestamp.Should().NotBeNull();
         spanCompletes[0].Timestamp.Should().NotBeNull();
@@ -302,7 +366,7 @@ public sealed class StartPreviewToolTests
             emitToolCallOnce: (callId, _, _) => calls.Add(callId),
             emitToolResultOnce: (_, _) => throw new InvalidOperationException("should not succeed"),
             emitToolErrorOnce: (_, message) => errorMessage = message,
-            startToolSpan: (_, _, _) => { },
+            startToolSpan: (_, _, _, _) => { },
             completeToolSpan: (_, success, error, _, _) => spanCompletes.Add((success, error)));
 
         var act = async () => await wrapped.InvokeAsync(new AIFunctionArguments());

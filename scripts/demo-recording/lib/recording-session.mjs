@@ -14,13 +14,19 @@ import { joinCaptureConfig, loadCaptureConfig } from './capture-config.mjs';
 import { loadBeatPlan } from './beats.mjs';
 import { renderCaptureScript } from './capture-plan.mjs';
 import { resolveCapturePreflight, verifyFixtureWorkflowRequirements } from './preflight.mjs';
-import { getSessionTokenStatus, writeSeedScript } from './auth.mjs';
+import {
+  DEFAULT_ACCESS_TOKEN_REFRESH_MARGIN_MS,
+  formatTokenRemaining,
+  inspectSessionToken,
+  writeSeedScript,
+} from './auth.mjs';
 
 export const DEFAULT_RECORDING_SESSION = 'agentweaver-demo';
 export const UNAUTHENTICATED_RECORDING_SESSION = 'agentweaver-demo-unauthenticated';
 export const DEFAULT_RECORDING_BASE_URL = 'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io';
 export const DEFAULT_RECORDING_AUTH_ROOT = 'scripts/demo-recording/.auth';
 export const CHROME_DEFAULT_PROFILE_DIRECTORY = 'Default';
+export const DEFAULT_RECORDING_TOKEN_REFRESH_MARGIN_MS = DEFAULT_ACCESS_TOKEN_REFRESH_MARGIN_MS;
 
 const COMMAND_OPTIONS = {
   signin: new Set(['session', 'base-url', 'auth-root', 'wait-for-chrome-ms']),
@@ -295,7 +301,7 @@ export async function resolveSafeAuthDestination(candidate, {
 
 export function assertAuthenticatedSnapshot(snapshot) {
   if (/Sign in with (Microsoft Entra ID|GitHub)/i.test(snapshot)) {
-    throw new Error('Recording authentication has expired. Run "npm run demo:record -- signin", then try again.');
+    throw new Error('Recording authentication has expired or reached a sign-in page. Proactive refresh should normally prevent this; attempting unattended recovery can still refresh from a valid Chrome SSO session.');
   }
   if (!/\b(Overview|Projects|Sessions|Settings)\b/i.test(snapshot)) {
     throw new Error('The recording session opened, but Agentweaver authentication could not be verified.');
@@ -487,21 +493,33 @@ export async function waitForInteractiveSignInCompletion(page, {
   baseUrl,
   timeoutMs = 900_000,
   pollMs = 250,
+  allowInteractiveSignIn = true,
+  ssoReplayTimeoutMs = 30_000,
   delayFn = delay,
+  now = () => Date.now(),
   write = (message) => process.stdout.write(message),
 } = {}) {
   const expectedOrigin = new URL(baseUrl).origin;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = now() + timeoutMs;
   let reachedIdentityProvider = false;
+  let reachedIdentityProviderAt = null;
 
-  while (Date.now() < deadline) {
+  while (now() < deadline) {
     const currentUrl = page.url();
     if (currentUrl !== 'about:blank' && currentUrl !== '') {
       const currentOrigin = new URL(currentUrl).origin;
       if (currentOrigin !== expectedOrigin) {
         if (!reachedIdentityProvider) {
           reachedIdentityProvider = true;
-          write('Microsoft Entra sign-in is now a human-only step. Complete it privately in the displayed Chrome window.\n');
+          reachedIdentityProviderAt = now();
+          write(allowInteractiveSignIn
+            ? 'Microsoft Entra sign-in is now a human-only step. Complete it privately in the displayed Chrome window.\n'
+            : 'Automatic recording auth refresh reached Microsoft Entra; waiting briefly for cached SSO to return without human interaction.\n');
+        }
+        if (!allowInteractiveSignIn && now() - reachedIdentityProviderAt >= ssoReplayTimeoutMs) {
+          const error = new Error('The recording access token could not be refreshed unattended because the Chrome SSO session no longer returned to Agentweaver automatically. Run "npm run demo:record -- signin" to renew the SSO session, then try again.');
+          error.code = 'SSO_SESSION_EXPIRED';
+          throw error;
         }
         await delayFn(pollMs);
         continue;
@@ -592,11 +610,17 @@ export async function signInRecordingSession(options) {
 
     let hasSession = await page.evaluate(() => window.sessionStorage.getItem('agentweaver.sessionToken') !== null).catch(() => false);
     if (!hasSession) {
+      const allowInteractiveSignIn = options.allowInteractiveSignIn !== false;
       await presentInteractiveSignInShell(page);
       process.stdout.write(
-        'Agentweaver sign-in is ready in Google Chrome. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
+        allowInteractiveSignIn
+          ? 'Agentweaver sign-in is ready in Google Chrome. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n'
+          : 'Agentweaver sign-in was started to refresh the recording access token. The recorder is waiting only for cached SSO and will not interact with Microsoft Entra.\n',
       );
-      await waitForInteractiveSignInCompletion(page, { baseUrl: options.baseUrl });
+      await waitForInteractiveSignInCompletion(page, {
+        baseUrl: options.baseUrl,
+        allowInteractiveSignIn,
+      });
       hasSession = true;
     }
 
@@ -618,23 +642,102 @@ export async function signInRecordingSession(options) {
   }
 }
 
-export async function hasRecordingAuth(authRoot = DEFAULT_RECORDING_AUTH_ROOT) {
+export async function inspectRecordingAuth(authRoot = DEFAULT_RECORDING_AUTH_ROOT, {
+  now = () => Date.now(),
+  minRemainingMs = DEFAULT_RECORDING_TOKEN_REFRESH_MARGIN_MS,
+  operationBudgetMs = 0,
+} = {}) {
   const paths = recordingAuthPaths(authRoot);
+  const tokenStatus = await inspectSessionToken(paths.sessionStoragePath, {
+    now,
+    minRemainingMs,
+    operationBudgetMs,
+  });
+  const status = {
+    storageStatePresent: false,
+    sessionStoragePresent: false,
+    structureReady: false,
+    tokenStatus,
+    ready: false,
+  };
   try {
     const [storageStateText, sessionStorageText] = await Promise.all([
       fs.readFile(paths.storageStatePath, 'utf8'),
       fs.readFile(paths.sessionStoragePath, 'utf8'),
     ]);
+    status.storageStatePresent = true;
+    status.sessionStoragePresent = true;
     const storageState = JSON.parse(storageStateText);
     const sessionStorage = JSON.parse(sessionStorageText);
-    return Array.isArray(storageState.cookies)
+    status.structureReady = Array.isArray(storageState.cookies)
       && Array.isArray(storageState.origins)
       && URL.canParse(sessionStorage.origin)
       && typeof sessionStorage.entries?.['agentweaver.sessionToken'] === 'string'
       && sessionStorage.entries['agentweaver.sessionToken'].length > 0;
   } catch {
-    return false;
+    status.structureReady = false;
   }
+  status.ready = status.structureReady && tokenStatus.ready;
+  return status;
+}
+
+export async function hasRecordingAuth(authRoot = DEFAULT_RECORDING_AUTH_ROOT, options = {}) {
+  return (await inspectRecordingAuth(authRoot, options)).ready;
+}
+
+function manualSsoRefreshError(cause) {
+  const error = new Error('The recording access token could not be refreshed from cached Chrome SSO. The SSO session is no longer usable for unattended refresh. Run "npm run demo:record -- signin" to renew the SSO session, then try again.');
+  error.code = 'SSO_SESSION_EXPIRED';
+  error.cause = cause;
+  return error;
+}
+
+function isSsoSessionExpiredError(error) {
+  return error?.code === 'SSO_SESSION_EXPIRED';
+}
+
+export async function ensureRecordingAuthenticationFresh(options, {
+  operationBudgetMs = 0,
+  reason = 'recording operation',
+  now = () => Date.now(),
+  minRemainingMs = DEFAULT_RECORDING_TOKEN_REFRESH_MARGIN_MS,
+  inspectAuthentication = inspectRecordingAuth,
+  refreshAuthentication = refreshRecordingAuthentication,
+  restoreAuthentication = restoreRecordingAuthentication,
+  write = (message) => process.stdout.write(message),
+} = {}) {
+  const paths = recordingAuthPaths(options.authRoot);
+  const authStatus = await inspectAuthentication(paths.root, {
+    now,
+    minRemainingMs,
+    operationBudgetMs,
+  });
+  if (authStatus.ready) {
+    return { refreshed: false, authStatus: authStatus.tokenStatus };
+  }
+
+  const tokenStatus = authStatus.tokenStatus;
+  const remaining = tokenStatus.remainingText ?? 'unknown';
+  const budgetText = formatTokenRemaining(operationBudgetMs);
+  const marginText = formatTokenRemaining(minRemainingMs);
+  const reasonText = tokenStatus.expired
+    ? 'the stored recording access token has already expired'
+    : `the stored recording access token has ${remaining} remaining, which does not cover ${budgetText} for ${reason} plus the ${marginText} safety margin`;
+  write(`Refreshing recording authentication because ${reasonText}.\n`);
+
+  try {
+    await refreshAuthentication({ ...options, allowInteractiveSignIn: false });
+  } catch (error) {
+    if (isSsoSessionExpiredError(error)) throw manualSsoRefreshError(error);
+    throw error;
+  }
+  try {
+    await restoreAuthentication(options);
+  } catch (error) {
+    if (isSsoSessionExpiredError(error)) throw manualSsoRefreshError(error);
+    throw error;
+  }
+  return { refreshed: true, authStatus: tokenStatus };
 }
 
 export function listPlaywrightSessions() {
@@ -690,17 +793,30 @@ export async function openRecordingSession(options, {
   refreshAuthentication = refreshRecordingAuthentication,
   hasAuthentication = hasRecordingAuth,
   restoreAuthentication = restoreRecordingAuthentication,
+  ensureAuthenticationFresh = ensureRecordingAuthenticationFresh,
+  write = (message) => process.stdout.write(message),
 } = {}) {
   const paths = recordingAuthPaths(options.authRoot);
   await assertProtectedAuthRoot(paths.root);
   const existingSessions = listSessions();
   if (existingSessions.get(options.session)?.status === 'open') {
+    let verifiedExistingSession = false;
     try {
       await verifyAuthenticatedSnapshot(options.session);
-      process.stdout.write(`Recording session "${options.session}" is already authenticated and ready.\n`);
+      verifiedExistingSession = true;
+      const freshness = await ensureAuthenticationFresh(options, {
+        refreshAuthentication,
+        restoreAuthentication,
+        write,
+      });
+      write(freshness.refreshed
+        ? `Recording session "${options.session}" was refreshed before reuse.\n`
+        : `Recording session "${options.session}" is already authenticated and ready.\n`);
       return;
-    } catch {
+    } catch (error) {
+      if (verifiedExistingSession) throw error;
       // The owned session is not usable, so use the existing close-first recovery flow.
+      write('Recording session authentication reached the reactive recovery path; proactive refresh should normally prevent this.\n');
     }
   }
 
@@ -713,10 +829,10 @@ export async function openRecordingSession(options, {
     }
   }
 
-  process.stdout.write(
-    'Protected recording authentication is unavailable or expired. Starting the safe interactive sign-in path; Microsoft Entra interaction, if shown, requires a human.\n',
+  write(
+    'Protected recording authentication is unavailable, expired, or inside the refresh safety margin. Starting unattended refresh from cached Chrome SSO; Microsoft Entra interaction is still human-only.\n',
   );
-  await refreshAuthentication(options);
+  await refreshAuthentication({ ...options, allowInteractiveSignIn: false });
   if (!await hasAuthentication(paths.root)) throw new Error('The refreshed Google Chrome Default sign-in could not be verified.');
   await restoreAuthentication(options);
 }
@@ -758,6 +874,30 @@ export function openUnauthenticatedRecordingSession(options) {
 
 function planName(planPath) {
   return path.basename(planPath).replace(/\.capture\.json$/i, '').replace(/\.json$/i, '');
+}
+
+function finiteNonNegativeMilliseconds(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+export function estimateCaptureStepBudgetMs(step) {
+  const afterMs = finiteNonNegativeMilliseconds(step.after);
+  if (step.type === 'pause') return finiteNonNegativeMilliseconds(step.ms) + afterMs;
+  if (step.timeout !== undefined) return finiteNonNegativeMilliseconds(step.timeout) + afterMs;
+  if (step.type === 'waitText') return 180_000 + afterMs;
+  if (step.type === 'waitFor') return 60_000 + afterMs;
+  if (step.type === 'followNewPage') return 10_000 + afterMs;
+  if (step.type === 'waitLoadState') return 30_000 + afterMs;
+  if (step.type === 'click' || step.type === 'type' || step.type === 'hover' || step.type === 'select') {
+    return 60_000 + afterMs;
+  }
+  return afterMs;
+}
+
+export function estimateCaptureOperationBudgetMs(beat) {
+  const navigationBudgetMs = beat.startUrl ? 120_000 : 0;
+  return navigationBudgetMs + (beat.steps ?? []).reduce((sum, step) => sum + estimateCaptureStepBudgetMs(step), 0);
 }
 
 function prerequisiteError(prerequisite) {
@@ -843,7 +983,12 @@ export async function prepareCaptureScripts(options, {
     if (writeScripts) {
       await fs.writeFile(scriptPath, renderCaptureScript(beat), { encoding: 'utf8', mode: 0o600 });
     }
-    scripts.push({ beatId: beat.id, scriptPath, videoPath: beat.videoPath });
+    scripts.push({
+      beatId: beat.id,
+      scriptPath,
+      videoPath: beat.videoPath,
+      operationBudgetMs: estimateCaptureOperationBudgetMs(beat),
+    });
   }
   return { outputDirectory, scripts };
 }
@@ -851,6 +996,7 @@ export async function prepareCaptureScripts(options, {
 export async function captureRecordingPlan(options, {
   openSession = openRecordingSession,
   openUnauthenticatedSession = openUnauthenticatedRecordingSession,
+  ensureAuthenticationFresh = ensureRecordingAuthenticationFresh,
   prepareScripts = prepareCaptureScripts,
   runScript = runPlaywrightCli,
   makeDirectory = fs.mkdir,
@@ -867,6 +1013,13 @@ export async function captureRecordingPlan(options, {
   });
   let lastPrepared;
   for (const queued of queue.scripts) {
+    if (!options.unauthenticated) {
+      await ensureAuthenticationFresh(options, {
+        operationBudgetMs: queued.operationBudgetMs ?? 0,
+        reason: `capture beat ${queued.beatId}`,
+        write,
+      });
+    }
     const prepared = await prepareScripts({ ...options, beat: queued.beatId, all: false });
     const item = prepared.scripts[0];
     if (!item) throw new Error(`Capture preparation did not produce beat ${queued.beatId}.`);
@@ -887,39 +1040,47 @@ export async function captureRecordingPlan(options, {
   return lastPrepared ?? { outputDirectory: queue.outputDirectory, scripts: [] };
 }
 
-export async function recordingStatus(options) {
+export async function recordingStatus(options, {
+  now = () => Date.now(),
+  validateChromeProfile = validateLiteralChromeDefaultProfile,
+  assertProtectedRoot = assertProtectedAuthRoot,
+  inspectAuthentication = inspectRecordingAuth,
+  listSessions = listPlaywrightSessions,
+  snapshot = (session) => runPlaywrightCli(sessionArgs(session, 'snapshot'), { sensitive: true }),
+} = {}) {
   const paths = recordingAuthPaths(options.authRoot);
-  const chromeProfile = resolveLiteralChromeDefaultProfile();
   const status = {
     chromeDefaultProfile: false,
     authIgnored: false,
     authReady: false,
-    tokenPresent: false,
-    tokenExpiresAt: null,
-    tokenExpired: false,
-    tokenMinutesRemaining: null,
+    authStatus: {
+      present: false,
+      ready: false,
+      remainingMs: null,
+      remainingText: 'unknown',
+      expiresAtIso: null,
+      reason: 'Not inspected.',
+    },
     sessionOpen: false,
     sessionAuthenticated: false,
   };
-  status.chromeDefaultProfile = await validateLiteralChromeDefaultProfile(chromeProfile)
-    .then(() => true, () => false);
-  status.authIgnored = await assertProtectedAuthRoot(paths.root).then(() => true, () => false);
-  const tokenStatus = await getSessionTokenStatus(paths.sessionStoragePath).catch(() => ({
-    present: false, expiresAt: null, expired: false, minutesRemaining: null,
-  }));
-  status.tokenPresent = tokenStatus.present;
-  status.tokenExpiresAt = tokenStatus.expiresAt;
-  status.tokenExpired = tokenStatus.expired;
-  status.tokenMinutesRemaining = tokenStatus.minutesRemaining;
-  // "ready" must mean usable. An expired token is structurally present but
-  // makes every authenticated request fail with 401, so reporting it as ready
-  // sends callers to debug the wrong thing.
-  status.authReady = status.authIgnored && await hasRecordingAuth(paths.root) && !tokenStatus.expired;
-  const sessions = listPlaywrightSessions();
+  try {
+    status.chromeDefaultProfile = await Promise.resolve(validateChromeProfile(resolveLiteralChromeDefaultProfile()))
+      .then(() => true, () => false);
+  } catch {
+    status.chromeDefaultProfile = false;
+  }
+  status.authIgnored = await Promise.resolve(assertProtectedRoot(paths.root)).then(() => true, () => false);
+  if (status.authIgnored) {
+    const auth = await inspectAuthentication(paths.root, { now });
+    status.authReady = auth.ready;
+    status.authStatus = auth.tokenStatus;
+  }
+  const sessions = listSessions();
   status.sessionOpen = sessions.get(options.session)?.status === 'open';
   if (status.sessionOpen) {
     try {
-      assertAuthenticatedSnapshot(runPlaywrightCli(sessionArgs(options.session, 'snapshot'), { sensitive: true }));
+      assertAuthenticatedSnapshot(snapshot(options.session));
       status.sessionAuthenticated = true;
     } catch {
       status.sessionAuthenticated = false;

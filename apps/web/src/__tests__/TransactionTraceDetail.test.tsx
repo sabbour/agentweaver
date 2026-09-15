@@ -5,11 +5,19 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
+const sseMocks = vi.hoisted(() => ({
+  useRunStream: vi.fn(),
+}));
+
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunTraces: vi.fn(),
     getRunEvents: vi.fn(),
   },
+}));
+
+vi.mock('../api/sse', () => ({
+  useRunStream: sseMocks.useRunStream,
 }));
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -18,6 +26,13 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sseMocks.useRunStream.mockReturnValue({
+    events: [],
+    droppedEventCount: 0,
+    status: 'streaming',
+    error: null,
+    reconnect: vi.fn(),
+  });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({
     runId: 'run-47',
     spans: [
@@ -112,21 +127,129 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  // vi.clearAllMocks() clears recorded calls but keeps queued mockResolvedValueOnce
+  // implementations. Several tests queue more "once" values than they consume, and the
+  // leftovers then shadow the defaults that beforeEach sets for later tests. Reset the
+  // implementations so each test starts from the same state whatever the run order.
+  vi.useRealTimers();
+  vi.resetAllMocks();
 });
 
 describe('TransactionTracePanel trace detail', () => {
   it('does not imply an absent trace when the telemetry source is temporarily unavailable', async () => {
-    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
-      runId: 'run-47',
-      spans: [],
-      queryError: 'Application Insights trace telemetry is temporarily unavailable. Retry shortly.',
-    });
-    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+        runId: 'run-47',
+        spans: [],
+        queryError: 'Application Insights trace telemetry is temporarily unavailable. Retry shortly.',
+      });
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
 
-    await waitFor(() => expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy());
-    expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
-    expect(screen.queryByText('No trace data available for this run yet.')).toBeNull();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(1_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy();
+      expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
+      expect(screen.queryByText('No trace data available for this run yet.')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('automatically retries a first-load trace dependency failure without showing the failure banner', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryError = 'Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly.';
+      vi.mocked(apiClient.getRunTraces)
+        .mockResolvedValueOnce({ runId: 'run-47', spans: [], queryError })
+        .mockResolvedValueOnce({
+          runId: 'run-47',
+          spans: [{ id: 'agent', name: 'Coordinator turn', timestamp: '2026-09-11T16:00:00.000Z', durationMs: 1, success: true }],
+        });
+
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+      expect(screen.queryByText('Trace spans are temporarily unavailable.')).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('trace-tree').querySelector('[data-span-key="agent"]')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+      expect(screen.queryByText('Trace spans are temporarily unavailable.')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces a persistent first-load trace dependency failure after retries and keeps manual Retry working', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryError = 'Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly.';
+      vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'run-47', spans: [], queryError });
+
+      render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+      expect(screen.queryByText(queryError)).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(queryError)).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(3);
+      expect(screen.getByText(queryError)).toBeTruthy();
+      expect(screen.getByText('Trace spans are temporarily unavailable.')).toBeTruthy();
+      expect(screen.getByText(/This does not mean the run produced no trace data/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiClient.getRunTraces).toHaveBeenCalledTimes(4);
+      expect(screen.getByText('Loading transaction trace')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('loads trace pages incrementally without replacing already-loaded spans', async () => {
@@ -300,7 +423,189 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
   });
 
-  it('labels an absent persisted tool output with correctly spaced text', async () => {
+  it('renders populated tool input and output from span attributes when persisted events are absent', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'tool',
+          name: 'run_command',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 500,
+          success: true,
+          toolName: 'run_command',
+          toolCallId: 'call-7',
+          attributes: {
+            runId: 'run-47',
+            toolName: 'run_command',
+            toolCallId: 'call-7',
+            toolInput: '{"command":"npm test"}',
+            toolInputState: 'captured',
+            toolOutput: 'stdout:\nok\nexit_code: 0',
+            toolOutputState: 'captured',
+          },
+        },
+      ],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId('trace-span'));
+    fireEvent.click(screen.getByText('Command details'));
+
+    expect(screen.getByText(/"command": "npm test"/)).toBeTruthy();
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('stdout:\nok');
+  });
+
+  it('renders distinct explanations for each missing or transformed span payload state', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'not-captured',
+          name: 'grep',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'grep',
+          toolCallId: 'not-captured-call',
+          attributes: {
+            toolName: 'grep',
+            toolCallId: 'not-captured-call',
+            toolInputState: 'not_captured',
+            toolOutputState: 'not_captured',
+          },
+        },
+        {
+          id: 'truncated',
+          name: 'read_file',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:02.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'read_file',
+          toolCallId: 'truncated-call',
+          attributes: {
+            toolName: 'read_file',
+            toolCallId: 'truncated-call',
+            toolInput: '{"path":"big.log"}',
+            toolInputState: 'captured',
+            toolOutput: 'line 1\n… [truncated because too large]',
+            toolOutputState: 'truncated',
+          },
+        },
+        {
+          id: 'redacted',
+          name: 'web_fetch',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:03.000Z',
+          durationMs: 100,
+          success: true,
+          toolName: 'web_fetch',
+          toolCallId: 'redacted-call',
+          attributes: {
+            toolName: 'web_fetch',
+            toolCallId: 'redacted-call',
+            toolInput: '{"url":"https://example.com","authorization":"***REDACTED***"}',
+            toolInputState: 'redacted',
+            toolOutput: '***REDACTED***',
+            toolOutputState: 'redacted',
+          },
+        },
+      ],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const spans = screen.getAllByTestId('trace-span');
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'not-captured')!);
+    expect(screen.getByText('Input was not captured in telemetry.')).toBeTruthy();
+    expect(screen.getByText('Output was not captured in telemetry.')).toBeTruthy();
+    expect(screen.queryByText('No input')).toBeNull();
+
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'truncated')!);
+    expect(screen.getByText('Truncated because too large')).toBeTruthy();
+    expect(screen.getByText(/line 1/)).toBeTruthy();
+
+    fireEvent.click(spans.find((span) => span.getAttribute('data-span-key') === 'redacted')!);
+    expect(screen.getAllByText('Redacted by policy').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/).length).toBeGreaterThan(0);
+  });
+
+  it('renders live run_command heartbeat progress from the run stream', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [
+        {
+          id: 'tool',
+          name: 'run_command',
+          spanType: 'tool',
+          timestamp: '2026-09-11T16:00:01.000Z',
+          durationMs: 12_000,
+          success: true,
+          toolName: 'run_command',
+          toolCallId: 'call-7',
+          attributes: {
+            runId: 'run-47',
+            toolName: 'run_command',
+            toolCallId: 'call-7',
+            status: 'success',
+          },
+        },
+      ],
+    });
+    sseMocks.useRunStream.mockReturnValue({
+      events: [
+        {
+          sequence: 8,
+          type: 'tool.execution_pending',
+          payload: {
+            runId: 'run-47',
+            toolCallId: 'call-7',
+            toolName: 'run_command',
+            startedAtUtc: '2026-09-11T16:00:01.000Z',
+            deadlineUtc: '2026-09-11T16:10:01.000Z',
+            elapsedSeconds: 12,
+          },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'streaming',
+      error: null,
+      reconnect: vi.fn(),
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
+    expect(toolSpan?.textContent).toContain('Running · 12 s');
+    fireEvent.click(toolSpan!);
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('Live progress');
+    expect(screen.getByLabelText('Span inspector').textContent).toContain('Running for 12 s');
+  });
+
+  it('labels an absent persisted tool output with a capture reason', async () => {
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       {
         sequence: 8,
@@ -319,7 +624,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    await waitFor(() => expect(screen.getByText('No output')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Output was not captured in telemetry.')).toBeTruthy());
   });
 
   it('distinguishes a recovered failed attempt from an active or terminally failed run', async () => {
@@ -371,6 +676,52 @@ describe('TransactionTracePanel trace detail', () => {
     expect(screen.getByLabelText('Span inspector').textContent).toContain('Run failed — terminal outcome');
   });
 
+  it('keeps run-command input and output collapsed until requested', async () => {
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [{
+        id: 'command',
+        name: 'run_command',
+        spanType: 'tool',
+        timestamp: '2026-09-11T16:00:01.000Z',
+        durationMs: 500,
+        success: true,
+        toolName: 'run_command',
+        toolCallId: 'call-command',
+      }],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 8,
+        type: 'tool.call',
+        payload: { callId: 'call-command', toolName: 'run_command', arguments: { command: 'dotnet test' } },
+      },
+      {
+        sequence: 9,
+        type: 'tool.result',
+        payload: { callId: 'call-command', content: 'exit_code: 0' },
+      },
+    ]);
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId('trace-span'));
+
+    const details = screen.getByTestId('run-command-details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.getByText('Command details')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Command details'));
+    expect(details.open).toBe(true);
+    expect(screen.getByText(/"command": "dotnet test"/)).toBeTruthy();
+    expect(screen.getByText('exit_code: 0')).toBeTruthy();
+  });
+
   it('redacts sensitive input and output again before rendering legacy event data', async () => {
     const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
@@ -397,7 +748,7 @@ describe('TransactionTracePanel trace detail', () => {
     fireEvent.click(toolSpan!);
 
     await waitFor(() => expect(screen.queryByText(secret)).toBeNull());
-    expect(screen.getAllByText('Redacted')).toHaveLength(2);
+    expect(screen.getAllByText('Redacted by policy')).toHaveLength(2);
     expect(screen.getAllByText(/\*\*\*REDACTED\*\*\*/)).toHaveLength(2);
   });
 });

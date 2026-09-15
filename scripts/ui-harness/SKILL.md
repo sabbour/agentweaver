@@ -49,10 +49,12 @@ managed Default profile into `scripts/ui-harness/.auth/chrome-default-automation
 starts Chrome from that disposable, git-ignored clone, and deletes the clone when done.
 
 The script navigates to `--base-url` before it checks or clicks Agentweaver's **Sign in
-with Microsoft Entra ID** button. Entra SSO often completes automatically. If an Entra
-page appears, complete it privately in the Chrome window, then press Resume in the
-Playwright Inspector. The harness never drives account selection, credentials, MFA, or
-consent.
+with Microsoft Entra ID** button. Entra SSO often completes automatically. The command
+then waits for the authenticated app and saves the session without a human. If an Entra
+page appears and asks for input, complete it privately in the Chrome window. The command
+continues on its own after the app returns. Add `--manual` to wait in the Playwright
+Inspector instead, and press Resume when the authenticated app is visible. The harness
+never drives account selection, credentials, MFA, or consent.
 
 ### Required recovery path
 

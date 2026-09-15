@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "canonical-board-lifecycle.json",
+    "sha256": "d3fab224cb19645a8b5689b447bbe689ff05012923e3710fd8c65050ef51dfef"
+  },
+  "drawio": {
+    "file": "canonical-board-lifecycle.drawio",
+    "sha256": "7dc41b55c41601cb8e2904daf02097c44260b216e65f259ff65a52e6e0114366"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "canonical-board-lifecycle.png",
+    "sha256": "f07cbfec1e5d117fba67bc9adc87a3db4146cff1b39c1666ffbf9d0acc92dcf4"
+  }
+}

@@ -161,6 +161,45 @@ export async function navigateAndStartAgentweaverSignIn(page, baseUrl, {
   return { hasSession: false, signInStarted: true };
 }
 
+export async function waitForAgentweaverSession(page, baseUrl, {
+  timeoutMs = 600_000,
+  pollMs = 250,
+  now = () => Date.now(),
+  delayFn = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  write = (message) => process.stdout.write(message),
+} = {}) {
+  const expectedOrigin = new URL(baseUrl).origin;
+  const deadline = now() + timeoutMs;
+  let announcedIdentityProvider = false;
+
+  while (now() < deadline) {
+    const currentUrl = page.url();
+    if (currentUrl && currentUrl !== 'about:blank') {
+      if (new URL(currentUrl).origin !== expectedOrigin) {
+        if (!announcedIdentityProvider) {
+          announcedIdentityProvider = true;
+          write('Microsoft Entra sign-in is open. Complete any prompts privately in the Chrome window. '
+            + 'A cached SSO session returns on its own.\n');
+        }
+        await delayFn(pollMs);
+        continue;
+      }
+    }
+
+    const hasSession = await page.evaluate(
+      () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
+    ).catch(() => false);
+    if (hasSession) return;
+
+    await delayFn(pollMs);
+  }
+
+  throw new Error(
+    'Agentweaver sign-in did not complete before the bounded wait elapsed. '
+    + 'If the Chrome Default profile has no current Entra session, rerun with --manual and complete the sign-in.',
+  );
+}
+
 export function assertAuthenticatedAgentweaverSession(origin, entries, baseUrl) {
   if (origin !== new URL(baseUrl).origin) {
     throw new Error('Sign-in did not return to the configured Agentweaver origin.');

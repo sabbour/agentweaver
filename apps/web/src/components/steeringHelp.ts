@@ -6,7 +6,7 @@
 export const STEERING_HELP = {
   send: 'Message the coordinator without changing the current plan.',
   redirect:
-    'Override the current plan and point the coordinator at a new instruction (can unblock a stuck child).',
+    'Override the current plan and point the coordinator at a new instruction without failing unrelated children.',
   amend: 'Add to the outcome/plan without discarding in-flight work.',
 } as const;
 

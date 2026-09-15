@@ -24,6 +24,9 @@ namespace Agentweaver.Tests.Mcp;
 /// </summary>
 public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationFactory>
 {
+    private static readonly TimeSpan DefaultServerPreviewPublicationBudget =
+        TimeSpan.FromSeconds(600 + 90);
+
     private readonly ProjectsWebApplicationFactory _factory;
 
     public McpStartPreviewTests(ProjectsWebApplicationFactory factory)
@@ -37,6 +40,14 @@ public sealed class McpStartPreviewTests : IClassFixture<ProjectsWebApplicationF
         var config = new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey);
         var apiClient = new AgentweaverApiClient(httpClient, config);
         return new RunTools(apiClient);
+    }
+
+    [Fact]
+    public void StartPreview_RegistrationTimeout_ExceedsDefaultServerPublicationBudget()
+    {
+        RunTools.PreviewRegistrationTimeout.Should().BeGreaterThan(
+            DefaultServerPreviewPublicationBudget,
+            because: "the MCP registration timeout must lose the race after the API convergence and publication budgets");
     }
 
     [Fact]

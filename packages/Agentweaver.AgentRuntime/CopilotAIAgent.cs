@@ -11,6 +11,7 @@ using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -235,8 +236,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         "AGENTWEAVER_AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
         TimeSpan.FromMinutes(60));
 
-    /// <summary>Cadence for active-shell progress events. Settable for focused tests.</summary>
-    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>
+    /// Cadence for active-shell progress events. Five seconds keeps the trace UI visibly alive
+    /// without turning the run stream into an output channel. Settable for focused tests.
+    /// </summary>
+    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Test seam; production defaults to force-stopping the Copilot CLI process tree.</summary>
     internal Func<Task>? ShellTimeoutTerminator { get; set; }
@@ -442,28 +446,29 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var agentId = $"did:mesh:agentweaver:copilot:{runId}";
 
         var controlledBuildTestShell = purpose == AgentHostPurpose.AssemblyBuildTest;
+        var runCommandDefaultTimeoutMs = SandboxToolOptions.ResolveDefaultRunCommandTimeoutMs();
         _controlledBuildTestShell = controlledBuildTestShell;
         var toolOptions = new SandboxToolOptions(
             ShellEnabled: sandboxPolicy.ShellEnabled,
-            DefaultTimeoutMs: controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
-                : (int)TimeSpan.FromMinutes(5).TotalMilliseconds)
+            DefaultTimeoutMs: runCommandDefaultTimeoutMs)
         {
             RepositoryAccessToken = _repositoryCredentialProvider?.GetAccessToken(),
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            UnattendedRun = IsUnattendedRun(runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
             MaximumTimeoutMs = controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                ? runCommandDefaultTimeoutMs
                 : 0,
-            // #313: floor Build/Test command timeouts at 10 min so an optimistically short
-            // model-supplied timeout_ms (e.g. 3 min) can't kill a legitimate long build under
-            // scheduling contention. Only applied in the controlled Build/Test tool context.
+            // #313: floor Build/Test command timeouts at the configured run_command default so an
+            // optimistically short model-supplied timeout_ms (e.g. 3 min) can't kill a legitimate
+            // long build under scheduling contention. Only applied in the controlled Build/Test
+            // tool context.
             MinimumTimeoutMs = controlledBuildTestShell
-                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                ? runCommandDefaultTimeoutMs
                 : 0,
         };
         _shellExecutionTracker?.Dispose();
@@ -851,6 +856,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             category = providerFailure.FailureKind.ToString(),
             errorCode = providerFailure.ErrorCode,
             retryable = providerFailure.IsRetryable,
+            causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
         });
     }
 
@@ -1129,15 +1135,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private void EmitShellExecutionPending(ShellExecutionSnapshot snapshot)
     {
-        Emit(EventTypes.ToolExecutionPending, new
-        {
-            toolCallId = snapshot.ToolCallId,
-            commandHash = snapshot.CommandHash,
-            startedAtUtc = snapshot.StartedAt,
-            deadlineUtc = snapshot.Deadline,
-            elapsedSeconds = (DateTimeOffset.UtcNow - snapshot.StartedAt).TotalSeconds,
-        });
+        Emit(EventTypes.ToolExecutionPending, CreateShellExecutionPendingPayload(_runId, snapshot, DateTimeOffset.UtcNow));
     }
+
+    internal static object CreateShellExecutionPendingPayload(
+        string runId,
+        ShellExecutionSnapshot snapshot,
+        DateTimeOffset observedAt) => new
+        {
+            runId,
+            toolCallId = snapshot.ToolCallId,
+            toolName = "run_command",
+            startedAtUtc = snapshot.StartedAt,
+            deadlineUtc = snapshot.Deadline == DateTimeOffset.MaxValue ? null : (DateTimeOffset?)snapshot.Deadline,
+            elapsedSeconds = Math.Max(0, (observedAt - snapshot.StartedAt).TotalSeconds),
+        };
 
     internal async Task HandleShellExecutionTimeoutAsync(ShellExecutionSnapshot snapshot)
     {
@@ -1657,7 +1669,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             TrackApprovedShell(callId, callId);
         }
-        StartToolSpan(callId, resolvedToolName, startTime);
+        StartToolSpan(callId, resolvedToolName, arguments, startTime);
         EmitToolCallOnce(callId, resolvedToolName, arguments);
     }
 
@@ -1671,11 +1683,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// tool call's span is still open when this one starts (overlapping tool calls), ambient
     /// parenting would nest this span under that other tool span instead of under the turn.
     /// </summary>
-    private void StartToolSpan(string callId, string toolName, DateTimeOffset? startTime = null)
+    private const int MaxTraceToolPayloadLength = 8_000;
+
+    private void StartToolSpan(string callId, string toolName, object? arguments = null, DateTimeOffset? startTime = null)
     {
         var activity = StartToolSpanCore(_turnActivity, toolName, startTime);
         if (activity is null) return;
         ConfigureToolSpanTags(activity, toolName, callId, _agentName, _runId);
+        SetToolPayloadTags(activity, TraceTelemetry.ToolInput, TraceTelemetry.ToolInputState, arguments);
         ApplySafeTraceContext(activity);
         if (_toolTraceDecisions.TryGetValue(callId, out var decision))
             ApplyToolTraceDecision(activity, decision);
@@ -1683,10 +1698,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             activity.Dispose();
     }
 
-    private void RecordDeniedToolSpan(string callId, string toolName, string errorType)
+    private void RecordDeniedToolSpan(string callId, string toolName, string errorType, object? arguments = null)
     {
         if (!_activeToolSpans.ContainsKey(callId))
-            StartToolSpan(callId, toolName, DateTimeOffset.UtcNow);
+            StartToolSpan(callId, toolName, arguments, DateTimeOffset.UtcNow);
         SetToolTraceDecision(callId, TraceTelemetry.DecisionDenied);
         if (_activeToolSpans.TryGetValue(callId, out var activity))
             activity.SetTag(TraceTelemetry.ErrorType, errorType);
@@ -1784,9 +1799,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         activity.SetTag(TraceTelemetry.Status, success ? "success" : "error");
         if (!success)
             activity.SetTag(TraceTelemetry.ErrorType, "tool_execution_failed");
-        // The error description and tool result can include command output, file content, or
-        // credentials. The trace contract carries only the bounded error category/status; the
-        // authorized persisted run-event API remains the redacted source for tool-call detail.
+        if (success)
+        {
+            SetToolPayloadTags(activity, TraceTelemetry.ToolOutput, TraceTelemetry.ToolOutputState, toolResult);
+        }
+        else
+        {
+            SetToolPayloadTags(activity, TraceTelemetry.ToolOutput, TraceTelemetry.ToolOutputState, error);
+        }
         activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error,
             success ? null : "Tool execution failed");
         if (endTime is { } ts && ts != default)
@@ -1796,6 +1816,19 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    private static void SetToolPayloadTags(Activity activity, string valueTag, string stateTag, object? value)
+    {
+        if (value is null)
+        {
+            activity.SetTag(stateTag, TraceTelemetry.PayloadNotCaptured);
+            return;
+        }
+
+        var capture = SensitiveDataRedactor.RedactAndBoundTelemetryPayload(value, MaxTraceToolPayloadLength);
+        activity.SetTag(valueTag, capture.Text);
+        activity.SetTag(stateTag, capture.State);
     }
 
     private static void CaptureHostProcessTelemetryStart(Activity activity)
@@ -1861,7 +1894,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 shellArgs["directory"] = workingDirectory;
                 var denyReason = BuildNativeShellDenyReason(
                     Interlocked.Increment(ref _nativeShellDenyAttempts));
-                RecordDeniedToolSpan(shellCallId, "run_command", "policy_denied");
+                RecordDeniedToolSpan(shellCallId, "run_command", "policy_denied", shellArgs);
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
                 EmitRunDegradedOnce("run_command", denyReason);
@@ -1954,7 +1987,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 if (!approved)
                 {
                     const string denyReason = "URL fetch was denied by the operator.";
-                    RecordDeniedToolSpan(urlCallId, "web_fetch", "authorization_denied");
+                    RecordDeniedToolSpan(urlCallId, "web_fetch", "authorization_denied", new Dictionary<string, object>
+                    {
+                        ["url"] = rawUrl,
+                    });
                     emitToolErrorOnce(urlCallId, denyReason);
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
                     return Task.FromResult(PermissionDecision.Reject(denyReason));
@@ -2068,7 +2104,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
                     if (!allowed)
                     {
-                        RecordDeniedToolSpan(customCallId, toolName, "policy_denied");
+                        RecordDeniedToolSpan(customCallId, toolName, "policy_denied", args);
                         emitToolCallOnce(customCallId, toolName, args);
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
@@ -2125,7 +2161,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     // self-consistent call+error pair, then a run.degraded event so the UI can
                     // show an amber badge regardless of the agent's self-assessment.
                     var denyReason2 = reason ?? "Operation denied by sandbox policy.";
-                    RecordDeniedToolSpan(callId, toolName, "policy_denied");
+                    RecordDeniedToolSpan(callId, toolName, "policy_denied", args);
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
                     EmitRunDegradedOnce(toolName, denyReason2);
@@ -2310,7 +2346,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         Action<string, string, object?> emitToolCallOnce,
         Action<string, string> emitToolResultOnce,
         Action<string, string> emitToolErrorOnce,
-        Action<string, string, DateTimeOffset?> startToolSpan,
+        Action<string, string, object?, DateTimeOffset?> startToolSpan,
         Action<string, bool, string?, DateTimeOffset?, string?> completeToolSpan) : AIFunction
     {
         public override string Name => inner.Name;
@@ -2328,7 +2364,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 : null;
 
             var startTime = DateTimeOffset.UtcNow;
-            startToolSpan(callId, inner.Name, startTime);
+            using var invocationScope = SandboxToolInvocation.PushToolCallId(callId);
+            startToolSpan(callId, inner.Name, argsDict, startTime);
             emitToolCallOnce(callId, inner.Name, argsDict);
 
             try
@@ -2453,6 +2490,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// </summary>
+    /// <summary>
+    /// A run created with <c>auto-approve-tools</c> or <c>autopilot</c> has no operator watching
+    /// for approval prompts. Used to tailor the shell HITL refusal so an unattended run rewrites a
+    /// blocked destructive command instead of spinning on it (#1314).
+    /// </summary>
+    private bool IsUnattendedRun(string runId)
+    {
+        if (_runOptions is null) return false;
+        var options = _runOptions.Get(runId);
+        return options.AutoApproveTools || options.Autopilot;
+    }
+
     internal static string SanitizeUrl(string rawUrl)
     {
         if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))

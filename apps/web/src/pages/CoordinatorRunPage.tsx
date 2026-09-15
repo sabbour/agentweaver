@@ -65,7 +65,7 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
 import { TopologyLayoutToggle } from '../components/TopologyLayoutToggle';
 import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
@@ -98,7 +98,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
@@ -112,7 +112,7 @@ import type {
   RunStatus,
   WorkPlanResponse,
 } from '../api/types';
-import { safeTerminalFailureMessage } from '../api/types';
+import { isSafeTerminalCause, safeTerminalFailureMessage } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
@@ -261,6 +261,43 @@ interface CoordinatorRunViewState {
   canToggleAutomation: boolean;
 }
 
+const RUN_PROMPT_COLLAPSED_LINES = 4;
+const RUN_PROMPT_TOGGLE_THRESHOLD = 280;
+
+function isLongRunPrompt(prompt: string): boolean {
+  return prompt.length > RUN_PROMPT_TOGGLE_THRESHOLD || prompt.split(/\r\n|\r|\n/).length > RUN_PROMPT_COLLAPSED_LINES;
+}
+
+function formatRunStartedAt(timestamp: number | undefined): string {
+  if (timestamp === undefined) return 'Start time unavailable';
+  const value = new Date(timestamp);
+  return Number.isNaN(value.getTime()) ? 'Start time unavailable' : value.toLocaleString();
+}
+
+function looksLikeInlineShellSnippet(value: string): boolean {
+  const text = value.replace(/^['`]|['`]$/g, '').trim();
+  return /(?:^|\s)(?:node|npm|pnpm|yarn|dotnet|git|gh|curl|sleep|kill)(?:\s|$)/i.test(text)
+    || /\b(?:localhost|pid=\$!|\$pid)\b/i.test(text)
+    || /[;&|]/.test(text);
+}
+
+function renderPromptWithInlineCode(prompt: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const matcher = /(`[^`\r\n]+`|'[^'\r\n]+')/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(prompt)) !== null) {
+    if (match.index > cursor) parts.push(prompt.slice(cursor, match.index));
+    const value = match[0];
+    parts.push(looksLikeInlineShellSnippet(value)
+      ? <code key={`code-${match.index}`}>{value}</code>
+      : value);
+    cursor = match.index + value.length;
+  }
+  if (cursor < prompt.length) parts.push(prompt.slice(cursor));
+  return parts;
+}
+
 const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
 
 // coordinator.assembly_* event type -> phase. These event types may not be emitted
@@ -320,6 +357,41 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (k.includes('declin')) return 'declined';
   if (k.includes('dispatch')) return 'dispatching';
   return 'unknown';
+}
+
+function isActiveOrchPhase(phase: OrchPhase): boolean {
+  return phase === 'drafting_outcome'
+    || phase === 'dispatching'
+    || phase === 'awaiting_assembly'
+    || phase === 'assembling'
+    || phase === 'build_test'
+    || phase === 'rai'
+    || phase === 'in_review'
+    || phase === 'merge'
+    || phase === 'scribe';
+}
+
+function isTerminalOrParkedOrchPhase(phase: OrchPhase): boolean {
+  return phase === 'complete'
+    || phase === 'delegated'
+    || phase === 'failed'
+    || phase === 'blocked'
+    || phase === 'needs_resolution'
+    || phase === 'declined';
+}
+
+function isIneligibleSubtasksReason(reason: string | undefined | null): boolean {
+  return /(?:^|\b)ineligible_subtasks(?:\b|\s*\[)/i.test(reason ?? '');
+}
+
+function normalizeCoordinatorReasonForPhase(reason: string | undefined | null, phase: OrchPhase): string | undefined {
+  if (!reason || reason.trim() === '') return undefined;
+  if (isIneligibleSubtasksReason(reason)) {
+    return normalizeAssemblyBlockedReason(reason) ?? "Waiting on subtasks that aren't ready to assemble.";
+  }
+  if (phase === 'blocked') return normalizeAssemblyBlockedReason(reason);
+  if (phase === 'failed' || phase === 'needs_resolution' || phase === 'declined') return reason;
+  return undefined;
 }
 
 function outcomePlanRedraftIsActive(
@@ -473,6 +545,7 @@ export function normalizeAssemblyBlockedReason(reason: string | undefined | null
       ? `Waiting on 1 subtask that isn't ready to assemble (${list}).`
       : `Waiting on ${ids.length} subtasks that aren't ready to assemble (${list}).`;
   }
+  if (isIneligibleSubtasksReason(stripped)) return "Waiting on subtasks that aren't ready to assemble.";
   return stripped.replace(/_/g, ' ');
 }
 
@@ -628,7 +701,7 @@ function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null)
   return probeState.key === probeKey ? probeState.status : 'warming';
 }
 
-// Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
+// Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status, except an active coordinator_status overrides stale terminal/parked events.
 function deriveOrchState(
   events: RunStreamEvent[],
   statusField: string | undefined,
@@ -679,6 +752,17 @@ function deriveOrchState(
       };
     }
   }
+  const fieldPhase = normalizePhase(statusField);
+  if (winner && fieldPhase !== 'unknown' && isActiveOrchPhase(fieldPhase) && isTerminalOrParkedOrchPhase(winner.phase)) {
+    return {
+      phase: fieldPhase,
+      reason: normalizeCoordinatorReasonForPhase(reasonField, fieldPhase),
+      ineligibleSubtasks: reasonField && isIneligibleSubtasksReason(reasonField)
+        ? parseIneligibleIdsFromReason(reasonField).map((id) => ({ id }))
+        : undefined,
+      sourceLabel: 'run status field',
+    };
+  }
   if (winner) {
     const rawFiles = winner.payload['conflictingFiles'] ?? winner.payload['conflicting_files'];
     const conflictFiles = Array.isArray(rawFiles)
@@ -726,14 +810,11 @@ function deriveOrchState(
       updatedAt: readEventTimestamp(latestOutcomeDrafting.payload),
     };
   }
-  const fieldPhase = normalizePhase(statusField);
   if (fieldPhase !== 'unknown') {
-    // #97: when the live blocked stream event was evicted (reload/reconnect) the only surviving signal
-    // is the persisted status/reason field — normalize the `ineligible_subtasks [ids]` code here too so
-    // the reason line never degrades back to the opaque raw code.
-    const normalizedFieldReason = fieldPhase === 'blocked'
-      ? normalizeAssemblyBlockedReason(reasonField)
-      : reasonField ?? undefined;
+    // #97/#1344: when the live blocked stream event was evicted (reload/reconnect) the only surviving
+    // signal is the persisted status/reason field. Normalize ineligible-subtask reasons as waiting
+    // context, but do not carry stale terminal reasons onto an active coordinator phase.
+    const normalizedFieldReason = normalizeCoordinatorReasonForPhase(reasonField, fieldPhase);
     return {
       phase: fieldPhase,
       reason: normalizedFieldReason,
@@ -938,6 +1019,19 @@ function deriveCoordinatorRunViewState(
   }
 
   const orchBucket = bucketForOrchPhase(orch.phase);
+  if (status === 'in_progress'
+    && (orchBucket === 'failed' || orchBucket === 'completed')) {
+    return {
+      bucket: 'running',
+      label: runStatusLabel(status),
+      reason: orch.reason,
+      sourceLabel: 'run status field',
+      terminal: false,
+      canRetry: false,
+      canStop: true,
+      canToggleAutomation: true,
+    };
+  }
   if (orchBucket !== 'unknown') {
     return {
       bucket: orchBucket,
@@ -1309,6 +1403,40 @@ const useStyles = makeStyles({
   },
   metaSeparator: {
     color: tokens.colorNeutralForeground4,
+  },
+  runPromptBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXS,
+    maxWidth: '76ch',
+    minWidth: 0,
+  },
+  runPromptLabel: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  runPromptBody: {
+    maxWidth: '100%',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    '& code': {
+      fontFamily: tokens.fontFamilyMonospace,
+      fontSize: tokens.fontSizeBase200,
+      padding: `0 ${tokens.spacingHorizontalXXS}`,
+      borderRadius: tokens.borderRadiusSmall,
+      backgroundColor: tokens.colorNeutralBackground3,
+      color: tokens.colorNeutralForeground1,
+    },
+  },
+  runPromptToggle: {
+    minWidth: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
   },
   executionContext: {
     display: 'flex',
@@ -2297,6 +2425,10 @@ export function CoordinatorRunPage() {
   }>({ runId: '', startedAt: undefined, endedAt: undefined });
   const runStartedAt = runTimingState.runId === (runId ?? '') ? runTimingState.startedAt : undefined;
   const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
+  const [runPromptExpansion, setRunPromptExpansion] = useState<{ key: string; expanded: boolean }>({
+    key: '',
+    expanded: false,
+  });
 
   const {
     events,
@@ -2607,7 +2739,14 @@ export function CoordinatorRunPage() {
       });
       if (detail.status === 'failed') {
         apiClient.getRunTerminalDiagnostic(runId)
-          .then((diagnostic) => { if (!cancelled) setTerminalDiagnostic(diagnostic); })
+          .then((diagnostic) => {
+            if (!cancelled) {
+              setTerminalDiagnostic({
+                ...diagnostic,
+                cause_chain: diagnostic.cause_chain.filter(isSafeTerminalCause),
+              });
+            }
+          })
           .catch(() => { if (!cancelled) setTerminalDiagnostic(null); });
       }
       if (wp) consecutiveWorkPlanNotReady = 0;
@@ -3044,6 +3183,9 @@ export function CoordinatorRunPage() {
         nodeSizeHints[node.id].height = COMPACT_NODE_H;
         // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
+        if (topoNode?.executionPodName) {
+          nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
+        }
         // Defensive: read display fields from flat props OR nested data map.
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
         const modelField  = node.model  ?? (node.data?.['model']  as string | undefined) ?? topoNode?.selectedModelId;
@@ -3104,6 +3246,9 @@ export function CoordinatorRunPage() {
       // height. (Human Review awaiting a decision is expanded further below to fit its on-face buttons.)
       if (wfModel) {
         nodeSizeHints[node.id].height = FIXED_NODE_WITH_CAPTION_H;
+      }
+      if (wfPod) {
+        nodeSizeHints[node.id].height += POD_INDICATOR_NODE_H;
       }
 
       // Collective-assembly stage status. Two sources combine: the phase projection
@@ -3179,7 +3324,7 @@ export function CoordinatorRunPage() {
       // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
       // room in the layout so neighboring bands keep clear of it. (Matches WorkflowNode's isHumanWaiting.)
       if (roleKey === 'review' && !nodePlanned && stepStatus === 'started') {
-        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H;
+        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H + (wfPod ? POD_INDICATOR_NODE_H : 0);
       }
 
       // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up
@@ -3981,6 +4126,19 @@ export function CoordinatorRunPage() {
   }, [keepaliveUrl]);
 
   const shortId         = runId && runId.length > 8 ? runId.slice(0, 8) : (runId ?? '');
+  const runStartedLabel = formatRunStartedAt(runStartedAt);
+  const runPrompt = goal && goal.trim() ? goal : undefined;
+  const runPromptKey = `${runId ?? ''}\n${runPrompt ?? ''}`;
+  const runPromptExpanded = runPromptExpansion.key === runPromptKey ? runPromptExpansion.expanded : false;
+  const runPromptIsLong = runPrompt ? isLongRunPrompt(runPrompt) : false;
+  const runPromptClampStyle: CSSProperties | undefined = runPrompt && runPromptIsLong && !runPromptExpanded
+    ? {
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: RUN_PROMPT_COLLAPSED_LINES,
+        overflow: 'hidden',
+      }
+    : undefined;
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
@@ -4053,7 +4211,7 @@ export function CoordinatorRunPage() {
       </div>
     </div>
   );
-  const isRetryable     = viewState.canRetry;
+  const isRetryable = viewState.canRetry && terminalDiagnostic?.retryable !== false;
   // Stop/toggle endpoints still require an active run, but coordinator messaging uses the backend's
   // explicit steerability bit so review-gated runs can receive operator instructions.
   const coordActive = coordinatorSteerable === true || (coordinatorSteerable === undefined && viewState.canStop);
@@ -4652,7 +4810,11 @@ export function CoordinatorRunPage() {
         {previewStatusContent()}
       </div>
     );
-  const retryHint = isRetryable ? 'Starts a fresh run from the same goal. The original run is kept and linked.' : 'Re-run available after failure';
+  const retryHint = isRetryable
+    ? 'Starts a fresh run from the same goal. The original run is kept and linked.'
+    : terminalDiagnostic?.retryable === false
+      ? 'This terminal failure is marked non-retryable.'
+      : 'Re-run is unavailable for this run state.';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
@@ -4779,6 +4941,7 @@ export function CoordinatorRunPage() {
             <MessageBar intent="error" data-testid="terminal-failure-diagnostic">
               <MessageBarBody>
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
+                {terminalDiagnostic.cause_chain.length > 0 ? ` Cause chain: ${terminalDiagnostic.cause_chain.join(' -> ')}.` : ''}
                 {' '}{terminalDiagnosticAction}
               </MessageBarBody>
               <MessageBarActions>
@@ -4913,6 +5076,48 @@ export function CoordinatorRunPage() {
                 )}
               </div>
             </div>
+            <div className={styles.metaRail} data-testid="run-metadata" aria-label="Run identity">
+              <span className={styles.metaItem}>
+                <span className={styles.metaItemStrong}>Run</span>
+                {' '}
+                <span className={styles.metaValue} title={runId}>{runId}</span>
+              </span>
+              <span className={styles.metaSeparator} aria-hidden="true"> · </span>
+              <span className={styles.metaItem}>
+                <span className={styles.metaItemStrong}>Started</span>
+                {' '}
+                <span className={styles.metaValue} title={runStartedLabel}>{runStartedLabel}</span>
+              </span>
+            </div>
+            {runPrompt && (
+              <div className={styles.runPromptBlock} data-testid="run-prompt">
+                <span className={styles.runPromptLabel}>Prompt</span>
+                <div
+                  id="run-prompt-body"
+                  className={styles.runPromptBody}
+                  data-testid="run-prompt-body"
+                  data-expanded={runPromptExpanded ? 'true' : 'false'}
+                  data-collapsed-lines={runPromptIsLong && !runPromptExpanded ? RUN_PROMPT_COLLAPSED_LINES : undefined}
+                  style={runPromptClampStyle}
+                >
+                  {renderPromptWithInlineCode(runPrompt)}
+                </div>
+                {runPromptIsLong && (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    className={styles.runPromptToggle}
+                    onClick={() => setRunPromptExpansion({ key: runPromptKey, expanded: !runPromptExpanded })}
+                    aria-expanded={runPromptExpanded}
+                    aria-controls="run-prompt-body"
+                    aria-label={runPromptExpanded ? 'Show less run prompt' : 'Show more run prompt'}
+                    data-testid="run-prompt-toggle"
+                  >
+                    {runPromptExpanded ? 'Show less' : 'Show more'}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

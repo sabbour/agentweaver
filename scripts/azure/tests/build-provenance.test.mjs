@@ -43,6 +43,13 @@ const CFG = Object.freeze({
   repoRoot: "C:\\fake\\repo",
 });
 
+const IMAGE_NAMES = Object.freeze([
+  "agentweaver-api",
+  "agentweaver-frontend",
+  "agentweaver-mcp",
+  "agentweaver-agent-host",
+]);
+
 function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
   const calls = { capture: [], run: [] };
   return {
@@ -59,6 +66,47 @@ function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
       return { code: 0 };
     },
   };
+}
+
+async function collectStderr(fn) {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = function patchedWrite(chunk, encoding, callback) {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    const result = await fn();
+    return { result, stderr: chunks.join("") };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
+function isAcrImport(args) {
+  return args[0] === "acr" && args[1] === "import";
+}
+
+function isAcrRepositoryShow(args) {
+  return args[0] === "acr" && args[1] === "repository" && args[2] === "show";
+}
+
+function imageArg(args) {
+  return args[args.indexOf("--image") + 1];
+}
+
+function sourceArg(args) {
+  return args[args.indexOf("--source") + 1];
+}
+
+function finalPromotionImports(exec, tag = "v1.2.3") {
+  return exec.calls.capture.filter((call) =>
+    isAcrImport(call.args)
+    && sourceArg(call.args).startsWith(CFG.ACR_LOGIN_SERVER)
+    && imageArg(call.args).endsWith(`:${tag}`),
+  );
 }
 
 test("stashFrontendNodeModules: removes stale sibling stashes but preserves this process's stash", () => {
@@ -299,20 +347,26 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
   assert.equal(digest, "sha256:" + "b".repeat(64));
 });
 
-test("acrRepositoryDigestForImage: returns null when the image tag does not exist", async () => {
+test("acrRepositoryDigestForImage: returns absent when the image tag does not exist", async () => {
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "", stderr: "not found", code: 1 }) });
-  assert.equal(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), null);
+  assert.deepEqual(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), { state: "absent" });
 });
 
-test("acrRepositoryDigestForImage: treats a timeout rejection as 'not visible yet' instead of throwing", async () => {
+test("acrRepositoryDigestForImage: retries a timeout rejection before returning unknown", async () => {
   // `az acr repository show` is observably hang-prone, so exec rejects on the
-  // timeout rather than returning a non-zero code. That rejection must not escape.
+  // timeout rather than returning a non-zero code. That rejection must not be
+  // confused with an absent tag after a single attempt.
+  let attempts = 0;
   const exec = fakeExec({
     captureImpl: async () => {
+      attempts += 1;
       throw new Error("Command timed out after 90000ms; remote operation state is unknown and was not retried: az acr repository show");
     },
   });
-  assert.equal(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), null);
+  const result = await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec, sleep: async () => {} });
+  assert.equal(result.state, "unknown");
+  assert.match(result.reason, /timed out/i);
+  assert.equal(attempts, 3);
 });
 
 test("waitForAcrRepositoryDigest: keeps retrying past a hung CLI call and returns the digest once it resolves", async () => {
@@ -370,6 +424,42 @@ test("stampProvenance: imports the source digest into prov-<sha> and then locks 
   assert.ok(lockCall.args.includes(`agentweaver-api:prov-${"c".repeat(40)}`), "lock call must target the stamped provenance tag");
 });
 
+test("stampProvenance: a timed-out provenance lock warns and returns", async () => {
+  const git = { revParseCommit: async () => "c".repeat(40) };
+  const sourceDigest = "sha256:" + "d".repeat(64);
+  let provReadCount = 0;
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("show-manifests")) {
+        const query = args[args.indexOf("--query") + 1];
+        if (query.includes("@=='v1.2.3'")) return { stdout: sourceDigest, stderr: "", code: 0 };
+        if (query.includes("@=='prov-")) {
+          provReadCount += 1;
+          return { stdout: provReadCount === 1 ? "" : sourceDigest, stderr: "", code: 0 };
+        }
+      }
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
+        return {
+          stdout: "",
+          stderr: "Command timed out after 600000ms; remote operation state is unknown and was not retried: az acr repository update",
+          code: 124,
+          timedOut: true,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const { result, stderr } = await collectStderr(() =>
+    stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, { exec, git, sleep: async () => {} }),
+  );
+
+  assert.equal(result.tag, `prov-${"c".repeat(40)}`);
+  assert.match(stderr, /WARNING:.*provenance tag agentweaver-api:prov-c+ lock timed out/i);
+  assert.match(stderr, /deployment will continue/i);
+});
+
 test("stampProvenance: is a no-op when the provenance tag already points at the expected digest", async () => {
   const git = { revParseCommit: async () => "e".repeat(40) };
   const digest = "sha256:" + "f".repeat(64);
@@ -424,6 +514,171 @@ test("importImagesFromGhcr: fails closed before final tag promotion when one sta
   assert.equal(finalImports.length, 0, "no final deployment tags should be mutated when GHCR preflight fails");
 });
 
+test("importImagesFromGhcr: throttled staged import retries and then succeeds", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const importAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        const count = (importAttempts.get(target) ?? 0) + 1;
+        importAttempts.set(target, count);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight") && count === 1) {
+          const error = new Error("Operation returned an invalid status code 'Too Many Requests'. StatusCode: 429");
+          error.stderr = "TOOMANYREQUESTS: too many requests to registry. Retry-After: 15";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && (args[2] === "untag" || args[2] === "update")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(result.expectedImageDigests["agentweaver-mcp"], digestByImage.get("agentweaver-mcp"));
+  const mcpStageAttempts = [...importAttempts]
+    .filter(([target]) => target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight"))
+    .map(([, count]) => count);
+  assert.deepEqual(mcpStageAttempts, [2]);
+});
+
+test("importImagesFromGhcr: throttled staged import failure names ACR throttling", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight")) {
+          const error = new Error("Operation returned an invalid status code 'Too Many Requests'. StatusCode: 429");
+          error.stderr = "TOOMANYREQUESTS: too many requests to registry. Retry-After: 15";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: `sha256:${String(IMAGE_NAMES.indexOf(image) + 1).repeat(64)}`, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(
+    () => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }),
+    /ACR throttled import of ghcr\.io\/sabbour\/agentweaver-mcp:sha-deadbee into agentweaver-mcp:/,
+  );
+});
+
+test("importImagesFromGhcr: missing staged source image fails with the missing image named", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const importAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        importAttempts.set(target, (importAttempts.get(target) ?? 0) + 1);
+        if (target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight")) {
+          const error = new Error("manifest unknown");
+          error.stderr = "manifest unknown: ghcr.io/sabbour/agentweaver-mcp:sha-deadbee";
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: `sha256:${String(IMAGE_NAMES.indexOf(image) + 1).repeat(64)}`, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(
+    () => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }),
+    /source image ghcr\.io\/sabbour\/agentweaver-mcp:sha-deadbee was not found while importing agentweaver-mcp:/,
+  );
+  const mcpStageAttempts = [...importAttempts]
+    .filter(([target]) => target.startsWith("agentweaver-mcp:") && target.includes("ghcr-preflight"))
+    .map(([, count]) => count);
+  assert.deepEqual(mcpStageAttempts, [1], "missing images must not be retried as throttling");
+});
+
+test("importImagesFromGhcr: staging cleanup timeout uses its own budget and deploy continues", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+    ACR_UNTAG_TIMEOUT_MS: "12345",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const untagTimeouts = [];
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args, opts) => {
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const [image] = imageArg(args).split(":");
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") {
+        untagTimeouts.push(opts.timeoutMs);
+        const error = new Error(`Command timed out after ${opts.timeoutMs}ms; remote operation state is unknown and was not retried`);
+        error.name = "ExecTimeoutError";
+        throw error;
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(result.expectedImageDigests["agentweaver-api"], digestByImage.get("agentweaver-api"));
+  assert.equal(untagTimeouts.length, 4);
+  assert.deepEqual([...new Set(untagTimeouts)], ["12345"]);
+});
+
 test("importImagesFromGhcr: refuses to overwrite a conflicting existing ACR tag without --force", async () => {
   const cfg = {
     ...CFG,
@@ -453,6 +708,280 @@ test("importImagesFromGhcr: refuses to overwrite a conflicting existing ACR tag 
     return source.startsWith(CFG.ACR_LOGIN_SERVER);
   });
   assert.equal(promotedImports.length, 0, "conflicting tags must fail before any staged digest is promoted");
+});
+
+test("importImagesFromGhcr: failed digest read with matching existing tag recovers via forced conflict retry", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const finalDigestReadAttempts = new Map();
+  const finalImportAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        const source = sourceArg(args);
+        if (source.startsWith(CFG.ACR_LOGIN_SERVER) && target.endsWith(":v1.2.3")) {
+          const count = (finalImportAttempts.get(target) ?? 0) + 1;
+          finalImportAttempts.set(target, count);
+          if (count === 1) {
+            const error = new Error(`(Conflict) Tag ${target} already exists in target registry.`);
+            error.stderr = error.message;
+            throw error;
+          }
+          assert.ok(args.includes("--force"), "matching conflict retry must use --force");
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        const [image, tag] = ref.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+        const count = (finalDigestReadAttempts.get(ref) ?? 0) + 1;
+        finalDigestReadAttempts.set(ref, count);
+        if (count <= 3) {
+          throw new Error("Command timed out after 90000ms; remote operation state is unknown: az acr repository show");
+        }
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && (args[2] === "untag" || args[2] === "update")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(result.expectedImageDigests["agentweaver-api"], digestByImage.get("agentweaver-api"));
+  assert.equal(finalPromotionImports(exec).filter((call) => call.args.includes("--force")).length, 4);
+});
+
+test("importImagesFromGhcr: failed digest read with differing existing tag refuses non-forced overwrite", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const requestedDigest = "sha256:" + "4".repeat(64);
+  const existingDigest = "sha256:" + "5".repeat(64);
+  const finalDigestReadAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        if (sourceArg(args).startsWith(CFG.ACR_LOGIN_SERVER) && target.endsWith(":v1.2.3")) {
+          const error = new Error(`(Conflict) Tag ${target} already exists in target registry.`);
+          error.stderr = error.message;
+          throw error;
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) return { stdout: requestedDigest, stderr: "", code: 0 };
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        if (ref.includes("ghcr-preflight")) return { stdout: requestedDigest, stderr: "", code: 0 };
+        const count = (finalDigestReadAttempts.get(ref) ?? 0) + 1;
+        finalDigestReadAttempts.set(ref, count);
+        if (count <= 3) {
+          throw new Error("Command timed out after 90000ms; remote operation state is unknown: az acr repository show");
+        }
+        return { stdout: existingDigest, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(
+    () => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }),
+    /refusing to retry promotion with --force/i,
+  );
+  assert.equal(finalPromotionImports(exec).filter((call) => call.args.includes("--force")).length, 0);
+});
+
+test("importImagesFromGhcr: matching existing digest after retry skips final tag import", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const finalDigestReadAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        const [image, tag] = ref.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+        const count = (finalDigestReadAttempts.get(ref) ?? 0) + 1;
+        finalDigestReadAttempts.set(ref, count);
+        if (count === 1) {
+          throw new Error("Command timed out after 90000ms; remote operation state is unknown: az acr repository show");
+        }
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(finalPromotionImports(exec).length, 0, "matching final tags must be clean no-ops");
+});
+
+test("importImagesFromGhcr: slow matching existing digest read gets a 10 minute default budget and skips promotion", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digestByImage = new Map(IMAGE_NAMES.map((image, index) => [image, `sha256:${String(index + 1).repeat(64)}`]));
+  const finalReadTimeouts = [];
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args, opts) => {
+      if (isAcrImport(args)) {
+        assert.ok(
+          !(sourceArg(args).startsWith(CFG.ACR_LOGIN_SERVER) && imageArg(args).endsWith(":v1.2.3")),
+          "matching final tags must not be promoted",
+        );
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) {
+        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      }
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        const [image, tag] = ref.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+        finalReadTimeouts.push(opts.timeoutMs);
+        if (opts.timeoutMs < 600_000) {
+          throw new Error(`Command timed out after ${opts.timeoutMs}ms; az acr repository show was still running under concurrent import load`);
+        }
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.ok(finalReadTimeouts.length >= 4, "expected final tag digest reads");
+  assert.ok(
+    finalReadTimeouts.every((timeoutMs) => timeoutMs >= 600_000),
+    "final tag digest reads need a default budget large enough for ACR under import load",
+  );
+  assert.equal(finalPromotionImports(exec).length, 0, "matching final tags must be clean no-ops after the slow read completes");
+});
+
+test("importImagesFromGhcr: operator --force reaches promotion import after digest read remains unknown", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+    FORCE: true,
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digest = "sha256:" + "6".repeat(64);
+  const finalDigestReadAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) return { stdout: digest, stderr: "", code: 0 };
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        if (ref.includes("ghcr-preflight")) return { stdout: digest, stderr: "", code: 0 };
+        const count = (finalDigestReadAttempts.get(ref) ?? 0) + 1;
+        finalDigestReadAttempts.set(ref, count);
+        if (count <= 3) {
+          throw new Error("Command timed out after 90000ms; remote operation state is unknown: az acr repository show");
+        }
+        return { stdout: digest, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.ok(finalPromotionImports(exec).length > 0, "expected final promotion imports");
+  assert.equal(
+    finalPromotionImports(exec).filter((call) => call.args.includes("--force")).length,
+    finalPromotionImports(exec).length,
+    "operator --force must not be gated on a successful pre-read",
+  );
+});
+
+test("importImagesFromGhcr: promotion Conflict with matching digest is retried with --force", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const digest = "sha256:" + "7".repeat(64);
+  const finalDigestReadAttempts = new Map();
+  const finalImportAttempts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (isAcrImport(args)) {
+        const target = imageArg(args);
+        if (sourceArg(args).startsWith(CFG.ACR_LOGIN_SERVER) && target.endsWith(":v1.2.3")) {
+          const count = (finalImportAttempts.get(target) ?? 0) + 1;
+          finalImportAttempts.set(target, count);
+          if (count === 1) {
+            const error = new Error(`(Conflict) Tag ${target} already exists in target registry.`);
+            error.stderr = error.message;
+            throw error;
+          }
+          assert.ok(args.includes("--force"), "conflict retry must use --force after digest confirmation");
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args.includes("show-manifests")) return { stdout: digest, stderr: "", code: 0 };
+      if (isAcrRepositoryShow(args)) {
+        const ref = imageArg(args);
+        if (ref.includes("ghcr-preflight")) return { stdout: digest, stderr: "", code: 0 };
+        const count = (finalDigestReadAttempts.get(ref) ?? 0) + 1;
+        finalDigestReadAttempts.set(ref, count);
+        if (count === 1) return { stdout: "", stderr: "not found", code: 1 };
+        return { stdout: digest, stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+
+  assert.equal(finalPromotionImports(exec).filter((call) => call.args.includes("--force")).length, 4);
 });
 
 test("importImagesFromGhcr: a last-image conflict blocks every earlier promotion and provenance stamp", async () => {

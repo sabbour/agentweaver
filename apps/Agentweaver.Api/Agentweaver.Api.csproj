@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\packages\Agentweaver.AspNetCore\Agentweaver.AspNetCore.csproj" />
     <!-- spec-006 (api-harness): serves a machine-readable OpenAPI contract so the LLM-driven curl
          harness can discover routes and request/response shapes instead of relying on hand-wrapped
          SDK-style subcommands. Built-in package (no Swashbuckle needed) since this project targets

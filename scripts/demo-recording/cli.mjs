@@ -55,7 +55,7 @@ Recording session commands:
   start    Self-direct session setup, then optionally prepare a capture plan.
   prepare  Validate a capture plan and create playwright-cli scripts.
   capture  Self-direct authenticated setup; --unauthenticated is isolated.
-  status   Check the Chrome profile, protected auth, and recording session.
+  status   Check Chrome, protected auth expiry, and the recording session.
   close    Close the named persistent recording session.
   help     Show this help.
 
@@ -338,18 +338,13 @@ export async function runRecordingCommand(command, argv, {
     await printPrepared(await captureRecordingPlan(options));
   } else if (command === 'status') {
     const status = await recordingStatus(options);
-    const tokenLine = !status.tokenPresent
-      ? 'missing'
-      : status.tokenExpiresAt === null
-        ? 'present (no decodable expiry)'
-        : status.tokenExpired
-          ? `EXPIRED ${Math.abs(status.tokenMinutesRemaining)} minute(s) ago at ${status.tokenExpiresAt.toISOString()} -- run "npm run demo:record -- signin"`
-          : `valid for ${status.tokenMinutesRemaining} more minute(s) (expires ${status.tokenExpiresAt.toISOString()})`;
+    const authState = status.authReady
+      ? `ready (${status.authStatus.remainingText} remaining; expires ${status.authStatus.expiresAtIso})`
+      : `${status.authStatus.present ? 'refresh needed' : 'missing'} (${status.authStatus.reason}; remaining ${status.authStatus.remainingText})`;
     process.stdout.write([
       `Google Chrome Default profile: ${status.chromeDefaultProfile ? 'found' : 'missing'}`,
       `Protected auth directory: ${status.authIgnored ? 'Git-ignored' : 'not Git-ignored'}`,
-      `Recording authentication: ${status.authReady ? 'ready' : 'missing'}`,
-      `Session token: ${tokenLine}`,
+      `Recording authentication: ${authState}`,
       `Session "${options.session}": ${status.sessionOpen ? 'open' : 'closed'}`,
       `Session authentication: ${status.sessionAuthenticated ? 'verified' : 'not verified'}`,
       '',

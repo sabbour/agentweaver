@@ -836,7 +836,7 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
     if (request.LifetimeMinutes is < 1 or > 1440)
         return Results.BadRequest(new { error = "lifetime_minutes must be between 1 and 1440." });
     if (request.DnsConvergenceTimeoutSeconds is < 60 or > 3600)
-        return Results.BadRequest(new { error = "dns_convergence_timeout_seconds must be between 60 and 3600." });
+        return Results.BadRequest(new { error = "dns_convergence_timeout_seconds must be between 60 and 3600 for infrastructure convergence." });
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
@@ -1077,7 +1077,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         ModelId       = r.ModelId,
         Result        = r.Result,
         CoordinatorStatus = coordinatorStatuses.GetValueOrDefault(r.Id.ToString()),
-        CoordinatorStatusReason = isCoordinator ? r.Result : null,
+        CoordinatorStatusReason = isCoordinator ? EndpointHelpers.CoordinatorStatusReasonForProjection(r, coordinatorStatuses.GetValueOrDefault(r.Id.ToString())) : null,
         ArchivedAt = r.ArchivedAt,
         };
     }).ToList();
@@ -1111,17 +1111,9 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     {
         operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode. " +
             "Prepare orchestration execution context first and send its short-lived execution_key in If-Model-Provider-Key.";
-        operation.Parameters ??= [];
-        operation.Parameters.Add(new Microsoft.OpenApi.OpenApiParameter
-        {
-            Name = "If-Model-Provider-Key",
-            In = Microsoft.OpenApi.ParameterLocation.Header,
-            Required = true,
-            Description = "Short-lived execution key returned by POST /api/ai/execution-context for the orchestration operation.",
-            Schema = new Microsoft.OpenApi.OpenApiSchema { Type = Microsoft.OpenApi.JsonSchemaType.String },
-        });
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext("orchestration");
     }
 
     /// <summary>

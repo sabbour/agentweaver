@@ -26,8 +26,50 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> SafeCauseTypes = new(StringComparer.Ordinal)
     {
-        "HttpRequestException", "IOException", "OperationCanceledException", "SocketException",
-        "TaskCanceledException", "TimeoutException",
+        "AgentProviderException",
+        "ArgumentException",
+        "DirectoryNotFoundException",
+        "FileNotFoundException",
+        "HttpRequestException",
+        "IOException",
+        "InvalidOperationException",
+        "JsonException",
+        "ModelProviderConnectionRequiredException",
+        "NotSupportedException",
+        "OperationCanceledException",
+        "SocketException",
+        "TaskCanceledException",
+        "TimeoutException",
+        "UnauthorizedAccessException",
+        "WorkflowAgentInfrastructureException",
+    };
+    private static readonly Regex SafeCauseEntry = new(
+        @"\A(?:code|phase|reason|step|tool):[A-Za-z0-9_.:-]{1,112}\z",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> SafeCodes = new(StringComparer.Ordinal)
+    {
+        "agent_turn_internal_error",
+        "a2a_transport_failure",
+        "agent_host_turn_incomplete",
+        "assembly_blocked",
+        "assembly_failed",
+        "coordinator_execution_failed",
+        "coordinator_direct_execution_failed",
+        "github_copilot_auth_required",
+        "github_copilot_capability_snapshot_unavailable",
+        "github_copilot_model_unavailable",
+        "github_copilot_models_unavailable",
+        "github_copilot_provider_unavailable",
+        "github_copilot_rate_limited",
+        "github_copilot_runtime_not_configured",
+        "github_copilot_turn_stalled",
+        "github_copilot_turn_timeout",
+        "model_provider_changed",
+        "model_provider_connection_required",
+        "model_provider_snapshot_unavailable",
+        "model_provider_unavailable",
+        "model_provider_validation_unavailable",
+        "shell_execution_timeout",
     };
 
     [McpServerTool(Name = "diagnostics_get"), Description("Get a real-time system diagnostics snapshot: API version, process uptime, project/run counts, heartbeat state, and checkpoint GC state.")]
@@ -70,7 +112,7 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
                 CorrelationIds = result.CorrelationIds
                     .Where(pair => ServerGeneratedId.IsMatch(pair.Value))
                     .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
-                CauseChain = result.CauseChain.Where(SafeCauseTypes.Contains).ToList(),
+                CauseChain = result.CauseChain.Where(IsSafeCause).ToList(),
             };
         }
         catch (McpApiException) { throw; }
@@ -79,17 +121,7 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
 
     private static string CreateSafeMessage(string code, bool? retryable)
     {
-        var safeCode = code is "agent_turn_internal_error"
-            or "a2a_transport_failure"
-            or "agent_host_turn_incomplete"
-            or "github_copilot_auth_required"
-            or "github_copilot_capability_snapshot_unavailable"
-            or "model_provider_snapshot_unavailable"
-            or "shell_execution_timeout"
-            or "assembly_blocked"
-            or "assembly_failed"
-            ? code
-            : "agent_turn_internal_error";
+        var safeCode = SafeCodes.Contains(code) ? code : "agent_turn_internal_error";
         var retrySummary = retryable switch
         {
             true => " Retry is available.",
@@ -98,4 +130,9 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
         };
         return $"Run failed with code '{safeCode}'." + retrySummary;
     }
+
+    private static bool IsSafeCause(string cause) =>
+        !string.IsNullOrWhiteSpace(cause)
+        && cause.Length <= 128
+        && (SafeCauseTypes.Contains(cause) || SafeCauseEntry.IsMatch(cause));
 }

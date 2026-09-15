@@ -56,12 +56,12 @@ A team shaped for Azure-specific feature work, including architecture, complianc
 
 ## Blueprints
 
-Blueprints are fuller, opinionated team configurations. They specify a `roster`, `workflow`, `review_policy`, and `sandbox_profile`.
+Blueprints are fuller, opinionated team configurations. They specify a `roster`, `workflows` array, `review_policy`, and `sandbox_profile`.
 
 ### `blueprint-content-authoring`
 **Name:** Content Authoring
 
-Roster: `lead-researcher`, `writer`, `editor`, `quality-reviewer`, `docs-writer`
+Roster: `lead-researcher`, `writer`, `editor`
 
 A team for long-form content production with quality review and documentation publishing.
 
@@ -118,5 +118,17 @@ This is the recommended starting point for teams shipping a full product.
 ## Notes
 
 - **No standalone GTM/Product Launch blueprint** — those responsibilities live inside `blueprint-product-management`.
-- The `workflow` field on all blueprints is currently `"default"`. Custom workflow configuration is planned for a future wave.
+- Blueprints declare a `workflows` array; the coordinator selects from that available set.
+  See the [canonical blueprint-to-workflow mapping](workflow-library.md#blueprint-workflow-mappings)
+  rather than treating every blueprint as `default`.
 - Role IDs use kebab-case and match the `id` field in each role JSON file under `roles/`.
+
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Blueprint relationships
+
+[![UML component view showing catalog selection, repository suggestion, or model generation producing a Blueprint; the Blueprint owning roster and role definitions while referencing workflows, review policy, and sandbox profile; explicit validation and apply materializing project configuration and a cast team consumed by the coordinator.](diagrams/flagship/canonical-blueprint-relationships.png)](diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+
+[Structured source](diagrams/src/flagship/canonical-blueprint-relationships.json) · [Editable draw.io](diagrams/drawio/generated/flagship/canonical-blueprint-relationships.drawio)
+<!-- flagship-diagrams:end -->

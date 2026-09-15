@@ -10,16 +10,21 @@ This page walks through the user experience. For the API see the
 [reference](../reference/sandbox-browser-preview.md); for how the proxy works under the hood see the
 [deep dive](../deep-dive/sandbox-browser-preview.md).
 
+<!-- Shared diagram: sandbox-browser-preview-fig1; owned by deep-dive-execution.
+     Consume the stable canonical PNG; do not edit a local duplicate. -->
+
 ## When the Preview button is available
 
 A **Preview Sandbox** button appears in the coordinator run page when **both** are true:
 
 - the run is using the **Kubernetes sandbox** (the run's `sandbox.selected` event reports backend
   `kubernetes-sandbox-claim`), **and**
-- the run is **still active**.
+- a preview lifecycle state has been recorded or an existing preview session is available.
 
-On local/dev sandbox backends, or after the run has finished, the button is not shown — there is no claim
-pod to route into.
+Kubernetes placement alone does not make the header button appear. The current UI does not hide it
+solely because the run is terminal: a retained preview can still be inspected. An operator API request
+can also start a post-run preview if the required pod is still bound; agent/platform publication
+remains run-bound.
 
 ## Step by step
 
@@ -37,8 +42,9 @@ pod to route into.
      a new tab.
    - On a local/dev backend where the gateway path is off, the dialog notes that no proxied preview URL was
      returned.
-5. **It stays alive while you watch.** While the dialog/preview is open the app pings a keepalive every
-   ~60 seconds, sliding the preview's idle timeout. Stop watching and the preview lapses on its own.
+5. **Keepalive is bounded.** While the run page has an active session with a keepalive URL, it sends
+   keepalive about every 60 seconds. This is not gated on the dialog being open. Expiry is bounded by the
+   original maximum lifetime; watching does not extend the hard cap.
 6. **Stop when done.** Click **Stop** to tear it down (`DELETE` on that session). **Close** just dismisses
    the dialog.
 
@@ -72,8 +78,9 @@ the approval stays in your hands.
 ## Build & Test preview
 
 Workflows that include the platform-owned **Build & Test** step can also produce a browser preview. After
-builds and tests pass, the platform starts the app/service, discovers the actual port, and registers a preview
-URL automatically. It no longer injects `PORT=3000` or `--port`; apps use their framework default or honor
+an approved **or request-changes** Build & Test verdict, the platform attempts to start the app/service,
+discover its actual port, and register a preview URL through the approval flow. Declined verdicts skip it;
+preview failure does not block human review. It no longer injects `PORT=3000` or `--port`; apps use their framework default or honor
 `process.env.PORT` if they already support it. Port discovery is dependency-free: AgentHost reads app log hints
 and the sandbox pod's `/proc/net/tcp` plus `/proc/net/tcp6` socket tables, so it works even when the image lacks
 `ss` and when Node binds IPv6-any (`::`). Before registration, AgentHost fronts the observed app port with a
@@ -94,15 +101,18 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
   anyone with the URL can open it, so don't share it. It is short-lived and auto-expires.
 - **Scoped to this run's pod.** A preview reaches only the run's own sandbox pod, never another run's.
   Keepalive and stop verify the token actually belongs to the run before acting.
-- **Auto-expiry.** A preview is reaped after **30 minutes** idle (no keepalive), after a hard **8-hour**
-  cap, or once its pod is gone — whichever comes first. By default it survives the run ending (you can keep
-  previewing a finished run's artifact) until one of those limits or an explicit **Stop**.
+- **Auto-expiry.** Project lifetime defaults to **1440 minutes (24 hours)** and can be set to
+  1–1440 minutes. Initial expiry and maximum lifetime are both calculated from that same setting at
+  creation; keepalive cannot extend the hard cap. Expiry, explicit **Stop**, or pod loss ends availability.
+  The default retention policy permits a preview to outlive its run only while the required pod/process
+  resources remain available. The route state is durable across API restarts.
 - **Platform previews handle loopback binds.** The Build & Test live-preview path runs the app and forwarder
   inside the sandbox pod and registers the forwarder's `0.0.0.0` public port, so apps that only bind
   `127.0.0.1` can still be previewed. Manual previews still expose the port you enter directly, so prefer
   all-interface binds there.
-- **Gateway is the reachability test.** The API does not data-path-probe sandbox preview ports; the preview is
-  proven ready in-pod first, then confirmed by opening the returned Gateway URL.
+- **Gateway is the reachability test.** The API does not probe the sandbox pod directly. Platform previews
+  first check readiness in-pod; registration then waits for publication through the generated HTTPS
+  Gateway URL. Opening that returned URL exercises the same path.
 - **Failure is actionable, not blocking.** If the app exits, no listening port appears, observe hits an
   unexpected error, or the forwarder cannot make the app reachable, you see **Preview unavailable** with a
   reason such as `process_exited:exit={code}`, `no_listening_port_discovered`, `observe_error`,
@@ -115,3 +125,66 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 - [Live-preview provisioning](./live-preview-provisioning.md) — the Build & Test preview review flow.
 - [Sandbox pod execution experience](./sandbox-pod-execution.md) — the pod pill and the pod-per-run model.
 - [Runs, board & live inspection](./runs-board-watch.md) — where embedded run inspection lives.
+
+<details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Preview readiness follows the public path</td></tr>
+<tr><td>takeaway</td><td>Provision the route, then probe its exact HTTPS URL; object creation alone is not ready.</td></tr>
+<tr><td>group-title0</td><td>CONTROL: PROVISION + PROBE</td></tr>
+<tr><td>group-title1</td><td>GATEWAY DATA PATH</td></tr>
+<tr><td>Preview API</td><td>Preview API</td></tr>
+<tr><td>Preview API</td><td>Resolve bound SandboxClaim</td></tr>
+<tr><td>Preview API</td><td>Patch run selector on pod</td></tr>
+<tr><td>Preview API</td><td>Create Service + HTTPRoute</td></tr>
+<tr><td>Preview API</td><td>State from cluster, not cache</td></tr>
+<tr><td>Publication probe</td><td>Publication probe</td></tr>
+<tr><td>Publication probe</td><td>Exact generated HTTPS URL</td></tr>
+<tr><td>Publication probe</td><td>Wait for managed DNS</td></tr>
+<tr><td>Publication probe</td><td>Check Gateway + application</td></tr>
+<tr><td>Publication probe</td><td>Only then return ready</td></tr>
+<tr><td>Browser preview</td><td>Browser preview</td></tr>
+<tr><td>Browser preview</td><td>Open the returned URL</td></tr>
+<tr><td>Browser preview</td><td>Run-scoped capability host</td></tr>
+<tr><td>Browser preview</td><td>Keepalive via API</td></tr>
+<tr><td>Browser preview</td><td>Iframe: no-referrer</td></tr>
+<tr><td>Preview Gateway</td><td>Preview Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>Separate shared Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPS host match</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPRoute selects Service</td></tr>
+<tr><td>Preview Gateway</td><td>Not API port-forward</td></tr>
+<tr><td>ClusterIP Service</td><td>ClusterIP Service</td></tr>
+<tr><td>ClusterIP Service</td><td>Per-preview target selector</td></tr>
+<tr><td>ClusterIP Service</td><td>Service :80 → public port</td></tr>
+<tr><td>ClusterIP Service</td><td>Routes to bound sandbox pod</td></tr>
+<tr><td>ClusterIP Service</td><td>Allowed ports 3000–9000</td></tr>
+<tr><td>Sandbox preview app</td><td>Sandbox preview app</td></tr>
+<tr><td>Sandbox preview app</td><td>AgentHost pod-local path</td></tr>
+<tr><td>Sandbox preview app</td><td>Live preview: TCP forwarder</td></tr>
+<tr><td>Sandbox preview app</td><td>0.0.0.0 → loopback app</td></tr>
+<tr><td>Sandbox preview app</td><td>Manual: chosen target port</td></tr>
+<tr><td>relation-0</td><td>1 after create</td></tr>
+<tr><td>relation-1</td><td>2 ready URL</td></tr>
+<tr><td>relation-2</td><td>3 HTTPS probe</td></tr>
+<tr><td>relation-3</td><td>4 HTTPS</td></tr>
+<tr><td>relation-4</td><td>5 route</td></tr>
+<tr><td>relation-5</td><td>6 public port</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.</td></tr>
+<tr><td>assurance-0-label</td><td>Public readiness</td></tr>
+<tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
+<tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Rollback on failure</td></tr>
+<tr><td>assurance-1-fact</td><td>Unpublish failed preview resources.</td></tr>
+<tr><td>assurance-1-source</td><td>SandboxPreviewPublicationTests.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Separate ingress</td></tr>
+<tr><td>assurance-2-fact</td><td>DNS managed externally, not by API.</td></tr>
+<tr><td>assurance-2-source</td><td>gateway-preview.yaml</td></tr>
+<tr><td>n0</td><td>Patch run selector on pod; Create Service + HTTPRoute</td></tr>
+<tr><td>n1</td><td>Wait for managed DNS; Check Gateway + application</td></tr>
+<tr><td>n2</td><td>Run-scoped capability host; Keepalive via API</td></tr>
+<tr><td>n3</td><td>HTTPS host match; HTTPRoute selects Service</td></tr>
+<tr><td>n4</td><td>Service :80 → public port; Routes to bound sandbox pod</td></tr>
+<tr><td>n5</td><td>Live preview: TCP forwarder; 0.0.0.0 → loopback app</td></tr>
+<tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
+</tbody></table>
+</details>

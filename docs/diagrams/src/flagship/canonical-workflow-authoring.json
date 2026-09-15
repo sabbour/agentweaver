@@ -1,0 +1,176 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Generate a draft; save to activate",
+  "alt": "Flowchart showing one model correction pass, human editing of an unsaved workflow draft, save-time validation, project YAML persistence, registry activation, and distinct pre-write and post-write failures.",
+  "direction": "LR",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "generate",
+      "label": "Generate YAML draft",
+      "subLabel": "Description plus project context",
+      "icon": "box",
+      "fluentIcon": "model",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "draft-valid",
+      "label": "Draft valid?",
+      "subLabel": "Structure and binder dry-run",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Validate",
+      "variant": "decision"
+    },
+    {
+      "id": "correct",
+      "label": "Correct once",
+      "subLabel": "Failed YAML plus validation error",
+      "icon": "box",
+      "fluentIcon": "history",
+      "badge": {
+        "text": "Concept",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "review",
+      "label": "Review and edit draft",
+      "subLabel": "Still unsaved",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": {
+        "text": "Concept",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "save-valid",
+      "label": "Save valid?",
+      "subLabel": "Access, ID, path, syntax, and binding",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": "Validate",
+      "variant": "decision"
+    },
+    {
+      "id": "write",
+      "label": "Persist project YAML",
+      "subLabel": ".agentweaver/workflows/{id}.yaml",
+      "icon": "box",
+      "fluentIcon": "workspace",
+      "badge": "Write",
+      "variant": "document"
+    },
+    {
+      "id": "reload",
+      "label": "Registry reload available?",
+      "subLabel": "Synchronize and resolve by ID",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": "Activate",
+      "variant": "decision"
+    },
+    {
+      "id": "active",
+      "label": "Available for selection",
+      "subLabel": "Save completed successfully",
+      "icon": "box",
+      "fluentIcon": "outcome",
+      "badge": "Active",
+      "variant": "terminator"
+    },
+    {
+      "id": "generation-failed",
+      "label": "Generation failed",
+      "subLabel": "No workflow file was saved",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Stop",
+      "variant": "terminator"
+    },
+    {
+      "id": "activation-failed",
+      "label": "Persistence or activation failed",
+      "subLabel": "Post-write state may require inspection",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": "Stop",
+      "variant": "terminator"
+    }
+  ],
+  "edges": [
+    {
+      "from": "generate",
+      "to": "draft-valid",
+      "label": "candidate"
+    },
+    {
+      "from": "generate",
+      "to": "generation-failed",
+      "label": "provider error"
+    },
+    {
+      "from": "draft-valid",
+      "to": "review",
+      "label": "yes"
+    },
+    {
+      "from": "draft-valid",
+      "to": "correct",
+      "label": "no"
+    },
+    {
+      "from": "correct",
+      "to": "draft-valid",
+      "label": "second candidate",
+      "loopback": true
+    },
+    {
+      "from": "draft-valid",
+      "to": "generation-failed",
+      "label": "second invalid"
+    },
+    {
+      "from": "review",
+      "to": "save-valid",
+      "label": "Save"
+    },
+    {
+      "from": "save-valid",
+      "to": "review",
+      "label": "reject and edit",
+      "loopback": true
+    },
+    {
+      "from": "save-valid",
+      "to": "write",
+      "label": "valid"
+    },
+    {
+      "from": "write",
+      "to": "activation-failed",
+      "label": "write error"
+    },
+    {
+      "from": "write",
+      "to": "reload",
+      "label": "persisted"
+    },
+    {
+      "from": "reload",
+      "to": "active",
+      "label": "available"
+    },
+    {
+      "from": "reload",
+      "to": "activation-failed",
+      "label": "not discovered"
+    }
+  ]
+}

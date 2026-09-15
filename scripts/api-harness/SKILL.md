@@ -78,6 +78,16 @@ Two traps make this easy to misdiagnose:
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
+Before choosing a persona for a dynamic API run, check
+`scripts/persona-briefs/catalog.json` through
+`node scripts/persona-briefs/find-similar.mjs --description "<intent>"`. If the API
+scenario must execute through completion or publish/validate a live preview, add
+`--requires-completion`; do not dispatch a candidate whose ranked output says
+`runsToCompletion: false` or `completionStatus: "stops-at-gate"` for that intent.
+The selector warns when the strongest keyword match stops at a gate and lists
+gate-stopping candidates under `rejectedMatches`, which is a scenario-selection
+problem, not evidence of a product regression.
+
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving
 actor and the target. Harness dispatches a fresh **`PersonaActor`** sub-agent
@@ -118,6 +128,20 @@ more endpoints it discovers the same way, not special named commands. There is
 no code-enforced default-defer wrapper for approvals anymore; PersonaActor is
 explicitly instructed (in its own agent file) to never blind-approve a gate and
 to ground every approval decision in real observed content.
+
+**The OpenAPI spec is incomplete — do not treat it as exhaustive.** It lists only
+the top-level paths and omits the parameterized run endpoints. `/api/runs/{id}/children`,
+`/api/runs/{id}/preview`, `/api/runs/{id}/shell-approvals`, `/api/runs/{id}/steer`,
+and `/api/runs/{id}/events` all exist and work despite being absent from it. Probe
+before concluding an endpoint is missing.
+
+**Shell approvals are not covered by `auto_approve_tools`.** A run submitted with
+`auto_approve_tools: true` and `autopilot: true` still emits `shell.approval_required`
+and then stalls indefinitely — while its status stays `InProgress`, so it looks like
+slow work rather than a gate. Any unattended run needs a poller on
+`GET /api/runs/{id}/events` that answers each `shell.approval_required` with
+`POST /api/runs/{id}/shell-approvals` and body `{"command_hash": "<payload.commandHash>"}`.
+Without it the run will never finish. See `scripts/harness-shared/learnings.md`.
 
 **Transcript recording is PersonaActor's own responsibility.** It appends one
 JSON line per turn (thought + real request + real response) with

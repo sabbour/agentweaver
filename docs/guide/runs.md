@@ -86,8 +86,6 @@ is actually unavailable.
 
 Click **Start task**. The coordinator orchestration begins and you're taken to the topology view.
 
-![Start orchestration dialog](/guide/images/start-orchestration.png)
-
 ::: tip Be specific about outcomes
 Describe what success looks like, not just what to do. The coordinator uses your description to draft an OutcomeSpec — the more concrete your goal, the sharper the spec.
 :::
@@ -102,10 +100,11 @@ You can also override mid-conversation by typing `use {workflow-id}` before conf
 
 ### Preview your work
 
-Runnable outputs are most useful when reviewers can open them live. Software delivery and bug-fix workflows include a platform `build_test` gate that runs after RAI and before human review. It builds, tests, starts web/service artifacts when applicable, verifies the actual bound port,
-and registers a sandbox preview with `start_preview(port=PORT, session_id=SESSION_ID)`. The
-`session_id` is the value returned by `observe_bound_port`; it lets the API confirm that the
-healthy preview process is still alive before publication.
+Software delivery and bug-fix workflows include a collective `build_test` gate after
+RAI. The built-in agent prompt builds/tests; it does not ask the agent to provision a
+preview. After eligible Build & Test outcomes, the coordinator invokes a deterministic
+platform **PreviewStep** before applying the gate decision. Preview unavailability is
+reported separately and does not itself block human review.
 
 For a custom workflow without that gate, ask the coordinator to have an agent build and start
 the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include
@@ -117,7 +116,7 @@ The supervised preview process accepts either a worktree-relative working direct
 
 ## The OutcomeSpec confirmation
 
-Before any agent work starts, the coordinator:
+For define-outcome mode with autopilot off, the coordinator:
 
 1. Reads the team's existing memories and decisions
 2. Selects the best-fit workflow for your task
@@ -131,8 +130,10 @@ Before any agent work starts, the coordinator:
 
 You review the OutcomeSpec in the conversation panel. If it looks right, confirm. If you need to adjust scope or correct an assumption, say so in the chat — the coordinator revises and re-presents.
 
-::: warning No work dispatched until you confirm
-The coordinator will not start any agent work until you explicitly confirm the OutcomeSpec. This gate is enforced by the platform.
+::: warning Check the launch mode
+Define-outcome with autopilot off waits for your confirmation. Direct mode skips outcome
+drafting, and explicit per-run autopilot can confirm unattended. Tool approval and
+human merge review remain separate.
 :::
 
 ## The WorkPlan and topology view
@@ -152,7 +153,12 @@ changed files appear through `GET /api/runs/{id}/assembly/files` once assembly h
 
 You see the **topology view** — a live graph of the entire orchestration.
 
-![Run topology](/guide/images/run-topology.png)
+The run header keeps the operator-facing identity first: status, run ID, start
+time, progress, elapsed time, and actions. The original prompt appears below
+that metadata at a readable width. Long prompts are collapsed by default with
+**Show more** / **Show less** controls; expanding keeps the full prompt
+selectable and preserves paragraph breaks, line breaks, and inline command
+snippets.
 
 The graph shows:
 
@@ -161,13 +167,24 @@ The graph shows:
 - **Edge status** — running, completed, failed, awaiting
 - **Coordinator status badge** in the header (Dispatching → Awaiting assembly → Assembling → In review → Complete)
 
+The run-level `status` is authoritative. A run reported as **In progress** remains in progress even
+if older coordinator context mentions `assembly_blocked` or `ineligible_subtasks`; that context means
+the coordinator is waiting for subtasks that are not ready to assemble yet. A child whose run status
+is **InProgress** stays running in the topology and run tree, not failed. Failure diagnostics and
+retry guidance appear only after the run reaches a failed terminal status.
+
 ### Comparing topology layouts
 
 The **Topology layout** control is available on the live run graph. **Balanced grid
-(current)** is the default layout engine. Choose **Legacy staircase (comparison)** only
-to compare card placement while diagnosing a rollout; it does not alter the run,
-its nodes, dependencies, edge direction, or status data. The selection is remembered
-locally and is also available in workflow graph viewer and editor canvases.
+(current)** is the default layout engine. It reserves the full rendered card footprint,
+including pod chips. It routes connector lines through gutters around cards. Each line
+keeps a clear gap from cards that it does not terminate at. Lines that use the same
+corridor move into separate lanes. Long row-wrap edges use the reserved channel between
+rows and show in-path direction markers, so the flow stays readable at dense zoom levels.
+Choose **Legacy staircase (comparison)** only to compare card placement while diagnosing a
+rollout. It does not alter the run, its nodes, dependencies, edge direction, or status
+data. The selection is remembered locally and is also available in workflow graph viewer
+and editor canvases.
 
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 
@@ -183,7 +200,10 @@ While a coordinator orchestration is active, you can intervene from the topology
 | **Stop run** | Immediately stop the orchestration; takes effect on running agents right away |
 
 ::: tip Stop is immediate; redirect is at the next turn
-Stopping a run takes effect immediately on all running agents. Redirecting or amending takes effect at the next agent turn boundary — the current turn completes first.
+Stopping a run takes effect immediately on all running agents. Redirecting or amending
+takes effect at the next agent turn boundary. If a targeted redirect must interrupt a
+stuck child turn, that cancellation is treated as a redirect handoff rather than a child
+failure, so unrelated siblings and dependents are not failed by the steer itself.
 :::
 
 After sending guidance, the Messages pane records a durable acknowledgement with its
@@ -197,8 +217,6 @@ stale until an explicit progress event arrives.
 
 Click any agent node in the topology view to open its **execution view**. This streams every event from that agent's run in real time.
 
-![Execution live view](/guide/images/execution-watch.png)
-
 ### The workflow pipeline
 
 Each agent run passes through a pipeline shown as a left-to-right node graph. For coordinator child runs (subtasks), the pipeline is:
@@ -209,7 +227,8 @@ Agent → Assemble-ready
 
 RAI, Build & Test, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask. In the built-in software workflows, Build & Test runs after RAI and before Human Review.
 
-Loopback edges appear when RAI or a reviewer requests changes and the agent needs to revise.
+Collective feedback goes through coordinator steering, which can redirect existing
+children or dispatch fresh work. It is not a per-child RAI loop.
 
 ### Event timeline
 
@@ -248,19 +267,22 @@ instead of sending you to a different run.
 
 ## RAI check
 
-Each agent run passes a **Responsible AI (RAI)** check before its output proceeds. If the check flags the output, the run automatically loops back — the agent revises and the check re-runs. This loopback is visible as a "Revise" edge in the pipeline graph. If the check passes, the run proceeds to the next stage (human review or assembly).
+Coordinator children hand off **Agent → Assemble-ready** output without per-child RAI.
+The selected workflow evaluates RAI on the combined output; built-in software workflows
+then run Build & Test. Feedback is handled by the coordinator's steering decision, not
+an unconditional agent-to-review shortcut.
 
 ## Run states
 
 | Status | Meaning |
 |---|---|
-| **Running** | The run is actively executing |
+| **Running** | The run is actively executing. If the coordinator is waiting on a still-running child, any `ineligible_subtasks` detail is shown as waiting context rather than a failure. |
 | **Awaiting assembly** | All subtasks have finished; coordinator is collecting results |
 | **Assembling** | Coordinator is assembling the combined output |
 | **In review** | Awaiting your approval |
 | **Completed / Merged** | Merged successfully |
 | **No Changes** | The agent finished but made no file changes |
-| **Failed** | Unrecoverable error |
+| **Failed** | Unrecoverable error. The failure banner and run retry guidance are shown only for terminal failed runs. |
 | **Declined** | You rejected the changes |
 | **Merge Failed** | The merge step failed (e.g., a conflict on the target branch) |
 
@@ -330,10 +352,15 @@ the configured provider changed, became unavailable, or requires reconnection. R
 GitHub only when a new run reports `github_copilot_auth_required`.
 
 The projection contains only a bounded error code, safe message, component,
-timestamp, retryability, allowlisted correlation IDs, and sanitized cause types.
-AgentHost-generated internal failures and pre-launch provider failures include a
-server-generated correlation ID, the active trace ID when available, and a bounded
-exception-type chain. If an earlier
+timestamp, retryability, allowlisted correlation IDs, and sanitized cause breadcrumbs.
+Those breadcrumbs may include exception type names plus server-authored `step:*`,
+`phase:*`, `reason:*`, and `tool:*` labels; they never include prompts, tool payloads,
+headers, credentials, raw paths, or stack traces. AgentHost-generated internal failures
+and pre-launch provider failures include a server-generated correlation ID, the active
+trace ID when available, and a bounded exception-type chain. When a terminal failure
+has no direct exception chain, the diagnostic reader inspects recent persisted step and
+tool-error events so repeated tool failures are surfaced instead of misattributing the
+failure to the component that timed out last. If an earlier
 best-effort agent operation failed but the Coordinator later terminalized for another
 reason, the projection uses the latest terminal failure instead of the earlier recovered
 failure.
@@ -364,14 +391,80 @@ Each agent runs inside a **dedicated git worktree** branched from the project's 
 
 While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
 
-![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/canonical-sandbox-experience.png)
 
-<!-- Rendered from ../diagrams/src/canonical-sandbox-experience.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+<!-- flagship-diagrams:start -->
+## Visual model
+
+### Coordinator journey
+
+[![Activity flow showing intent proposal and confirmation, visible planning, dependency-aware execution, collective review, revision or intervention paths, application of the approved result, and explicit terminal outcomes.](../diagrams/flagship/canonical-coordinator-journey.png)](../diagrams/drawio/generated/flagship/canonical-coordinator-journey.drawio)
+
+[Structured source](../diagrams/src/flagship/canonical-coordinator-journey.json) · [Editable draw.io](../diagrams/drawio/generated/flagship/canonical-coordinator-journey.drawio)
+<!-- flagship-diagrams:end -->
 
 ## See also
 
 - [Workflow selection — Deep Dive](/deep-dive/workflow-selection) — full algorithm, override hierarchy, and trigger filtering
-- [Coordinator reference — Workflow selection](/reference/coordinator#workflow-selection-how-the-coordinator-picks-the-process-to-run) — precedence table and API details
+- [Coordinator reference — Workflow selection](/reference/coordinator#workflow-selection) — precedence table and API details
+
+<details id="diagram-context-canonical-sandbox-experience" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>From run request to reviewable work</td></tr>
+<tr><td>takeaway</td><td>A run gets isolated execution, visible progress and bounded tools—not an unrestricted host shell.</td></tr>
+<tr><td>group-title0</td><td>ADMIT AND PREPARE</td></tr>
+<tr><td>group-title1</td><td>EXECUTE AND RETURN EVIDENCE</td></tr>
+<tr><td>Authorized run</td><td>Authorized run</td></tr>
+<tr><td>Authorized run</td><td>User requests repository work</td></tr>
+<tr><td>Authorized run</td><td>Provider acceptance first</td></tr>
+<tr><td>Authorized run</td><td>API owns run lifecycle</td></tr>
+<tr><td>Authorized run</td><td>Project role required</td></tr>
+<tr><td>SandboxClaim</td><td>SandboxClaim</td></tr>
+<tr><td>SandboxClaim</td><td>Bind a warm AgentHost pod</td></tr>
+<tr><td>SandboxClaim</td><td>Resolve claim-bound pod</td></tr>
+<tr><td>SandboxClaim</td><td>Configure identity once</td></tr>
+<tr><td>SandboxClaim</td><td>Claim state is shared</td></tr>
+<tr><td>AgentHost</td><td>AgentHost</td></tr>
+<tr><td>AgentHost</td><td>Model and governed tools</td></tr>
+<tr><td>AgentHost</td><td>A2A authenticated turns</td></tr>
+<tr><td>AgentHost</td><td>Run-scoped workspace</td></tr>
+<tr><td>AgentHost</td><td>Copilot OR BYOK</td></tr>
+<tr><td>Run experience</td><td>Run experience</td></tr>
+<tr><td>Run experience</td><td>Events and human decisions</td></tr>
+<tr><td>Run experience</td><td>Progress / tool evidence</td></tr>
+<tr><td>Run experience</td><td>Approve consequential work</td></tr>
+<tr><td>Run experience</td><td>Approval ≠ policy bypass</td></tr>
+<tr><td>Isolated workspace</td><td>Isolated workspace</td></tr>
+<tr><td>Isolated workspace</td><td>File and shell results</td></tr>
+<tr><td>Isolated workspace</td><td>Contain paths and processes</td></tr>
+<tr><td>Isolated workspace</td><td>Bound / redact tool output</td></tr>
+<tr><td>Isolated workspace</td><td>Network policy also applies</td></tr>
+<tr><td>Preview or review</td><td>Preview or review</td></tr>
+<tr><td>Preview or review</td><td>Inspect resulting work</td></tr>
+<tr><td>Preview or review</td><td>Preview needs publication proof</td></tr>
+<tr><td>Preview or review</td><td>Review artifacts before merge</td></tr>
+<tr><td>Preview or review</td><td>Release / reap compute</td></tr>
+<tr><td>relation-0</td><td>1 start</td></tr>
+<tr><td>relation-1</td><td>2 configure</td></tr>
+<tr><td>relation-2</td><td>3 tools</td></tr>
+<tr><td>relation-3</td><td>4 events / approvals</td></tr>
+<tr><td>relation-4</td><td>5 work artifacts</td></tr>
+<tr><td>assurance</td><td>Credentials arrive via /configure, not ambient stores. Approval, policy and isolation remain independent checks.</td></tr>
+<tr><td>assurance-0-label</td><td>Workspace ownership</td></tr>
+<tr><td>assurance-0-fact</td><td>Children use isolated worktrees.</td></tr>
+<tr><td>assurance-0-source</td><td>RunOrchestrator.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Pod observation</td></tr>
+<tr><td>assurance-1-fact</td><td>Pod telemetry is not branch ownership.</td></tr>
+<tr><td>assurance-1-source</td><td>sandbox-pod-execution.md</td></tr>
+<tr><td>assurance-2-label</td><td>Publication evidence</td></tr>
+<tr><td>assurance-2-fact</td><td>Preview readiness proves public HTTPS.</td></tr>
+<tr><td>assurance-2-source</td><td>SandboxPreviewPublicationTests.cs</td></tr>
+<tr><td>n0</td><td>Provider acceptance first; API owns run lifecycle</td></tr>
+<tr><td>n1</td><td>Resolve claim-bound pod; Configure identity once</td></tr>
+<tr><td>n2</td><td>A2A authenticated turns; Run-scoped workspace</td></tr>
+<tr><td>n3</td><td>Progress / tool evidence; Approve consequential work</td></tr>
+<tr><td>n4</td><td>Contain paths and processes; Bound / redact tool output</td></tr>
+<tr><td>n5</td><td>Preview needs publication proof; Review artifacts before merge</td></tr>
+<tr><td>groups</td><td>ADMIT AND PREPARE; EXECUTE AND RETURN EVIDENCE</td></tr>
+</tbody></table>
+</details>

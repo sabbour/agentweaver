@@ -29,6 +29,40 @@ public interface IRunStore
     Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default);
 
     /// <summary>
+    /// Claims the preview-publication lease for <paramref name="runId"/> until
+    /// <paramref name="leaseUntil"/>, but only while the run is still active. Returns <c>false</c>
+    /// when the run is already terminal, in which case publication must abort — a preview URL
+    /// cannot be published for a run that has ended.
+    ///
+    /// Publishing a preview can spend the configured Gateway-convergence window before its final
+    /// <c>sandbox.preview_ready</c> batch commits while the run row is still active. An agent that
+    /// finishes its work inside that window would otherwise cancel its own preview (#1315). While
+    /// the renewable lease is held, every terminal transition defers, so publication wins the race
+    /// without holding a long database transaction open.
+    ///
+    /// The lease is a bound, not a promise: it expires on its own so a replica that crashes
+    /// mid-publication cannot park a run indefinitely. The default no-op grants the lease without
+    /// recording it, which keeps in-memory test stores on today's behavior.
+    /// </summary>
+    Task<bool> TryBeginPreviewPublicationAsync(RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
+    /// <summary>
+    /// Releases the preview-publication lease claimed by
+    /// <see cref="TryBeginPreviewPublicationAsync"/>, letting any deferred terminal transition
+    /// proceed at once instead of waiting out the lease. Safe to call when no lease is held.
+    /// </summary>
+    Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Returns the instant the current preview-publication lease expires, or <c>null</c> when no
+    /// publication is in flight. The default no-op never defers a terminal transition.
+    /// </summary>
+    Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(RunId runId, CancellationToken ct = default) =>
+        Task.FromResult<DateTimeOffset?>(null);
+
+    /// <summary>
     /// CAS-transitions a run from <see cref="RunStatus.InProgress"/> to the NON-terminal
     /// <see cref="RunStatus.Idle"/> dormant state (Assistant/Operator idle-timeout parking). Returns
     /// <c>true</c> only for the single caller that actually observed InProgress and flipped it —

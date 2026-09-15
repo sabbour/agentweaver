@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 
 namespace Agentweaver.AgentTools.Tools;
@@ -14,8 +15,15 @@ internal sealed class RunCommandTool : ISandboxTool
             async (
                 [Description("Shell command to execute inside the sandbox.")] string command,
                 [Description("Timeout in milliseconds (bounded by the runtime policy).")] int? timeout_ms = null,
+                // #1317: the native Copilot shell tool accepts a `description`, so the model
+                // frequently supplies one here too. Accepting and ignoring it keeps the call
+                // matching this sandboxed tool instead of falling through to the disabled native
+                // shell, which cost a full turn to a tool.error + run.degraded before the agent
+                // retried without it.
+                [Description("Optional human-readable description of the command. Accepted for compatibility and otherwise ignored.")] string? description = null,
                 CancellationToken ct = default) =>
             {
+                _ = description;
                 if (ctx.Options.RejectBackgroundCommands && ContainsBackgrounding(command))
                     return "Command rejected: background/detached shell execution is not allowed.";
 
@@ -62,24 +70,50 @@ internal sealed class RunCommandTool : ISandboxTool
                     }
                     else
                     {
-                        ctx.Logger.LogWarning(
-                            "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash}",
-                            requestId, command.Length, commandHash);
+                        // An unattended run (auto-approve-tools / autopilot) has nobody watching
+                        // for the approval card. Destructive shell is deliberately NOT eligible for
+                        // run-level auto-approval — see ToolApprovalPolicySemantics
+                        // .IsRunAutoApprovalEligible — so the gate still holds here and the command
+                        // does not execute. What changes is the guidance: telling an unattended run
+                        // to "retry after approval" makes it spin on the same blocked command while
+                        // the run reports InProgress, so instead it is told to rewrite the command
+                        // into a non-destructive equivalent and move on (#1314).
+                        var unattended = ctx.Options.UnattendedRun && !ctx.Options.RequireApprovalForAllShell;
 
-                        ctx.EmitEvent?.Invoke("shell.approval_required", new
+                        ctx.Logger.LogWarning(
+                            "Shell HITL approval required — requestId={RequestId} commandLength={Length} commandHash={Hash} unattended={Unattended}",
+                            requestId, command.Length, commandHash, unattended);
+
+                        ctx.EmitEvent?.Invoke(EventTypes.ShellApprovalRequired, new
                         {
                             requestId,
                             commandLength = command.Length,
                             commandHash,
                             command,
+                            unattended,
                             message = "Shell command requires operator approval before execution.",
                         });
 
+                        var approvalInstructions =
+                            $"An operator can approve it via: POST /api/runs/{ctx.RunId}/shell-approvals " +
+                            $"with body {{\"command_hash\":\"{commandHash}\"}}.";
+
+                        if (unattended)
+                        {
+                            return $"This command matched a destructive pattern and requires operator " +
+                                   $"approval before it can execute (request ID: {requestId}). " +
+                                   $"This run is unattended, so no operator is watching and destructive " +
+                                   $"commands are never auto-approved. Do NOT retry this command as-is — " +
+                                   $"it will keep being blocked. Instead, achieve the same result without " +
+                                   $"the destructive operation: write into a new unique directory rather " +
+                                   $"than deleting an existing one, remove specific files individually, or " +
+                                   $"use the file tools. " + approvalInstructions;
+                        }
+
                         return $"This command requires operator approval before it can execute " +
                                $"(request ID: {requestId}). " +
-                               $"The operator can approve it via: POST /api/runs/{ctx.RunId}/shell-approvals " +
-                               $"with body {{\"command_hash\":\"{commandHash}\"}}. " +
-                               $"After approval, retry this command.";
+                               approvalInstructions +
+                               $" After approval, retry this command.";
                     }
                 }
 
@@ -140,16 +174,28 @@ internal sealed class RunCommandTool : ISandboxTool
                         // margin, so the executor's CancelAfter fires first (graceful timed_out:true)
                         // and the watchdog only backstops a hung/unkillable process. Arming both at
                         // the same value made the watchdog win the race and fatally abort the turn.
+                        var toolCallId = ResolveToolCallId(ctx);
                         executionLease = await ctx.ShellExecutionTracker.EnterAsync(
+                            toolCallId,
                             commandHash,
                             TimeSpan.FromMilliseconds(timeout) + ctx.Options.ShellWatchdogGrace,
                             ct).ConfigureAwait(false);
                     }
-                    result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);
+                    result = await ExecuteWithDeadlineAsync(ctx, cmd, timeout, commandHash, ct)
+                        .ConfigureAwait(false);
                 }
                 finally
                 {
                     executionLease?.Dispose();
+                }
+
+                if (result.TimedOut)
+                {
+                    EmitDeadlineExceeded(ctx, timeout);
+                    result = result with
+                    {
+                        Stderr = AppendDeadlineGuidance(result.Stderr, timeout),
+                    };
                 }
 
                 var stdout = RedactOutput(result.Stdout, ctx);
@@ -181,6 +227,140 @@ internal sealed class RunCommandTool : ISandboxTool
 
         return Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR");
+    }
+
+    private static string ResolveToolCallId(SandboxToolContext ctx) =>
+        ctx.CurrentToolCallId?.Invoke()
+        ?? SandboxToolInvocation.CurrentToolCallId
+        ?? Guid.NewGuid().ToString("n");
+
+    private static async Task<SandboxExecResult> ExecuteWithDeadlineAsync(
+        SandboxToolContext ctx,
+        SandboxCommand command,
+        int timeoutMs,
+        string commandHash,
+        CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var execution = ctx.Executor.ExecuteAsync(command, deadline.Token);
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var completed = await Task.WhenAny(
+                execution,
+                Task.Delay(timeout, ct))
+            .ConfigureAwait(false);
+
+        if (ReferenceEquals(completed, execution))
+            return await AwaitExecutionAsync(execution, deadline, timeoutMs, ct).ConfigureAwait(false);
+
+        if (ct.IsCancellationRequested)
+            throw new OperationCanceledException(ct);
+
+        try
+        {
+            await deadline.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (execution.IsCompleted)
+            return await AwaitExecutionAsync(execution, deadline, timeoutMs, ct).ConfigureAwait(false);
+
+        _ = ObserveLateExecutorCompletionAsync(execution, ctx.Logger, commandHash);
+        ctx.Logger.LogWarning(
+            "run_command exceeded execution budget and was cancelled — timeoutMs={TimeoutMs} commandHash={CommandHash}",
+            timeoutMs,
+            commandHash);
+        return new SandboxExecResult(
+            -1,
+            "",
+            BuildDeadlineGuidance(timeoutMs),
+            TimedOut: true,
+            OutputTruncated: false);
+    }
+
+    private static async Task<SandboxExecResult> AwaitExecutionAsync(
+        Task<SandboxExecResult> execution,
+        CancellationTokenSource deadline,
+        int timeoutMs,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await execution.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            return new SandboxExecResult(
+                -1,
+                "",
+                BuildDeadlineGuidance(timeoutMs),
+                TimedOut: true,
+                OutputTruncated: false);
+        }
+    }
+
+    private static async Task ObserveLateExecutorCompletionAsync(
+        Task<SandboxExecResult> execution,
+        ILogger logger,
+        string commandHash)
+    {
+        try
+        {
+            await execution.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "run_command executor completed with an exception after its tool deadline — commandHash={CommandHash}",
+                commandHash);
+        }
+    }
+
+    private static void EmitDeadlineExceeded(SandboxToolContext ctx, int timeoutMs)
+    {
+        ctx.EmitEvent?.Invoke(EventTypes.RunDegraded, new
+        {
+            toolName = "run_command",
+            reason = BuildDeadlineGuidance(timeoutMs),
+            timeoutMs,
+        });
+    }
+
+    private static string AppendDeadlineGuidance(string stderr, int timeoutMs)
+    {
+        var guidance = BuildDeadlineGuidance(timeoutMs);
+        if (string.IsNullOrWhiteSpace(stderr))
+            return guidance;
+
+        if (stderr.Contains(guidance, StringComparison.Ordinal))
+            return stderr;
+
+        return stderr.TrimEnd() + "\n" + guidance;
+    }
+
+    private static string BuildDeadlineGuidance(int timeoutMs)
+    {
+        var budget = timeoutMs > 0
+            ? $" of {FormatTimeout(timeoutMs)}"
+            : "";
+        return $"run_command exceeded its execution budget{budget} and was killed. " +
+               "Do not use run_command for long-lived or backgrounded servers. " +
+               "Use start_preview_process for preview/dev servers, then call observe_bound_port " +
+               "with the returned session_id and start_preview only after the port is healthy. " +
+               "For finite builds or tests, run a narrower command or set an explicit timeout_ms " +
+               "that fits within the command budget.";
+    }
+
+    private static string FormatTimeout(int timeoutMs)
+    {
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        if (timeout.TotalMinutes >= 1)
+            return $"{timeout.TotalMinutes:n0} minutes";
+        if (timeout.TotalSeconds >= 1)
+            return $"{timeout.TotalSeconds:n0} seconds";
+        return $"{timeoutMs} ms";
     }
 
     private static Dictionary<string, string> BuildCommandEnvironment(

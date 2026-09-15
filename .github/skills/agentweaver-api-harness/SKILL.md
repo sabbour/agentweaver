@@ -4,7 +4,7 @@ description: Run Agentweaver's REST API harness for backend validation, repro re
 domain: testing
 confidence: high
 source: scripts/api-harness/SKILL.md
-allowed-tools: Bash(node scripts/api-harness/run-persona.mjs:*) Bash(node scripts/api-harness/agent-driver/tools.mjs:*) Bash(npm --prefix scripts/api-harness:*)
+allowed-tools: Bash(node scripts/api-harness/run-persona.mjs:*) Bash(npm --prefix scripts/api-harness:*)
 ---
 
 # API harness
@@ -16,9 +16,16 @@ controls, exit codes, evidence artifacts, and both supported modes:
 - For a structured scenario or a re-test from a `reproManifest`, invoke
   `node scripts/api-harness/run-persona.mjs` with a fresh scenario run. A manifest
   is provenance for a new comparable run—not an old `runId` replay.
-- For a free-text or exploratory persona investigation, invoke
-  `node scripts/api-harness/agent-driver/tools.mjs` in its session-based sequence
-  and call `finish` to persist the transcript.
+- For a free-text or exploratory persona investigation, dispatch a fresh
+  **`PersonaActor`** sub-agent with the persona brief. PersonaActor drives the live
+  API itself and records its own transcript under
+  `scripts/api-harness/transcripts/`. There is no `agent-driver` CLI.
+
+Runs are unattended by default, and `auto_approve_tools` does **not** cover shell
+commands: a run will emit `shell.approval_required` and stall forever unless
+something approves it. Poll `GET /api/runs/{id}/events` and approve via
+`POST /api/runs/{id}/shell-approvals` with `{"command_hash": "<payload.commandHash>"}`,
+or the run will look `InProgress` while making no progress at all.
 
 Use the actual commands in that contract. Capture the output path, inspect the
 verdict/transcript JSON, and report the outcome with its evidence path and whether

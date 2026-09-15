@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Research-only documentation area audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["area", "model", "documents", "diagrams", "findings", "repository_sources"],
+  "properties": {
+    "area": {"type": "string", "minLength": 1},
+    "model": {"const": "gpt-6-astra"},
+    "documents": {"type": "array", "items": {"$ref": "#/$defs/document"}},
+    "diagrams": {"type": "array", "items": {"$ref": "#/$defs/diagram"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "repository_sources": {"$ref": "#/$defs/strings"}
+  },
+  "$defs": {
+    "strings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "evidence": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^.+:[0-9]+(?:-[0-9]+)?$"}},
+    "disposition": {"enum": ["retain", "reuse", "merge", "remove", "redesign"]},
+    "target": {"type": ["string", "null"]},
+    "reference": {
+      "type": "object", "additionalProperties": false, "required": ["line", "target"],
+      "properties": {"line": {"type": "integer", "minimum": 1}, "target": {"type": "string", "minLength": 1}}
+    },
+    "document": {
+      "type": "object", "additionalProperties": false, "required": ["path", "concepts"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "concepts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/concept"}}
+      }
+    },
+    "concept": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "representation", "disposition", "target", "canonical_diagram", "rationale", "evidence", "references"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "representation": {"enum": ["diagram", "prose", "table", "ascii", "mermaid", "screenshot", "proposed-diagram", "reference"]},
+        "disposition": {"$ref": "#/$defs/disposition"},
+        "target": {"$ref": "#/$defs/target"},
+        "canonical_diagram": {"$ref": "#/$defs/target"},
+        "rationale": {"type": "string", "minLength": 1},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "references": {"type": "array", "items": {"$ref": "#/$defs/reference"}}
+      },
+      "allOf": [{
+        "if": {"properties": {"disposition": {"enum": ["reuse", "merge"]}}},
+        "then": {"properties": {"target": {"type": "string", "minLength": 1}}}
+      }]
+    },
+    "diagram": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "disposition", "target", "rationale", "evidence", "consumer_changes"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "disposition": {"$ref": "#/$defs/disposition"},
+        "target": {"$ref": "#/$defs/target"},
+        "rationale": {"type": "string", "minLength": 1},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "consumer_changes": {"$ref": "#/$defs/strings"}
+      },
+      "allOf": [{
+        "if": {"properties": {"disposition": {"enum": ["reuse", "merge"]}}},
+        "then": {"properties": {"target": {"type": "string", "minLength": 1}}}
+      }]
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false, "required": ["severity", "subject", "detail", "evidence"],
+      "properties": {
+        "severity": {"enum": ["info", "warning", "blocker"]},
+        "subject": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      }
+    }
+  }
+}

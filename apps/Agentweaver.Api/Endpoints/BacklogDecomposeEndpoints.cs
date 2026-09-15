@@ -304,7 +304,9 @@ public static class BacklogDecomposeEndpoints
                 agentResult.WasCapped,
                 agentResult.TotalFound,
                 executionPlans.ToResponse(execution.Plan!, "completed")));
-        }).WithTags("Backlog");
+        })
+            .WithTags("Backlog")
+            .RequiresAiExecutionContext("backlog_decomposition");
     }
 
     /// <summary>

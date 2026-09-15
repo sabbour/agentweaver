@@ -185,7 +185,7 @@ npm run setup
 existing file. It does **not** start servers or touch Azure.
 
 Before first sign-in, complete [Configure local authentication and model
-access](#1-configure-local-authentication-and-model-access). Then start both
+access](#_1-configure-local-authentication-and-model-access). Then start both
 servers from the repo root:
 
 ```bash
@@ -240,13 +240,15 @@ feature branch/worktree
 
 GitHub Merge Queue is unavailable while this repository is owned by the
 personal `sabbour` account. The enforceable fallback is standard protection:
-every normal change uses a PR, the branch must be up to date with `dev`, and the four
-blocking checks rerun before squash merge. Concurrent PRs may need repeated
+every normal change uses a PR, the branch must be up to date with `dev`, and the
+[required CI suites](https://github.com/sabbour/agentweaver/blob/dev/CONTRIBUTING.md#continuous-integration) rerun before squash
+merge. That policy defines the seven .NET shards and conditional Node, web, docs, and
+changeset checks; do not infer a fixed four-check gate. Concurrent PRs may need repeated
 updates/retests when another PR merges first. The
-[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology)
+[Branch Topology Activation Plan](https://github.com/sabbour/agentweaver/blob/dev/CONTRIBUTING.md#branch-topology)
 describes retained growth guidance. Official releases are cut from an exact promoted
 `main` commit; see
-[RELEASING.md](../../RELEASING.md).
+[RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 
 ---
 
@@ -351,7 +353,7 @@ required on any platform. The root `package.json` exposes these scripts:
 | `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names and Entra configuration. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Fetches and resolves an arbitrary committed ref, deploys it through a temporary detached worktree, and leaves the caller's checkout untouched. |
-| `npm run release:publish` | From a prepared exact-main checkout, creates the annotated tag and GitHub Release without deploying. |
+| `npm run release:publish` | From a prepared exact-main checkout, creates the tag, waits for GHCR images, and creates the GitHub Release. |
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Deploys an existing published release from an exact checkout of its tag commit. |
 | `npm run azure:release` | Composes `release:publish` and `azure:deploy-from-release` for the first shipment. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |

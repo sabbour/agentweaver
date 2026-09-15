@@ -4,7 +4,11 @@
 The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
 :::
 
-Agentweaver's MCP server turns the whole product into tools an AI assistant can call for you. Instead of driving only the web UI, you can connect Claude Desktop, VS Code, GitHub Copilot CLI, or GitHub Copilot desktop and ask it to create projects, cast teams, manage backlog, start coordinator work, watch runs, review artifacts, and approve outcomes. This doc explains the experience first, then gives a complete tool catalog for assistant-driven use.
+Agentweaver's MCP server exposes product operations as tools an AI assistant can call for you.
+Connect a compatible client to create projects, cast teams, manage backlog, start work, watch
+runs, and bring artifacts back for review. This page explains the journey and representative
+tools; use the generated [tool index](../reference/mcp-tools.md) and live `tools/list`
+for the connected server's complete catalog.
 
 Related context: [Overview](./00-overview.md), [Connect an MCP client](../guide/mcp-cli.md), [Onboarding & auth](./onboarding-auth.md), [Projects](../guide/projects.md), [Teams](../guide/teams.md), [Board](../guide/board.md), [Runs](../guide/runs.md), [Review](../guide/review.md), [Workflows](../guide/workflows.md), [Coordinator reference](../reference/coordinator.md), [MCP reference](../reference/mcp.md), and [MCP OAuth](../mcp-oauth.md).
 
@@ -63,12 +67,23 @@ The assistant turns that into a sequence of concrete tool calls and narrates the
 
 1. **Find or create the project.** It calls `project_list` to see whether the repository is already registered. For a GitHub origin, it selects a repository through the Repo App selection endpoints, then calls `project_create` with the local working directory, `origin: "github"`, and the short-lived `repository_selection_code`. The API rejects direct repository URLs and identifiers. It can also apply a blueprint. The returned project ID becomes the anchor for the rest of the session.
 2. **Shape the team.** It calls `catalog_list_roles` or `catalog_list_scenarios` when it needs role context, then `team_cast` with the goal. If the user wants to inspect the proposed cast, the assistant leaves `confirm=false`; if the instruction is clear, it can use `confirm=true` to create and confirm in one step. It can then call `team_get` and `team_member_get_charter` to explain who will do what.
-3. **Capture work.** It calls `backlog_capture_task` for individual tasks, or `backlog_decompose_spec` to preview tasks from a workspace markdown spec. When the list looks right, it calls `send_all_backlog_to_ready` or `backlog_move_to_ready` so the board reflects what is ready to be claimed.
-4. **Start the coordinator.** It calls `coordinator_start` with a plain-language goal. This starts a coordinator run, but the coordinator does not dispatch child work immediately. It drafts an outcome spec and stops at a confirmation gate.
-5. **Confirm or revise the outcome.** The assistant calls `run_watch` or `coordinator_outcome_spec_get` to surface the draft. If the user asks for changes, it calls `coordinator_outcome_spec_revise`; when the user accepts, it calls `coordinator_outcome_spec_confirm`. Only then does the coordinator resume and dispatch subagents.
+3. **Choose one intake path for the work.** For queued work, call `backlog_capture_task`
+   or preview a spec with `backlog_decompose_spec`, then promote the agreed tasks to Ready.
+   Background pickup atomically claims and reserves a coordinator run and starts it unattended.
+   Do not also manually start the same goal. For immediate work, skip that pickup path and
+   use `coordinator_start` or `run_task`.
+4. **Choose the immediate start mode.** `coordinator_start` defaults to `defineOutcome`:
+   draft the outcome spec, then suspend for confirmation. Its `direct` mode skips that gate.
+   `run_task` defaults to `direct` and waits for completion or a gate before returning the next action.
+5. **Confirm or revise when a gate exists.** Use `coordinator_outcome_spec_get` to
+   surface the draft, `coordinator_outcome_spec_revise` for feedback, and
+   `coordinator_outcome_spec_confirm` only with the user's authorization. Direct and
+   unattended starts do not add this manual step.
 6. **Watch execution.** It calls `run_watch` on the coordinator run. Progress notifications stream agent messages, tool calls, tool results, run status changes, review requests, coordinator topology, subtask events, and steering events. For point-in-time views, it can call `coordinator_work_plan_get`, `coordinator_children_get`, or `orchestration_topology`.
 7. **Review the result.** When the run reaches review, the assistant calls `run_show_artifacts` and `run_get_file` for changed files, summarizes the diff, and asks for an approve/decline decision. It calls `run_review` only when the user approves or explicitly asks it to reject.
-8. **Persist context.** If useful, it calls `decision_inbox_submit`, `decision_inbox_merge`, `memory_record`, or `session_update` so future agents inherit what was learned.
+8. **Persist eligible context.** Use `decision_inbox_submit`, `memory_record`, or
+   `session_update` for durable records. Acceptance and promotion require an authorized
+   owner or verified Coordinator; recording alone does not grant team-wide prompt eligibility.
 
 The user sees the same objects the UI sees: a project appears in the project list, backlog cards move across board columns, coordinator child runs show up under the orchestration, and completed runs await review until approved or rejected.
 
@@ -81,23 +96,18 @@ An effective MCP client does not call tools randomly. It keeps a small mental mo
 | Orientation | Establish the project, repository path, team, board, and recent runs before changing anything. | `project_list`, `project_get`, `team_get`, `backlog_get_board`, `project_list_runs` |
 | Design | Ask Agentweaver to propose structure, then explain the proposal in user language. | `team_cast`, `blueprint_generate`, `workflow_generate`, `backlog_decompose_spec` |
 | Commitment | Make the smallest durable state change that matches the user's intent. | `project_create`, `team_cast`, `workflow_save`, `backlog_capture_task`, `send_all_backlog_to_ready` |
-| Orchestration | Start a coordinator run, wait for the outcome spec, and stop for confirmation. | `coordinator_start`, `run_watch`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_confirm` |
+| Orchestration | Choose Ready pickup or immediate start; stop for confirmation in Define Outcome mode. | `coordinator_start`, `run_task`, `run_watch`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_confirm` |
 | Supervision | Watch long work, inspect topology, and steer only when the user or state calls for it. | `run_watch`, `orchestration_topology`, `coordinator_children_get`, `coordinator_steer` |
 | Review | Show changed files and summarize impact before approval. | `run_show_artifacts`, `run_get_file`, `run_review` |
 | Memory | Save decisions and learnings that should survive the session. | `decision_inbox_submit`, `decision_inbox_merge`, `memory_record`, `session_update` |
 
 The best user experience is conversational but auditable: the assistant says what it is about to do, calls the relevant tool, summarizes the returned state, and links the next action to a visible Agentweaver concept such as a project, board card, coordinator gate, child run, or review.
 
-![Assistant operating pattern: User, MCP client assistant, Agentweaver MCP server, Agentweaver API/UI state, Coordinator run, Child agent runs](../diagrams/experience-mcp-client-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-mcp-client-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ## Safety, idempotency, and confirmations
 
-- **Coordinator runs are confirmation-gated.** `coordinator_start` drafts an outcome spec and suspends. Subagent work waits for `coordinator_outcome_spec_confirm`; `coordinator_outcome_spec_revise` loops the draft back through the gate.
+- **Confirmation depends on start mode.** `coordinator_start` defaults to Define Outcome,
+  with confirmation before dispatch. Direct mode and unattended pickup skip that manual
+  outcome gate; tool approvals and human review are separate boundaries.
 - **Review is explicit.** `run_review` approves or rejects a run that is awaiting review. The assistant should summarize artifacts before invoking it.
 - **Streaming is long-running.** `run_watch` stays open while it consumes the API run stream, reports MCP progress notifications, reconnects at the API SSE layer, and returns the final run state when complete.
 - **Backlog bulk promotion is safe to repeat.** `send_all_backlog_to_ready` is idempotent: it appends backlog tasks after existing Ready tasks, preserves order, and returns "No backlog tasks to promote" on an empty backlog.
@@ -111,7 +121,9 @@ Scope limit: the MCP server exposes Agentweaver operations as tools; file edits 
 
 ## Tool catalog
 
-The catalog below is grouped by the 13 MCP tool domains. Each tool name is the real MCP tool name exposed by the server.
+The following task-oriented tables are representative, not a versioned exhaustive catalog.
+The generated [MCP tool index](../reference/mcp-tools.md) documents the source catalog;
+the client's `tools/list` is authoritative for the server it actually connected to.
 
 ### Projects
 
@@ -180,11 +192,11 @@ Purpose: manage the project's Kanban-style work intake and pickup settings.
 
 ### Coordinator
 
-Purpose: run multi-agent orchestration with an explicit outcome-spec confirmation gate.
+Purpose: run multi-agent orchestration with an optional outcome-spec confirmation gate.
 
 | Tool | What it does for the user |
 |---|---|
-| `coordinator_start` | Starts a coordinator orchestration from a plain-language goal; drafts an outcome spec and suspends before dispatch. |
+| `coordinator_start` | Starts a coordinator orchestration; `defineOutcome` is the default gated mode, while `direct` skips the outcome-spec gate. |
 | `coordinator_outcome_spec_get` | Reads the current persisted outcome spec for a coordinator run. |
 | `coordinator_outcome_spec_confirm` | Confirms the drafted outcome spec and resumes the coordinator past the gate. |
 | `coordinator_outcome_spec_revise` | Sends revision guidance so the coordinator re-drafts and re-suspends at the gate. |
@@ -199,13 +211,16 @@ Purpose: observe, inspect, retry, archive, and approve or reject coordinator and
 
 | Tool | What it does for the user |
 |---|---|
+| `run_task` | Starts immediate work (Direct by default), waits for completion or a gate, and returns artifacts or the next action. |
+| `run_submit` | Legacy compatibility alias for Direct coordinator start; prefer `run_task` or `coordinator_start`. |
 | `run_status` | Gets the current status and details for a run. |
 | `run_watch` | Streams live progress until completion, then returns final run state. It reports agent messages, tool calls/results, status updates, completion, and review requests. |
 | `run_review` | Approves or rejects a run that is awaiting review. |
 | `run_show_artifacts` | Lists files changed by a run. |
 | `run_get_file` | Gets the content or diff for a specific file changed by a run. |
-| `run_retry` | Creates a fresh run from a failed run's original inputs. |
+| `run_retry` | Retries failed work; eligible coordinator recovery resumes the same run, otherwise a new linked run is created. Inspect the returned run ID. |
 | `run_archive` | Archives a run off active project board/list projections. |
+| `start_preview` | Requests a preview for an already-started, verified sandbox server; approval and retained runtime resources determine availability. |
 
 ### Workspace
 
@@ -239,7 +254,7 @@ Purpose: preserve decisions, inbox items, agent memory, session context, and fil
 | `decision_inbox_list` | Lists inbox entries, optionally filtered by agent, type, or status. |
 | `decision_inbox_merge` | Merges a pending inbox entry into team decisions. |
 | `decision_inbox_reject` | Rejects a pending inbox entry while preserving the audit trail. |
-| `decision_create` | Creates a team decision directly, usually from coordinator or Scribe-style flows. |
+| `decision_create` | Records a decision under the server's authority and trust rules; an arbitrary caller cannot make approved policy by naming a governance agent. |
 | `squad_decide` | Submits a team decision to the decision inbox from a squad agent. |
 | `decision_list` | Lists team decisions for a project, optionally filtered by type or agent. |
 | `decision_update` | Updates a decision's status, content, rationale, or superseding decision link. |
@@ -263,10 +278,25 @@ Agentweaver product identity. Browser handoff and status output are redacted.
 | `github_repo_app_connect` | Starts the current human's Repo App browser handoff and returns only an opaque transaction ID, browser URL, and expiry. |
 | `github_repo_app_authorization_status` | Polls the initiating human's Repo App handoff, returning only lifecycle status. |
 | `github_repo_app_disconnect` | Disconnects the current human's Repo App authorization. |
+| `github_repository_selections_list` | Lists repositories available through the caller's Repo App authorization. |
+| `github_repository_selection_issue` | Issues a short-lived, caller-bound, single-use selection code for GitHub-backed project creation. |
 | `project_copilot_app_connect` | Starts an Owner-authorized, project-pinned Copilot App browser handoff. |
 | `project_copilot_app_authorization_status` | Polls the initiating human's project-pinned Copilot handoff. |
 | `project_copilot_app_disconnect` | De-privileges a project Copilot binding for an authorized human Owner or administrator. |
 | `project_github_capability_status` | Gets redacted, server-derived unattended readiness for a project. |
+
+### Skills
+
+Purpose: acquire reusable instructions into a project catalog, then assign active skills to agents.
+
+| Tool | What it does for the user |
+|---|---|
+| `skill_list`, `skill_get` | Inspect catalog entries and full instructions. |
+| `skill_create`, `skill_generate` | Create a skill or generate a draft to inspect first. |
+| `skill_import_preview`, `skill_import` | Preview trusted-source candidates, then import selected skills. |
+| `skill_marketplaces_list`, `skill_marketplace_browse`, `skill_marketplace_import` | Discover approved marketplaces and import candidates with provenance. |
+| `skill_sync` | Refresh supported skill folders from the connected repository. |
+| `skill_assign`, `skill_unassign`, `skill_assignments_list` | Manage agent-specific instruction eligibility, separately from acquisition. |
 
 ### Sandbox policy
 
@@ -300,3 +330,56 @@ Every successful tool call writes or reads the same state that the UI renders:
 - Diagnostics tools reflect server-side state rather than user project state.
 
 The practical pattern is simple: let the assistant use tools for state changes, let `run_watch` keep the conversation live during long operations, and use the UI whenever the user wants a visual board, topology, or review surface alongside the assistant's summary.
+
+<details id="diagram-context-experience-mcp-client-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Assistant-driven work</td></tr>
+<tr><td>takeaway</td><td>Choose one intake path, inspect the result, and preserve explicit human decisions.</td></tr>
+<tr><td>group-title-0</td><td>PREPARE AND CHOOSE</td></tr>
+<tr><td>group-title-1</td><td>OPERATE AND REVIEW</td></tr>
+<tr><td>Human + assistant</td><td>Human + assistant</td></tr>
+<tr><td>Human + assistant</td><td>Agree on the work</td></tr>
+<tr><td>Human + assistant</td><td>MCP calls -&gt; API</td></tr>
+<tr><td>Human + assistant</td><td>The assistant explains actions; a person supplies judgment.</td></tr>
+<tr><td>Project and team</td><td>Project and team</td></tr>
+<tr><td>Project and team</td><td>Inspect or create</td></tr>
+<tr><td>Project and team</td><td>propose -&gt; confirm cast</td></tr>
+<tr><td>Project and team</td><td>Named roles and charters belong to the project.</td></tr>
+<tr><td>Choose intake</td><td>Choose intake</td></tr>
+<tr><td>Choose intake</td><td>Queue OR start now</td></tr>
+<tr><td>Choose intake</td><td>do not start twice</td></tr>
+<tr><td>Choose intake</td><td>Ready pickup is an alternative to an immediate start.</td></tr>
+<tr><td>Human review</td><td>Human review</td></tr>
+<tr><td>Human review</td><td>Read before deciding</td></tr>
+<tr><td>Human review</td><td>run_review: boolean</td></tr>
+<tr><td>Human review</td><td>MCP approve/decline is binary. Feedback uses other surfaces.</td></tr>
+<tr><td>State and artifacts</td><td>State and artifacts</td></tr>
+<tr><td>State and artifacts</td><td>Watch, list, read</td></tr>
+<tr><td>State and artifacts</td><td>API -&gt; MCP -&gt; client</td></tr>
+<tr><td>State and artifacts</td><td>Progress and results return through the MCP adapter.</td></tr>
+<tr><td>Coordinator</td><td>Coordinator</td></tr>
+<tr><td>Coordinator</td><td>Runs and child work</td></tr>
+<tr><td>Coordinator</td><td>status / children / watch</td></tr>
+<tr><td>Coordinator</td><td>Queued: claim then unattended. Direct: no outcome gate.</td></tr>
+<tr><td>e0</td><td>prepare</td></tr>
+<tr><td>e1</td><td>choose</td></tr>
+<tr><td>e2</td><td>start once</td></tr>
+<tr><td>e3</td><td>observe</td></tr>
+<tr><td>e4</td><td>inspect</td></tr>
+<tr><td>note</td><td>Define Outcome is the third start variant: draft, obtain authorized confirmation, then dispatch.</td></tr>
+<tr><td>n0</td><td>The assistant explains actions;
+a person supplies judgment.</td></tr>
+<tr><td>n1</td><td>Named roles and charters
+belong to the project.</td></tr>
+<tr><td>n2</td><td>Ready pickup is an alternative
+to an immediate start.</td></tr>
+<tr><td>n3</td><td>MCP approve/decline is binary.
+Feedback uses other surfaces.</td></tr>
+<tr><td>n4</td><td>Progress and results return
+through the MCP adapter.</td></tr>
+<tr><td>n5</td><td>Queued: claim then unattended.
+Direct: no outcome gate.</td></tr>
+<tr><td>groups</td><td>PREPARE AND CHOOSE; OPERATE AND REVIEW</td></tr>
+</tbody></table>
+</details>

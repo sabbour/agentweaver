@@ -104,6 +104,8 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
     help: false,
     imageSource: "ghcr",
     ghcrToken: undefined,
+    resume: false,
+    restart: false,
   });
   assert.throws(() => parseArgs([]), /Usage/);
   assert.throws(() => parseArgs(["1.2.3"]), /Usage/);
@@ -116,6 +118,8 @@ test("deploy-from-release accepts --image-source ghcr and --ghcr-token", () => {
     help: false,
     imageSource: "ghcr",
     ghcrToken: "tok",
+    resume: false,
+    restart: false,
   });
   assert.deepEqual(parseArgs(["v1.2.3", "--image-source=ghcr"]).imageSource, "ghcr");
   assert.throws(() => parseArgs(["v1.2.3", "--image-source", "bogus"]), /--image-source must be one of/);

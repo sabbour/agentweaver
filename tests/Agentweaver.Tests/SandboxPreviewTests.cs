@@ -136,6 +136,26 @@ public class SandboxPreviewTests
         new SandboxPreviewOptions().DnsConvergenceTimeoutSeconds.Should().Be(600);
     }
 
+    [Fact]
+    public void Options_legacy_dns_convergence_name_remains_supported_alias()
+    {
+        var options = new SandboxPreviewOptions { DnsConvergenceTimeoutSeconds = 123 };
+
+        options.EffectiveGatewayConvergenceTimeoutSeconds.Should().Be(123);
+    }
+
+    [Fact]
+    public void Options_gateway_convergence_name_overrides_legacy_alias()
+    {
+        var options = new SandboxPreviewOptions
+        {
+            DnsConvergenceTimeoutSeconds = 123,
+            GatewayConvergenceTimeoutSeconds = 456,
+        };
+
+        options.EffectiveGatewayConvergenceTimeoutSeconds.Should().Be(456);
+    }
+
     // ── PreviewToken ─────────────────────────────────────────────────────────────
 
     [Fact]

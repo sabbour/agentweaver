@@ -25,7 +25,19 @@ namespace Agentweaver.AgentRuntime;
 /// </remarks>
 public static class PreviewPublishTool
 {
-    internal static readonly TimeSpan RegistrationTimeout = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// Client-side preview registration deadline. Keep this strictly greater than the API server's
+    /// default publication budget: <c>SandboxPreviewOptions.EffectiveGatewayConvergenceTimeoutSeconds</c>
+    /// plus <c>SandboxPreviewOptions.PublicationTimeoutSeconds</c>. The defaults are 600 s plus
+    /// 90 s, so this client gets 14 minutes 30 seconds and loses the server timeout race last.
+    /// </summary>
+    /// <remarks>
+    /// Agentweaver.AgentRuntime cannot reference the API project or its SandboxPreviewOptions type.
+    /// Keep this constant coupled to those server defaults during preview timeout changes. If this
+    /// value is less than or equal to the server-side sum, the agent can get a timeout message naming
+    /// a duration the server never actually exceeded while the server is still converging.
+    /// </remarks>
+    internal static readonly TimeSpan RegistrationTimeout = TimeSpan.FromSeconds(870);
 
     /// <summary>
     /// Builds the <c>start_preview</c> tool for the given run. The model supplies ONLY the port; the
@@ -135,9 +147,32 @@ public static class PreviewPublishTool
             ? $"{timeout.TotalMilliseconds:n0} milliseconds"
             : $"{timeout.TotalSeconds:n0} seconds";
 
-    private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
+    /// <summary>
+    /// Builds the HTTP client used to register a preview. <see cref="HttpClient.Timeout"/> is disabled
+    /// so the linked <see cref="CancellationTokenSource"/> in <see cref="Build"/> is the single authority
+    /// on how long registration may take.
+    /// </summary>
+    /// <remarks>
+    /// HttpClient's default timeout is 100 seconds, which is SHORTER than
+    /// <see cref="RegistrationTimeout"/> (14 minutes 30 seconds). Publishing a preview can take up to the server
+    /// infrastructure convergence plus publication windows, so the default aborted the POST while the
+    /// server was still publishing successfully. The tool then reported "did not complete within 180
+    /// seconds" — a duration that could never actually elapse, because the client always gave up first.
+    /// That made the configured <see cref="RegistrationTimeout"/> unreachable dead code and produced a
+    /// misleading error naming a timeout that had not been hit.
+    ///
+    /// Do not restore a finite timeout here. Adjust <see cref="RegistrationTimeout"/> instead, so the
+    /// budget and the message the agent receives stay the same value.
+    /// <see cref="Agentweaver.Mcp"/>'s client already does this (<c>Timeout.InfiniteTimeSpan</c>); this
+    /// path had drifted from it.
+    /// </remarks>
+    internal static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
     {
-        var http = new HttpClient { BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + '/') };
+        var http = new HttpClient
+        {
+            BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + '/'),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
         if (!string.IsNullOrEmpty(apiKey))
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return http;

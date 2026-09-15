@@ -144,6 +144,35 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         subtask.RecoveryGuidance.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ObserveChild_CurrentPreviewPublicationLease_PastStallTtl_NotClassifiedAsStalled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await _runStore.TryBeginPreviewPublicationAsync(
+            RunId.Parse(childRunId), DateTimeOffset.UtcNow.AddSeconds(5));
+
+        const string coord = "obs-preview-publication-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        await Task.Delay(350, cts.Token);
+        await stream.AppendAsync(childRunId, new RunEvent(
+            0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), cts.Token);
+        await stream.CompleteAsync(childRunId, cts.Token);
+        await loop;
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
+            "a current durable publication lease proves the silent child is still doing live preview work");
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "preview convergence must not be false-positive stall-failed");
+    }
+
     // -----------------------------------------------------------------------
     // #317: completion-signal race — a child whose terminal event was already
     // durably recorded must NOT be declared agent_stall_timeout when the stall
@@ -536,6 +565,60 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Steer_MidRun_ForcedRedirectCancellation_DoesNotFailTargetOrCascadeDependents()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var targetChildRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        var siblingChildRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        const string coord = "midrun-forced-redirect-coord";
+        var (_, ids) = await SeedPlanAsync(
+            coord,
+            [
+                (SubtaskStatus.Running, targetChildRunId),
+                (SubtaskStatus.Pending, null),
+                (SubtaskStatus.Running, siblingChildRunId),
+            ],
+            dependencyPairs: [(1, 0)]);
+        _streamStore.Create(coord, "owner");
+        _streamStore.Create(targetChildRunId, "owner");
+
+        var steering = BuildSteering();
+        var view = await steering.SteerAsync(
+            coord,
+            SteeringKind.Redirect,
+            targetChildRunId,
+            "stop the hung command and finish with the simpler backend path",
+            "alice",
+            default);
+        view.Status.Should().Be(SteeringStatus.Queued);
+
+        await stream.AppendAsync(targetChildRunId, new RunEvent(
+            0,
+            EventTypes.RunCancelled,
+            new { reason = "steering_redirect", directiveId = view.Id }));
+        await stream.CompleteAsync(targetChildRunId);
+        await stream.AppendAsync(siblingChildRunId, new RunEvent(
+            0,
+            EventTypes.RunAssembleReady,
+            new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(siblingChildRunId);
+
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        (await GetDirectiveAsync(view.Id))!.Status.Should().Be(SteeringStatus.NeedsAttention,
+            "this hermetic test host has no child worktree/workflow, so it proves the failed revision-launch path without treating the redirect cancellation as child failure");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Running,
+            "a steering_redirect cancellation is a control signal consumed by redirect injection, not a failed child result");
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.Pending,
+            "the dependent subtask must not be cascaded to failed just because its predecessor was redirected");
+        (await GetSubtaskAsync(ids[2])).Status.Should().NotBe(SubtaskStatus.Failed,
+            "a sibling unrelated to the targeted redirect must not be failed by the redirect");
+        _assembly.Started.Should().Be(0,
+            "the coordinator must not advance to assembly_blocked/assembly because the targeted redirect was not a child failure");
+    }
+
+    [Fact]
     public async Task Steer_MidRun_SendAdvisoryQueuedThenDrainedAtNextBoundary()
     {
         var stream = new SqliteRunEventStream(_streamConfig);
@@ -762,7 +845,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
         string coordinatorRunId,
-        (string Status, string? ChildRunId)[] subtasks)
+        (string Status, string? ChildRunId)[] subtasks,
+        (int SubtaskIndex, int DependsOnIndex)[]? dependencyPairs = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -814,6 +898,19 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             db.Subtasks.Add(subtask);
             await db.SaveChangesAsync();
             ids.Add(subtask.Id);
+        }
+
+        if (dependencyPairs is not null)
+        {
+            foreach (var (subtaskIndex, dependsOnIndex) in dependencyPairs)
+            {
+                db.SubtaskDependencies.Add(new SubtaskDependency
+                {
+                    SubtaskId = ids[subtaskIndex],
+                    DependsOnSubtaskId = ids[dependsOnIndex],
+                });
+            }
+            await db.SaveChangesAsync();
         }
 
         return (plan.Id, ids);

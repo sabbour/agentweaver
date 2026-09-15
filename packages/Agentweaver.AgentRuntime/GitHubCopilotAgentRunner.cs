@@ -8,6 +8,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -342,11 +343,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
 
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: sandboxPolicy.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled,
+            DefaultTimeoutMs: SandboxToolOptions.ResolveDefaultRunCommandTimeoutMs())
         {
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
+            UnattendedRun = IsUnattendedRun(runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
         };
         var toolContext = new SandboxToolContext(
@@ -437,6 +440,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     category = providerFailure.FailureKind.ToString(),
                     errorCode = providerFailure.ErrorCode,
                     retryable = providerFailure.IsRetryable,
+                    causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
                 });
                 throw providerFailure;
             }
@@ -518,6 +522,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     category = providerFailure.FailureKind.ToString(),
                     errorCode = providerFailure.ErrorCode,
                     retryable = providerFailure.IsRetryable,
+                    causeChain = StructuredRunFailureTerminal.BuildExceptionCauseChain(providerFailure),
                 });
                 throw providerFailure;
             }
@@ -1009,6 +1014,18 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// Falls back to truncation if the input is not a valid absolute URI.
     /// </summary>
+    /// <summary>
+    /// A run created with <c>auto-approve-tools</c> or <c>autopilot</c> has no operator watching
+    /// for approval prompts. Used to tailor the shell HITL refusal so an unattended run rewrites a
+    /// blocked destructive command instead of spinning on it (#1314).
+    /// </summary>
+    private bool IsUnattendedRun(string runId)
+    {
+        if (_runOptions is null) return false;
+        var options = _runOptions.Get(runId);
+        return options.AutoApproveTools || options.Autopilot;
+    }
+
     internal static string SanitizeUrl(string rawUrl)
     {
         if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))

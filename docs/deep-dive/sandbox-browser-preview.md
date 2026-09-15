@@ -17,15 +17,10 @@ environments where `Sandbox:Preview:Enabled` is `false`, the Gateway path is a n
 
 ## End-to-end flow
 
-A preview is just three small Kubernetes objects the API creates at runtime, chaining the shared gateway to
-the run's pod:
-
-![End-to-end flow: Browser, Preview Gateway, API orchestrator, HTTPRoute, ClusterIP Service, Sandbox pod, TcpPortForwarder, Preview app](../diagrams/sandbox-browser-preview-fig1.png)
-
-<!-- Rendered from ../diagrams/src/sandbox-browser-preview-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+A preview creates two Kubernetes objects (Service and HTTPRoute) and patches the
+existing pod. The API also validates the generated HTTPS URL; creation alone is
+not readiness. The shared-owned diagram below is a reference, not authority for
+older "creates objects only" labels:
 
 When the user clicks **Preview** and picks a port, `StartPreviewAsync`
 ([`SandboxPreviewService.cs:100`](#source)) does the following:
@@ -54,11 +49,15 @@ When the user clicks **Preview** and picks a port, `StartPreviewAsync`
    ([`SandboxPreviewService.cs:184`](#source)).
 6. **Validate publication through the generated hostname.** App Routing owns the managed DNS zone and creates
    the per-preview record. The API probes immediately; a fresh name may be NXDOMAIN while that record
-   converges, so it retries only name-resolution failures with bounded backoff until the configured
-   `DnsConvergenceTimeoutSeconds` deadline (ten minutes by default). Existing records succeed on the
-   initial probe. After DNS resolves, non-DNS Gateway and application failures use the shorter
+   converges, so it retries name-resolution failures with bounded backoff until the configured
+   `GatewayConvergenceTimeoutSeconds` deadline (ten minutes by default). The legacy
+   `DnsConvergenceTimeoutSeconds` key remains supported. Gateway `502`, `503`, and `504` responses
+   stay in this same infrastructure convergence window because they can mean the HTTPRoute is not
+   programmed yet. This environment's App Routing `external-dns` reconciles every 3 minutes, so the
+   convergence budget must exceed that interval. Existing records succeed on the initial probe. A
+   `404`, a `500`, or any other status outside `502`/`503`/`504` starts the shorter
    `PublicationTimeoutSeconds` readiness window. The API neither creates wildcard records nor otherwise
-   mutates DNS.
+   mutates DNS, and it does not patch the managed App Routing addon.
 
 The API returns `preview_url` and a relative `keepalive_url`; the browser opens the URL (in an iframe with
 `referrerPolicy="no-referrer"`) and pings keepalive every 60 s. The API does **not** prove readiness by
@@ -93,8 +92,9 @@ if no port in `3000-9000` is free, the reason is `no_public_port_available`
 closed-set: `no_listening_port_discovered` when the observe timeout expires without a healthy listening port,
 `process_exited:exit={code}` when the app exits before readiness, and `observe_error` for an unexpected
 observe-endpoint error ([`PreviewRunner.cs:262`](#source), [`apps/Agentweaver.AgentHost/Program.cs:347`](#source)).
-Failed preview paths best-effort stop the supervised process and dispose the forwarder, so preview failures do
-not leak listeners and never block human review ([`PreviewStep.cs:154`](#source), [`PreviewRunner.cs:776`](#source)).
+Denial and non-retryable failures best-effort stop the process and forwarder.
+Approval expiry instead retains the healthy private process for fresh-approval
+retry; it does not publish a URL.
 
 ### Single-label subdomain (no nested wildcards)
 
@@ -121,8 +121,8 @@ is torn down by a background reaper, an explicit stop, or pod disappearance:
 
 - **Sliding idle TTL.** The HTTPRoute's `preview-expires-at` annotation is set to
   now + the project `lifetime_minutes` (**24 h** default; deployment fallback is
-  `LifetimeMinutes`). `preview-max-until` uses the same lifetime, so no distinct hidden cap can
-  end a preview sooner.
+  `LifetimeMinutes`). `preview-max-until` initially uses the same lifetime.
+  Keepalive moves idle expiry but never the original hard maximum.
 - **Pod-gone.** If the backing pod no longer exists (run ended, claim released), the reaper reaps the
   preview as an orphan.
 - **The reaper.** `SandboxPreviewReaperService` ([`SandboxPreviewReaperService.cs`](#source)) sweeps every
@@ -161,8 +161,9 @@ replica-safe.
   (`gateway.networking.k8s.io/gateway-name=agentweaver-preview-gateway`). With no `namespaceSelector`, the
   peer matches those pods in the policy's own namespace (`agentweaver`) — exactly where the
   approuting-istio preview gateway data-plane runs — so only the preview gateway can reach the sandbox
-  preview ports. API pods are intentionally not in this data path; an API-side `podIP:{target_port}` probe
-  would be denied by policy. Out-of-range ports are rejected by the endpoint, so we never provision a preview
+  preview ports under that rule. TCP 8088 is inside the range and also has
+  API/worker control allows, so the union is not an exclusive Gateway-only rule
+  for every port. API does not use a direct preview-port preflight. Out-of-range ports are rejected by the endpoint, so we never provision a preview
   the policy would black-hole.
 - **Capability token in the URL.** The 128-bit token rides in the preview URL and therefore the Host header
   (and keepalive path). This is expected and inherent to an unguessable capability URL: app code only ever
@@ -202,28 +203,16 @@ resolving both run claim conventions: the AgentHost `agent-{runId}` claim and th
 ## Agent-initiated preview (`start_preview`)
 
 A running agent can also expose its server **autonomously**, mid-workflow, without a human picking a port in
-the UI — via the `start_preview` agent tool. The tool is produced by `AgentweaverApiTools.Build` and is
-**run-scoped**: it is only offered when a `runId` is captured in the tool closure
-([`AgentweaverApiTools.cs:245`](#source)), and the model supplies **only** the port. Because the `runId` is
-server-bound, the agent physically cannot target another run.
-
-![Agent-initiated preview (`start_preview`): Agent (in sandbox), API (start_preview endpoint), AgentPreviewGate, Operator / auto-approve, SandboxPreviewService](../diagrams/sandbox-browser-preview-fig2.png)
-
-<!-- Rendered from ../diagrams/src/sandbox-browser-preview-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+the UI — via `PreviewRunnerToolProvider` / `PreviewPublishTool`. The model supplies
+`port` and optional process `session_id`; the run ID is server-bound. The tool's
+binding is not itself a cryptographic restriction on a shared service credential:
+the endpoint still performs run access checks.
 
 1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
    ([`SandboxEndpoints.cs:60`](#source)) and returns the response `preview_url` back to the agent.
-2. **Authorization** accepts the run's owner **or** the run's own agent callback. The agent callback
-   authenticates with the shared service key, which resolves to the hardcoded internal-service identity
-   (`ProjectAuthorization.InternalServiceUser` = `"agentweaver-internal"`) or, if configured, the `Auth:User`
-   identity — not the human owner — so the human-oriented `IsOwner` check would block it; `IsOwnerOrServiceCaller`
-   ([`EndpointHelpers.cs:40`](#source)) delegates to `ProjectAuthorization.IsInternalServiceCaller` to admit that
-   service identity **without** weakening security — the server-bound `runId` means a service caller can only
-   ever act on the run its agent is executing. (Issue #529: this previously checked only the configured
-   `Auth:User` value, which no deployment sets, so `start_preview` 403'd for every agent callback in production.)
+2. **Authorization** requires contributor-level run access, with the explicit
+   internal-service allowance. Port/run validation and authorization are separate
+   from the later operator-approval gate (`SandboxEndpoints.cs:86-137`).
 3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:108`](#source)) is the
    human-in-the-loop seam. It reuses the same `IToolApprovalGate` primitive as `web_fetch`: it emits a
    `tool.approval_required` card ([`AgentPreviewGate.cs:131`](#source)) and suspends until an operator grants
@@ -239,9 +228,12 @@ server-bound, the agent physically cannot target another run.
    notification, or waiter. Production remains human-gated when all sources are false. Auto-approval
    bypasses only the human wait: port validation, process liveness, sandbox ownership, and Gateway or
    port-forward publication still run and fail normally.
-5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
+5. **On approval** the endpoint rechecks the active run and, when a process session
+   is supplied, process health. Only then does it run the **same** `StartPreviewForRunAsync` path
    ([`SandboxEndpoints.cs:238`](#source)) as the operator route — Gateway-direct preview when enabled,
-   `kubectl` fallback otherwise — and returns `preview_url`.
+   `kubectl` fallback otherwise. Gateway publication returns a URL only after
+   HTTPS validation. Denial returns 403 and expiry returns 408 without calling
+   the publication path.
 6. **On timeout** the deterministic preview step records the expired request and retains the healthy,
    still-private PreviewRunner process. An owner can call
    `POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry`; the API rejects non-expired,
@@ -306,3 +298,101 @@ introduce a separate approval path. Omitted/false policy remains human-gated.
 - [Sandbox](./sandbox.md) — the sandbox claim/pod model the preview targets.
 - [Sandbox pod execution](./sandbox-pod-execution.md) — how the per-run pod is claimed and bound.
 - [Sandbox pods reference](../reference/sandbox-pods.md) — pod naming and the wider sandbox API surface.
+
+<details id="diagram-context-sandbox-browser-preview-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Preview readiness follows the public path</td></tr>
+<tr><td>takeaway</td><td>Provision the route, then probe its exact HTTPS URL; object creation alone is not ready.</td></tr>
+<tr><td>group-title0</td><td>CONTROL: PROVISION + PROBE</td></tr>
+<tr><td>group-title1</td><td>GATEWAY DATA PATH</td></tr>
+<tr><td>Preview API</td><td>Preview API</td></tr>
+<tr><td>Preview API</td><td>Resolve bound SandboxClaim</td></tr>
+<tr><td>Preview API</td><td>Patch run selector on pod</td></tr>
+<tr><td>Preview API</td><td>Create Service + HTTPRoute</td></tr>
+<tr><td>Preview API</td><td>State from cluster, not cache</td></tr>
+<tr><td>Publication probe</td><td>Publication probe</td></tr>
+<tr><td>Publication probe</td><td>Exact generated HTTPS URL</td></tr>
+<tr><td>Publication probe</td><td>Wait for managed DNS</td></tr>
+<tr><td>Publication probe</td><td>Check Gateway + application</td></tr>
+<tr><td>Publication probe</td><td>Only then return ready</td></tr>
+<tr><td>Browser preview</td><td>Browser preview</td></tr>
+<tr><td>Browser preview</td><td>Open the returned URL</td></tr>
+<tr><td>Browser preview</td><td>Run-scoped capability host</td></tr>
+<tr><td>Browser preview</td><td>Keepalive via API</td></tr>
+<tr><td>Browser preview</td><td>Iframe: no-referrer</td></tr>
+<tr><td>Preview Gateway</td><td>Preview Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>Separate shared Gateway</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPS host match</td></tr>
+<tr><td>Preview Gateway</td><td>HTTPRoute selects Service</td></tr>
+<tr><td>Preview Gateway</td><td>Not API port-forward</td></tr>
+<tr><td>ClusterIP Service</td><td>ClusterIP Service</td></tr>
+<tr><td>ClusterIP Service</td><td>Per-preview target selector</td></tr>
+<tr><td>ClusterIP Service</td><td>Service :80 → public port</td></tr>
+<tr><td>ClusterIP Service</td><td>Routes to bound sandbox pod</td></tr>
+<tr><td>ClusterIP Service</td><td>Allowed ports 3000–9000</td></tr>
+<tr><td>Sandbox preview app</td><td>Sandbox preview app</td></tr>
+<tr><td>Sandbox preview app</td><td>AgentHost pod-local path</td></tr>
+<tr><td>Sandbox preview app</td><td>Live preview: TCP forwarder</td></tr>
+<tr><td>Sandbox preview app</td><td>0.0.0.0 → loopback app</td></tr>
+<tr><td>Sandbox preview app</td><td>Manual: chosen target port</td></tr>
+<tr><td>relation-0</td><td>1 after create</td></tr>
+<tr><td>relation-1</td><td>2 ready URL</td></tr>
+<tr><td>relation-2</td><td>3 HTTPS probe</td></tr>
+<tr><td>relation-3</td><td>4 HTTPS</td></tr>
+<tr><td>relation-4</td><td>5 route</td></tr>
+<tr><td>relation-5</td><td>6 public port</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; infrastructure convergence has a bounded retry window.</td></tr>
+<tr><td>assurance-0-label</td><td>Public readiness</td></tr>
+<tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
+<tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>
+<tr><td>assurance-1-label</td><td>Rollback on failure</td></tr>
+<tr><td>assurance-1-fact</td><td>Unpublish failed preview resources.</td></tr>
+<tr><td>assurance-1-source</td><td>SandboxPreviewPublicationTests.cs</td></tr>
+<tr><td>assurance-2-label</td><td>Separate ingress</td></tr>
+<tr><td>assurance-2-fact</td><td>DNS managed externally, not by API.</td></tr>
+<tr><td>assurance-2-source</td><td>gateway-preview.yaml</td></tr>
+<tr><td>n0</td><td>Patch run selector on pod; Create Service + HTTPRoute</td></tr>
+<tr><td>n1</td><td>Wait for managed DNS; Check Gateway + application</td></tr>
+<tr><td>n2</td><td>Run-scoped capability host; Keepalive via API</td></tr>
+<tr><td>n3</td><td>HTTPS host match; HTTPRoute selects Service</td></tr>
+<tr><td>n4</td><td>Service :80 → public port; Routes to bound sandbox pod</td></tr>
+<tr><td>n5</td><td>Live preview: TCP forwarder; 0.0.0.0 → loopback app</td></tr>
+<tr><td>groups</td><td>CONTROL: PROVISION + PROBE; GATEWAY DATA PATH</td></tr>
+</tbody></table>
+</details>
+
+<details id="diagram-context-sandbox-browser-preview-fig2" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Only approved requests reach publication</td></tr>
+<tr><td>takeaway</td><td>Run access, operator approval and HTTPS readiness are different gates.</td></tr>
+<tr><td>Run-bound preview tool</td><td>Run-bound preview tool</td></tr>
+<tr><td>Run-bound preview tool</td><td>port + optional session_id</td></tr>
+<tr><td>Run-bound preview tool</td><td>PreviewPublishTool provider</td></tr>
+<tr><td>API preview endpoint</td><td>API preview endpoint</td></tr>
+<tr><td>API preview endpoint</td><td>Validate run and target port</td></tr>
+<tr><td>API preview endpoint</td><td>Contributor / internal service</td></tr>
+<tr><td>AgentPreviewGate</td><td>AgentPreviewGate</td></tr>
+<tr><td>AgentPreviewGate</td><td>Explicit auto or human approval</td></tr>
+<tr><td>AgentPreviewGate</td><td>No authority from tool closure</td></tr>
+<tr><td>Denied / expired</td><td>Denied / expired</td></tr>
+<tr><td>Denied / expired</td><td>403 / 408 respectively</td></tr>
+<tr><td>Denied / expired</td><td>No StartPreview invocation</td></tr>
+<tr><td>Approved only</td><td>Approved only</td></tr>
+<tr><td>Approved only</td><td>Recheck active run</td></tr>
+<tr><td>Approved only</td><td>Process health if session supplied</td></tr>
+<tr><td>Shared start path</td><td>Shared start path</td></tr>
+<tr><td>Shared start path</td><td>Gateway publication or local mode</td></tr>
+<tr><td>Shared start path</td><td>Failure never yields ready URL</td></tr>
+<tr><td>arrow-1</td><td>POST</td></tr>
+<tr><td>arrow-2</td><td>request</td></tr>
+<tr><td>arrow-3</td><td>reject</td></tr>
+<tr><td>arrow-4</td><td>grant</td></tr>
+<tr><td>arrow-5</td><td>start</td></tr>
+<tr><td>note-0</td><td>Denial and expiry terminate before publication; expiry supports fresh approval.</td></tr>
+<tr><td>note-1</td><td>Gateway URL only after HTTPS validation; local fallback is API-host loopback.</td></tr>
+<tr><td>note-2</td><td>Process session_id is distinct from the Gateway capability token.</td></tr>
+<tr><td>notes</td><td>Denial and expiry terminate before publication; expiry supports fresh approval.; Gateway URL only after HTTPS validation; local fallback is API-host loopback.; Process session_id is distinct from the Gateway capability token.</td></tr>
+</tbody></table>
+</details>

@@ -85,7 +85,11 @@ app.MapPost("/api/projects/{id}/casting/proposals", CreateCastingProposalAsync)
     {
         operation.Description ??= "Creates a draft team proposal for a project from scenario, free-text, analysis, or manual role inputs.";
         return Task.CompletedTask;
-    });
+    })
+    .RequiresAiExecutionContext(
+        "casting_generation",
+        required: false,
+        condition: "for the free_text and analysis modes");
 
 // GET /api/projects/{id}/casting/proposals — list active proposals for a project
 app.MapGet("/api/projects/{id}/casting/proposals", async (

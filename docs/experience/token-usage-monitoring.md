@@ -1,78 +1,59 @@
 # Token usage and cost visibility
 
-Agentweaver tracks GitHub Copilot token consumption and AI Credit (AIC) cost at run, workflow/coordinator, project, and app scope. The UI now surfaces that cost in compact run cards, graph nodes, the project dashboard leaderboard, and the fleet Overview page. For API contracts see the [reference](../reference/token-usage.md); for event/projection internals see the [deep dive](../deep-dive/token-usage-monitoring.md).
+Agentweaver exposes recorded token consumption and AI Credit (AIC) cost through run inspection, graph cost chips, dashboards, and Observability. Read the **scope, time range, and data source** before comparing totals. A selected-range telemetry chart is not the same measurement as a durable run aggregate. For API contracts see the [reference](../reference/token-usage.md); for event/projection internals see the [deep dive](../deep-dive/token-usage-monitoring.md).
 
 ## Run and graph cost surfaces
 
-Token usage is projected from `agent.turn.usage` events. It appears on run cards, coordinator graphs, dashboards, and observability pages.
+Run usage is projected from `agent.turn.usage` events. `CostChip` delegates its label to `costChipLabel`: positive `totalNanoAiu` displays AIC, positive tokens without cost display a compact token count, and absent/zero values produce no chip. The richer `AiCredits` control shares this formatting for run/graph contexts. The absence of a chip is not evidence that execution was free.
 
-![Token counter on embedded run inspection surfaces](/screenshots/watch-token-counter.png)
+Coordinator inspection exposes AI-credit context and per-agent usage where available. Graph usage is associated with the relevant coordinator or child context, not inferred from a neighboring node. Open an orchestration and inspect its usage controls alongside the selected task's messages and artifacts.
 
-> 📸 **Screenshot — `watch-token-counter.png`**
-> *Shows:* the coordinator run **AI credits** popover with total token/cost context and per-agent breakdown when available.
-> *Path:* `/projects/:projectId/orchestrations/:runId` → click the AI credits chip.
+The current board `RunCard` focuses on status, stage, agent, approvals, retry, and archive; it does **not** render `CostChip` or fetch supplemental run usage. Use run inspection and telemetry surfaces rather than expecting a cost beside every board status badge.
 
-## Run cards and DAG nodes
+Sources: `apps/web/src/components/CostChip.tsx:13`, `apps/web/src/components/costChipFormat.ts:16`, `apps/web/src/components/AiCredits.tsx:109`, `apps/web/src/components/board/RunCard.tsx:146`.
 
-Run cards in the board show a compact cost chip beside the status badge. If `total_nano_aiu` is positive, the chip displays AICs; otherwise it falls back to compact token count when only tokens are available. Run cards use embedded card fields when present and fetch `GET /api/runs/{id}/usage` as supplementary data when the card did not include totals. Source: `apps/web/src/components/CostChip.tsx:18`, `apps/web/src/components/CostChip.tsx:24`, `apps/web/src/components/board/RunCard.tsx:78`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160`.
+## Scope and surface mapping
 
-Coordinator graphs use the same `CostChip`: coordinator usage attaches to the coordinator node and child-run usage attaches to subtask nodes. Source: `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/pages/CoordinatorRunPage.tsx`.
+| Surface | Scope and source | How to read it |
+|---|---|---|
+| Run usage API / run inspection | Persisted usage aggregates for that run; project usage APIs have their own endpoint-defined scope. | Treat these as run aggregates, not automatically as telemetry for the dashboard's selected range. |
+| Project **Dashboard** | Dashboard state plus `GET /api/projects/{id}/metrics?from=...&to=...`. The **Activity** selector offers 7/30/90-day ranges. | The current **Model metrics** and agent leaderboard **Cost** use the selected-range metrics response, not a client-side sum of `/runs/{id}/usage` calls. |
+| Fleet **Overview** | **AI usage & performance** aggregates project observability metrics for the **recent projects shown on that page**. | Its 7/30/90-day selector scopes that rollup; do not call it an exhaustive all-project billing total. |
+| Project **Observability → Overview** | Selected-range project metrics. | Inspect model mix, credit trends, response time, and first-token timing with the range visible. |
+| Project **Observability → Agents** | Metrics grouped by agent over the selected range. | **Agent token breakdown** is a dimensioned telemetry view, not proof that every run reported usage. |
+| Project **Observability → Traces** | Recorded spans for a selected run, with persisted run events for tool detail. | Cost sums the model spans loaded into the trace tree; incomplete telemetry or pagination can differ from a durable full-run aggregate. |
 
-## Project dashboard
+Sources: `apps/web/src/pages/DashboardPage.tsx:675`, `:881`, `:989`, `:1018`; `apps/web/src/pages/OverviewPage.tsx:299`, `:382`; `apps/web/src/pages/observability/ObservabilityOverviewPage.tsx:95`; `apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:95`, `:190`; `apps/web/src/components/runs/traceTree.ts:308`.
 
-The project dashboard's **Agent and usage metrics** range selector scopes both the **Token and AIC usage** panel and the leaderboard's **Cost** column. The selector offers **Last 7 days**, **Last 30 days**, and **Last 90 days**; changing it calls `GET /api/projects/{id}/usage?from=...&to=...`, then fetches scoped run usage to aggregate costs per leaderboard agent. Source: `apps/web/src/pages/DashboardPage.tsx:40`, `apps/web/src/pages/DashboardPage.tsx:44`, `apps/web/src/pages/DashboardPage.tsx:289`, `apps/web/src/pages/DashboardPage.tsx:293`, `apps/web/src/pages/DashboardPage.tsx:299`, `apps/web/src/pages/DashboardPage.tsx:304`, `apps/web/src/pages/DashboardPage.tsx:425`, `apps/web/src/pages/DashboardPage.tsx:461`, `apps/web/src/pages/DashboardPage.tsx:494`, `apps/web/src/pages/DashboardPage.tsx:504`.
+## Empty and partial telemetry
 
-![Token usage section on the project dashboard](/screenshots/dashboard-token-usage.png)
+Charts use explicit empty states such as **No data for AI credits in this range**, **No response-time data for this range**, and **No first-token data for this range**. Missing or delayed telemetry is not a healthy zero-cost result. Check the selected project/range and query availability before interpreting an empty trend or comparing it with per-model rows.
 
-> 📸 **Screenshot — `dashboard-token-usage.png`**
-> *Shows:* the project **Dashboard** with the **Activity** range filter, **Model metrics** panels, Agent leaderboard **Cost** column, and AI-credit/token data.
-> *Path:* `/projects/:projectId`.
+The previous AI-credit popover, dashboard, and Overview usage images were 1×1 placeholders; the Agents image was also a placeholder. They are omitted. The earlier Observability Overview capture had zero total AIC alongside nonzero model rows and empty trends; it is not used as an illustration of coherent totals. No replacement captures or visual verification are claimed.
 
-## App overview (admin)
-
-The **Overview** page aggregates recent-project metrics and shows the **AI Usage & Performance** section with a shared 7d/30d/90d range selector, token consumption by model, model usage distribution, response duration, TTFT, and success-rate tiles. Source: `apps/web/src/pages/OverviewPage.tsx:222`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:239`, `apps/web/src/pages/OverviewPage.tsx:245`, `apps/web/src/pages/OverviewPage.tsx:272`, `apps/web/src/pages/OverviewPage.tsx:439`, `apps/web/src/pages/OverviewPage.tsx:442`, `apps/web/src/pages/OverviewPage.tsx:445`, `apps/web/src/pages/OverviewPage.tsx:450`, `apps/web/src/pages/OverviewPage.tsx:465`, `apps/web/src/pages/OverviewPage.tsx:475`.
-
-![App-level usage on the Overview page](/screenshots/overview-token-usage.png)
-
-> 📸 **Screenshot — `overview-token-usage.png`**
-> *Shows:* the **Overview** page **AI Usage & Performance** section with range selector and model/cost/latency tiles.
-> *Path:* `/overview`.
-
-## Project Observability
-
-The project-scoped **Observability** section adds an AppInsights-backed view beside the older usage panels. The Overview tab calls `GET /api/projects/{id}/metrics` for the selected 7d/30d/90d range and renders compact tiles for runs created over time, AI credit usage over time, AI credit usage by model, model invocation share, response duration by model, and TTFT by model (`apps/web/src/pages/observability/ObservabilityOverviewPage.tsx:31`, `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`). Empty charts say **No AI credit usage data yet.**, **No response-duration data yet.**, or **No TTFT data available yet.** rather than fabricating values (`ModelPerformancePanels.tsx:186`, `:229`, `:234`).
-
-The **Agents** tab aggregates the same metrics by agent and reuses the token breakdown component (`apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:58`). The **Traces** tab lists recent coordinator runs and opens an AppInsights trace preview; each lane is an agent, each bar is an agentic/LLM span, and expanding a bar shows model, input tokens, output tokens, duration, and operation (`apps/web/src/pages/observability/ObservabilityTracesPage.tsx:108`, `apps/web/src/components/runs/TransactionTracePanel.tsx:260`).
-
-![Project Observability overview with model performance panels](/screenshots/observability-overview.png)
-
-> 📸 **Screenshot — `observability-overview.png`**
-> *Shows:* the project **Observability** Overview tab with the range selector, **Refresh**, and model performance panels for run creation, AI credit usage, model distribution, response duration, and TTFT.
-> *Path:* open a project → click **Observability** → `/projects/:projectId/observability`.
-
-![Project Observability agents tab with token breakdown by agent](/screenshots/observability-agents.png)
-
-> 📸 **Screenshot — `observability-agents.png`**
-> *Shows:* the **Observability** Agents tab with **Agent token breakdown** aggregated by agent over the selected range.
-> *Path:* `/projects/:projectId/observability` → click **Agents**.
+Source: `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:332`, `:354`, `:386`, `:390`.
 
 ## Understanding the numbers
 
-| Term | What it counts | Source |
-|---|---|---|
-| **Input tokens** | Prompt tokens sent to the model. | `apps/web/src/api/types.ts:1187` |
-| **Output tokens** | Completion tokens returned by the model. | `apps/web/src/api/types.ts:1189` |
-| **Total tokens** | Aggregate token count for the selected run/project/app scope. | `apps/web/src/api/types.ts:1190` |
-| **Total AICs** | `total_nano_aiu` converted by `formatAic`. Values below `1` AIC show four decimal places. | `apps/web/src/api/types.ts:1191`, `apps/web/src/components/CostChip.tsx:3` |
-| **Per-model breakdown** | Model rows in `by_model`, used by `TokenUsagePanel`. | `apps/web/src/api/types.ts:1179`, `apps/web/src/components/TokenUsagePanel.tsx:118` |
+| Term | What it counts |
+|---|---|
+| **Input tokens** | Recorded prompt tokens sent to the model. |
+| **Output tokens** | Recorded completion tokens returned by the model. |
+| **Total tokens** | Reported aggregate for the specified run or telemetry scope; compare like scopes and ranges. |
+| **AIC** | Nano-AIU divided by **1,000,000,000**. `formatAic` renders values below 1 AIC with four decimal places. This is a credit unit, not a currency amount. |
+| **Per-model / per-agent breakdown** | Usage grouped by the dimension supplied by the endpoint. Missing attribution or incomplete telemetry must not be filled with invented rows. |
+| **Trace invocation cost** | Sum of descendant model-call costs; agent and tool nodes do not add a second copy of their own model totals. |
 
-## DAG layout note
+Sources: `apps/web/src/components/costChipFormat.ts:1`; `apps/web/src/components/runs/traceTree.ts:308–327`; `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:159`, `:203`.
 
-The added cost chips and pod/status badges made DAG cards taller, so graph layout shares `DAG_NODE_SEP = 96` and per-node rendered-height hints. Coordinator topology, shared workflow graph panels, and the visual workflow editor pass those hints into `layoutDag`, preventing node overlap as cards gain metadata. Source: `apps/web/src/utils/dagLayout.ts`, `apps/web/src/components/CoordinatorTopologyGraph.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/components/VisualWorkflowEditor.tsx`.
+## Graph layout
+
+Cost chips, pod indicators, and status metadata contribute to card height. Shared DAG layout uses rendered-height hints so graphs can accommodate that metadata; this is presentation behavior, not another source of usage totals. See `apps/web/src/utils/dagLayout.ts` and `apps/web/src/components/CoordinatorTopologyGraph.tsx`.
 
 ## See also
 
-- [Token usage — Reference](../reference/token-usage.md) — endpoints, DTOs, and status codes.
-- [Token usage monitoring — Deep Dive](../deep-dive/token-usage-monitoring.md) — event flow, projections, and source table.
-- [Runs, board, and live inspection](./runs-board-watch.md) — run cards, the board, and embedded inspection flow.
-- [Distributed execution & scaling](../deep-dive/distributed-execution-scaling.md) — shared event-store streaming under multiple replicas.
+- [Token usage — Reference](../reference/token-usage.md)
+- [Token usage monitoring — Deep Dive](../deep-dive/token-usage-monitoring.md)
+- [Runs, board, and live inspection](./runs-board-watch.md)
+- [Transaction traces](./transaction-traces.md)
+- [Distributed execution & scaling](../deep-dive/distributed-execution-scaling.md)

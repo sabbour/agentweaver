@@ -32,6 +32,7 @@ export const FIXED_NODE_H = 56;
 // the same caption reserve the subtask node uses (SUBTASK_NODE_H − SUBTASK_CARD_H = 24px).
 export const FIXED_NODE_WITH_CAPTION_H = FIXED_CARD_H + (SUBTASK_NODE_H - SUBTASK_CARD_H);
 export const REVIEW_EXPANDED_NODE_H = 96;
+export const POD_INDICATOR_NODE_H = 28;
 // Back-compat aliases: existing imports refer to the subtask (tall) pill dimensions.
 export const COMPACT_CARD_H = SUBTASK_CARD_H;
 export const COMPACT_NODE_H = SUBTASK_NODE_H;
@@ -122,6 +123,13 @@ export interface ConnectorPoint {
   y: number;
 }
 
+export interface ConnectorDirectionMarker extends ConnectorPoint {
+  angle: number;
+}
+
+export const TOPOLOGY_CONNECTOR_CARD_CLEARANCE = 14;
+export const TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING = 160;
+
 /**
  * Computes the axis-aligned bounding box (width/height) that encloses a laid-out
  * node set, honoring each node's size hint (falling back to the default node box).
@@ -186,6 +194,12 @@ interface OrthogonalSegment {
   end: number;
 }
 
+interface SpineEdgeRoutingData {
+  flowDirection?: 'horizontal' | 'vertical';
+  gutterLaneOffset?: number;
+  routePoints?: ConnectorPoint[];
+}
+
 function handlePoint(node: Node, handle: string | null | undefined): ConnectorPoint {
   const { width, height } = graphNodeSize(node);
   const side = handle?.split('-').at(-1);
@@ -200,10 +214,8 @@ function spineRoutePoints(edge: Edge, nodes: Map<string, Node>): ConnectorPoint[
   const source = nodes.get(edge.source);
   const target = nodes.get(edge.target);
   if (!source || !target || edge.type !== 'spine') return null;
-  const data = edge.data as {
-    flowDirection?: 'horizontal' | 'vertical';
-    gutterLaneOffset?: number;
-  } | undefined;
+  const data = edge.data as SpineEdgeRoutingData | undefined;
+  if (data?.routePoints && data.routePoints.length >= 2) return data.routePoints;
   const from = handlePoint(source, edge.sourceHandle);
   const to = handlePoint(target, edge.targetHandle);
   return buildSteppedConnectorRoute({
@@ -488,8 +500,14 @@ export function findRoutedConnectorJunctions(routes: RoutedConnector[]): Map<str
 
   for (const group of bySource.values()) {
     if (group.length < 2) continue;
-    add(group[0].id, sharedSourcePoint(group));
-    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
+    const sourcePoint = sharedSourcePoint(group);
+    add(group[0].id, sourcePoint);
+    for (const tee of logicalTeePoints(group)) {
+      if (sourcePoint && Math.hypot(tee.point.x - sourcePoint.x, tee.point.y - sourcePoint.y) <= BRIDGE_ENDPOINT_CLEARANCE) {
+        continue;
+      }
+      add(tee.edgeId, tee.point);
+    }
   }
   for (const group of byTarget.values()) {
     if (group.length < 2) continue;
@@ -625,6 +643,71 @@ export function buildSteppedConnectorRoute(input: {
   };
 }
 
+export function connectorRouteLabelPoint(points: ConnectorPoint[]): ConnectorPoint {
+  const clean = dedupePoints(points);
+  if (clean.length === 0) return { x: 0, y: 0 };
+  if (clean.length === 1) return clean[0];
+  const segmentLengths = clean.slice(1).map((point, index) =>
+    Math.hypot(point.x - clean[index].x, point.y - clean[index].y));
+  const total = segmentLengths.reduce((sum, length) => sum + length, 0);
+  if (total <= 0) return clean[Math.floor(clean.length / 2)];
+  let cursor = 0;
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const length = segmentLengths[index];
+    if (cursor + length >= total / 2) {
+      const from = clean[index];
+      const to = clean[index + 1];
+      const ratio = (total / 2 - cursor) / length;
+      return {
+        x: from.x + (to.x - from.x) * ratio,
+        y: from.y + (to.y - from.y) * ratio,
+      };
+    }
+    cursor += length;
+  }
+  return clean[clean.length - 1];
+}
+
+export function connectorDirectionMarkers(
+  points: ConnectorPoint[],
+  maxSpacing = TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING,
+): ConnectorDirectionMarker[] {
+  const clean = dedupePoints(points);
+  if (clean.length < 2) return [];
+  const segments = clean.slice(1).map((point, index) => {
+    const from = clean[index];
+    const to = point;
+    return {
+      from,
+      to,
+      length: Math.hypot(to.x - from.x, to.y - from.y),
+    };
+  }).filter((segment) => segment.length > 0.5);
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (total <= 0) return [];
+
+  const count = Math.max(1, Math.ceil(total / maxSpacing));
+  const distances = Array.from({ length: count }, (_, index) => ((index + 1) * total) / (count + 1));
+  const markers: ConnectorDirectionMarker[] = [];
+  for (const distance of distances) {
+    let cursor = 0;
+    for (const segment of segments) {
+      if (cursor + segment.length < distance) {
+        cursor += segment.length;
+        continue;
+      }
+      const ratio = clamp((distance - cursor) / segment.length, 0, 1);
+      markers.push({
+        x: segment.from.x + (segment.to.x - segment.from.x) * ratio,
+        y: segment.from.y + (segment.to.y - segment.from.y) * ratio,
+        angle: Math.atan2(segment.to.y - segment.from.y, segment.to.x - segment.from.x) * 180 / Math.PI,
+      });
+      break;
+    }
+  }
+  return markers;
+}
+
 export function workflowNodeSizeHint(
   nodeType?: string | null,
   opts: { withEditorActions?: boolean } = {},
@@ -668,7 +751,8 @@ interface BandedLayoutOptions {
 }
 
 const BANDED_MARGIN = 24;
-const BANDED_LANE_STEP = 34;
+export const TOPOLOGY_CONNECTOR_LANE_GAP = 34;
+const BANDED_LANE_STEP = TOPOLOGY_CONNECTOR_LANE_GAP;
 const BANDED_LABEL_CHAR_W = 7;
 const BANDED_SNAKE_MIN_RANKS = 3;
 
@@ -1545,6 +1629,277 @@ export function layoutDag(
   });
 }
 
+interface RouteRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+const GRID_ROUTE_CLEARANCE = TOPOLOGY_CONNECTOR_CARD_CLEARANCE;
+const GRID_ROUTE_BEND_PENALTY = 24;
+const GRID_ROUTE_PORT_STUB = Math.max(8, TOPOLOGY_CONNECTOR_CARD_CLEARANCE - 4);
+
+function nodeRouteRect(node: Node, clearance = 0): RouteRect {
+  const size = graphNodeSize(node);
+  return {
+    x0: node.position.x - clearance,
+    y0: node.position.y - clearance,
+    x1: node.position.x + size.width + clearance,
+    y1: node.position.y + size.height + clearance,
+  };
+}
+
+function pointInsideRouteRect(point: ConnectorPoint, rect: RouteRect): boolean {
+  return point.x > rect.x0 && point.x < rect.x1 && point.y > rect.y0 && point.y < rect.y1;
+}
+
+function segmentCrossesRouteRect(from: ConnectorPoint, to: ConnectorPoint, rect: RouteRect): boolean {
+  if (Math.abs(from.x - to.x) < 0.5) {
+    const x = from.x;
+    if (x <= rect.x0 || x >= rect.x1) return false;
+    return Math.max(from.y, to.y) > rect.y0 && Math.min(from.y, to.y) < rect.y1;
+  }
+  if (Math.abs(from.y - to.y) < 0.5) {
+    const y = from.y;
+    if (y <= rect.y0 || y >= rect.y1) return false;
+    return Math.max(from.x, to.x) > rect.x0 && Math.min(from.x, to.x) < rect.x1;
+  }
+  return false;
+}
+
+function routeSegmentClear(from: ConnectorPoint, to: ConnectorPoint, obstacles: RouteRect[]): boolean {
+  return obstacles.every((rect) =>
+    !pointInsideRouteRect(from, rect)
+    && !pointInsideRouteRect(to, rect)
+    && !segmentCrossesRouteRect(from, to, rect));
+}
+
+function addCoordinate(values: number[], value: number) {
+  if (!Number.isFinite(value)) return;
+  const rounded = Math.round(value * 100) / 100;
+  if (!values.some((existing) => Math.abs(existing - rounded) < 0.5)) values.push(rounded);
+}
+
+function simplifyRoutePoints(points: ConnectorPoint[]): ConnectorPoint[] {
+  const clean = dedupePoints(points);
+  return clean.filter((point, index) => {
+    if (index === 0 || index === clean.length - 1) return true;
+    const prev = clean[index - 1];
+    const next = clean[index + 1];
+    return !(
+      (Math.abs(prev.x - point.x) < 0.5 && Math.abs(point.x - next.x) < 0.5) ||
+      (Math.abs(prev.y - point.y) < 0.5 && Math.abs(point.y - next.y) < 0.5)
+    );
+  });
+}
+
+function handleOutwardVector(handle: string): ConnectorPoint {
+  const side = handle.split('-').at(-1);
+  if (side === 'left') return { x: -1, y: 0 };
+  if (side === 'right') return { x: 1, y: 0 };
+  if (side === 'top') return { x: 0, y: -1 };
+  if (side === 'bottom') return { x: 0, y: 1 };
+  return { x: 0, y: 0 };
+}
+
+function perpendicularVector(vector: ConnectorPoint): ConnectorPoint {
+  return { x: -vector.y, y: vector.x };
+}
+
+function translatePoint(point: ConnectorPoint, vector: ConnectorPoint, distance: number): ConnectorPoint {
+  if (Math.abs(distance) < 0.5) return point;
+  return { x: point.x + vector.x * distance, y: point.y + vector.y * distance };
+}
+
+function connectorRouteClear(points: ConnectorPoint[], obstacles: RouteRect[]): boolean {
+  return points.every((point, index) => index === 0 || routeSegmentClear(points[index - 1], point, obstacles));
+}
+
+function obstacleAwareLaneRoute(input: {
+  from: ConnectorPoint;
+  to: ConnectorPoint;
+  nodes: Node[];
+  excludedNodeIds: Set<string>;
+  preferredOrientation: 'horizontal' | 'vertical';
+  sourceHandle: string;
+  targetHandle: string;
+  sourcePortLaneOffset: number;
+  targetPortLaneOffset: number;
+  gutterLaneOffset: number;
+}): ConnectorPoint[] {
+  const obstacles = input.nodes
+    .filter((node) => !input.excludedNodeIds.has(node.id))
+    .map((node) => nodeRouteRect(node, GRID_ROUTE_CLEARANCE));
+  const sourceOutward = handleOutwardVector(input.sourceHandle);
+  const targetOutward = handleOutwardVector(input.targetHandle);
+  const sourceStub = translatePoint(input.from, sourceOutward, GRID_ROUTE_PORT_STUB);
+  const targetStub = translatePoint(input.to, targetOutward, GRID_ROUTE_PORT_STUB);
+  const sourceLane = translatePoint(sourceStub, perpendicularVector(sourceOutward), input.sourcePortLaneOffset);
+  const targetLane = translatePoint(targetStub, perpendicularVector(targetOutward), input.targetPortLaneOffset);
+  const middle = obstacleAvoidingRoute(
+    sourceLane,
+    targetLane,
+    input.nodes,
+    input.excludedNodeIds,
+    input.preferredOrientation,
+    input.gutterLaneOffset,
+  );
+  const candidate = simplifyRoutePoints([
+    input.from,
+    sourceStub,
+    sourceLane,
+    ...middle,
+    targetLane,
+    targetStub,
+    input.to,
+  ]);
+  if (connectorRouteClear(candidate, obstacles)) return candidate;
+  return obstacleAvoidingRoute(
+    input.from,
+    input.to,
+    input.nodes,
+    input.excludedNodeIds,
+    input.preferredOrientation,
+    input.gutterLaneOffset,
+  );
+}
+
+function obstacleAvoidingRoute(
+  from: ConnectorPoint,
+  to: ConnectorPoint,
+  nodes: Node[],
+  excludedNodeIds: Set<string>,
+  preferredOrientation: 'horizontal' | 'vertical',
+  laneOffset = 0,
+): ConnectorPoint[] {
+  const obstacles = nodes
+    .filter((node) => !excludedNodeIds.has(node.id))
+    .map((node) => nodeRouteRect(node, GRID_ROUTE_CLEARANCE));
+
+  const fallback = buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: preferredOrientation,
+    laneOffset,
+  }).points;
+  if (fallback.every((point, index) => index === 0 || routeSegmentClear(fallback[index - 1], point, obstacles))) {
+    return fallback;
+  }
+
+  const xs: number[] = [];
+  const ys: number[] = [];
+  addCoordinate(xs, from.x);
+  addCoordinate(xs, to.x);
+  addCoordinate(ys, from.y);
+  addCoordinate(ys, to.y);
+  if (preferredOrientation === 'horizontal') {
+    addCoordinate(xs, (from.x + to.x) / 2 + laneOffset);
+  } else {
+    addCoordinate(ys, (from.y + to.y) / 2 + laneOffset);
+  }
+  for (const rect of obstacles) {
+    addCoordinate(xs, rect.x0);
+    addCoordinate(xs, rect.x1);
+    addCoordinate(ys, rect.y0);
+    addCoordinate(ys, rect.y1);
+  }
+  xs.sort((a, b) => a - b);
+  ys.sort((a, b) => a - b);
+
+  const pointKey = (x: number, y: number) => `${x}:${y}`;
+  const points: ConnectorPoint[] = [];
+  const pointIndex = new Map<string, number>();
+  for (const y of ys) {
+    for (const x of xs) {
+      const point = { x, y };
+      if (obstacles.some((rect) => pointInsideRouteRect(point, rect))) continue;
+      pointIndex.set(pointKey(x, y), points.length);
+      points.push(point);
+    }
+  }
+
+  const start = pointIndex.get(pointKey(Math.round(from.x * 100) / 100, Math.round(from.y * 100) / 100));
+  const end = pointIndex.get(pointKey(Math.round(to.x * 100) / 100, Math.round(to.y * 100) / 100));
+  if (start === undefined || end === undefined) return fallback;
+
+  const byRow = new Map<number, number[]>();
+  const byCol = new Map<number, number[]>();
+  points.forEach((point, index) => {
+    byRow.set(point.y, [...(byRow.get(point.y) ?? []), index]);
+    byCol.set(point.x, [...(byCol.get(point.x) ?? []), index]);
+  });
+  for (const indexes of byRow.values()) indexes.sort((a, b) => points[a].x - points[b].x);
+  for (const indexes of byCol.values()) indexes.sort((a, b) => points[a].y - points[b].y);
+
+  const neighbors = (index: number) => {
+    const point = points[index];
+    const result: Array<{ index: number; direction: 'horizontal' | 'vertical'; distance: number }> = [];
+    const row = byRow.get(point.y) ?? [];
+    const rowIndex = row.indexOf(index);
+    for (const nextIndex of [row[rowIndex - 1], row[rowIndex + 1]]) {
+      if (nextIndex === undefined) continue;
+      const next = points[nextIndex];
+      if (routeSegmentClear(point, next, obstacles)) {
+        result.push({ index: nextIndex, direction: 'horizontal', distance: Math.abs(next.x - point.x) });
+      }
+    }
+    const col = byCol.get(point.x) ?? [];
+    const colIndex = col.indexOf(index);
+    for (const nextIndex of [col[colIndex - 1], col[colIndex + 1]]) {
+      if (nextIndex === undefined) continue;
+      const next = points[nextIndex];
+      if (routeSegmentClear(point, next, obstacles)) {
+        result.push({ index: nextIndex, direction: 'vertical', distance: Math.abs(next.y - point.y) });
+      }
+    }
+    return result;
+  };
+
+  type StateDirection = 'start' | 'horizontal' | 'vertical';
+  const stateKey = (index: number, direction: StateDirection) => `${index}:${direction}`;
+  const queue: Array<{ index: number; direction: StateDirection; cost: number }> = [
+    { index: start, direction: 'start', cost: 0 },
+  ];
+  const dist = new Map([[stateKey(start, 'start'), 0]]);
+  const previous = new Map<string, { key: string; index: number; direction: StateDirection }>();
+  let bestEndKey: string | undefined;
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => a.cost - b.cost);
+    const current = queue.shift()!;
+    const currentKey = stateKey(current.index, current.direction);
+    if ((dist.get(currentKey) ?? Infinity) < current.cost) continue;
+    if (current.index === end) {
+      bestEndKey = currentKey;
+      break;
+    }
+    for (const next of neighbors(current.index)) {
+      const bend = current.direction !== 'start' && current.direction !== next.direction
+        ? GRID_ROUTE_BEND_PENALTY
+        : 0;
+      const cost = current.cost + next.distance + bend;
+      const nextKey = stateKey(next.index, next.direction);
+      if (cost >= (dist.get(nextKey) ?? Infinity)) continue;
+      dist.set(nextKey, cost);
+      previous.set(nextKey, { key: currentKey, index: current.index, direction: current.direction });
+      queue.push({ index: next.index, direction: next.direction, cost });
+    }
+  }
+
+  if (!bestEndKey) return fallback;
+  const reversed: ConnectorPoint[] = [];
+  let cursorKey: string | undefined = bestEndKey;
+  while (cursorKey) {
+    const [indexPart] = cursorKey.split(':');
+    reversed.push(points[Number(indexPart)]);
+    cursorKey = previous.get(cursorKey)?.key;
+  }
+  return simplifyRoutePoints(reversed.reverse());
+}
+
 /**
  * Rendered footprint of a laid-out grid node: measured size wins, then the layout
  * helper's `initialWidth`/`initialHeight` hint, then the compact-pill default.
@@ -1561,13 +1916,15 @@ export function graphNodeSize(node: Node): { width: number; height: number } {
  *
  * Chooses the source/target handle (of the eight GRID handles rendered by
  * WorkflowNode) and a `flowDirection` for every `spine` / `loopback` edge so the
- * connector leaves and enters on the correct side and bows AROUND any node that
- * sits in its straight corridor. Non-spine/loopback edges pass through untouched.
+ * connector leaves and enters on the correct side. Spine edges receive routed
+ * points that avoid occupied node rectangles; edges missing either endpoint are
+ * dropped so React Flow never renders a dangling connector.
  * Shared by the Coordinator run graph and the landing scenario demo so both use
  * the exact same production routing (never a reimplementation).
  */
 export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
+  const validEdges = edges.filter((edge) => byId.has(edge.source) && byId.has(edge.target));
   const center = (node: Node) => {
     const size = graphNodeSize(node);
     return {
@@ -1575,18 +1932,45 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       y: node.position.y + size.height / 2,
     };
   };
+  const spineDirection = (sourceCenter: ConnectorPoint, targetCenter: ConnectorPoint) => {
+    const dx = targetCenter.x - sourceCenter.x;
+    const dy = targetCenter.y - sourceCenter.y;
+    if (dx >= 0 && Math.abs(dx) >= Math.abs(dy)) {
+      return {
+        sourceHandle: 'source-right',
+        targetHandle: 'target-left',
+        flowDirection: 'horizontal' as const,
+      };
+    }
+    if (dy >= 0 || Math.abs(dy) > 0.5) {
+      return {
+        sourceHandle: dy >= 0 ? 'source-bottom' : 'source-top',
+        targetHandle: dy >= 0 ? 'target-top' : 'target-bottom',
+        flowDirection: 'vertical' as const,
+      };
+    }
+    return {
+      sourceHandle: 'source-left',
+      targetHandle: 'target-right',
+      flowDirection: 'horizontal' as const,
+    };
+  };
   const laneOffsets = new Map<string, number>();
+  const sourcePortLaneOffsets = new Map<string, number>();
+  const targetPortLaneOffsets = new Map<string, number>();
   const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const sourcePortGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const targetPortGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
   const loopbackSides = new Map<string, 'left' | 'right' | 'top' | 'bottom'>();
   const loopbackGroups = new Map<string, Edge[]>();
-  for (const edge of edges) {
-    const source = byId.get(edge.source);
-    const target = byId.get(edge.target);
-    if (!source || !target) continue;
+  const spineDirections = new Map<string, ReturnType<typeof spineDirection>>();
+  for (const edge of validEdges) {
+    const source = byId.get(edge.source)!;
+    const target = byId.get(edge.target)!;
     const sourceCenter = center(source);
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
-      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
+      const returnJoin = findLoopbackReturnJoinNode(edge, validEdges);
       const joinNode = byId.get(returnJoin);
       const joinCenter = joinNode ? center(joinNode) : targetCenter;
       const horizontal = Math.abs(joinCenter.x - sourceCenter.x)
@@ -1604,8 +1988,9 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       continue;
     }
     if (edge.type !== 'spine') continue;
-    const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
-      >= Math.abs(targetCenter.y - sourceCenter.y);
+    const direction = spineDirection(sourceCenter, targetCenter);
+    spineDirections.set(edge.id, direction);
+    const horizontal = direction.flowDirection === 'horizontal';
     const midpoint = horizontal
       ? (sourceCenter.x + targetCenter.x) / 2
       : (sourceCenter.y + targetCenter.y) / 2;
@@ -1615,11 +2000,43 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const key = `${horizontal ? 'h' : 'v'}:${Math.round(midpoint / 4)}`;
     if (!gutterGroups.has(key)) gutterGroups.set(key, []);
     gutterGroups.get(key)!.push({ edge, cross });
+
+    const sourcePortKey = `${edge.source}:${direction.sourceHandle}`;
+    if (!sourcePortGroups.has(sourcePortKey)) sourcePortGroups.set(sourcePortKey, []);
+    sourcePortGroups.get(sourcePortKey)!.push({
+      edge,
+      cross: direction.sourceHandle.endsWith('top') || direction.sourceHandle.endsWith('bottom')
+        ? targetCenter.x
+        : targetCenter.y,
+    });
+
+    const targetPortKey = `${edge.target}:${direction.targetHandle}`;
+    if (!targetPortGroups.has(targetPortKey)) targetPortGroups.set(targetPortKey, []);
+    targetPortGroups.get(targetPortKey)!.push({
+      edge,
+      cross: direction.targetHandle.endsWith('top') || direction.targetHandle.endsWith('bottom')
+        ? sourceCenter.x
+        : sourceCenter.y,
+    });
   }
   for (const group of gutterGroups.values()) {
     group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
     group.forEach(({ edge }, index) => {
       laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+  for (const group of sourcePortGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      sourcePortLaneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+  for (const group of targetPortGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      targetPortLaneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
     });
   }
 
@@ -1633,15 +2050,14 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     });
   }
 
-  return edges.map((edge) => {
-    const source = byId.get(edge.source);
-    const target = byId.get(edge.target);
-    if (!source || !target) return edge;
+  return validEdges.map((edge) => {
+    const source = byId.get(edge.source)!;
+    const target = byId.get(edge.target)!;
     const sourceCenter = center(source);
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
       const side = loopbackSides.get(edge.id) ?? 'top';
-      const returnJoin = findLoopbackReturnJoinNode(edge, edges);
+      const returnJoin = findLoopbackReturnJoinNode(edge, validEdges);
       return {
         ...edge,
         sourceHandle: `source-${side}`,
@@ -1655,109 +2071,30 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       };
     }
     if (edge.type !== 'spine') return edge;
-    // Pick the dominant axis so the connector leaves/enters on the correct side in BOTH the
-    // horizontal (LR) and vertical (TB) layouts. Horizontal-dominant → left/right handles;
-    // vertical-dominant → top/bottom handles.
-    const dx = targetCenter.x - sourceCenter.x;
-    const dy = targetCenter.y - sourceCenter.y;
-
-    // A spine edge that skips over a rank (e.g. an upper sibling → a shared fan-in target two rows
-    // below) is normally drawn as a straight bottom→top (or right→left) segment. When another,
-    // UNRELATED node happens to sit in that straight corridor — as when same-rank siblings are
-    // stacked in one column above their common downstream target — the segment is drawn directly
-    // through that intermediate card, making a real edge look like a dependency on the occluded
-    // node. Detect that occlusion and route the edge out to a perpendicular side handle so React
-    // Flow bows it AROUND the stack instead of through it. Non-occluded edges keep their handles.
-    const corridorObstacles = (axis: 'vertical' | 'horizontal') => {
-      const result: Array<{ cx: number; cy: number }> = [];
-      for (const peer of nodes) {
-        if (peer.id === edge.source || peer.id === edge.target) continue;
-        const size = graphNodeSize(peer);
-        const x0 = peer.position.x;
-        const x1 = peer.position.x + size.width;
-        const y0 = peer.position.y;
-        const y1 = peer.position.y + size.height;
-        if (axis === 'vertical') {
-          const loY = Math.min(sourceCenter.y, targetCenter.y);
-          const hiY = Math.max(sourceCenter.y, targetCenter.y);
-          const corridorX = (sourceCenter.x + targetCenter.x) / 2;
-          const peerCy = (y0 + y1) / 2;
-          if (corridorX >= x0 && corridorX <= x1 && peerCy > loY && peerCy < hiY) {
-            result.push({ cx: (x0 + x1) / 2, cy: peerCy });
-          }
-        } else {
-          const loX = Math.min(sourceCenter.x, targetCenter.x);
-          const hiX = Math.max(sourceCenter.x, targetCenter.x);
-          const corridorY = (sourceCenter.y + targetCenter.y) / 2;
-          const peerCx = (x0 + x1) / 2;
-          if (corridorY >= y0 && corridorY <= y1 && peerCx > loX && peerCx < hiX) {
-            result.push({ cx: peerCx, cy: (y0 + y1) / 2 });
-          }
-        }
-      }
-      return result;
-    };
-
-    if (Math.abs(dx) >= Math.abs(dy)) {
-      const forward = dx >= 0;
-      // Horizontal-dominant edge blocked by a node in the horizontal corridor → bow vertically.
-      const blockers = corridorObstacles('horizontal');
-      if (blockers.length > 0) {
-        const corridorY = (sourceCenter.y + targetCenter.y) / 2;
-        const above = blockers.filter((b) => b.cy < corridorY).length;
-        const below = blockers.length - above;
-        const side = below <= above ? 'bottom' : 'top';
-        return {
-          ...edge,
-          sourceHandle: `source-${side}`,
-          targetHandle: `target-${side}`,
-          data: {
-            ...(edge.data ?? {}),
-            flowDirection: 'horizontal',
-            reroutedAround: side,
-            gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
-          },
-        };
-      }
-      return {
-        ...edge,
-        sourceHandle: forward ? 'source-right' : 'source-left',
-        targetHandle: forward ? 'target-left' : 'target-right',
-        data: {
-          ...(edge.data ?? {}),
-          flowDirection: 'horizontal',
-          gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
-        },
-      };
-    }
-    const down = dy >= 0;
-    // Vertical-dominant edge blocked by a node in the vertical corridor → bow horizontally.
-    const blockers = corridorObstacles('vertical');
-    if (blockers.length > 0) {
-      const corridorX = (sourceCenter.x + targetCenter.x) / 2;
-      const left = blockers.filter((b) => b.cx < corridorX).length;
-      const right = blockers.length - left;
-      const side = right <= left ? 'right' : 'left';
-      return {
-        ...edge,
-        sourceHandle: `source-${side}`,
-        targetHandle: `target-${side}`,
-        data: {
-          ...(edge.data ?? {}),
-          flowDirection: 'vertical',
-          reroutedAround: side,
-          gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
-        },
-      };
-    }
+    const direction = spineDirections.get(edge.id) ?? spineDirection(sourceCenter, targetCenter);
+    const laneOffset = laneOffsets.get(edge.id) ?? 0;
+    const from = handlePoint(source, direction.sourceHandle);
+    const to = handlePoint(target, direction.targetHandle);
     return {
       ...edge,
-      sourceHandle: down ? 'source-bottom' : 'source-top',
-      targetHandle: down ? 'target-top' : 'target-bottom',
+      sourceHandle: direction.sourceHandle,
+      targetHandle: direction.targetHandle,
       data: {
         ...(edge.data ?? {}),
-        flowDirection: 'vertical',
-        gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
+        flowDirection: direction.flowDirection,
+        gutterLaneOffset: laneOffset,
+        routePoints: obstacleAwareLaneRoute({
+          from,
+          to,
+          nodes,
+          excludedNodeIds: new Set([edge.source, edge.target]),
+          preferredOrientation: direction.flowDirection,
+          sourceHandle: direction.sourceHandle,
+          targetHandle: direction.targetHandle,
+          sourcePortLaneOffset: sourcePortLaneOffsets.get(edge.id) ?? 0,
+          targetPortLaneOffset: targetPortLaneOffsets.get(edge.id) ?? 0,
+          gutterLaneOffset: laneOffset,
+        }),
       },
     };
   });

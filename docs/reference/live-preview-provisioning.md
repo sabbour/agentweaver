@@ -1,5 +1,7 @@
 # Decoupled live-preview provisioning — Reference
 
+See Resolve command, supervise process, observe port, approve and publish for the shared visual model.
+
 Reference for the platform-owned preview step that runs after Build & Test. It starts a supervised app process, discovers the actual port, registers a Gateway preview URL, and records a durable preview outcome without changing the Build & Test verdict.
 
 For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview — Reference](./sandbox-browser-preview.md). For implementation details, see the [deep dive](../deep-dive/live-preview-provisioning.md). For the user workflow, see the [experience guide](../experience/live-preview-provisioning.md).
@@ -28,87 +30,16 @@ turn ended (`KubernetesSandboxExecutor.ReleaseAgentHostPodAsync`), and a complet
 also became an "orphan" to `AgentHostReaperService` immediately — so a preview URL handed to a human
 reviewer would `404` within minutes, before the review gate could open it.
 
-Both teardown paths now consult `ISandboxPreviewService.HasActivePreviewAsync(runId)` and **defer**
-while a preview is still alive:
+Release, orphan reaping and preview activity use `ReconcilePreviewLifecycleAsync(runId)`. Durable HTTPRoute annotations determine run-level state and idempotent retention changes.
 
-| Teardown path | Behavior with an active preview | Source |
-| --- | --- | --- |
-| Turn-end release | `ReleaseAgentHostPodAsync` skips the claim delete and returns; the pod stays up. | `KubernetesSandboxExecutor.cs` |
-| Orphan reaper sweep | `SweepOrphanedPodsAsync` skips (continues past) a claim whose run has a live preview. | `AgentHostReaperService.cs` |
+| State | Durable evidence | Sandbox effects |
+|---|---|---|
+| `PreviewActive` | At least one route has both idle and maximum expiry in the future. | Extend backing claim TTL and set pod `safe-to-evict=false`; release/reaping defer. |
+| `Previewable` | No qualifying route, unavailable client/run identity, or lookup failure. | Restore normal TTL and `safe-to-evict=true`; normal cleanup can proceed. |
 
-`HasActivePreviewAsync` returns `true` only when the run has an `HTTPRoute` whose **idle** expiry
-(`preview-expires-at`, bumped by keepalive) *and* **hard-max** expiry (`preview-max-until`) are both
-still in the future (`PreviewReaper.Decide(...) == Alive`). It deliberately does **not** require the
-pod to still exist (the pod is present at the teardown boundary), and it is leak-safe: preview
-disabled, no un-expired route, or any lookup failure all return `false`, so the caller performs its
-normal teardown. Eventual teardown is therefore bounded and cannot leak: with no keepalive the preview
-expires at the project preview-lifetime setting (or `Sandbox:Preview:LifetimeMinutes`, default 24 hours),
-which is also its hard max; the `SandboxPreviewReaperService` then deletes the
-route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
+Cleanup reads cluster state even if creation is disabled in this process. The backing pod need not exist for a retention decision. Protection patches are best-effort, not a guarantee against infrastructure loss.
 
-### Direct-backed execution subtasks and worker reaper parity
-
-Coordinator-dispatched execution subtasks may report `sandbox.backend=direct` because their tool
-traffic goes directly to the per-run AgentHost. Their preview process is nevertheless backed by the
-same `agent-*` `SandboxClaim` and pod lifecycle described above. Both API and worker roles run
-heartbeat/reaper paths, so both must read the shared `HTTPRoute` state before treating a terminal
-child claim as orphaned.
-
-The worker deployment therefore mirrors the API's `Sandbox__Preview__*` cluster configuration.
-Its sandbox Role has read-only `httproutes` access plus `sandboxclaims: patch,update` and
-`pods: patch`. This lets the worker reaper see an active route, renew its backing claim TTL, and
-re-assert `safe-to-evict=false` instead of deleting the claim. The worker still cannot create,
-modify, or delete preview routes. When the route idle/max lifetime ends, the positive preview check
-becomes false and the next orphan sweep deletes the terminal claim and credential, preserving
-bounded cleanup.
-
-### Cluster-side claim TTL renewal (issue #560)
-
-Deferring the **API-side** deletes above is necessary but not sufficient. Every `SandboxClaim` is
-created with a cluster-side lifecycle TTL
-(`spec.lifecycle.ttlSecondsAfterFinished = Sandbox:TimeoutSeconds`, default **600s**, with
-`shutdownPolicy: Delete`). The sandbox controller enforces this TTL **independently of the API**: once
-a run's pod workload *finishes* — which happens within seconds for a coordinator-dispatched child
-execution subtask when its turn ends — the controller reaps the pod ~`TimeoutSeconds` later. That is
-why a preview backed by a **terminal** run still went `NXDOMAIN` ~8–10 min after the turn ended even
-with the #542/#551 API-side deferral in place: the #551 deferral cannot stop the controller. (The
-coordinator run in the original A/B test survived only because it stayed *active* — its workload never
-"finished", so its claim TTL never fired — which is a different code path from the terminal-run
-deferral it was meant to prove.)
-
-While a preview is active, the API now **renews the backing claim's cluster TTL** so the controller
-keeps the pod alive for exactly as long as a preview may live:
-
-| Renewal trigger | Behavior | Source |
-| --- | --- | --- |
-| Turn-end release deferral | After deferring the delete, `RenewBackingClaimTtlAsync(runId)` patches the claim TTL. | `KubernetesSandboxExecutor.ReleaseAgentHostPodAsync` |
-| Orphan reaper deferral | After deferring the reap, the sweep renews the claim TTL. | `AgentHostReaperService.SweepOrphanedPodsAsync` |
-| Keepalive | Each keepalive renews the backing claim TTL for the route's run (read from the durable `preview-run-id` annotation). | `SandboxPreviewService.KeepAliveAsync` |
-
-`RenewBackingClaimTtlAsync` JSON-merge-patches `spec.lifecycle.ttlSecondsAfterFinished` up to
-`LifetimeMinutes × 60 + 600s` on both the agent-host (`agent-*`) and run-command (`run-*`) claim
-names for the run (whichever exists is patched; a missing candidate 404s and is ignored). MergePatch
-preserves the sibling `shutdownPolicy`. It is **leak-safe / best-effort**: a no-op when preview is
-disabled and never throws. Bounded teardown is preserved because the extended TTL is only a *backstop*
-— the API-side preview reaper and `AgentHostReaperService` still delete the claim promptly on
-idle/max expiry, which supersedes the TTL. It is only invoked while a preview is demonstrably active
-(both deferral sites gate on `HasActivePreviewAsync`; keepalive only runs for a live route).
-
-> **Controller behaviour (verified against `kubernetes-sigs/agent-sandbox` v0.5.3, the pinned
-> `SANDBOX_CONTROLLER_VERSION`):** this renewal is effective because the controller recomputes the
-> deletion deadline from the **live** claim field on every reconcile — it does **not** snapshot an
-> absolute deadline at finish time. `SandboxClaimReconciler.checkExpiration` calls
-> `lifecycle.TimeLeft(time.Now(), claim.Spec.Lifecycle.ShutdownTime, claim.Spec.Lifecycle.TTLSecondsAfterFinished, finishedCondition)`,
-> and `lifecycle.ExpireAt` returns `finishedAt + ttlSecondsAfterFinished` (the earlier of that and the
-> optional spec `ShutdownTime`, which Agentweaver does not set). `finishedAt` is the fixed
-> `Finished` condition timestamp; the TTL is read live, so patching `spec.lifecycle.ttlSecondsAfterFinished`
-> upward moves the deadline forward, and a spec patch triggers an immediate reconcile
-> (`RequeueAfter = timeLeft`). The claim's TTL is the *sole* TTL-driven expiry: the controller never
-> copies `spec.lifecycle` onto the underlying `Sandbox` object, so there is no independent
-> Sandbox-level TTL that could reap the pod behind the claim. The only requirement is that a renewal
-> lands within `TimeoutSeconds` (default 600s) of the workload finishing — satisfied by the turn-end
-> release, the ~2-min reaper deferral, and per-request keepalive. **If the pinned controller version
-> changes, re-verify this reconcile behaviour**, as the fix depends on it.
+Both supported claim-name candidates are merge-patched without removing sibling fields. Active retention uses service-level `LifetimeMinutes * 60 + 600`; inactive state restores `Sandbox:Kubernetes:TimeoutSeconds` (default 600). Stop/expiry reconcile after route deletion: another live route retains the pod; removing the final one reverses protection.
 
 ## AgentHost preview-runner endpoints
 
@@ -151,7 +82,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | `bound_unreachable` | The app's loopback health check passed, but the forwarder public port did not pass the through-forwarder health check. |
 | `no_public_port_available` | AgentHost could not bind any free forwarder public port in the allowed `3000-9000` range. |
 | `approval_denied` | Operator denied preview exposure. |
-| `approval_timed_out` | Operator did not approve before the project timeout (30 minutes by default). The latest expired attempt can be retried with a fresh request id while reusing the retained process. |
+| `approval_timed_out` | Operator did not approve before the project timeout (1440 minutes / 24 hours by default). The latest expired attempt can be retried with a fresh request id while reusing the retained process. |
 | `port_not_allowed` | Observed port is outside the allowed Gateway preview range. |
 | `registration_failed` | Gateway preview registration failed. |
 | `preview_outcome_missing` | Safety-net guard found no terminal outcome. |
@@ -184,3 +115,50 @@ The coordinator run page reads the latest preview event:
 - [Events reference](./events.md)
 - [Coordinator reference](./coordinator.md)
 - [Sandbox browser preview — Reference](./sandbox-browser-preview.md)
+
+<details id="diagram-context-live-preview-provisioning-fig1" v-pre>
+<summary>Diagram details and constraints</summary>
+<table><thead><tr><th>Element</th><th>Contract</th></tr></thead><tbody>
+<tr><td>title</td><td>Preview ready means validated publication</td></tr>
+<tr><td>takeaway</td><td>Platform-owned orchestration still has explicit skip, denial, expiry and failure outcomes.</td></tr>
+<tr><td>Build/Test verdict</td><td>Build/Test verdict</td></tr>
+<tr><td>Build/Test verdict</td><td>Approved or request-changes</td></tr>
+<tr><td>Build/Test verdict</td><td>Declined: no preview stage</td></tr>
+<tr><td>Command resolution</td><td>Command resolution</td></tr>
+<tr><td>Command resolution</td><td>Heuristic then bounded model</td></tr>
+<tr><td>Command resolution</td><td>Unavailable infra: skipped</td></tr>
+<tr><td>AgentHost runner</td><td>AgentHost runner</td></tr>
+<tr><td>AgentHost runner</td><td>Map effective workspace</td></tr>
+<tr><td>AgentHost runner</td><td>Start authenticated process</td></tr>
+<tr><td>App + forwarder health</td><td>App + forwarder health</td></tr>
+<tr><td>App + forwarder health</td><td>Observe actual app port</td></tr>
+<tr><td>App + forwarder health</td><td>Bind reachable public port</td></tr>
+<tr><td>Preview approval</td><td>Preview approval</td></tr>
+<tr><td>Preview approval</td><td>Grant / deny / expire</td></tr>
+<tr><td>Preview approval</td><td>Policy auto-approval is explicit</td></tr>
+<tr><td>Approved publication</td><td>Approved publication</td></tr>
+<tr><td>Approved publication</td><td>Active run + process recheck</td></tr>
+<tr><td>Approved publication</td><td>Create Service and HTTPRoute</td></tr>
+<tr><td>No publication</td><td>No publication</td></tr>
+<tr><td>No publication</td><td>Deny: stop; expire: private retry</td></tr>
+<tr><td>No publication</td><td>Never emit ready on rejection</td></tr>
+<tr><td>Generated HTTPS URL</td><td>Generated HTTPS URL</td></tr>
+<tr><td>Generated HTTPS URL</td><td>Bounded DNS/readiness checks</td></tr>
+<tr><td>Generated HTTPS URL</td><td>Failure: rollback publication</td></tr>
+<tr><td>preview_ready</td><td>preview_ready</td></tr>
+<tr><td>preview_ready</td><td>Exact URL validated</td></tr>
+<tr><td>preview_ready</td><td>Return to authored gate handling</td></tr>
+<tr><td>arrow-1</td><td>prepare</td></tr>
+<tr><td>arrow-2</td><td>start</td></tr>
+<tr><td>arrow-3</td><td>observe</td></tr>
+<tr><td>arrow-4</td><td>request</td></tr>
+<tr><td>arrow-5</td><td>grant</td></tr>
+<tr><td>arrow-6</td><td>reject</td></tr>
+<tr><td>arrow-7</td><td>probe</td></tr>
+<tr><td>arrow-8</td><td>healthy</td></tr>
+<tr><td>note-0</td><td>Denial/expiry branch stays private; unresolved commands fail explicitly.</td></tr>
+<tr><td>note-1</td><td>Rows summarize stages; the page retains detailed failure and retry rules.</td></tr>
+<tr><td>note-2</td><td>Resource creation alone is not readiness; API does not probe pod preview ports.</td></tr>
+<tr><td>notes</td><td>Denial/expiry branch stays private; unresolved commands fail explicitly.; Rows summarize stages; the page retains detailed failure and retry rules.; Resource creation alone is not readiness; API does not probe pod preview ports.</td></tr>
+</tbody></table>
+</details>
