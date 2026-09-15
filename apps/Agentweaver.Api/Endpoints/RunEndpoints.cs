@@ -222,7 +222,7 @@ app.MapGet("/api/runs/{id}", async (
         SubtaskId = run.SubtaskId,
         RetriedFrom = run.RetriedFrom,
         CoordinatorStatus = coordinatorStatus,
-        CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
+        CoordinatorStatusReason = isCoordinatorRun ? EndpointHelpers.CoordinatorStatusReasonForProjection(run, coordinatorStatus) : null,
         CoordinatorSteerable = isCoordinatorRun && CoordinatorSteeringService.IsSteerableRunStatus(run.Status),
         AutoApproveTools = runOptions.Get(run.Id.ToString()).AutoApproveTools,
         Autopilot = runOptions.Get(run.Id.ToString()).Autopilot,

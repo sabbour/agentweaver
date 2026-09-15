@@ -1,5 +1,6 @@
 namespace Agentweaver.Mcp;
 
+using Agentweaver.AspNetCore.DataProtection;
 using Agentweaver.Mcp.Tools;
 using Microsoft.AspNetCore.Authentication;
 using OpenIddict.Validation.AspNetCore;
@@ -45,6 +46,8 @@ public sealed class McpProgram
         builder.Services.AddMemoryCache();
         builder.Services.AddHttpClient();
         builder.Services.AddHttpContextAccessor();
+        if (!useStdio)
+            builder.Services.AddAgentweaverDataProtection(builder.Configuration, builder.Environment);
         if (!useStdio)
         {
             builder.Services.AddAuthentication(options =>
@@ -93,6 +96,7 @@ public sealed class McpProgram
             app.MapGet("/.well-known/oauth-protected-resource/mcp", () => ProtectedResourceMetadata(oauth!));
             app.UseAuthentication();
             app.UseAuthorization();
+            app.UseMcpStaleSessionRecovery("/mcp");
         }
 
         var mcp = app.MapMcp("/mcp");

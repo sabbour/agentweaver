@@ -273,12 +273,12 @@ public sealed class TraceInstrumentationTests
     }
 
     /// <summary>
-    /// Tool arguments are redacted for the authorized persisted event stream but are intentionally
-    /// excluded from Application Insights. A trace span's public dimension contract may only carry
-    /// bounded operational identifiers and state, never arbitrary tool input.
+    /// Tool arguments are redacted for the authorized persisted event stream and for the bounded
+    /// trace preview. Raw SDK attributes remain absent; only Agentweaver's redacted preview tags
+    /// are emitted.
     /// </summary>
     [Fact]
-    public void EmitToolCallOnce_DoesNotStoreToolArgumentsOnSpan()
+    public void ObserveToolExecutionStarted_StoresBoundedRedactedToolInputPreview()
     {
         Activity? capturedSpan = null;
         using var listener = new ActivityListener
@@ -302,6 +302,8 @@ public sealed class TraceInstrumentationTests
 
         capturedSpan.Should().NotBeNull("StartToolSpan must have opened an execute_tool span before EmitToolCallOnce ran");
         capturedSpan!.GetTagItem("gen_ai.tool.call.arguments").Should().BeNull();
+        capturedSpan.GetTagItem(TraceTelemetry.ToolInput).Should().Be("""{"query":"hello world"}""");
+        capturedSpan.GetTagItem(TraceTelemetry.ToolInputState).Should().Be(TraceTelemetry.PayloadCaptured);
 
         capturedSpan.Stop();
     }
@@ -322,6 +324,8 @@ public sealed class TraceInstrumentationTests
             activity!, success: true, error: null, endTime: null, toolResult: "{\"path\":\"file.txt\"}");
 
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
+        activity.GetTagItem(TraceTelemetry.ToolOutput).Should().Be("""{"path":"file.txt"}""");
+        activity.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadCaptured);
     }
 
     [Fact]
@@ -335,6 +339,8 @@ public sealed class TraceInstrumentationTests
         CopilotAIAgent.CompleteToolSpanCore(activity!, success: true, error: null, endTime: null);
 
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
+        activity.GetTagItem(TraceTelemetry.ToolOutput).Should().BeNull();
+        activity.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadNotCaptured);
     }
 
     [Fact]
@@ -347,11 +353,13 @@ public sealed class TraceInstrumentationTests
         CopilotAIAgent.CompleteToolSpanCore(
             activity!,
             success: false,
-            error: "credential ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            error: "permission denied",
             endTime: null);
 
         activity!.GetTagItem(TraceTelemetry.ErrorType).Should().Be("tool_execution_failed");
         activity.GetTagItem("error.message").Should().BeNull();
+        activity.GetTagItem(TraceTelemetry.ToolOutput).Should().Be("permission denied");
+        activity.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadCaptured);
         activity.StatusDescription.Should().Be("Tool execution failed");
     }
 
@@ -371,7 +379,9 @@ public sealed class TraceInstrumentationTests
             toolResult: "line one\nline two\nsome file contents, not JSON");
 
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull(
-            "plain-text results are not redactable and must never reach App Insights telemetry");
+            "plain-text results must not be copied into the raw GenAI result attribute");
+        activity.GetTagItem(TraceTelemetry.ToolOutput).Should().Be("line one\nline two\nsome file contents, not JSON");
+        activity.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadCaptured);
     }
 
     [Fact]
@@ -386,6 +396,56 @@ public sealed class TraceInstrumentationTests
             activity!, success: true, error: null, endTime: null, toolResult: "[1,2,3]");
 
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
+        activity.GetTagItem(TraceTelemetry.ToolOutput).Should().Be("[1,2,3]");
+        activity.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadCaptured);
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_RedactsAndTruncatesToolOutputPreview()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "run_command");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null,
+            toolResult: $"stdout:\n{new string('x', 8_100)}");
+
+        activity!.GetTagItem(TraceTelemetry.ToolOutputState).Should().Be(TraceTelemetry.PayloadTruncated);
+        activity.GetTagItem(TraceTelemetry.ToolOutput)!.ToString().Should().EndWith("… [truncated because too large]");
+    }
+
+    [Fact]
+    public void ObserveToolExecutionStarted_RedactsSecretsWithoutSuppressingWholeCommand()
+    {
+        Activity? capturedSpan = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Agentweaver",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if (activity.OperationName == "execute_tool run_command")
+                    capturedSpan = activity;
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var agent = BuildAgent();
+        agent.ObserveToolExecutionStarted(
+            "call-secret-1",
+            "run_command",
+            JsonSerializer.SerializeToElement(new { command = "curl -H \"Authorization: Bearer super-secret-token\" https://example.test" }),
+            DateTimeOffset.UtcNow);
+
+        capturedSpan.Should().NotBeNull();
+        var input = capturedSpan!.GetTagItem(TraceTelemetry.ToolInput)!.ToString();
+        input.Should().Contain("curl -H").And.Contain(SensitiveDataRedactor.RedactedPlaceholder);
+        input.Should().NotContain("super-secret-token");
+        capturedSpan.GetTagItem(TraceTelemetry.ToolInputState).Should().Be(TraceTelemetry.PayloadRedacted);
+
+        capturedSpan.Stop();
     }
 
     [Fact]
@@ -402,6 +462,10 @@ public sealed class TraceInstrumentationTests
             [TraceTelemetry.ProviderSource] = "github-copilot",
             [TraceTelemetry.ProviderKind] = "github_copilot",
             [TraceTelemetry.ToolName] = "grep",
+            [TraceTelemetry.ToolInput] = """{"pattern":"trace"}""",
+            [TraceTelemetry.ToolInputState] = TraceTelemetry.PayloadCaptured,
+            [TraceTelemetry.ToolOutput] = "match",
+            [TraceTelemetry.ToolOutputState] = TraceTelemetry.PayloadCaptured,
             [TraceTelemetry.PolicyDecision] = TraceTelemetry.DecisionAllowed,
             [TraceTelemetry.AuthorizationDecision] = TraceTelemetry.DecisionApproved,
             [TraceTelemetry.PolicyShellEnabled] = "true",
@@ -432,6 +496,10 @@ public sealed class TraceInstrumentationTests
         attributes.ModelId.Should().Be("gpt-5.4");
         attributes.ProviderKind.Should().Be("github_copilot");
         attributes.ToolName.Should().Be("grep");
+        attributes.ToolInput.Should().Be("""{"pattern":"trace"}""");
+        attributes.ToolInputState.Should().Be(TraceTelemetry.PayloadCaptured);
+        attributes.ToolOutput.Should().Be("match");
+        attributes.ToolOutputState.Should().Be(TraceTelemetry.PayloadCaptured);
         attributes.PolicyDecision.Should().Be(TraceTelemetry.DecisionAllowed);
         attributes.AuthorizationDecision.Should().Be(TraceTelemetry.DecisionApproved);
         attributes.PolicyShellEnabled.Should().BeTrue();

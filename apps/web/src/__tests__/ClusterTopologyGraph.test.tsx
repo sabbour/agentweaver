@@ -82,7 +82,34 @@ const topology: KubernetesTopologyDto = {
       namespace: 'agentweaver',
       health: 'healthy',
       summary: 'Pod · Running',
-      details: {},
+      details: {
+        ready: '2/2',
+        restartCount: '0',
+        ageSeconds: '120',
+        nodeName: 'aks-katapool-12319583-vmss00004d',
+        runtimeClassName: 'kata-vm-isolation',
+        containers: 'agentweaver-agent-host, agentweaver-exec',
+        imageTags: 'v0.32.2',
+        deployment: 'agentweaver-agent-host',
+      },
+    },
+    {
+      id: 'sandbox:agent-abc123',
+      layer: 'runtime',
+      type: 'Sandbox',
+      api_version: 'agents.x-k8s.io/v1beta1',
+      name: 'agent-abc123',
+      namespace: 'agentweaver',
+      health: 'healthy',
+      summary: 'Sandbox · Ready',
+      details: {
+        podName: 'agent-abc123',
+        nodeName: 'aks-katapool-12319583-vmss00004d',
+        runtimeClassName: 'kata-vm-isolation',
+        isolationBackend: 'Kata VM isolation',
+        containers: 'agentweaver-agent-host, agentweaver-exec',
+        status: 'available',
+      },
     },
     {
       id: 'template:agent-host',
@@ -93,7 +120,14 @@ const topology: KubernetesTopologyDto = {
       namespace: 'agentweaver',
       health: 'healthy',
       summary: 'SandboxTemplate',
-      details: {},
+      details: {
+        imageTags: 'v0.32.2',
+        runtimeClassName: 'kata-vm-isolation',
+        resourceRequests: 'cpu 300m, memory 1Gi',
+        resourceLimits: 'cpu 800m, memory 2Gi',
+        mounts: '/workspace, /local-workspace',
+        policy: 'env injection Allowed; network Managed',
+      },
     },
     {
       id: 'pool:agent-host',
@@ -104,7 +138,15 @@ const topology: KubernetesTopologyDto = {
       namespace: 'agentweaver',
       health: 'healthy',
       summary: 'SandboxWarmPool · 2/2 ready',
-      details: {},
+      details: {
+        replicas: '2',
+        readyReplicas: '2',
+        availableReplicas: '1',
+        template: 'agentweaver-agent-host',
+        minReplicas: '1',
+        maxReplicas: '4',
+        lastScaleEvent: 'Not reported by controller',
+      },
     },
     {
       id: 'claim:agent-abc123',
@@ -115,7 +157,13 @@ const topology: KubernetesTopologyDto = {
       namespace: 'agentweaver',
       health: 'healthy',
       summary: 'SandboxClaim · ready',
-      details: {},
+      details: {
+        runId: 'run-abc123',
+        boundSandbox: 'agent-abc123',
+        warmPool: 'agentweaver-agent-host',
+        phase: 'bound',
+        ageSeconds: '90',
+      },
     },
     {
       id: 'gateway:public',
@@ -191,7 +239,13 @@ const topology: KubernetesTopologyDto = {
       namespace: 'agentweaver',
       health: 'healthy',
       summary: 'Deployment · 2/2 available',
-      details: {},
+      details: {
+        replicas: '2',
+        readyReplicas: '2',
+        availableReplicas: '2',
+        imageTags: 'v0.32.2',
+        lastRolloutUtc: '2026-09-10T12:00:00Z',
+      },
     },
     {
       id: 'pvc:data',
@@ -282,15 +336,15 @@ describe('ClusterTopologyGraph', () => {
     }
   });
 
-  it('marks the Agent Execution split and its true in-gutter tee, not independent route elbows', () => {
+  it('marks the Agent Execution split without duplicating separated lane stubs or independent route elbows', () => {
     render(<Wrapper><ClusterTopologyGraph topology={topology} /></Wrapper>);
 
     const junctions = findConnectorJunctions(flowCapture.edges as Edge[], flowCapture.nodes);
     const points = [...junctions.values()].flat();
 
-    expect(points).toHaveLength(2);
+    expect(points).toHaveLength(1);
     expect(junctions.get('agent-execution->sandbox-claim')).toEqual([{ x: 566, y: 456 }]);
-    expect(junctions.get('agent-execution->session-artifacts')).toEqual([{ x: 616, y: 456 }]);
+    expect(junctions.has('agent-execution->session-artifacts')).toBe(false);
     expect(junctions.has('control-plane->application-state')).toBe(false);
     expect(junctions.has('control-plane->workload-pods')).toBe(false);
   });
@@ -324,5 +378,95 @@ describe('ClusterTopologyGraph', () => {
     expect(screen.queryByText('StorageClass')).toBeNull();
     expect(screen.getByTestId('topology-edges').textContent).toContain('control-plane->application-state');
     expect(screen.getByTestId('topology-edges').textContent).toContain('agent-execution->session-artifacts');
+  });
+
+  it('renders enriched calm detail for healthy workload pods without the generic Function row', () => {
+    render(<Wrapper><ClusterTopologyGraph topology={topology} /></Wrapper>);
+
+    fireEvent.click(screen.getByTestId('cluster-topology-node-workload-pods'));
+    const inspector = screen.getByLabelText('Agentweaver workload pods resource details');
+
+    expect(within(inspector).getByText('Last updated')).toBeTruthy();
+    expect(within(inspector).getByText('agentweaver-agent-host')).toBeTruthy();
+    expect(within(inspector).getByText('agent-abc123')).toBeTruthy();
+    expect(within(inspector).getByText('2/2')).toBeTruthy();
+    expect(within(inspector).getByText('0')).toBeTruthy();
+    expect(within(inspector).getByText('aks-katapool-12319583-vmss00004d')).toBeTruthy();
+    expect(within(inspector).getByText('v0.32.2')).toBeTruthy();
+    expect(within(inspector).queryByText('Function')).toBeNull();
+    expect(within(inspector).queryByRole('alert')).toBeNull();
+  });
+
+  it('sorts unhealthy workload pods first and makes restart counts prominent', () => {
+    const mixedTopology: KubernetesTopologyDto = {
+      ...topology,
+      nodes: [
+        ...topology.nodes,
+        {
+          id: 'pod:agent-bad456',
+          layer: 'runtime',
+          type: 'Pod',
+          api_version: 'v1',
+          name: 'agent-bad456',
+          namespace: 'agentweaver',
+          health: 'attention',
+          summary: 'Pod · Running',
+          details: {
+            ready: '0/1',
+            restartCount: '7',
+            ageSeconds: '360',
+            nodeName: 'aks-apppool-17502699-vmss000012',
+            containers: 'worker',
+            imageTags: 'v0.32.2',
+            deployment: 'agentweaver-worker',
+          },
+        },
+      ],
+    };
+
+    render(<Wrapper><ClusterTopologyGraph topology={mixedTopology} /></Wrapper>);
+
+    fireEvent.click(screen.getByTestId('cluster-topology-node-workload-pods'));
+    const inspector = screen.getByLabelText('Agentweaver workload pods resource details');
+    const rows = within(inspector).getAllByRole('row');
+
+    expect(rows[1].textContent).toContain('agent-bad456');
+    expect(within(inspector).getByRole('alert').textContent).toContain('agent-bad456');
+    expect(within(inspector).getByText('7 restarts')).toBeTruthy();
+  });
+
+  it('renders zero sandbox claims as a clear calm empty state', () => {
+    const idleTopology: KubernetesTopologyDto = {
+      ...topology,
+      nodes: topology.nodes.filter((node) => node.type !== 'SandboxClaim'),
+    };
+
+    render(<Wrapper><ClusterTopologyGraph topology={idleTopology} /></Wrapper>);
+
+    fireEvent.click(screen.getByTestId('cluster-topology-node-sandbox-claim'));
+    const inspector = screen.getByLabelText('Sandbox claims resource details');
+
+    expect(within(inspector).getByText('No sandbox claims are active')).toBeTruthy();
+    expect(within(inspector).getByText(/legitimate idle state/i)).toBeTruthy();
+    expect(within(inspector).queryByRole('alert')).toBeNull();
+  });
+
+  it('names a partial detail fetch while still rendering available detail', () => {
+    const partialTopology: KubernetesTopologyDto = {
+      ...topology,
+      layers: topology.layers.map((layer) =>
+        layer.name === 'runtime'
+          ? { ...layer, status: 'partial', message: 'Pod detail read timed out after 8s.' }
+          : layer),
+    };
+
+    render(<Wrapper><ClusterTopologyGraph topology={partialTopology} /></Wrapper>);
+
+    fireEvent.click(screen.getByTestId('cluster-topology-node-workload-pods'));
+    const inspector = screen.getByLabelText('Agentweaver workload pods resource details');
+
+    expect(within(inspector).getByRole('alert').textContent)
+      .toContain('Runtime detail fetch partially failed: Pod detail read timed out after 8s.');
+    expect(within(inspector).getByText('agent-abc123')).toBeTruthy();
   });
 });
