@@ -21,14 +21,78 @@ import fs from "node:fs";
 import path from "node:path";
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
+import { withRetry } from "../lib/retry.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
 const SECRET_NAMES = Object.freeze(["agentweaver-a2a-ca", "agentweaver-a2a-server-tls", "agentweaver-a2a-client-tls"]);
+const SECRET_READ_ATTEMPTS = 3;
+const SECRET_READ_TIMEOUT_MS = 30_000;
 
-/** True if a K8s Secret already exists in the namespace. */
-export async function secretExists(name, namespace, { exec = execDefault } = {}) {
-  const { code } = await exec.capture("kubectl", ["get", "secret", name, "--namespace", namespace], { allowFailure: true });
-  return code === 0;
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function firstLine(value) {
+  return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+}
+
+function kubectlSecretReadFailure(name, namespace, result) {
+  const reason = firstLine(result.stderr) || firstLine(result.stdout) || `exit code ${result.code}`;
+  const error = new Error(`Kubernetes Secret read failed for ${name} in namespace ${namespace}: ${reason}`);
+  error.stderr = result.stderr;
+  error.stdout = result.stdout;
+  error.code = result.code;
+  return error;
+}
+
+function kubectlSecretReadUnknown(name, namespace, error) {
+  const reason = firstLine(error?.message) || firstLine(error?.stderr) || String(error);
+  return {
+    state: "unknown",
+    reason: `Kubernetes Secret read failed for ${name} in namespace ${namespace}: ${reason}`,
+  };
+}
+
+function isKubectlSecretNotFound({ stdout, stderr }) {
+  const haystack = `${stdout ?? ""}\n${stderr ?? ""}`.toLowerCase();
+  return /\bnotfound\b/.test(haystack) || /\bsecrets?\b.*\bnot\s+found\b/.test(haystack);
+}
+
+function a2aSecretReadError(result) {
+  return new Error(`${result.reason}. State could not be determined. Aborting A2A mTLS secret reconciliation. No absent or partial result was inferred. Resolve the read failure and rerun the deployment.`);
+}
+
+function logSecretReadRetry(log, { attempt, attempts, delay, error, label }) {
+  const reason = (error?.message || String(error)).split("\n")[0];
+  log.warn?.(`  ${label}: attempt ${attempt}/${attempts} failed (${reason}); retrying in ${delay}ms`);
+}
+
+/** Reads a K8s Secret state as present, absent, or unknown. */
+export async function secretReadState(name, namespace, { exec = execDefault, log = logDefault, sleep = defaultSleep } = {}) {
+  try {
+    return await withRetry(
+      async () => {
+        const { stdout, stderr, code } = await exec.capture("kubectl", ["get", "secret", name, "--namespace", namespace], {
+          allowFailure: true,
+          timeoutMs: SECRET_READ_TIMEOUT_MS,
+        });
+        if (code === 0) return { state: "present" };
+        if (isKubectlSecretNotFound({ stdout, stderr })) return { state: "absent" };
+        throw kubectlSecretReadFailure(name, namespace, { stdout, stderr, code });
+      },
+      {
+        attempts: SECRET_READ_ATTEMPTS,
+        baseDelayMs: 250,
+        maxDelayMs: 1_000,
+        label: `Kubernetes Secret read ${name}`,
+        isTransient: () => true,
+        onRetry: (details) => logSecretReadRetry(log, details),
+        sleep,
+      },
+    );
+  } catch (error) {
+    return kubectlSecretReadUnknown(name, namespace, error);
+  }
 }
 
 /** Base64-encodes file content with no line wrapping, matching `base64 | tr -d '\n'`. */
@@ -61,7 +125,7 @@ ${dataLines}
  * @param {object} [opts] Injectable collaborators, primarily for testing. `opts.force` (bool) regenerates even if all three secrets exist.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault, fs: fsImpl = fs, repoRoot = DEFAULT_REPO_ROOT, force = false } = opts;
+  const { exec = execDefault, log = logDefault, fs: fsImpl = fs, repoRoot = DEFAULT_REPO_ROOT, force = false, sleep = defaultSleep } = opts;
   const namespace = cfg.NAMESPACE || "agentweaver";
   const scratchRoot = cfg.AGENTWEAVER_TMP_DIR || path.join(repoRoot, ".agentweaver", "tmp");
   const workDir = path.join(scratchRoot, `a2a-mtls-${process.pid}`);
@@ -76,7 +140,9 @@ export async function run(cfg, opts = {}) {
   if (!force) {
     const existing = [];
     for (const name of SECRET_NAMES) {
-      if (await secretExists(name, namespace, { exec })) existing.push(name);
+      const result = await secretReadState(name, namespace, { exec, log, sleep });
+      if (result.state === "unknown") throw a2aSecretReadError(result);
+      if (result.state === "present") existing.push(name);
     }
     if (existing.length === SECRET_NAMES.length) {
       log.ok("All three A2A mTLS secrets already exist -- skipping generation.");
@@ -184,8 +250,12 @@ export async function run(cfg, opts = {}) {
     log.info("Applying K8s Secrets...");
 
     const applySecret = async (name, manifest) => {
-      if (force && (await secretExists(name, namespace, { exec }))) {
-        await exec.run("kubectl", ["delete", "secret", name, "--namespace", namespace]);
+      if (force) {
+        const result = await secretReadState(name, namespace, { exec, log, sleep });
+        if (result.state === "unknown") throw a2aSecretReadError(result);
+        if (result.state === "present") {
+          await exec.run("kubectl", ["delete", "secret", name, "--namespace", namespace]);
+        }
       }
       const manifestPath = path.join(workDir, `secret-${name}.yaml`);
       fsImpl.writeFileSync(manifestPath, manifest);
