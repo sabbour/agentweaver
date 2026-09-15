@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { capture, run, resolveExecutable } from "../lib/exec.mjs";
+import { capture, ExecTimeoutError, run, resolveExecutable } from "../lib/exec.mjs";
 
 const DEFINITELY_MISSING_BINARY = "agentweaver-definitely-not-a-real-binary-xyz";
 
@@ -42,15 +42,42 @@ test("run: rejects with ExecError when the binary does not exist on PATH (no all
 test("run: opt-in timeout terminates the local process and never retries it", async () => {
   await assert.rejects(
     run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25 }),
-    /timed out after 25ms; remote operation state is unknown and was not retried/,
+    (error) => error instanceof ExecTimeoutError
+      && /timed out after 25ms; remote operation state is unknown and was not retried/.test(error.message),
   );
 });
 
-test("capture: timeout remains an indeterminate failure even with allowFailure", async () => {
-  await assert.rejects(
-    capture(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25, allowFailure: true }),
-    /timed out after 25ms; remote operation state is unknown and was not retried/,
+test("run: allowFailure true resolves an opt-in timeout with timeout details", async () => {
+  const result = await run(
+    process.execPath,
+    ["-e", "setTimeout(() => {}, 5000)"],
+    { timeoutMs: 25, allowFailure: true },
   );
+
+  assert.equal(result.code, 124);
+  assert.equal(result.timedOut, true);
+  assert.match(result.stderr, /timed out after 25ms; remote operation state is unknown and was not retried/);
+});
+
+test("capture: timeout without allowFailure still rejects with ExecTimeoutError", async () => {
+  await assert.rejects(
+    capture(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25 }),
+    (error) => error instanceof ExecTimeoutError
+      && /timed out after 25ms; remote operation state is unknown and was not retried/.test(error.message),
+  );
+});
+
+test("capture: allowFailure true resolves an opt-in timeout with timeout details", async () => {
+  const result = await capture(
+    process.execPath,
+    ["-e", "setTimeout(() => {}, 5000)"],
+    { timeoutMs: 25, allowFailure: true, json: true },
+  );
+
+  assert.equal(result.code, 124);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.json, null);
+  assert.match(result.stderr, /timed out after 25ms; remote operation state is unknown and was not retried/);
 });
 
 test("capture: Windows timeout terminates spawned descendants, not only the wrapper", {

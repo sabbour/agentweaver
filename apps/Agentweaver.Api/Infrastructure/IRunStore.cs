@@ -34,11 +34,11 @@ public interface IRunStore
     /// when the run is already terminal, in which case publication must abort — a preview URL
     /// cannot be published for a run that has ended.
     ///
-    /// Publishing a preview takes 90-120 s (port-forward, DNS convergence, health probe) and its
-    /// final <c>sandbox.preview_ready</c> batch only commits while the run row is still active. An
-    /// agent that finishes its work inside that window would otherwise cancel its own preview
-    /// (#1315). While the lease is held, every terminal transition defers, so publication wins the
-    /// race without holding a long database transaction open.
+    /// Publishing a preview can spend the configured Gateway-convergence window before its final
+    /// <c>sandbox.preview_ready</c> batch commits while the run row is still active. An agent that
+    /// finishes its work inside that window would otherwise cancel its own preview (#1315). While
+    /// the renewable lease is held, every terminal transition defers, so publication wins the race
+    /// without holding a long database transaction open.
     ///
     /// The lease is a bound, not a promise: it expires on its own so a replica that crashes
     /// mid-publication cannot park a run indefinitely. The default no-op grants the lease without

@@ -68,6 +68,23 @@ function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
   };
 }
 
+async function collectStderr(fn) {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = function patchedWrite(chunk, encoding, callback) {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    const result = await fn();
+    return { result, stderr: chunks.join("") };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 function isAcrImport(args) {
   return args[0] === "acr" && args[1] === "import";
 }
@@ -405,6 +422,42 @@ test("stampProvenance: imports the source digest into prov-<sha> and then locks 
   assert.ok(lockCall.args.includes("--write-enabled"), "lock call must set --write-enabled");
   assert.ok(lockCall.args.includes("false"), "lock call must set --write-enabled false");
   assert.ok(lockCall.args.includes(`agentweaver-api:prov-${"c".repeat(40)}`), "lock call must target the stamped provenance tag");
+});
+
+test("stampProvenance: a timed-out provenance lock warns and returns", async () => {
+  const git = { revParseCommit: async () => "c".repeat(40) };
+  const sourceDigest = "sha256:" + "d".repeat(64);
+  let provReadCount = 0;
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("show-manifests")) {
+        const query = args[args.indexOf("--query") + 1];
+        if (query.includes("@=='v1.2.3'")) return { stdout: sourceDigest, stderr: "", code: 0 };
+        if (query.includes("@=='prov-")) {
+          provReadCount += 1;
+          return { stdout: provReadCount === 1 ? "" : sourceDigest, stderr: "", code: 0 };
+        }
+      }
+      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
+        return {
+          stdout: "",
+          stderr: "Command timed out after 600000ms; remote operation state is unknown and was not retried: az acr repository update",
+          code: 124,
+          timedOut: true,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const { result, stderr } = await collectStderr(() =>
+    stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, { exec, git, sleep: async () => {} }),
+  );
+
+  assert.equal(result.tag, `prov-${"c".repeat(40)}`);
+  assert.match(stderr, /WARNING:.*provenance tag agentweaver-api:prov-c+ lock timed out/i);
+  assert.match(stderr, /deployment will continue/i);
 });
 
 test("stampProvenance: is a no-op when the provenance tag already points at the expected digest", async () => {

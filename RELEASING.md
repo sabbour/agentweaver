@@ -10,7 +10,7 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:provision-infra` | Current HEAD short SHA by default | Provision or reconcile Azure infrastructure and perform its initial deployment. |
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
-| `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag and GitHub Release from the exact protected-`main` SHA. No Azure work. |
+| `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag, wait for GHCR images, then create the GitHub Release. No Azure work. |
 | `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import already-published GHCR images by default (or, with `--image-source acr-build`, rebuild from source) and deploy that exact release to the configured environment. |
 | `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
@@ -26,7 +26,7 @@ arbitrary branch / PR tip / commit
 
 prepared exact main SHA
   └─ release:publish
-       └─ annotated vX.Y.Z tag + GitHub Release
+       └─ annotated vX.Y.Z tag + GHCR images + GitHub Release
             └─ azure:deploy-from-release -- vX.Y.Z
                  └─ image:vX.Y.Z → running versioned environment
 ```
@@ -61,17 +61,23 @@ from its exact matching section; do not run another changelog generator.
 
 4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
-5. Before opening the promotion PR, merge `main` into the release branch so
-   the branch carries real ancestry from `main`:
+5. Push the release branch.
+
+   `release:prepare` fetches `origin/main` before it changes release files. If
+   `origin/main` is not an ancestor, it runs:
 
    ```bash
    git merge -X ours origin/main --no-ff -m "merge: resolve main into release/vX.Y.Z"
    ```
 
-   `-X ours` resolves the (expected, cosmetic) conflicts in favor of the
-   release branch's content; review the resulting diff (`git show --stat
-   HEAD`) to confirm it only carries forward genuinely main-only files (e.g.
-   docs assets added directly on `main`), then push the release branch.
+   The merge runs on a clean tree, before Changesets changes release files.
+   This keeps the release metadata commit separate from the ancestry merge. If
+   Git reports conflicts, the command stops and leaves the merge for manual
+   repair. To inspect without the merge, run
+   `npm run release:prepare -- --expected X.Y.Z --no-ancestry-merge`. The command
+   fails and prints the same `git merge` command.
+
+   CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR, merged with
    **"Rebase and merge"** (not squash — see note below).
 
@@ -101,7 +107,7 @@ allowed, while stray ignored files outside those recognized locations still bloc
 the release:
 
 ```bash
-# Repository identity only: tag + GitHub Release, no Azure deployment
+# Repository identity only: tag + GHCR images + GitHub Release
 npm run release:publish
 
 # Deploy that already-published release now or later
@@ -120,6 +126,13 @@ fails after publication, the tag and GitHub Release remain durable:
 
 ```bash
 npm run azure:release -- --resume vX.Y.Z
+```
+
+If the image build fails, `release:publish` stops before it creates the
+GitHub Release. Fix the image build. Then rerun the tag image workflow and run:
+
+```bash
+npm run release:publish -- --resume vX.Y.Z
 ```
 
 To deploy the same release to another configured environment, check out the
@@ -166,23 +179,22 @@ publishes container images to GitHub's container/artifact registry via the
 | Push to `dev` | `sha-<short>`, `dev` |
 | Push to `release/vX.Y.Z` | `sha-<short>`, `rc-X.Y.Z` |
 | Push to `main` | `sha-<short>`, `main` |
-| Published GitHub Release `vX.Y.Z` | `sha-<short>`, `X.Y.Z`, `vX.Y.Z`, `latest` (not for prereleases) |
+| Push tag `vX.Y.Z` | `sha-<short>`, `X.Y.Z`, `vX.Y.Z`, `latest` |
 | Manual run on `dev`, `main`, or `release/vX.Y.Z` | `sha-<short>` plus that ref's `dev`, `main`, or `rc-X.Y.Z` channel tag |
 | Manual run on another ref | `sha-<short>` |
 
 This table follows `scripts/ci/ghcr-plan.mjs`: `workflow_dispatch` is classified
 by its selected ref, not forced into a commit-only channel. The checked-in workflow
-skips docs/specs/Markdown-only **pushes**; release events and manual runs have their
-own triggers. These are repository configuration facts, not evidence that any
-particular image, release, or deployment has already been published.
+skips docs/specs/Markdown-only **pushes**. Manual runs have their own trigger.
+These are repository facts, not evidence that a specific image or release exists.
 
-Release images are published from the `release: published` event, i.e. as a
-consequence of `npm run release:publish`, so the tag, the GitHub Release, and the
-`vX.Y.Z` images all describe the same exact `main` SHA. Publishing images is
-independent of deployment: `azure:deploy-from-release` imports these
-already-published images by default, or add `--image-source acr-build` to
-build/retag and ship them into the configured Azure environment from source
-instead.
+Release images are published from the `vX.Y.Z` tag push. The `release:publish`
+command waits for that image workflow before it creates the GitHub Release.
+As a result, the tag, the GitHub Release, and the `vX.Y.Z` images all describe
+the same exact `main` SHA. Image publication is independent of deployment.
+`azure:deploy-from-release` imports these images by default. Add
+`--image-source acr-build` to build and ship them into the configured Azure
+environment from source instead.
 
 ## Local and infrastructure deployment
 

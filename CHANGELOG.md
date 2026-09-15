@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.32.4
+
+### Patch Changes
+
+- d1c7cb7: Make ACR release imports more resilient. GHCR imports now retry registry throttling before they fail. Staging tag cleanup now uses a short timeout and never blocks a completed deploy.
+- d6eb9ea: Fix topology connectors so dense graphs keep clear card gaps, split shared lanes, and show in-path direction markers on long edges.
+- 96bde09: Enrich the Cluster topology detail panel with copyable pod, deployment, session, sandbox, warm-pool, and template diagnostics.
+- b9e4fd2: Keep healthy in-progress coordinator runs and running child subtasks from being projected as failed when stale assembly-blocked context only means the coordinator is waiting for assembly eligibility.
+- 9ecd2ca: Keep preview Gateway 502, 503, and 504 responses in the infrastructure convergence window so App Routing route programming does not consume the shorter publication budget.
+- 69c0c2e: Refresh demo-recording bearer tokens proactively from cached Chrome SSO before they expire, and make `status` report real token lifetime.
+- 3370ce9: Persist the ASP.NET Core Data Protection key ring for API and MCP in Azure Key Vault. Return 404 for stale MCP session ids instead of 500 so clients can open a new session.
+- dc5f8c8: Improve coordinator run headers so long prompts stay readable behind a Show more control while run identity remains visible first.
+- 87df555: Capture bounded, redacted tool input and output previews in transaction traces so the inspector can explain captured, truncated, redacted, and not-captured payload states.
+- 754b35a: Automatically retry the first transaction trace load before showing a temporary Application Insights failure, and avoid letting unrelated metrics cooldowns block trace retrieval.
+
+## 0.32.3
+
+### Patch Changes
+
+- 17f4b54: Fix GHCR/custom image promotion resume behavior when an ACR final-tag digest read times out or fails transiently.
+  
+  ACR repository digest reads now distinguish present, absent, and unknown states after retrying read-only failures. The default ACR digest-query budget is now 10 minutes, and retries widen shorter explicit budgets toward that default. Image promotion no longer treats an unknown digest as an absent tag, honors operator `--force` intent even when the pre-read failed, and recovers from ACR `Conflict` responses by retrying with `--force` only after confirming the existing tag already matches the staged digest.
+- a1482aa: Avoid starting the optional writable system root for ordinary sandboxed `run_command` calls so trivial shell commands no longer inherit the helper's 120-second failure wait.
+- 5bfab44: Guard the Topology panel's balanced-grid routing fix with two-engine geometry regression tests so future layout changes preserve card clearance and lane banding.
+
 ## 0.32.2
 
 ### Patch Changes

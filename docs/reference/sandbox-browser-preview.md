@@ -36,8 +36,13 @@ forwarder public port before registration (`apps/Agentweaver.AgentHost/PreviewRu
 `tcp6` table matters for Node's default IPv6-any binds. After registration, the real end-to-end check is opening the returned Gateway hostname (`preview_url`). A
 new generated hostname can remain NXDOMAIN while App Routing creates its per-preview DNS record, so this
 validation probes immediately, then retries DNS name-resolution failures with a bounded backoff for up to
-`DnsConvergenceTimeoutSeconds` (ten minutes by default). A hostname whose record already exists succeeds
-on that initial probe. Once DNS resolves, ordinary Gateway and application failures remain bounded by
+`GatewayConvergenceTimeoutSeconds` (ten minutes by default). The legacy
+`DnsConvergenceTimeoutSeconds` key remains supported. A hostname whose record already exists succeeds
+on that initial probe. Gateway `502`, `503`, and `504` responses remain in this infrastructure
+convergence phase because they can mean the HTTPRoute is not programmed yet. This environment's
+App Routing `external-dns` reconciles every 3 minutes, so the convergence budget must exceed that
+interval. The API does not add wildcard DNS records and does not patch the managed App Routing
+addon. A `404`, a `500`, or any other status outside `502`/`503`/`504` starts
 `PublicationTimeoutSeconds`. `ListForRunAsync` uses a label-selector pod-existence
 check as its liveness proxy, because the same NetworkPolicy makes an API-side TCP liveness probe invalid
 (`SandboxPreviewService.cs:399`, `:768`).
@@ -91,8 +96,8 @@ Project owners configure 1–1440 minutes in **Project settings → Sandbox poli
 `PUT /api/projects/{projectId}/preview-settings` with
 `{ "approval_timeout_minutes": 1440, "lifetime_minutes": 1440, "dns_convergence_timeout_seconds": 600 }`.
 Project owners can set each approval and preview lifetime from 1–1440 minutes; both
-default to 24 hours. They can set the DNS convergence deadline from 60–3600 seconds; it defaults
-to 600 seconds (10 minutes).
+default to 24 hours. They can set the infrastructure convergence deadline from
+60–3600 seconds; it defaults to 600 seconds (10 minutes).
 `Sandbox:Preview:ApprovalTimeoutMinutes` and
 `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES` remain a 24-hour-default fallback only for legacy/non-project
 runs.
@@ -133,11 +138,12 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:KeepAfterRun` | `true` | Keep routing after completion while a live preview defers backing-pod release; expiry, stop and missing-pod reconciliation still bound cleanup; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
-| `Sandbox:Preview:DnsConvergenceTimeoutSeconds` | `600` | Upper-bound deadline for App Routing to create a new generated preview hostname after DNS name-resolution failures. Publication probes immediately, then retries with a 1 s, 2 s, 4 s, 8 s, then 10 s-max backoff. This does not create or modify DNS records. After DNS resolves, `PublicationTimeoutSeconds` bounds HTTPS Gateway/application readiness. |
-| `Sandbox:Preview:PublicationTimeoutSeconds` | `90` | Bounded wait for HTTPS Gateway/application readiness once DNS resolves, or immediately for non-DNS failures. |
+| `Sandbox:Preview:GatewayConvergenceTimeoutSeconds` | `600` | Upper-bound deadline for App Routing to create a new generated preview hostname and program the Gateway HTTPRoute. Publication probes immediately, then retries with a 1 s, 2 s, 4 s, 8 s, then 10 s-max backoff. This does not create or modify DNS records. This environment's App Routing `external-dns` reconciles every 3 minutes, so keep this budget above that interval. |
+| `Sandbox:Preview:DnsConvergenceTimeoutSeconds` | `600` | Supported legacy alias for `GatewayConvergenceTimeoutSeconds`. Existing deployments can keep this key. |
+| `Sandbox:Preview:PublicationTimeoutSeconds` | `90` | Bounded wait after a response proves the request reached a backend. `404`, `500`, and any status outside `502`/`503`/`504` start this window. Gateway `502`, `503`, and `504` stay in the convergence window. |
 | Project `approval_timeout_minutes` | `1440` | Human approval window for agent-initiated preview, configurable by a project owner from 1–1440 minutes. |
 | Project `lifetime_minutes` | `1440` | Published preview lifetime and hard cap, configurable by a project owner from 1–1440 minutes in **Project settings → Sandbox policy**. It is used consistently for the route expiration and maximum lifetime. |
-| Project `dns_convergence_timeout_seconds` | `600` | Per-project upper-bound DNS convergence deadline, configurable by a project owner from 60–3600 seconds in **Project settings → Sandbox policy**. The API probes immediately and uses this effective project value for bounded DNS retries. Existing projects receive 600 through storage defaults/migrations. |
+| Project `dns_convergence_timeout_seconds` | `600` | Stable project API and storage field for the infrastructure convergence deadline. It now covers DNS and Gateway route programming. It stays under the legacy wire name so existing projects, clients, and the persisted `PreviewDnsConvergenceTimeoutSeconds` column keep working. Project owners configure it from 60–3600 seconds in **Project settings → Sandbox policy**. |
 | `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `1440` | Fallback for legacy/non-project runs. Values clamp to 1–1440 minutes. Project-backed runs use the project setting. |
 | `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:176`](#source). Keep `false` in production. |
 | Run `auto_approve_tools` policy | `false` | When explicitly selected at direct start or atomically captured from backlog pickup settings, auto-approves `start_preview` without creating an approval card, notification, or waiter. The decision cites the persisted immutable policy snapshot ID and sanitized target port. Port/process/ownership/publication validation remains enforced. |
@@ -264,7 +270,7 @@ With preview enabled (AKS default), start returns `preview_url` and `keepalive_u
 <tr><td>relation-3</td><td>4 HTTPS</td></tr>
 <tr><td>relation-4</td><td>5 route</td></tr>
 <tr><td>relation-5</td><td>6 public port</td></tr>
-<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; DNS convergence has a bounded retry window.</td></tr>
+<tr><td>assurance</td><td>No API → pod TCP readiness probe. Publication failure rolls back; infrastructure convergence has a bounded retry window.</td></tr>
 <tr><td>assurance-0-label</td><td>Public readiness</td></tr>
 <tr><td>assurance-0-fact</td><td>Probe the exact generated HTTPS URL.</td></tr>
 <tr><td>assurance-0-source</td><td>SandboxPreviewService.cs</td></tr>

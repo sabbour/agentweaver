@@ -143,6 +143,12 @@ If Kubernetes cannot confirm a secret state after retries, deployment stops
 with a read error. Do not use `force: true` to repair a read failure. Retry
 after the Kubernetes API read succeeds.
 
+Best-effort ACR hardening steps can also use a local timeout. The provenance
+tag lock is one of these steps. If its Azure CLI process times out, the
+deployment warns and continues. The registry can already have applied the
+lock. If not, the tag can stay writable. The warning tells you to verify the
+tag state.
+
 ACR *import* and retag operations are retried automatically (three attempts,
 exponential backoff with jitter) on transient transport or service failures,
 including connection resets, throttling, and timeouts. This is safe because

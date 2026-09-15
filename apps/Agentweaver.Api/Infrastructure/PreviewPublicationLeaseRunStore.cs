@@ -6,7 +6,7 @@ namespace Agentweaver.Api.Infrastructure;
 /// <summary>
 /// Defers a run's terminal transition while a preview publication holds the run's lease (#1315).
 ///
-/// Publishing a preview takes 90-120 s: port-forward, DNS convergence, then an HTTP health probe.
+/// Publishing a preview can spend up to the configured Gateway-convergence window before the HTTP health probe.
 /// Its final <c>sandbox.preview_ready</c> batch commits only while the run row is still active. An
 /// agent that finishes its work inside that window therefore cancels its own preview, and the
 /// publication path tears the preview process down as <c>preview_not_published</c>.
@@ -19,29 +19,27 @@ namespace Agentweaver.Api.Infrastructure;
 /// also taken by the conditional preview append, so waiting while holding it would deadlock the
 /// very publication this decorator is waiting for.
 ///
-/// The wait is bounded twice over: the lease carries its own expiry, so a replica that crashes
-/// mid-publication cannot park a run indefinitely, and <see cref="MaxDeferral"/> caps the wait even
-/// if a lease is repeatedly renewed.
+/// The lease carries its own short expiry, so a replica that crashes mid-publication cannot park a
+/// run indefinitely. Active publication renews it; explicit cancellation clears it before making
+/// the run terminal.
 /// </summary>
 public sealed class PreviewPublicationLeaseRunStore(
     IRunStore inner,
     ILogger<PreviewPublicationLeaseRunStore>? logger = null) : IRunStore, IRunStoreDecorator
 {
-    /// <summary>Default ceiling on how long one terminal transition defers for a publication.</summary>
-    internal static readonly TimeSpan DefaultMaxDeferral = TimeSpan.FromMinutes(3);
-
     /// <summary>
-    /// How long a publication site claims the lease for. Publication takes 90-120 s, so this leaves
-    /// margin. It matches <see cref="DefaultMaxDeferral"/> so one lease can never be cut short by
-    /// the cap.
+    /// How long a publication site claims the lease for. The lease is renewed during active
+    /// convergence polling, while this short window remains the crash-recovery backstop.
     /// </summary>
     public static readonly TimeSpan PublicationLeaseWindow = TimeSpan.FromMinutes(3);
+
+    /// <summary>How often active convergence polling extends the short publication lease.</summary>
+    public static readonly TimeSpan PublicationLeaseRenewalInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>Default interval at which the lease is re-read while a transition is deferred.</summary>
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly TimeProvider _time = TimeProvider.System;
-    private readonly TimeSpan _maxDeferral = DefaultMaxDeferral;
     private readonly TimeSpan _pollInterval = DefaultPollInterval;
 
     public IRunStore Inner { get; } = inner;
@@ -49,12 +47,10 @@ public sealed class PreviewPublicationLeaseRunStore(
     /// <summary>Test constructor: shrinks the wait so a deferral test does not take minutes.</summary>
     internal PreviewPublicationLeaseRunStore(
         IRunStore inner,
-        TimeSpan maxDeferral,
         TimeSpan pollInterval,
         ILogger<PreviewPublicationLeaseRunStore>? logger = null)
         : this(inner, logger)
     {
-        _maxDeferral = maxDeferral;
         _pollInterval = pollInterval;
     }
 
@@ -64,7 +60,6 @@ public sealed class PreviewPublicationLeaseRunStore(
     /// </summary>
     private async Task AwaitPreviewPublicationAsync(RunId runId, CancellationToken ct)
     {
-        var deadline = _time.GetUtcNow() + _maxDeferral;
         var deferred = false;
         while (true)
         {
@@ -72,14 +67,6 @@ public sealed class PreviewPublicationLeaseRunStore(
             var now = _time.GetUtcNow();
             if (leaseUntil is null || leaseUntil <= now)
                 break;
-            if (now >= deadline)
-            {
-                logger?.LogWarning(
-                    "Preview publication lease for run {RunId} outlasted the {Cap} deferral cap; terminalizing anyway",
-                    runId.ToString(), _maxDeferral);
-                break;
-            }
-
             if (!deferred)
             {
                 deferred = true;

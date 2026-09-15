@@ -7,7 +7,7 @@ status:
 npm run demo:record -- help
 ```
 
-## First use or expired sign-in
+## First use or expired SSO sign-in
 
 ```powershell
 npm run demo:record -- signin
@@ -16,10 +16,12 @@ npm run demo:record -- signin
 ## Microsoft Entra boundary for agents
 
 An agent **must** click Agentweaver's own **Sign in with Microsoft Entra ID** button
-to start its redirect, and **must** run `signin` or `open` when recording auth is
-missing or expired. These are the normal, expected way to get a session — not a
-workaround. Cached SSO usually completes authentication after that click without any
-prompt. Do not stop and ask a human before trying; try first.
+to start its redirect, and **must** run `open`, `start`, or authenticated `capture`
+when recording auth is missing, expired, or near expiry so unattended refresh can run
+first. Use `signin` only for first setup or when cached SSO no longer returns
+automatically. These are the normal, expected way to get a session — not a workaround.
+Cached SSO usually completes authentication after that click without any prompt. Do not
+stop and ask a human before trying; try first.
 
 The boundary is narrow and begins only if the redirect actually lands on a Microsoft
 Entra prompt: the agent must not type credentials, choose an account, satisfy MFA, or
@@ -27,8 +29,9 @@ grant consent there, and must not exfiltrate tokens, cookies, session storage, b
 profiles, or account data. Only if such a prompt appears and blocks progress should the
 agent stop and hand off to a human to complete sign-in privately and off camera.
 
-Treat "the token is expired" as a reason to run `signin`, never as a reason to declare
-the task blocked.
+Treat "the access token is expired or near expiry" as a reason to let `open`, `start`,
+or authenticated `capture` refresh from cached Chrome SSO. Run `signin` manually only
+when the SSO session itself no longer returns to Agentweaver without human interaction.
 
 The command uses **only** the literal Google Chrome `Default` work profile at
 `%LOCALAPPDATA%\Google\Chrome\User Data\Default`. Edge and every other Chrome
@@ -50,8 +53,15 @@ profile are refused. Close all Chrome windows when prompted. The command then:
 `start` and authenticated `capture` self-direct their session setup: they first reuse a
 live verified session, then restore and verify protected recording auth without touching
 the live Default profile. Run `status` only to inspect state; it is not a prerequisite.
-If that protected auth is expired or unavailable, the command safely starts the existing
-interactive sign-in path. Keep any planned media and fixtures unchanged:
+Before reusing protected auth, the command decodes the bearer JWT `exp` claim. It refreshes
+with a 15-minute safety margin, and before each captured beat it also checks the beat's
+known timeout budget so a long operation is not started with too little token lifetime
+left to finish. `status` uses the same check and reports the remaining lifetime; a token
+inside the safety margin is reported as refresh-needed rather than ready.
+
+If protected auth is expired, near expiry, or unavailable, the command safely starts an
+unattended refresh from the disposable Chrome Default-profile copy. Keep any planned
+media and fixtures unchanged:
 
 ```powershell
 npm run demo:record -- close
@@ -60,14 +70,15 @@ npm run demo:record -- close
 Close any remaining Google Chrome windows through their normal UI, then run:
 
 ```powershell
-npm run demo:record -- signin
 npm run demo:record -- open
 npm run demo:record -- status
 ```
 
-Proceed only after `status` reports that the recording session is authenticated. Do not
-use another tool's auth artifacts, terminate Chrome by name, or clean fixtures as part of
-this recovery.
+Proceed only after `status` reports that the recording authentication is ready with enough
+remaining lifetime and that the recording session is authenticated. If cached SSO no longer
+returns automatically and Microsoft Entra requires account selection, credentials, MFA, or
+consent, then run `signin` for a human-private renewal. Do not use another tool's auth
+artifacts, terminate Chrome by name, or clean fixtures as part of this recovery.
 
 The live Default directory is never automated. Google Chrome requires Chrome instances
 to be closed for DevTools attachment, and current Chromium releases reject remote
@@ -100,12 +111,12 @@ npm run demo:record -- start `
 session when it is already open and its live Agentweaver shell verifies as authenticated.
 When it is closed, they restore the protected recorder auth into the owned session and
 verify the live shell before considering Default-profile sign-in. This avoids touching
-the live Chrome Default profile whenever auth remains valid. Expired or unverifiable
-stored auth falls through to the existing Default-profile sign-in path, which closes
-only the owned recording session before waiting for Chrome and never terminates unrelated
-Chrome processes. If Microsoft Entra is reached, the displayed sign-in requires a human;
-the CLI does not select an account, enter credentials, MFA, or consent. The default
-session name is `agentweaver-demo`.
+the live Chrome Default profile whenever auth remains valid. Expired, near-expiry, or unverifiable stored auth falls through to the existing
+Default-profile sign-in path, which closes only the owned recording session before waiting
+for Chrome and never terminates unrelated Chrome processes. Cached SSO usually mints a
+fresh bearer without human input. If Microsoft Entra is reached and does not return through
+cached SSO, the displayed sign-in requires a human; the CLI does not select an account,
+enter credentials, MFA, or consent. The default session name is `agentweaver-demo`.
 
 ## Capture
 
@@ -144,6 +155,12 @@ Authenticated capture restores and verifies the persistent session before it run
 generated script with `playwright-cli --raw`. `capture --all` automatically skips
 unauthenticated handoff beats and begins with the first authenticated beat; it never
 waits for their unauthenticated dialog.
+
+Authenticated capture also refreshes proactively before each beat when the current token's
+remaining lifetime cannot cover the beat's estimated timeout budget plus the 15-minute
+safety margin. Long validation captures no longer need to be timeboxed under one bearer
+token lifetime; the operator should rely on the proactive refresh and `status` remaining
+time instead.
 
 Capture-plan prerequisites are evaluated only for selected beats. Thus Beat 0.0 can
 capture its safe unauthenticated Agentweaver handoff without external GitHub-triage

@@ -199,6 +199,25 @@ test("refuses to prune when the cluster cannot be read", async () => {
   );
 });
 
+test("refuses to prune when the cluster read times out", async () => {
+  await assert.rejects(
+    readInUseImages("acr.azurecr.io", {
+      exec: kubectlExec({
+        code: 124,
+        stdout: "",
+        stderr: "Command timed out after 60000ms; remote operation state is unknown and was not retried: kubectl get pods",
+        timedOut: true,
+      }),
+    }),
+    (error) => {
+      assert.ok(error instanceof PruneError);
+      assert.match(error.message, /reading running images from the cluster timed out/);
+      assert.match(error.message, /protects in-use digests/);
+      return true;
+    },
+  );
+});
+
 test("refuses to prune when no image from this registry is running", async () => {
   await assert.rejects(
     readInUseImages("acr.azurecr.io", {

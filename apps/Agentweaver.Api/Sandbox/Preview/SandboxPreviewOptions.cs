@@ -61,15 +61,25 @@ public sealed class SandboxPreviewOptions
     /// <summary>Maximum simultaneously active previews for the deployment, enforced from HTTPRoute state.</summary>
     public int MaxConcurrentSessionsGlobal { get; init; } = 20;
 
-    /// <summary>Seconds to wait for the generated HTTPS URL to serve a successful response through the Gateway.</summary>
+    /// <summary>Seconds to wait after the request reaches a backend but before the preview is ready.</summary>
     public int PublicationTimeoutSeconds { get; init; } = 90;
 
     /// <summary>
-    /// Seconds to allow App Routing to create a newly generated preview hostname before treating a
-    /// DNS name-resolution failure as a publication failure. This window applies only until DNS
-    /// resolves; other Gateway and application failures use <see cref="PublicationTimeoutSeconds"/>.
+    /// Seconds to allow App Routing to create a new preview hostname and program the Gateway route.
+    /// This is the preferred option name. If omitted, <see cref="DnsConvergenceTimeoutSeconds"/> is
+    /// used as a supported legacy alias.
+    /// </summary>
+    public int? GatewayConvergenceTimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// Legacy alias for <see cref="GatewayConvergenceTimeoutSeconds"/>. Existing deployments can keep
+    /// using this key while the window now covers DNS and Gateway route programming.
     /// </summary>
     public int DnsConvergenceTimeoutSeconds { get; init; } = 600;
+
+    /// <summary>Effective DNS plus Gateway route-programming convergence deadline.</summary>
+    public int EffectiveGatewayConvergenceTimeoutSeconds =>
+        GatewayConvergenceTimeoutSeconds ?? DnsConvergenceTimeoutSeconds;
 
     /// <summary>
     /// Pure check: is <paramref name="port"/> within the inclusive preview port range
