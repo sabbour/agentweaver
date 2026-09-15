@@ -206,6 +206,21 @@ describe('TransactionTracePanel trace detail', () => {
     }
   });
 
+  it('surfaces a bounded trace timeout without automatically repeating the long query', async () => {
+    const queryError = 'Application Insights trace telemetry did not respond within 15 seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly.';
+    vi.mocked(apiClient.getRunTraces).mockResolvedValue({
+      runId: 'run-47',
+      spans: [],
+      queryError,
+    });
+
+    render(<Wrapper><TransactionTracePanel runId="run-47" /></Wrapper>);
+
+    expect(await screen.findByText('Trace spans are temporarily unavailable.')).toBeTruthy();
+    expect(screen.getByText(queryError)).toBeTruthy();
+    expect(apiClient.getRunTraces).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a persistent first-load trace dependency failure after retries and keeps manual Retry working', async () => {
     vi.useFakeTimers();
     try {

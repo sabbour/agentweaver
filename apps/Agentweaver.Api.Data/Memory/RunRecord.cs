@@ -58,4 +58,10 @@ public sealed class RunRecord
     /// Cleared on release.
     /// </summary>
     public DateTimeOffset? PreviewPublicationLeaseUntil { get; set; }
+
+    /// <summary>
+    /// Unique publication-attempt owner. Prevents overlapping retries from renewing or releasing
+    /// another replica's active preview-publication lease.
+    /// </summary>
+    public string? PreviewPublicationLeaseOwner { get; set; }
 }

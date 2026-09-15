@@ -28,17 +28,20 @@ public sealed class AppInsightsMetricsService
     private const int MaxConcurrentWorkspaceQueries = 16;
     private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
     private static readonly TimeSpan WorkspaceQueryTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DefaultTraceWorkspaceQueryTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan WorkspaceQueryCooldown = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan TracePageFallbackCacheLifetime = TimeSpan.FromMinutes(2);
     private const int MaxTracePageFallbackEntries = 128;
     private long _workspaceUnavailableUntilUtcTicks;
     private readonly ConcurrentDictionary<string, Lazy<Task<TracePage>>> _inflightTracePages = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CachedTracePage> _tracePageFallbackCache = new(StringComparer.Ordinal);
+    private readonly TimeSpan _traceWorkspaceQueryTimeout;
 
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
         _configuration = configuration;
         _logger = logger;
+        _traceWorkspaceQueryTimeout = ResolveTraceWorkspaceQueryTimeout(configuration);
     }
 
     /// <summary>
@@ -848,8 +851,9 @@ public sealed class AppInsightsMetricsService
             timeFrom,
             timeTo,
             ct,
-            exception => queryError = DescribeTraceQueryFailure(exception),
-            useWorkspaceCooldown: false).ConfigureAwait(false);
+            exception => queryError = DescribeTraceQueryFailure(exception, _traceWorkspaceQueryTimeout),
+            useWorkspaceCooldown: false,
+            timeout: _traceWorkspaceQueryTimeout).ConfigureAwait(false);
         if (result is null) return new TracePage([], queryError, null, false);
 
         var hasMore = result.Table.Rows.Count > pageSize;
@@ -1039,6 +1043,7 @@ public sealed class AppInsightsMetricsService
         Action<Exception>? onError = null,
         QueryFailureSink? failures = null,
         bool useWorkspaceCooldown = true,
+        TimeSpan? timeout = null,
         [CallerMemberName] string context = "")
     {
         var client = GetClient();
@@ -1053,8 +1058,9 @@ public sealed class AppInsightsMetricsService
             return null;
         }
 
+        var effectiveTimeout = timeout ?? WorkspaceQueryTimeout;
         using var queryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        queryCts.CancelAfter(WorkspaceQueryTimeout);
+        queryCts.CancelAfter(effectiveTimeout);
         var leaseAcquired = false;
         try
         {
@@ -1082,9 +1088,12 @@ public sealed class AppInsightsMetricsService
         catch (Exception ex)
         {
             var failure = ex is OperationCanceledException
-                ? new TimeoutException($"Application Insights workspace query exceeded the {WorkspaceQueryTimeout.TotalSeconds:0}-second timeout.", ex)
+                ? new TimeoutException($"Application Insights workspace query exceeded the {effectiveTimeout.TotalSeconds:0}-second timeout.", ex)
                 : ex;
-            if (useWorkspaceCooldown) MarkWorkspaceUnavailable();
+            // Queue exhaustion can be caused by other long-running trace requests rather than a
+            // workspace failure. Only open the shared metrics cooldown after this request actually
+            // reached Azure Monitor.
+            if (useWorkspaceCooldown && leaseAcquired) MarkWorkspaceUnavailable();
             onError?.Invoke(failure);
             if (failures is not null)
             {
@@ -1138,12 +1147,27 @@ public sealed class AppInsightsMetricsService
         QueryError = queryError,
     };
 
-    private static string DescribeTraceQueryFailure(Exception exception) =>
+    private static string DescribeTraceQueryFailure(Exception exception, TimeSpan timeout) =>
         exception is TimeoutException
-            ? $"Application Insights trace telemetry did not respond within {WorkspaceQueryTimeout.TotalSeconds:0} seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly."
+            ? $"Application Insights trace telemetry did not respond within {timeout.TotalSeconds:0} seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly."
             : exception is TelemetryQueryUnavailableException
                 ? "Application Insights trace telemetry is temporarily unavailable after a dependency failure. Retry shortly."
                 : "Application Insights trace telemetry is temporarily unavailable. Retry shortly.";
+
+    internal static TimeSpan ResolveTraceWorkspaceQueryTimeout(IConfiguration configuration)
+    {
+        foreach (var value in new[]
+        {
+            configuration["Metrics:AppInsights:TraceQueryTimeoutSeconds"],
+            configuration["APPINSIGHTS_TRACE_QUERY_TIMEOUT_SECONDS"],
+        })
+        {
+            if (int.TryParse(value, out var seconds) && seconds > 0)
+                return TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 60));
+        }
+
+        return DefaultTraceWorkspaceQueryTimeout;
+    }
 
     private sealed class TelemetryQueryUnavailableException(string message) : Exception(message);
 

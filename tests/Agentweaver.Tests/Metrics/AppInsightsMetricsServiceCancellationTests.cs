@@ -25,6 +25,7 @@ public class AppInsightsMetricsServiceCancellationTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["APPLICATIONINSIGHTS_CONNECTION_STRING"] = "WorkspaceId=fake-workspace-id;",
+                ["Metrics:AppInsights:TraceQueryTimeoutSeconds"] = "1",
             })
             .Build();
 
@@ -130,7 +131,7 @@ public class AppInsightsMetricsServiceCancellationTests
         var result = await service.GetRunTracesAsync("run-1");
 
         Assert.Empty(result.Spans);
-        Assert.Contains("did not respond within 3 seconds", result.QueryError, StringComparison.Ordinal);
+        Assert.Contains("did not respond within 1 seconds", result.QueryError, StringComparison.Ordinal);
         Assert.Equal(1, fakeClient.QueryCount);
     }
 
@@ -149,8 +150,33 @@ public class AppInsightsMetricsServiceCancellationTests
         Assert.All(responses, response =>
         {
             Assert.Empty(response.Spans);
-            Assert.Contains("did not respond within 3 seconds", response.QueryError, StringComparison.Ordinal);
+            Assert.Contains("did not respond within 1 seconds", response.QueryError, StringComparison.Ordinal);
         });
+    }
+
+    [Theory]
+    [InlineData(null, null, 15)]
+    [InlineData("7", null, 7)]
+    [InlineData(null, "8", 8)]
+    [InlineData("61", null, 60)]
+    [InlineData("0", null, 15)]
+    [InlineData("invalid", "9", 9)]
+    public void ResolveTraceWorkspaceQueryTimeout_UsesValidatedConfiguredBudget(
+        string? configuredSeconds,
+        string? environmentSeconds,
+        int expectedSeconds)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Metrics:AppInsights:TraceQueryTimeoutSeconds"] = configuredSeconds,
+                ["APPINSIGHTS_TRACE_QUERY_TIMEOUT_SECONDS"] = environmentSeconds,
+            })
+            .Build();
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            AppInsightsMetricsService.ResolveTraceWorkspaceQueryTimeout(configuration));
     }
 
     [Fact]

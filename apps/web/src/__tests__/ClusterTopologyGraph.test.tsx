@@ -386,6 +386,10 @@ describe('ClusterTopologyGraph', () => {
     fireEvent.click(screen.getByTestId('cluster-topology-node-workload-pods'));
     const inspector = screen.getByLabelText('Agentweaver workload pods resource details');
 
+    const inspectorStyle = getComputedStyle(inspector);
+    expect(inspectorStyle.width).toBe('100%');
+    expect(inspectorStyle.maxWidth).toBe('');
+    expect(inspectorStyle.minWidth).toBe('0');
     expect(within(inspector).getByText('Last updated')).toBeTruthy();
     expect(within(inspector).getByText('agentweaver-agent-host')).toBeTruthy();
     expect(within(inspector).getByText('agent-abc123')).toBeTruthy();

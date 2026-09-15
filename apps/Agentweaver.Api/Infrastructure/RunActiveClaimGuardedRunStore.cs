@@ -194,6 +194,32 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
         inner.UpdateModelSourceAsync(runId, modelSource, ct);
 
+    public Task<bool> TryBeginPreviewPublicationAsync(
+        RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        inner.TryBeginPreviewPublicationAsync(runId, leaseUntil, ct);
+
+    public Task<bool> TryAcquirePreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+
+    public Task<bool> TryRenewPreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+
+    public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
+        inner.EndPreviewPublicationAsync(runId, ct);
+
+    public Task EndPreviewPublicationAsync(RunId runId, string ownerId, CancellationToken ct = default) =>
+        inner.EndPreviewPublicationAsync(runId, ownerId, ct);
+
+    public Task<bool> IsPreviewPublicationOwnerAsync(
+        RunId runId, string ownerId, CancellationToken ct = default) =>
+        inner.IsPreviewPublicationOwnerAsync(runId, ownerId, ct);
+
+    public Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(
+        RunId runId, CancellationToken ct = default) =>
+        inner.GetPreviewPublicationLeaseAsync(runId, ct);
+
     public Task<IReadOnlyList<Run>> GetRunsBySubmittingUserAsync(
         string submittingUser, string? agentName, int limit, CancellationToken ct = default) =>
         inner.GetRunsBySubmittingUserAsync(submittingUser, agentName, limit, ct);
