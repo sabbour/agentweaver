@@ -36,6 +36,23 @@ test("diagram changes run focused generator and drift validation", () => {
   assert.match(job, /validate\.mjs --profile ci --area diagrams/);
 });
 
+test("release PRs into main test main ancestry on the head commit", () => {
+  const job = workflowSection("  release-main-ancestry:\n", "\n  dotnet-test-plan:\n");
+
+  assert.match(
+    job,
+    /if: github\.event_name == 'pull_request' && github\.base_ref == 'main' && startsWith\(github\.head_ref, 'release\/'\)/,
+  );
+  assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(job, /fetch-depth: 0/);
+  assert.match(job, /git fetch origin main:refs\/remotes\/origin\/main/);
+  assert.match(job, /git merge-base --is-ancestor origin\/main HEAD/);
+  assert.match(
+    job,
+    /Fix: git merge -X ours origin\/main --no-ff -m \\"merge: resolve main into \$\{RELEASE_BRANCH\}\\"/,
+  );
+});
+
 test("path filters escalate on ci.yml only, never on every workflow file", () => {
   const filters = workflowSection("          filters: |\n", "\n  dotnet-tests:\n");
 

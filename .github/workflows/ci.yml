@@ -109,6 +109,33 @@ jobs:
               - 'scripts/docs/**'
               - '.github/workflows/ci.yml'
 
+  release-main-ancestry:
+    name: Release main ancestry
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify main ancestry
+        env:
+          RELEASE_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "origin/main is an ancestor of ${RELEASE_BRANCH}."
+            exit 0
+          fi
+
+          echo "::error title=Release branch is missing main ancestry::origin/main is not an ancestor of ${RELEASE_BRANCH}. Run git merge -X ours origin/main --no-ff -m \"merge: resolve main into ${RELEASE_BRANCH}\"."
+          echo "Cause: origin/main is not an ancestor of ${RELEASE_BRANCH}."
+          echo "Fix: git merge -X ours origin/main --no-ff -m \"merge: resolve main into ${RELEASE_BRANCH}\""
+          exit 1
+
   dotnet-test-plan:
     name: Plan .NET test shards
     needs: changes
