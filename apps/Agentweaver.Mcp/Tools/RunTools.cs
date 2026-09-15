@@ -101,7 +101,19 @@ public sealed record RunTaskResult
 public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistrationTimeout = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-    internal static readonly TimeSpan PreviewRegistrationTimeout = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// Client-side preview registration deadline. Keep this strictly greater than the API server's
+    /// default publication budget: <c>SandboxPreviewOptions.EffectiveGatewayConvergenceTimeoutSeconds</c>
+    /// plus <c>SandboxPreviewOptions.PublicationTimeoutSeconds</c>. The defaults are 600 s plus
+    /// 90 s, so this client gets 14 minutes 30 seconds and loses the server timeout race last.
+    /// </summary>
+    /// <remarks>
+    /// Agentweaver.Mcp cannot reference the API project or its SandboxPreviewOptions type. Keep this
+    /// constant coupled to those server defaults during preview timeout changes. If this value is less
+    /// than or equal to the server-side sum, MCP callers can get a timeout message naming a duration
+    /// the server never actually exceeded while the server is still converging.
+    /// </remarks>
+    internal static readonly TimeSpan PreviewRegistrationTimeout = TimeSpan.FromSeconds(870);
     private readonly TimeSpan _previewRegistrationTimeout =
         previewRegistrationTimeout ?? PreviewRegistrationTimeout;
 
