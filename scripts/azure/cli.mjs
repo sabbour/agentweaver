@@ -5,7 +5,7 @@
 
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { basename, join, dirname } from "node:path";
 import { userInfo } from "node:os";
 import * as logDefault from "./lib/log.mjs";
 import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
@@ -19,11 +19,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * This ensures that `deploy-from-local` and `verify` honour per-user config
  * (e.g. AUTH_MODE=Entra) without requiring a shell env variable every time.
  */
-function findUserParamsFile() {
-  const username = userInfo().username;
-  for (const ext of [".json", ".jsonc"]) {
-    const candidate = join(__dirname, `params.${username}${ext}`);
-    if (existsSync(candidate)) return candidate;
+export function findUserParamsFile({
+  username = userInfo().username,
+  cliDir = __dirname,
+  fileExists = existsSync,
+} = {}) {
+  const candidateDirs = [cliDir];
+  const repoRoot = dirname(dirname(cliDir));
+  const worktreesDir = dirname(repoRoot);
+  if (basename(worktreesDir) === ".worktrees") {
+    candidateDirs.push(join(dirname(worktreesDir), "scripts", "azure"));
+  }
+
+  for (const candidateDir of candidateDirs) {
+    for (const ext of [".json", ".jsonc"]) {
+      const candidate = join(candidateDir, `params.${username}${ext}`);
+      if (fileExists(candidate)) return candidate;
+    }
   }
   return null;
 }

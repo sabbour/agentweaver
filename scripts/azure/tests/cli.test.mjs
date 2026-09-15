@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { HELP_TEXT, main, run } from "../cli.mjs";
+import { HELP_TEXT, findUserParamsFile, main, run } from "../cli.mjs";
 
 function noopLog() {
   const rec = () => () => {};
@@ -63,6 +63,21 @@ test("run: no command prints HELP_TEXT", async () => {
   const result = await run([], { log });
   assert.equal(result.help, true);
   assert.ok(messages.includes(HELP_TEXT));
+});
+
+test("findUserParamsFile: worktrees inherit the main checkout's ignored user params", () => {
+  const root = path.join("C:", "repo");
+  const cliDir = path.join(root, ".worktrees", "feature", "scripts", "azure");
+  const sharedParams = path.join(root, "scripts", "azure", "params.alice.json");
+
+  assert.equal(
+    findUserParamsFile({
+      username: "alice",
+      cliDir,
+      fileExists: (candidate) => candidate === sharedParams,
+    }),
+    sharedParams,
+  );
 });
 
 test("run: -h/--help/help all print HELP_TEXT", async () => {
