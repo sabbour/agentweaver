@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 export const SEMVER = /^\d+\.\d+\.\d+$/;
 const FRAGMENT_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]+)$/;
@@ -142,6 +143,52 @@ export function validateReleasePreparation(expected, branch, calculatedVersion) 
   if (expected !== "1.0.0" && expected.split(".")[0] !== "0") {
     throw new Error("Unexpected major-version transition.");
   }
+}
+
+export function releaseMainMergeCommand(branch) {
+  return `git merge -X ours origin/main --no-ff -m "merge: resolve main into ${branch}"`;
+}
+
+export function ensureReleaseBranchHasMainAncestry(
+  repoRoot,
+  branch,
+  { allowMerge = true, log = console.log, execFile = execFileSync } = {},
+) {
+  const git = (...args) => execFile("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  const command = releaseMainMergeCommand(branch);
+
+  try {
+    git("fetch", "origin", "main:refs/remotes/origin/main");
+  } catch (error) {
+    throw new Error(`Failed to fetch origin/main. Git error: ${(error.stderr || error.message || "").toString().trim()}`);
+  }
+
+  try {
+    git("merge-base", "--is-ancestor", "origin/main", "HEAD");
+    log(`origin/main is already an ancestor of ${branch}.`);
+    return { merged: false, commit: git("rev-parse", "--short", "HEAD") };
+  } catch (error) {
+    if (error.status !== 1) {
+      throw new Error(`Failed to test origin/main ancestry for ${branch}. Git error: ${(error.stderr || error.message || "").toString().trim()}`);
+    }
+  }
+
+  if (!allowMerge) {
+    throw new Error(`origin/main is not an ancestor of ${branch}. Run ${command} before release preparation.`);
+  }
+
+  log(`origin/main is not an ancestor of ${branch}. release:prepare will merge it before release files change.`);
+  log(`Running: ${command}`);
+
+  try {
+    git("merge", "-X", "ours", "origin/main", "--no-ff", "-m", `merge: resolve main into ${branch}`);
+  } catch (error) {
+    throw new Error(`Failed to merge origin/main into ${branch}. Git stopped during: ${command}. Resolve the conflict, or abort the merge and run release:prepare again.`);
+  }
+
+  const commit = git("rev-parse", "--short", "HEAD");
+  log(`Created ancestry merge ${commit}.`);
+  return { merged: true, commit };
 }
 
 export function validateReleasePreparationFiles(sha, files) {
