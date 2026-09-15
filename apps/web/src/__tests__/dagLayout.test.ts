@@ -24,7 +24,6 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node } from '@xyflow/react';
-
 function makeNode(id: string): Node {
   return { id, position: { x: 0, y: 0 }, data: {} };
 }
