@@ -277,6 +277,9 @@ function runNodeTests(repoRoot) {
 
 function runWeb(repoRoot, isolated, selection) {
   ensureDependencies(repoRoot, 'apps/web', isolated);
+  if (selection !== 'test' && selection !== 'lint') {
+    runNpm(['--prefix', 'apps/web', 'run', 'typecheck'], repoRoot);
+  }
   if (selection !== 'lint') {
     runNpm(['--prefix', 'apps/web', 'run', 'test'], repoRoot);
   }

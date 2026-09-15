@@ -353,7 +353,7 @@ required on any platform. The root `package.json` exposes these scripts:
 | `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names and Entra configuration. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Fetches and resolves an arbitrary committed ref, deploys it through a temporary detached worktree, and leaves the caller's checkout untouched. |
-| `npm run release:publish` | From a prepared exact-main checkout, creates the annotated tag and GitHub Release without deploying. |
+| `npm run release:publish` | From a prepared exact-main checkout, creates the tag, waits for GHCR images, and creates the GitHub Release. |
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Deploys an existing published release from an exact checkout of its tag commit. |
 | `npm run azure:release` | Composes `release:publish` and `azure:deploy-from-release` for the first shipment. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |

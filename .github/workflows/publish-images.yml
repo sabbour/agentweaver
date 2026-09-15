@@ -19,34 +19,41 @@ name: Publish images
 #   push to dev              -> :sha-<short>, :dev
 #   push to release/vX.Y.Z   -> :sha-<short>, :rc-X.Y.Z
 #   push to main             -> :sha-<short>, :main
-#   GitHub Release published -> :sha-<short>, :X.Y.Z, :vX.Y.Z, :latest
-#                               (:latest is skipped for prereleases)
-#   workflow_dispatch (any ref, i.e. an arbitrary commit)
-#                            -> :sha-<short>
+#   pull request             -> build only, no push
+#   push tag vX.Y.Z          -> :sha-<short>, :X.Y.Z, :vX.Y.Z, :latest
+#   workflow_dispatch        -> :sha-<short> plus the selected ref channel tag
 #
 # Every build always publishes the immutable `sha-<short>` tag, so any image
 # is addressable by the exact commit it was built from -- the same identifier
 # model `npm run azure:deploy-from-local` / `deploy-from-commit` already use.
-# Release publication is driven by the `release: published` event rather than
-# by the `v*` tag push, because `npm run release:publish` creates the
-# annotated tag and the GitHub Release together and we do not want two
-# competing runs racing to move `:latest`.
+# `npm run release:publish` pushes the tag first and waits for this workflow.
+# It creates the GitHub Release only after the image build succeeds.
 #
 # This workflow is deliberately independent of the Azure/ACR deploy toolchain:
 # it publishes images to GitHub, it does not deploy to any cluster.
 
 on:
+  pull_request:
+    paths:
+      - 'apps/web/**'
+      - 'apps/Agentweaver.*/**'
+      - 'packages/**'
+      - 'Directory.Build.props'
+      - '**/Dockerfile'
+      - '.github/workflows/publish-images.yml'
+      - 'scripts/azure/image-spec.mjs'
+      - 'scripts/ci/ghcr-plan.mjs'
   push:
     branches:
       - dev
       - main
       - 'release/v*'
+    tags:
+      - 'v*'
     paths-ignore:
       - 'docs/**'
       - 'specs/**'
       - '**/*.md'
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       push:
@@ -57,11 +64,11 @@ on:
 permissions:
   contents: read
 
-# Never let two runs for the same ref publish overlapping tags. Release runs
-# are never cancelled mid-flight.
+# Never let two runs for the same ref publish overlapping tags. Tag runs are
+# never cancelled mid-flight.
 concurrency:
   group: publish-images-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   plan:
@@ -84,8 +91,8 @@ jobs:
       - name: Resolve publishing channel and tags
         id: plan
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          RELEASE_PRERELEASE: 'false'
         run: node scripts/ci/ghcr-plan.mjs
 
       - name: Summarize plan
@@ -106,9 +113,8 @@ jobs:
   # never disagree about what feeds each image.
   #
   # Runs unconditionally so that `build` (which needs this job) is never
-  # skipped due to a skipped dependency. The filter step only runs on push;
-  # for release/workflow_dispatch the outputs are empty and the build step's
-  # own `if` handles those events without referencing these outputs.
+  # skipped due to a skipped dependency. The filter step runs on branch pushes
+  # and pull request events. It does not run on tag pushes.
   changes:
     name: Detect changed images
     runs-on: ubuntu-latest
@@ -119,11 +125,11 @@ jobs:
       agentweaver-agent-host: ${{ steps.filter.outputs.agentweaver-agent-host }}
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name == 'push'
+        if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request'
 
       - uses: dorny/paths-filter@v3
         id: filter
-        if: github.event_name == 'push'
+        if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request'
         with:
           filters: |
             agentweaver-api:
@@ -134,10 +140,18 @@ jobs:
               - 'nuget.config'
               - 'packages/**'
               - 'VERSION'
+              - '**/Dockerfile'
+              - '.github/workflows/publish-images.yml'
+              - 'scripts/azure/image-spec.mjs'
+              - 'scripts/ci/ghcr-plan.mjs'
               - 'apps/Agentweaver.Api/**'
               - 'apps/Agentweaver.Api.Data/**'
               - 'apps/Agentweaver.Api.Migrations.Postgres/**'
             agentweaver-frontend:
+              - '**/Dockerfile'
+              - '.github/workflows/publish-images.yml'
+              - 'scripts/azure/image-spec.mjs'
+              - 'scripts/ci/ghcr-plan.mjs'
               - 'apps/web/**'
               - 'apps/Agentweaver.Web/**'
             agentweaver-mcp:
@@ -148,6 +162,10 @@ jobs:
               - 'nuget.config'
               - 'packages/**'
               - 'VERSION'
+              - '**/Dockerfile'
+              - '.github/workflows/publish-images.yml'
+              - 'scripts/azure/image-spec.mjs'
+              - 'scripts/ci/ghcr-plan.mjs'
               - 'apps/Agentweaver.Mcp/**'
             agentweaver-agent-host:
               - 'agentweaver.sln'
@@ -157,6 +175,10 @@ jobs:
               - 'nuget.config'
               - 'packages/**'
               - 'VERSION'
+              - '**/Dockerfile'
+              - '.github/workflows/publish-images.yml'
+              - 'scripts/azure/image-spec.mjs'
+              - 'scripts/ci/ghcr-plan.mjs'
               - 'apps/Agentweaver.AgentHost/**'
 
   build:
@@ -164,11 +186,10 @@ jobs:
     needs: [plan, changes]
     # Always run the job so the matrix can expand; per-image path filtering
     # is enforced at the build step level (where matrix context is valid).
-    # `changes` is skipped for release/workflow_dispatch events, so we must
-    # not gate the job on it — only on whether a push event happened at all.
+    # Tag and workflow_dispatch events do not use changed-image outputs.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'release' ||
+      github.event_name == 'pull_request' ||
       github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -204,30 +225,21 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'workflow_dispatch' || inputs.push
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # A `release: published` event always fires against the exact commit
-      # that `npm run release:publish` just validated as HEAD of `main`
-      # (validateMainSha in scripts/azure/release-publish.mjs) — so its
-      # `sha-<short>` image was, in practice, already built and pushed by the
-      # `push`-to-`main` run moments earlier. Rebuilding from scratch here is
-      # pure waste: GitHub Actions' cache ACL only lets a run read caches from
-      # its own branch, a PR's base branch, or the default branch — a
-      # `refs/tags/vX.Y.Z` ref (what `release` events run on) does not
-      # inherit `main`'s cache, so without this fast path every release
-      # rebuilds cold (observed: ~45-60min on agentweaver-agent-host, whose
-      # build stage compiles `gh`/`buildctl` from source — see its
-      # Dockerfile). Retagging the already-published digest via `imagetools
-      # create` is a manifest-only operation (seconds, no cache needed) and
-      # produces a byte-identical image under the release's version tags.
+      # A `vX.Y.Z` tag push runs against the exact commit that
+      # `npm run release:publish` validated as HEAD of `main`. The `sha-<short>`
+      # image was normally built by the `push`-to-`main` run. Retagging the
+      # already-published digest with `imagetools create` is a manifest-only
+      # operation. It produces the same image under the release version tags.
       - name: Check for already-published sha image (release retag fast path)
         id: existing
-        if: github.event_name == 'release'
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           SHA_TAG=$(printf '%s\n' "${{ matrix.tags }}" | grep ':sha-' | head -n1)
@@ -243,7 +255,7 @@ jobs:
           fi
 
       - name: Retag already-published image for this release (skip rebuild)
-        if: github.event_name == 'release' && steps.existing.outputs.found == 'true'
+        if: startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true'
         run: |
           set -euo pipefail
           args=()
@@ -258,22 +270,21 @@ jobs:
       # The GitHub Actions layer cache keeps unchanged images (notably the
       # heavy agent-host) cheap on the runs where they do build.
       # `matrix` context is available in step-level `if` (not job-level), so
-      # the path-filter guard lives here: main/release/dispatch always build;
-      # dev/release-branch pushes only build images whose sources changed.
-      # Release events skip the build entirely when the retag fast path above
-      # already found and retagged the matching sha-<short> image.
+      # the path-filter guard lives here. Main, tag, and dispatch events build
+      # all images. Pull requests and non-main pushes build changed images.
       - name: Build and push ${{ matrix.name }}
         if: >-
-          (github.event_name != 'push' ||
+          (github.event_name == 'workflow_dispatch' ||
+           startsWith(github.ref, 'refs/tags/v') ||
            github.ref == 'refs/heads/main' ||
            needs.changes.outputs[matrix.name] == 'true') &&
-          !(github.event_name == 'release' && steps.existing.outputs.found == 'true')
+          !(startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true')
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push) }}
           tags: ${{ matrix.tags }}
           build-args: |
             IMAGE_TAG=${{ needs.plan.outputs.primary_tag }}

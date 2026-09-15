@@ -153,6 +153,9 @@ node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs s
 node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness
 npm --prefix scripts/ui-harness test
 
+# Web frontend typecheck
+npm --prefix apps/web run typecheck
+
 # Web frontend (Vitest)
 npm --prefix apps/web run test
 
@@ -184,7 +187,7 @@ purposes:
 |---|---|---|---|
 | Seven `.NET test shard (…)` jobs | Stable namespace shards plus isolated PostgreSQL/Testcontainers, process-global environment, and Kata runtime gates; every shard writes TRX results | Blocking — must pass | Every PR targeting `dev`, so all seven ruleset-required contexts are emitted even for metadata-only PRs |
 | `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
-| `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
+| `Web tests` | Web typecheck, tests, and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
 | `Documentation diagrams` | Generator tests and rendered-artifact stamp checks | Workflow validation | Diagram tooling/assets changed, as classified by `ci.yml` |
 | `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
@@ -220,8 +223,8 @@ toolchain's single source of truth) through
 - push to `dev` → `:sha-<short>` and `:dev`
 - push to `release/vX.Y.Z` → `:sha-<short>` and `:rc-X.Y.Z`
 - push to `main` → `:sha-<short>` and `:main`
-- a published GitHub Release → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
-  (`:latest` is skipped for prereleases)
+- pull request paths that can affect images → build only, no push
+- tag push `vX.Y.Z` → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
 - manual `workflow_dispatch` → `:sha-<short>` plus the selected ref's channel tag
   for `dev`, `main`, or `release/vX.Y.Z`; other refs receive only `:sha-<short>`.
   An optional build-only dry run skips the push
@@ -229,6 +232,8 @@ toolchain's single source of truth) through
 Every build publishes the immutable `sha-<short>` tag, so any image is addressable by
 the exact commit it was built from — the same identifier model
 `npm run azure:deploy-from-local` and `azure:deploy-from-commit` use.
+`npm run release:publish` pushes the tag first. It waits for `Publish images`
+to build the tag images before it creates the GitHub Release.
 
 ## Opening a pull request
 
