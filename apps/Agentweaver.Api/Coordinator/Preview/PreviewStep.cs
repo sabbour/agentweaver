@@ -165,9 +165,8 @@ public sealed class PreviewStep
             // 5. Start the supervised process (deterministic). Non-success exits best-effort stop
             //    the process, except approval timeout: that leaves the healthy process private and
             //    supervised so a fresh approval attempt can reuse it without duplicate execution.
-            //    The publication lease starts here: starting and observing the process takes most
-            //    of the 90-120 s window in which an agent that finishes its work would otherwise
-            //    cancel its own preview (#1315).
+            //    The publication lease starts here so process startup, observation, and the configured
+            //    Gateway-convergence window cannot be cancelled by the run finishing its agent work.
             leased = await TryLeaseAsync(runId, ct).ConfigureAwait(false);
             if (!leased)
             {
@@ -299,7 +298,8 @@ public sealed class PreviewStep
             // 8. Gateway registration via the emit-nothing helper — single-owner emission below.
             var registration = await SandboxEndpoints.TryRegisterPreviewAsync(
                 runId, port.Port, request.SubmittingUser, _previewService, ct,
-                previewRunnerSessionId: started.SessionId).ConfigureAwait(false);
+                previewRunnerSessionId: started.SessionId,
+                maintainPublicationLease: true).ConfigureAwait(false);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {

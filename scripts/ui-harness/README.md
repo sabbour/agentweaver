@@ -26,7 +26,12 @@ node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.stagi
 
 It navigates to the supplied base URL before checking or clicking Agentweaver's sign-in
 button. It never automates Microsoft Entra account selection, credentials, MFA, or
-consent. If Chrome is locked, it exits with a close-Chrome instruction rather than
+consent. After it clicks the Agentweaver sign-in button, it waits for the Chrome Default
+profile to replay its cached Entra SSO session and for the authenticated app to return.
+As a result, the command completes without a human when that cached session is current.
+If the session is not current, complete the Entra prompts in the displayed Chrome window,
+or run the command with `--manual` to use the Playwright Inspector and press Resume.
+If Chrome is locked, it exits with a close-Chrome instruction rather than
 opening an empty tab. Do not fall back to generic Playwright, direct CDP/DevTools,
 ad-hoc profile launches/copies, or manual browser automation. `--cdp` and `--cdp-url`
 are rejected; resolve the reported condition and rerun this command.

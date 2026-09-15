@@ -35,6 +35,7 @@ test("resolveChannel maps each branch topology stage to a channel", () => {
   assert.equal(resolveChannel({ eventName: "push", ref: "refs/heads/dev" }), "dev");
   assert.equal(resolveChannel({ eventName: "push", ref: "refs/heads/main" }), "main");
   assert.equal(resolveChannel({ eventName: "push", ref: "refs/heads/release/v1.2.3" }), "rc");
+  assert.equal(resolveChannel({ eventName: "push", ref: "refs/tags/v1.2.3" }), "release");
   assert.equal(resolveChannel({ eventName: "release", ref: "refs/tags/v1.2.3", releaseTag: "v1.2.3" }), "release");
   assert.equal(resolveChannel({ eventName: "push", ref: "refs/heads/copilot/thing" }), "commit");
   assert.equal(
@@ -75,6 +76,17 @@ test("published releases get semver tags plus latest", () => {
     "v1.2.3",
     "latest",
   ]);
+});
+
+test("tag pushes get semver tags plus latest", () => {
+  const plan = buildPlan({
+    owner: "sabbour",
+    eventName: "push",
+    ref: "refs/tags/v1.2.3",
+    sha: SHA,
+  });
+  assert.equal(plan.channel, "release");
+  assert.deepEqual(plan.tags, ["sha-abcdef1", "1.2.3", "v1.2.3", "latest"]);
 });
 
 test("prereleases never move latest", () => {

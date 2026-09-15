@@ -518,7 +518,12 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
     ),
   );
   if (lockResult.code !== 0) {
-    log.warn(`  could not lock provenance tag ${image}:${provTag} as read-only: ${lockResult.stderr}`);
+    const reason = firstLine(lockResult.stderr) || firstLine(lockResult.stdout) || `exit code ${lockResult.code}`;
+    if (lockResult.timedOut) {
+      log.warn(`  provenance tag ${image}:${provTag} lock timed out. Remote state is unknown. The deployment will continue: ${reason}`);
+    } else {
+      log.warn(`  could not lock provenance tag ${image}:${provTag} as read-only: ${reason}`);
+    }
   }
 
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${provTag} (commit ${resolvedCommit})`);

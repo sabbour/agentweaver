@@ -136,6 +136,12 @@ The build and import limits behave differently from each other. A timed-out
 state unknown. Inspect the target ACR tag/digest before deciding whether a
 manual retry is safe.
 
+Best-effort ACR hardening steps can also use a local timeout. The provenance
+tag lock is one of these steps. If its Azure CLI process times out, the
+deployment warns and continues. The registry can already have applied the
+lock. If not, the tag can stay writable. The warning tells you to verify the
+tag state.
+
 ACR *import* and retag operations are retried automatically (three attempts,
 exponential backoff with jitter) on transient transport or service failures,
 including connection resets, throttling, and timeouts. This is safe because

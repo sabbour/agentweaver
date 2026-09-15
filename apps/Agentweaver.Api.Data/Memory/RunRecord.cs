@@ -52,9 +52,10 @@ public sealed class RunRecord
 
     /// <summary>
     /// While set to a future instant, a preview publication is in flight for this run and every
-    /// terminal transition defers until the lease clears or expires (#1315). Publication takes
-    /// 90-120 s and commits sandbox.preview_ready only while the run row is still active, so an
-    /// agent that finished its work would otherwise cancel its own preview. Cleared on release.
+    /// terminal transition defers until the lease clears or expires (#1315). Publication can spend
+    /// the configured Gateway-convergence window before sandbox.preview_ready commits while the run
+    /// row is still active, so an agent that finished its work would otherwise cancel its own preview.
+    /// Cleared on release.
     /// </summary>
     public DateTimeOffset? PreviewPublicationLeaseUntil { get; set; }
 }

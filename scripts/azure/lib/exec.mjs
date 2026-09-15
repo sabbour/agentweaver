@@ -267,6 +267,10 @@ function normalizeTimeoutMs(timeoutMs) {
   return Math.floor(parsed);
 }
 
+function timeoutMessage(timeoutMs, displayLine) {
+  return `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`;
+}
+
 /**
  * Run a command with inherited stdio, streaming output directly to the
  * console. Use for long-running/interactive operations (builds, deploys).
@@ -275,7 +279,7 @@ function normalizeTimeoutMs(timeoutMs) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
  */
 export function run(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -313,15 +317,27 @@ export function run(cmd, args = [], opts = {}) {
         stdio: "inherit",
       });
     } catch (err) {
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: 127, stderr: redact(err.message) }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
     child.on("error", (err) => {
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: 127, stderr: redact(err.message) }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
     });
     child.on("close", (code, signal) => {
       if (code === 0) {
         finish(() => resolve({ code: 0 }));
+        return;
+      }
+      if (opts.allowFailure) {
+        finish(() => resolve({ code: code ?? 1, signal: signal ?? undefined }));
         return;
       }
       finish(() => reject(
@@ -338,10 +354,12 @@ export function run(cmd, args = [], opts = {}) {
         // Retry belongs in lib/retry.mjs, at call sites that know the
         // operation is idempotent.
         killProcessTree(child);
-        finish(() => reject(new ExecTimeoutError(
-          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
-          { command: displayLine },
-        )));
+        const stderr = timeoutMessage(timeoutMs, displayLine);
+        if (opts.allowFailure) {
+          finish(() => resolve({ code: 124, stderr, timedOut: true }));
+          return;
+        }
+        finish(() => reject(new ExecTimeoutError(stderr, { command: displayLine })));
       }, timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     }
@@ -357,7 +375,7 @@ export function run(cmd, args = [], opts = {}) {
  * @param {string} cmd
  * @param {string[]} args
  * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, input?: string|Buffer }} [opts]
- * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown }>}
+ * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown, timedOut?: boolean }>}
  */
 export function capture(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -394,6 +412,10 @@ export function capture(cmd, args = [], opts = {}) {
         stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (err) {
+      if (opts.allowFailure) {
+        finish(() => resolve({ stdout: "", stderr: redact(err.message), code: 127 }));
+        return;
+      }
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
@@ -454,10 +476,19 @@ export function capture(cmd, args = [], opts = {}) {
     if (timeoutMs) {
       timer = setTimeout(() => {
         killProcessTree(child);
-        finish(() => reject(new ExecTimeoutError(
-          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
-          { command: displayLine },
-        )));
+        const stderr = timeoutMessage(timeoutMs, displayLine);
+        if (opts.allowFailure) {
+          const trimmedStdout = opts.trim === false ? stdout : stdout.trim();
+          finish(() => resolve({
+            stdout: trimmedStdout,
+            stderr,
+            code: 124,
+            json: opts.json ? null : undefined,
+            timedOut: true,
+          }));
+          return;
+        }
+        finish(() => reject(new ExecTimeoutError(stderr, { command: displayLine })));
       }, timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     }
