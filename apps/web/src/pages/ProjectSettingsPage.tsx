@@ -721,7 +721,7 @@ export function ProjectSettingsPage() {
     if (!Number.isInteger(previewDnsConvergenceTimeout)
       || previewDnsConvergenceTimeout < 60
       || previewDnsConvergenceTimeout > 3600) {
-      setPreviewApprovalError('DNS convergence deadline must be a whole number between 60 and 3600 seconds.');
+      setPreviewApprovalError('Infrastructure convergence deadline must be a whole number between 60 and 3600 seconds.');
       setPreviewApprovalSuccess(false);
       return;
     }
@@ -1427,8 +1427,8 @@ export function ProjectSettingsPage() {
                     />
                   </Field>
                   <Field
-                    label="DNS convergence deadline (seconds)"
-                    hint="Whole number from 60 to 3600. Default 600 seconds (10 minutes); publication probes immediately and retries with bounded backoff."
+                    label="Infrastructure convergence deadline (seconds)"
+                    hint="Whole number from 60 to 3600. Default 600 seconds (10 minutes). This covers App Routing DNS and Gateway route programming."
                   >
                     <Input
                       type="number"
@@ -1437,7 +1437,7 @@ export function ProjectSettingsPage() {
                       step={1}
                       value={String(previewDnsConvergenceTimeout)}
                       onChange={(_, data) => setPreviewDnsConvergenceTimeout(Number(data.value))}
-                      aria-label="Preview DNS convergence deadline in seconds"
+                      aria-label="Preview infrastructure convergence deadline in seconds"
                     />
                   </Field>
                   <div className={styles.formActions}>

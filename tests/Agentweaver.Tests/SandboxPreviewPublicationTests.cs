@@ -99,6 +99,97 @@ public sealed class SandboxPreviewPublicationTests
     }
 
     [Fact]
+    public async Task Gateway503_DoesNotStartPublicationWindow()
+    {
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 5);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        h.ReadyEvents().Should().HaveCount(2);
+        calls.Should().Be(2, "Gateway 503 stays in the longer infrastructure convergence window");
+    }
+
+    [Fact]
+    public async Task Gateway503_BeyondPublicationWindowStillSucceedsInsideConvergenceWindow()
+    {
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            var call = Interlocked.Increment(ref calls);
+            if (call <= 2)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 10);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        h.ReadyEvents().Should().HaveCount(2);
+        calls.Should().Be(3, "Gateway 503 does not consume PublicationTimeoutSeconds");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task BackendStatus_StartsPublicationWindow(HttpStatusCode statusCode)
+    {
+        var clock = new PublicationClock();
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return Task.FromResult(new HttpResponseMessage(statusCode));
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 5, clock: clock);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(409);
+        h.ReadyEvents().Should().BeEmpty();
+        var failed = h.Streams.Get(h.Run.Id.ToString())!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed).Subject;
+        JsonSerializer.SerializeToNode(failed.Payload)!["message"]!.GetValue<string>()
+            .Should().Contain("publication phase", $"{(int)statusCode} proves the route reached a backend");
+    }
+
+    [Fact]
+    public async Task NxdomainThenGateway503Then200_Succeeds()
+    {
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            var call = Interlocked.Increment(ref calls);
+            if (call == 1)
+                throw new HttpRequestException(HttpRequestError.NameResolutionError);
+            if (call == 2)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 5);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        h.ReadyEvents().Should().HaveCount(2);
+        calls.Should().Be(3);
+    }
+
+    [Fact]
     public async Task DnsConvergenceWindow_AllowsNameResolutionBeyondPublicationWindow()
     {
         var calls = 0;
@@ -176,6 +267,31 @@ public sealed class SandboxPreviewPublicationTests
     }
 
     [Theory]
+    [InlineData("dns", "infrastructure convergence phase")]
+    [InlineData("503", "infrastructure convergence phase")]
+    [InlineData("404", "publication phase")]
+    public async Task PermanentPublicationFailure_NamesExpiredPhase(string failure, string phase)
+    {
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            if (failure == "dns")
+                throw new HttpRequestException(HttpRequestError.NameResolutionError);
+
+            return Task.FromResult(new HttpResponseMessage(
+                failure == "404" ? HttpStatusCode.NotFound : HttpStatusCode.ServiceUnavailable));
+        });
+        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 1);
+
+        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(409);
+        var failed = h.Streams.Get(h.Run.Id.ToString())!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed).Subject;
+        var message = JsonSerializer.SerializeToNode(failed.Payload)!["message"]!.GetValue<string>();
+        message.Should().Contain(phase);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CancellationDuringRequestOrRetry_RemovesPublication(bool stalledRequest)
@@ -230,6 +346,16 @@ public sealed class SandboxPreviewPublicationTests
         handler.Credentials.Should().BeNull();
         handler.ServerCertificateCustomValidationCallback.Should().BeNull();
         handler.ClientCertificates.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void PublicationClient_UsesAttemptCancellationTokenAsItsOnlyTimeout()
+    {
+        using var http = SandboxPreviewService.CreatePublicationClient();
+
+        http.Timeout.Should().Be(
+            Timeout.InfiniteTimeSpan,
+            because: "WaitForPublicationAsync links the publication budget into each request");
     }
 
     private sealed class Harness : IDisposable
