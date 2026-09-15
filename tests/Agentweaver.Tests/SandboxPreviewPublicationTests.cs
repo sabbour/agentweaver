@@ -139,6 +139,56 @@ public sealed class SandboxPreviewPublicationTests
         calls.Should().Be(3, "Gateway 503 does not consume PublicationTimeoutSeconds");
     }
 
+    [Fact]
+    public async Task GatewayConvergence_RenewsShortPublicationLease()
+    {
+        var runStore = new Agentweaver.Tests.Preview.PreviewPublicationLeaseRunStoreTests.LeaseRunStore();
+        var publication = new PreviewPublicationHandler(async (_, ct) =>
+        {
+            await Task.Delay(100, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var h = new Harness(
+            publication,
+            dnsConvergenceTimeoutSeconds: 600,
+            runStore: runStore,
+            publicationLeaseRenewalInterval: TimeSpan.FromMilliseconds(20));
+
+        var result = await h.StartServiceAsync(maintainPublicationLease: true)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.PreviewUrl.Should().StartWith("https://");
+        runStore.LeaseExpirations.Should().HaveCountGreaterThanOrEqualTo(2,
+            "an independent timer renews the short lease even while one HTTPS attempt is in flight");
+        runStore.LeaseExpirations.Should().BeInAscendingOrder();
+    }
+
+    [Fact]
+    public async Task PublicationLeaseRenewalRefused_AbortsAndRollsBack()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runStore = new Agentweaver.Tests.Preview.PreviewPublicationLeaseRunStoreTests.LeaseRunStore();
+        var publication = new PreviewPublicationHandler(async (_, ct) =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var h = new Harness(
+            publication,
+            runStore: runStore,
+            publicationLeaseRenewalInterval: TimeSpan.FromMilliseconds(20));
+
+        var start = h.StartServiceAsync(maintainPublicationLease: true);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        runStore.Terminal = true;
+
+        var act = async () => await start.WaitAsync(TimeSpan.FromSeconds(5));
+        await act.Should().ThrowAsync<PreviewPublicationRunEndedException>()
+            .WithMessage("*became terminal*");
+        h.AssertCleanedUp();
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
@@ -381,7 +431,9 @@ public sealed class SandboxPreviewPublicationTests
             PreviewPublicationHandler handler,
             int timeoutSeconds = 90,
             int dnsConvergenceTimeoutSeconds = 600,
-            TimeProvider? clock = null)
+            TimeProvider? clock = null,
+            IRunStore? runStore = null,
+            TimeSpan? publicationLeaseRenewalInterval = null)
         {
             var claim = SandboxClaimConventions.DeriveAgentHostClaimName(Run.Id.ToString());
             Kube.OnGet(
@@ -397,13 +449,25 @@ public sealed class SandboxPreviewPublicationTests
                 ZoneSuffix = "preview.example.test",
                 PublicationTimeoutSeconds = timeoutSeconds,
                 DnsConvergenceTimeoutSeconds = dnsConvergenceTimeoutSeconds,
-            }, NullLogger<SandboxPreviewService>.Instance, clock: clock, publicationClient: _http);
+            }, NullLogger<SandboxPreviewService>.Instance,
+                clock: clock,
+                publicationClient: _http,
+                runStore: runStore,
+                publicationLeaseRenewalInterval: publicationLeaseRenewalInterval);
             Streams.Create(Run.Id.ToString(), Run.SubmittingUser);
         }
 
         public Task<IResult> StartAsync(CancellationToken ct = default) =>
             SandboxEndpoints.StartPreviewForRunAsync(
                 Run.Id.ToString(), 4632, Run, _service, null!, Streams, NullLogger.Instance, ct, "retained-session");
+
+        public Task<PreviewSession> StartServiceAsync(
+            bool maintainPublicationLease = false, CancellationToken ct = default) =>
+            maintainPublicationLease
+                ? _service.StartRunBoundPreviewAsync(
+                    Run.Id.ToString(), 4632, Run.SubmittingUser, ct, "retained-session")
+                : _service.StartPreviewAsync(
+                    Run.Id.ToString(), 4632, Run.SubmittingUser, ct, "retained-session");
 
         public IEnumerable<string> ReadyEvents() =>
             Streams.Get(Run.Id.ToString())!.GetSnapshotSince(0).Events

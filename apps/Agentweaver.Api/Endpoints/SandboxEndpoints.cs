@@ -490,7 +490,8 @@ public static class SandboxEndpoints
         if (previewService.Enabled)
         {
             var registration = await TryRegisterPreviewAsync(
-                runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId);
+                runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId,
+                maintainPublicationLease: runStore is not null);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
@@ -669,7 +670,8 @@ public static class SandboxEndpoints
         string ownerUserId,
         ISandboxPreviewService previewService,
         CancellationToken ct,
-        string? previewRunnerSessionId = null)
+        string? previewRunnerSessionId = null,
+        bool maintainPublicationLease = false)
     {
         if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
                 targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
@@ -682,8 +684,11 @@ public static class SandboxEndpoints
 
         try
         {
-            var preview = await previewService.StartPreviewAsync(
-                runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+            var preview = maintainPublicationLease
+                ? await previewService.StartRunBoundPreviewAsync(
+                    runId, targetPort, ownerUserId, ct, previewRunnerSessionId)
+                : await previewService.StartPreviewAsync(
+                    runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
             return PreviewRegistrationResult.Ok(preview, previewRunnerSessionId);
         }
         catch (PortForwardLimitExceededException ex)
@@ -694,6 +699,11 @@ public static class SandboxEndpoints
         {
             return PreviewRegistrationResult.Error(
                 PreviewRegistrationStatus.Conflict, "publication_not_ready", ex.Message);
+        }
+        catch (PreviewPublicationRunEndedException ex)
+        {
+            return PreviewRegistrationResult.Error(
+                PreviewRegistrationStatus.Conflict, "run_terminal", ex.Message);
         }
         catch (InvalidOperationException ex)
         {

@@ -406,14 +406,27 @@ internal static async Task CancelRunWorkAsync(
     // is torn down. Without this, a tool call in-flight may try to write to a path already deleted.
     await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None);
 
+    // Explicit cancellation must interrupt publication rather than wait behind its renewable lease.
+    // Complete the stream first so the publication token is cancelled, then clear the durable lease
+    // so terminalization cannot outlive the request or leave a destroyed worktree on an active run.
+    streamStore.Complete(id);
+    try
+    {
+        await runStore.EndPreviewPublicationAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Best-effort preview publication lease release failed for cancelled run {RunId}", id);
+    }
+
     if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
     {
         try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
         catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
     }
 
-    await runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", ct);
-    streamStore.Complete(id);
+    await runStore.TrySetTerminalStatusAsync(
+        run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", CancellationToken.None);
 
     // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
     await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);

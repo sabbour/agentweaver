@@ -19,6 +19,7 @@ public sealed record PreviewSession(
     DateTimeOffset StartedAt);
 
 public sealed class PreviewPublicationException(string message) : InvalidOperationException(message);
+public sealed class PreviewPublicationRunEndedException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// Durable run-level preview lifecycle derived from unexpired HTTPRoutes.
@@ -65,6 +66,16 @@ public interface ISandboxPreviewService
     Task<PreviewSession> StartPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
         string? previewRunnerSessionId = null);
+
+    /// <summary>
+    /// Run-bound variant that keeps the caller's durable publication lease current while waiting
+    /// for Gateway convergence. Test doubles and non-run-bound implementations may use the default
+    /// behavior when they do not persist publication leases.
+    /// </summary>
+    Task<PreviewSession> StartRunBoundPreviewAsync(
+        string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+        string? previewRunnerSessionId = null) =>
+        StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
 
     /// <summary>
     /// Lists active previews for <paramref name="runId"/> from HTTPRoute annotations. Replica-safe.
@@ -155,6 +166,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private readonly HttpClient _publicationClient;
     private readonly IProjectStore? _projectStore;
     private readonly IRunStore? _runStore;
+    private readonly TimeSpan _publicationLeaseRenewalInterval;
 
     public SandboxPreviewService(
         IKubernetes? client,
@@ -167,7 +179,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         KubernetesSandboxOptions? kubernetesOptions = null,
         HttpClient? publicationClient = null,
         IProjectStore? projectStore = null,
-        IRunStore? runStore = null)
+        IRunStore? runStore = null,
+        TimeSpan? publicationLeaseRenewalInterval = null)
     {
         _client = client;
         _options = options;
@@ -180,6 +193,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         _publicationClient = publicationClient ?? PublicationClient;
         _projectStore = projectStore;
         _runStore = runStore;
+        _publicationLeaseRenewalInterval = publicationLeaseRenewalInterval
+            ?? PreviewPublicationLeaseRunStore.PublicationLeaseRenewalInterval;
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
@@ -188,9 +203,25 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     public int AllowedPortMax => _options.AllowedPortMax;
 
-    public async Task<PreviewSession> StartPreviewAsync(
+    public Task<PreviewSession> StartPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
-        string? previewRunnerSessionId = null)
+        string? previewRunnerSessionId = null) =>
+        StartPreviewCoreAsync(
+            runId, targetPort, ownerUserId, maintainPublicationLease: false, ct, previewRunnerSessionId);
+
+    public Task<PreviewSession> StartRunBoundPreviewAsync(
+        string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+        string? previewRunnerSessionId = null) =>
+        StartPreviewCoreAsync(
+            runId, targetPort, ownerUserId, maintainPublicationLease: true, ct, previewRunnerSessionId);
+
+    private async Task<PreviewSession> StartPreviewCoreAsync(
+        string runId,
+        int targetPort,
+        string ownerUserId,
+        bool maintainPublicationLease,
+        CancellationToken ct,
+        string? previewRunnerSessionId)
     {
         EnsureReady();
         if (targetPort is <= 0 or > 65535)
@@ -308,7 +339,9 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             // Retain the sandbox while DNS and Gateway configuration converge.
             await ApplyPreviewLifecycleStateAsync(
                 runId, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
-            await WaitForPublicationAsync(new Uri(previewUrl), previewSettings.GatewayConvergenceTimeoutSeconds, ct).ConfigureAwait(false);
+            await WaitForPublicationAsync(
+                runId, new Uri(previewUrl), previewSettings.GatewayConvergenceTimeoutSeconds,
+                maintainPublicationLease, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             published = true;
         }
@@ -333,7 +366,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     }
 
     private async Task WaitForPublicationAsync(
-        Uri previewUrl, int gatewayConvergenceTimeoutSeconds, CancellationToken ct)
+        string runId,
+        Uri previewUrl,
+        int gatewayConvergenceTimeoutSeconds,
+        bool maintainPublicationLease,
+        CancellationToken ct)
     {
         var publicationWindow = TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds);
         var gatewayConvergenceWindow = TimeSpan.FromSeconds(gatewayConvergenceTimeoutSeconds);
@@ -343,6 +380,19 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         var publicationStarted = 0L;
         var lastFailure = "no successful HTTPS response";
         var retryAttempt = 0;
+        var leaseRunId = maintainPublicationLease && _runStore is not null && RunId.TryParse(runId, out var parsedRunId)
+            ? parsedRunId
+            : (RunId?)null;
+        using var leaseRenewalStop = new CancellationTokenSource();
+        using var leaseRenewalFailed = new CancellationTokenSource();
+        Exception? leaseRenewalFailure = null;
+        var leaseRenewalRefused = false;
+        var leaseRenewal = leaseRunId is { } leasedRunId
+            ? MaintainPublicationLeaseAsync(leasedRunId)
+            : Task.CompletedTask;
+        using var publicationLifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            ct, leaseRenewalFailed.Token);
+        var publicationCt = publicationLifetime.Token;
 
         try
         {
@@ -360,8 +410,9 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                     ? new CancellationTokenSource(publicationWindow, _clock)
                     : null;
                 using var attemptDeadline = requestTimeout is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(ct, activeTimeout.Token)
-                    : CancellationTokenSource.CreateLinkedTokenSource(ct, activeTimeout.Token, requestTimeout.Token);
+                    ? CancellationTokenSource.CreateLinkedTokenSource(publicationCt, activeTimeout.Token)
+                    : CancellationTokenSource.CreateLinkedTokenSource(
+                        publicationCt, activeTimeout.Token, requestTimeout.Token);
                 var attemptStarted = _clock.GetTimestamp();
                 attemptDeadline.Token.ThrowIfCancellationRequested();
                 try
@@ -431,9 +482,24 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 }
 
                 var retryTimeout = publicationTimeout ?? gatewayConvergenceTimeout;
-                using var retryDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, retryTimeout.Token);
+                using var retryDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+                    publicationCt, retryTimeout.Token);
                 await Task.Delay(PublicationRetryDelay(retryAttempt++), _clock, retryDeadline.Token).ConfigureAwait(false);
             }
+        }
+        catch (OperationCanceledException) when (leaseRenewalFailed.IsCancellationRequested)
+        {
+            if (leaseRenewalFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    "Failed to renew the preview publication lease.", leaseRenewalFailure);
+            }
+            if (leaseRenewalRefused)
+            {
+                throw new PreviewPublicationRunEndedException(
+                    "The run became terminal before preview publication completed.");
+            }
+            throw;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested &&
             (gatewayConvergenceTimeout.IsCancellationRequested || publicationTimeout?.IsCancellationRequested == true))
@@ -449,6 +515,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
         finally
         {
+            leaseRenewalStop.Cancel();
+            await leaseRenewal.ConfigureAwait(false);
             publicationTimeout?.Dispose();
         }
 
@@ -459,6 +527,36 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
             publicationStarted = _clock.GetTimestamp();
             publicationTimeout = new CancellationTokenSource(publicationWindow, _clock);
+        }
+
+        async Task MaintainPublicationLeaseAsync(RunId leasedRunId)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(
+                        _publicationLeaseRenewalInterval, _clock, leaseRenewalStop.Token).ConfigureAwait(false);
+                    if (!await _runStore!.TryBeginPreviewPublicationAsync(
+                            leasedRunId,
+                            _clock.GetUtcNow() + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                            leaseRenewalStop.Token).ConfigureAwait(false))
+                    {
+                        leaseRenewalRefused = true;
+                        leaseRenewalFailed.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (leaseRenewalStop.IsCancellationRequested)
+            {
+                // Publication completed or was cancelled; stop renewing.
+            }
+            catch (Exception ex)
+            {
+                leaseRenewalFailure = ex;
+                leaseRenewalFailed.Cancel();
+            }
         }
     }
 

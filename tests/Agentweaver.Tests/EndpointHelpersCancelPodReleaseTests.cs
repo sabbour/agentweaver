@@ -113,6 +113,34 @@ public sealed class EndpointHelpersCancelPodReleaseTests
             "a null podLifecycle (not running in Kubernetes) must be a silent no-op, never an exception that could block cancellation");
     }
 
+    [Fact]
+    public async Task CancelRunWorkAsync_ActivePreviewPublication_ClearsLeaseBeforeTerminalizing()
+    {
+        var runId = RunId.New();
+        var run = MakeRun(runId);
+        var inner = new Agentweaver.Tests.Preview.PreviewPublicationLeaseRunStoreTests.LeaseRunStore();
+        var runStore = new PreviewPublicationLeaseRunStore(
+            inner, pollInterval: TimeSpan.FromMilliseconds(10));
+        await runStore.TryBeginPreviewPublicationAsync(runId, DateTimeOffset.UtcNow.AddHours(1));
+
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+
+        await EndpointHelpers.CancelRunWorkAsync(
+                run,
+                runStore,
+                streamStore,
+                new RunWorkflowRegistry(),
+                new NoOpWorktreeOperations(),
+                NullLogger.Instance,
+                new CancellationToken(canceled: true))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        inner.TerminalCalls.Should().Be(1,
+            "explicit cancellation clears the renewable lease before awaiting the terminal transition");
+        (await inner.GetPreviewPublicationLeaseAsync(runId)).Should().BeNull();
+    }
+
     /// <summary>Minimal <see cref="IRunStore"/> fake — only <see cref="TrySetTerminalStatusAsync"/> is
     /// exercised by <see cref="EndpointHelpers.CancelRunWorkAsync"/>; every other member throws.</summary>
     private sealed class NoOpRunStore : IRunStore

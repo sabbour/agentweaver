@@ -144,6 +144,35 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         subtask.RecoveryGuidance.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ObserveChild_CurrentPreviewPublicationLease_PastStallTtl_NotClassifiedAsStalled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await _runStore.TryBeginPreviewPublicationAsync(
+            RunId.Parse(childRunId), DateTimeOffset.UtcNow.AddSeconds(5));
+
+        const string coord = "obs-preview-publication-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        await Task.Delay(350, cts.Token);
+        await stream.AppendAsync(childRunId, new RunEvent(
+            0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), cts.Token);
+        await stream.CompleteAsync(childRunId, cts.Token);
+        await loop;
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
+            "a current durable publication lease proves the silent child is still doing live preview work");
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "preview convergence must not be false-positive stall-failed");
+    }
+
     // -----------------------------------------------------------------------
     // #317: completion-signal race — a child whose terminal event was already
     // durably recorded must NOT be declared agent_stall_timeout when the stall
