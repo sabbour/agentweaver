@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.32.5
+
+### Patch Changes
+
+- 09d4a29: `release:prepare` adds the `main` ancestry merge before it changes release files. Promotion PRs from `release/*` to `main` fail when that merge is missing.
+- 16c1575: Repair the container image build. The frontend image build runs `tsc` across test files, and a type error in a topology test blocked it. The MCP Dockerfile did not copy `packages/`, so its project reference to `Agentweaver.AspNetCore` was not in the build context.
+- cde38d0: Best-effort ACR timeout handling now warns and continues when the caller allows failure.
+  This prevents a hung Azure CLI provenance lock from stopping a deployment after the registry operation can already have completed.
+
 ## 0.32.4
 
 ### Patch Changes
