@@ -36,22 +36,25 @@ admits Gateway pods, not a hostname; port 8088 also has separate control allows.
 
 ## Publication lease
 
-Publication takes 90-120 s and its terminal `sandbox.preview_ready` batch commits only while the
-run row is still active. Without a lease, an agent that finished its work inside that window
-cancelled its own preview: the run's completion token tore down the publication, and the preview
-process stopped with reason `preview_not_published`.
+Publication can spend the configured Gateway-convergence window before its terminal
+`sandbox.preview_ready` batch commits while the run row is still active. Without a lease, an agent
+that finished its work inside that window cancelled its own preview: the run's completion token
+tore down the publication, and the preview process stopped with reason `preview_not_published`.
 
 Every publication path therefore claims a run-level lease before its slow work
 (`IRunStore.TryBeginPreviewPublicationAsync`). The lease is a column on the run row, so it is
 visible to all API replicas. While it is held, `PreviewPublicationLeaseRunStore` defers every
 transition that can make the run terminal, and `preview_ready` keeps its ordering before the
-terminal event. A refused lease means the run is already terminal, and publication aborts with the
-same conflict it reported before.
+terminal event. While DNS and Gateway programming converge, the publication loop renews the short
+lease and the coordinator treats a current lease as durable evidence that the otherwise-silent child
+is still doing live work. A refused renewal means the run is already terminal, and publication
+aborts with the same conflict it reported before.
 
-The wait is bounded twice. The lease carries its own expiry, so a replica that crashes
-mid-publication cannot park a run. A separate deferral cap releases a waiting transition even if a
-lease is renewed. `PreviewStep` also releases the lease around the preview approval wait, so a run
-is never held open while an operator decides.
+Each lease extension is only three minutes, so a replica that crashes mid-publication stops renewing
+and cannot park a run for the full convergence budget. Explicit cancellation completes the run
+stream and clears the lease before terminalizing, so it interrupts publication rather than waiting
+for convergence. `PreviewStep` also releases the lease around the preview approval wait, so a run is
+never held open while an operator decides.
 
 `PreviewPublicationLeaseRunStore` deliberately wraps `RunActiveClaimGuardedRunStore` from the
 outside. That store's per-run claim is also taken by the conditional `preview_ready` append, so

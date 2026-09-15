@@ -2049,6 +2049,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     continue;
                 }
 
+                // Preview publication can legitimately remain silent while App Routing DNS and the
+                // Gateway converge. The publication path renews this short durable lease while it is
+                // actively polling; a current lease is therefore proof of live work across replicas.
+                // If the publisher crashes, renewal stops and the lease expires quickly, restoring
+                // ordinary stall detection without extending the TTL for unrelated child work.
+                var publicationLease = RunId.TryParse(childRunId, out var leaseRunId)
+                    ? await _runStore.GetPreviewPublicationLeaseAsync(leaseRunId, ct).ConfigureAwait(false)
+                    : null;
+                if (publicationLease > DateTimeOffset.UtcNow)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed during active preview publication (lease until {LeaseUntil}) — " +
+                        "treating as live work, not stalled",
+                        childRunId, subtaskId, _stallTimeout, publicationLease);
+                    continue;
+                }
+
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +

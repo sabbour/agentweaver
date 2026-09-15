@@ -7,17 +7,17 @@ using Xunit;
 namespace Agentweaver.Tests.Preview;
 
 /// <summary>
-/// Covers the preview-publication lease (#1315). Publishing a preview takes 90-120 s and its final
-/// <c>preview_ready</c> batch commits only while the run row is still active. An agent that finishes
-/// inside that window used to cancel its own preview. The lease keeps the run active for the
-/// publication instead, and every terminal transition defers until the lease clears.
+/// Covers the preview-publication lease (#1315). Publishing can spend the configured Gateway
+/// convergence window before its final <c>preview_ready</c> batch commits while the run is active.
+/// The renewable lease keeps the run active for publication, and every terminal transition defers
+/// until the lease clears.
 /// </summary>
 public class PreviewPublicationLeaseRunStoreTests
 {
     private static readonly RunId Run = RunId.New();
 
     private static PreviewPublicationLeaseRunStore Decorate(LeaseRunStore inner) =>
-        new(inner, maxDeferral: TimeSpan.FromSeconds(5), pollInterval: TimeSpan.FromMilliseconds(10));
+        new(inner, pollInterval: TimeSpan.FromMilliseconds(10));
 
     [Fact]
     public async Task TerminalTransition_WaitsUntilPublicationReleasesTheLease()
@@ -50,22 +50,6 @@ public class PreviewPublicationLeaseRunStoreTests
 
         // A replica that crashes mid-publication never releases the lease. Expiry is the backstop.
         await store.TryBeginPreviewPublicationAsync(Run, DateTimeOffset.UtcNow.AddMilliseconds(300));
-
-        await store.TrySetTerminalStatusAsync(Run, RunStatus.Completed, DateTimeOffset.UtcNow, "done")
-            .WaitAsync(TimeSpan.FromSeconds(5));
-
-        inner.TerminalCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task TerminalTransition_GivesUpAtTheDeferralCap()
-    {
-        var inner = new LeaseRunStore();
-        var store = new PreviewPublicationLeaseRunStore(
-            inner, maxDeferral: TimeSpan.FromMilliseconds(300), pollInterval: TimeSpan.FromMilliseconds(10));
-
-        // A lease far longer than the cap must not park the run forever.
-        await store.TryBeginPreviewPublicationAsync(Run, DateTimeOffset.UtcNow.AddHours(1));
 
         await store.TrySetTerminalStatusAsync(Run, RunStatus.Completed, DateTimeOffset.UtcNow, "done")
             .WaitAsync(TimeSpan.FromSeconds(5));
@@ -116,15 +100,17 @@ public class PreviewPublicationLeaseRunStoreTests
     {
         private DateTimeOffset? _leaseUntil;
 
-        public bool Terminal;
+        public volatile bool Terminal;
         public int TerminalCalls;
         public int StatusCalls;
+        public List<DateTimeOffset> LeaseExpirations { get; } = [];
 
         public Task<bool> TryBeginPreviewPublicationAsync(RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default)
         {
             if (Terminal)
                 return Task.FromResult(false);
             _leaseUntil = leaseUntil;
+            LeaseExpirations.Add(leaseUntil);
             return Task.FromResult(true);
         }
 
