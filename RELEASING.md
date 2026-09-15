@@ -51,7 +51,11 @@ from its exact matching section; do not run another changelog generator.
 ## Preparing a release
 
 1. Select a green `dev` SHA and run `npm run changeset:status` plus
-   `npm run release:plan`.
+   `npm run release:plan`. The planner queries published semver tags from
+   `origin` and stops if `dev` does not contain the previous release preparation
+   forward-port. Never bypass that guard: create a short-lived branch from
+   current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
+   merge that PR, and plan again.
 2. Create `release/vX.Y.Z` from that SHA and soak it.
 3. On the clean release branch run:
 

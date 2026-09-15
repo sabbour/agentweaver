@@ -2,18 +2,45 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertVersionMirrors,
+  compareSemver,
   extractChangelogSection,
   hasChangesetExemption,
   isReleaseMetadataOnly,
   isReleaseRelevant,
+  latestPublishedVersion,
   parseChangesetFragment,
   releaseBranchVersion,
   synchronizePackageLockVersion,
+  validatePublishedReleaseState,
   validateReleasePreparation,
   validateReleasePreparationFiles,
   validateSyncBranch,
   getUnexpectedIgnoredFiles,
 } from "../shared.mjs";
+
+test("published release state requires dev forward-port before another release", () => {
+  const refs = [
+    "1111111111111111111111111111111111111111\trefs/tags/v0.32.4",
+    "2222222222222222222222222222222222222222\trefs/tags/v0.9.70",
+    "3333333333333333333333333333333333333333\trefs/tags/not-a-release",
+    "4444444444444444444444444444444444444444\trefs/tags/v0.32.5",
+  ].join("\n");
+
+  assert.equal(compareSemver("0.9.70", "0.32.5"), -1);
+  assert.equal(compareSemver("0.32.5", "0.32.5"), 0);
+  assert.equal(compareSemver("1.0.0", "0.32.5"), 1);
+  assert.equal(latestPublishedVersion(refs), "0.32.5");
+  assert.equal(latestPublishedVersion(""), undefined);
+  assert.throws(
+    () => validatePublishedReleaseState("0.32.4", "0.32.5", "0.32.5"),
+    /missing the previous release preparation forward-port/,
+  );
+  assert.throws(
+    () => validatePublishedReleaseState("0.32.5", "0.32.5", "0.32.5"),
+    /not newer than published/,
+  );
+  assert.doesNotThrow(() => validatePublishedReleaseState("0.32.5", "0.32.6", "0.32.5"));
+});
 
 test("version mirrors require VERSION, package.json, and lockfile to match", () => {
   const files = new Map([

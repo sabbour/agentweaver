@@ -57,6 +57,52 @@ export function assertVersionMirrors(repoRoot, options) {
   return mirrors.version;
 }
 
+export function compareSemver(left, right) {
+  if (!SEMVER.test(left ?? "") || !SEMVER.test(right ?? "")) {
+    throw new Error(`Cannot compare invalid semver values: '${left ?? "missing"}' and '${right ?? "missing"}'`);
+  }
+
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] < rightParts[index] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+export function latestPublishedVersion(refs) {
+  const versions = refs
+    .split(/\r?\n/)
+    .map((line) => /refs\/tags\/v(\d+\.\d+\.\d+)$/.exec(line.trim())?.[1])
+    .filter(Boolean);
+
+  return versions.sort(compareSemver).at(-1);
+}
+
+export function validatePublishedReleaseState(currentVersion, plannedVersion, publishedVersion) {
+  if (!publishedVersion) {
+    return;
+  }
+
+  if (compareSemver(currentVersion, publishedVersion) < 0) {
+    throw new Error(
+      `Published v${publishedVersion} is newer than repository version ${currentVersion}. `
+      + "dev is missing the previous release preparation forward-port. "
+      + "Create a short-lived branch from current dev and run "
+      + "`npm run release:sync-dev -- <release-preparation-sha>` before planning another release.",
+    );
+  }
+
+  if (plannedVersion && compareSemver(plannedVersion, publishedVersion) <= 0) {
+    throw new Error(
+      `Planned v${plannedVersion} is not newer than published v${publishedVersion}. `
+      + "Do not reuse or overwrite a release tag; reconcile dev with the previous release preparation first.",
+    );
+  }
+}
+
 export function synchronizePackageLockVersion(
   repoRoot,
   version,
