@@ -74,6 +74,28 @@ from its exact matching section; do not run another changelog generator.
    docs assets added directly on `main`), then push the release branch.
 6. Promote the prepared branch to `main` through a green PR, merged with
    **"Rebase and merge"** (not squash — see note below).
+7. Reconcile the milestones against what the release actually consumed. Merge order
+   decides the real contents, so a milestone set before the cut can name the wrong
+   release. `release:prepare` consumes the changeset fragments it shipped. Map each
+   consumed fragment back to the pull request that added it:
+
+   ```bash
+   git log origin/dev --oneline --diff-filter=A -- ".changeset/<fragment>.md"
+   ```
+
+   Put every pull request that appears in that list on this release's milestone. Move
+   every pull request that does not appear to the next milestone.
+
+8. Create the next milestone (`vX.Y.Z+1`) and close the milestone for the release
+   you just published. Move any unshipped work to the new milestone:
+
+   ```bash
+   gh api repos/<owner>/<repo>/milestones -f title="vX.Y.Z+1" -f state=open
+   gh api repos/<owner>/<repo>/milestones/<number> -X PATCH -f state=closed
+   ```
+
+   See [CONTRIBUTING.md → Target release
+   milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
 
 > **Promotion history is not release identity.** The operating recommendation above
 > uses "Rebase and merge," but rebasing rewrites commits; it does not preserve the

@@ -244,6 +244,44 @@ the exact commit it was built from — the same identifier model
   rerun relevant tests/CI, and merge only after all required checks are green
   on the updated branch.
 
+### Target release milestone
+
+Set a GitHub **milestone** on every pull request and on every issue you plan to fix.
+The milestone names the release that will carry the work, such as `v0.32.4`. Use the
+next unreleased patch version. If you do not know the target version, use the open
+milestone with the lowest version number.
+
+```bash
+gh pr edit <number> --milestone "v0.32.4"
+gh issue edit <number> --milestone "v0.32.4"
+```
+
+The milestone answers two questions that the changelog cannot answer on its own:
+what a given release contains before it ships, and which release carried a given
+fix after it ships. Use it to report status:
+
+```bash
+gh pr list --search "milestone:v0.32.4"          # what is planned or shipped
+gh issue list --milestone "v0.32.4" --state all  # what this release repairs
+```
+
+A milestone is a **target, not a guarantee**. Merge order decides the real contents.
+A PR that misses the release cut ships in the next release, even when the milestone
+still names the earlier one. The release manager reconciles the milestones against
+the changesets the release actually consumed. See [RELEASING.md → Preparing a
+release](RELEASING.md#preparing-a-release). Set your best estimate and let that
+reconciliation correct it.
+
+Rules:
+
+- The release manager creates the next milestone when a release is cut, and closes
+  the milestone after the release publishes.
+- Move work that slips to the next milestone. Do not leave it on a closed one.
+- A milestone records the **target release**. The `release:blocking` and
+  `release:backlog` labels record **triage intent**. The two are complementary.
+  Do not use the legacy `release:v0.x` version labels for this. They stop at
+  `v0.10` and are not maintained.
+
 ### Contributing from a fork
 
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
@@ -266,6 +304,11 @@ scope. `sync-squad-labels.yml` reads that manifest for static labels and generat
 member labels from the roster. The legacy `bug`, `enhancement`, and `workstream:*` labels
 are deprecated in favor of `type:bug`, `type:feature`, and the smaller `area:*` vocabulary;
 existing issues are not being mass-relabelled.
+
+The legacy `release:v0.x` version labels are also deprecated. They stop at `v0.10` and do
+not track patch releases. Use a [target release milestone](#target-release-milestone)
+instead. Keep `release:blocking` and `release:backlog`, which record triage intent rather
+than a target version.
 
 ## Commit messages
 
@@ -385,7 +428,9 @@ mechanically blocks a spec-less feature PR. Reviewers are responsible for catchi
    one-liner (typo, broken link, obviously-wrong constant) — anything with behavioral
    nuance or a risk of regression gets an issue.
 2. **Reference the issue in the commit/PR** with `Closes #N` (see [Commit
-   messages](#commit-messages)) so it auto-closes on merge.
+   messages](#commit-messages)) so it auto-closes on merge. Set the **target release
+   milestone** on both the issue and the PR (see [Target release
+   milestone](#target-release-milestone)).
 3. **Include a regression test** that fails before the fix and passes after, whenever the
    bug is in code with a test suite — this is the existing "[add or update tests for any
    behavior change](#making-a-change)" rule applied to fixes, and it is what QA
