@@ -34,7 +34,7 @@ import * as log from "../lib/log.mjs";
 import * as execDefault from "../lib/exec.mjs";
 import * as gitDefault from "../lib/git.mjs";
 import * as kubectlDefault from "../lib/kubectl.mjs";
-import { manifestDigestForTag } from "../lib/acr-manifest.mjs";
+import { createAcrManifestClient, manifestDigestForTag } from "../lib/acr-manifest.mjs";
 import { githubReleaseExists, resolveGitHubRepository } from "../lib/github.mjs";
 import { IMAGES, buildArgsFor } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
@@ -186,13 +186,13 @@ function buildAcrTagDigestPollDelays() {
  * load, ACR's metadata read path has lagged the successful write by minutes in
  * production, so a short 10s loop causes false "unstamped image" deploy failures.
  */
-export async function waitForAcrTagDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
-  const initialDigest = await acrDigestForTag(image, tag, cfg, { exec });
+export async function waitForAcrTagDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep, manifestClient } = {}) {
+  const initialDigest = await acrDigestForTag(image, tag, cfg, { exec, manifestClient });
   if (initialDigest) return initialDigest;
 
   for (const delay of ACR_TAG_DIGEST_POLL_DELAYS_MS) {
     await sleep(delay);
-    const digest = await acrDigestForTag(image, tag, cfg, { exec });
+    const digest = await acrDigestForTag(image, tag, cfg, { exec, manifestClient });
     if (digest) return digest;
   }
   return null;
@@ -203,10 +203,11 @@ function defaultSleep(ms) {
 }
 
 /** Looks up the manifest digest a single ACR tag currently resolves to, or null. */
-export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = {}) {
+export async function acrDigestForTag(image, tag, cfg, { exec = execDefault, manifestClient } = {}) {
   return manifestDigestForTag(cfg.ACR_NAME, image, tag, {
     exec,
     timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS,
+    manifestClient,
   });
 }
 
@@ -411,7 +412,13 @@ export async function waitForAcrRepositoryDigest(image, tag, cfg, { exec = execD
  * mirroring stamp_provenance()/Invoke-StampProvenance()'s "refusing to ship
  * unstamped image" behavior.
  */
-export async function stampProvenance(image, tag, commit, cfg, { exec = execDefault, git = gitDefault } = {}) {
+export async function stampProvenance(
+  image,
+  tag,
+  commit,
+  cfg,
+  { exec = execDefault, git = gitDefault, manifestClient } = {},
+) {
   if (!commit) {
     throw new Error(`no resolvable commit for ${image}:${tag}; refusing to ship unstamped image`);
   }
@@ -429,7 +436,7 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
 
   const sourceDigest = await log.withTiming(
     `Waiting for ACR digest ${image}:${tag}`,
-    () => waitForAcrTagDigest(image, tag, cfg, { exec }),
+    () => waitForAcrTagDigest(image, tag, cfg, { exec, manifestClient }),
   );
   if (!sourceDigest) {
     throw new Error(`source image ${image}:${tag} never resolved to a digest in ACR; refusing to stamp unverifiable provenance`);
@@ -442,7 +449,7 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
   // because the tag is locked read-only below on first stamp -- without
   // this early-out, a legitimate re-run would hit `az acr import --force`
   // against an already-locked tag and fail.
-  const existingProvDigest = await acrDigestForTag(image, provTag, cfg, { exec });
+  const existingProvDigest = await acrDigestForTag(image, provTag, cfg, { exec, manifestClient });
   if (existingProvDigest === sourceDigest) {
     log.skip(`${image}:${provTag} already stamped and locked at the expected digest`);
     return { image, tag: provTag, commit: resolvedCommit };
@@ -468,7 +475,7 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
 
   const stampedDigest = await log.withTiming(
     `Waiting for ACR digest ${image}:${provTag}`,
-    () => waitForAcrTagDigest(image, provTag, cfg, { exec }),
+    () => waitForAcrTagDigest(image, provTag, cfg, { exec, manifestClient }),
   );
   if (!stampedDigest) {
     throw new Error(`provenance tag ${image}:${provTag} did not appear in ACR after import; refusing to ship unstamped image`);
@@ -981,7 +988,13 @@ export async function importImagesFromCustomSources(cfg, deps = {}) {
  * --build-arg -- the fix called out in the decision log), then retags it as
  * 'latest-release' and stamps provenance. Mirrors build_image()/Invoke-BuildImage().
  */
-export async function buildImage(imageSpec, tag, commit, cfg, { exec = execDefault, git = gitDefault } = {}) {
+export async function buildImage(
+  imageSpec,
+  tag,
+  commit,
+  cfg,
+  { exec = execDefault, git = gitDefault, manifestClient } = {},
+) {
   const { name: image, dockerfile } = imageSpec;
   log.info(`--- Building ${image}:${tag} (${dockerfile}) ---`);
 
@@ -989,7 +1002,7 @@ export async function buildImage(imageSpec, tag, commit, cfg, { exec = execDefau
 
   if (exec.isDryRun()) {
     log.info(`  [dry-run] Would run az acr build for ${image}:${tag}`);
-    await stampProvenance(image, tag, commit, cfg, { exec, git });
+    await stampProvenance(image, tag, commit, cfg, { exec, git, manifestClient });
     return;
   }
 
@@ -1016,7 +1029,7 @@ export async function buildImage(imageSpec, tag, commit, cfg, { exec = execDefau
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${tag}`);
   // Also tag as latest-release so it always points at the most recently built version.
   await retagImage(image, tag, "latest-release", cfg, { exec });
-  await stampProvenance(image, tag, commit, cfg, { exec, git });
+  await stampProvenance(image, tag, commit, cfg, { exec, git, manifestClient });
 }
 
 const FRONTEND_WATCHED_PATHS = Object.freeze(["apps/web", "apps/Agentweaver.Web"]);
@@ -1133,16 +1146,16 @@ export async function planImage(imageSpec, targetCommit, cfg, { git = gitDefault
 
 /** Executes a single image's plan (build, or retag+provenance-restamp). */
 async function executePlan(plan, targetCommit, cfg, deps) {
-  const { exec = execDefault, git = gitDefault } = deps;
+  const { exec = execDefault, git = gitDefault, manifestClient } = deps;
   const image = plan.image.name;
   return log.withTiming(`${plan.action === "build" ? "Image build lifecycle" : "Image retag lifecycle"} ${image}:${plan.targetTag}`, async () => {
     if (plan.action === "build") {
       log.info(`  [build]  ${image} (${plan.reason})`);
-      await buildImage(plan.image, plan.targetTag, targetCommit, cfg, { exec, git });
+      await buildImage(plan.image, plan.targetTag, targetCommit, cfg, { exec, git, manifestClient });
     } else {
       log.info(`  [retag]  ${image} (${plan.reason})`);
       await retagImage(image, plan.sourceTag, plan.targetTag, cfg, { exec });
-      await stampProvenance(image, plan.targetTag, plan.sourceCommit, cfg, { exec, git });
+      await stampProvenance(image, plan.targetTag, plan.sourceCommit, cfg, { exec, git, manifestClient });
     }
     return { image, tag: plan.targetTag };
   });
@@ -1164,6 +1177,7 @@ export async function runAcrBuild(cfg, deps = {}) {
   const kubectl = deps.kubectl ?? kubectlDefault;
   const repoRoot = cfg.repoRoot ?? DEFAULT_REPO_ROOT;
   const resolvedCfg = { ...cfg, repoRoot };
+  const manifestClient = createAcrManifestClient(resolvedCfg.ACR_NAME, { exec });
 
   log.section("Building, retagging, and pushing Agentweaver images");
   log.field("ACR", resolvedCfg.ACR_LOGIN_SERVER);
@@ -1192,7 +1206,7 @@ export async function runAcrBuild(cfg, deps = {}) {
   }
   try {
     const results = await Promise.allSettled(
-      plans.map((plan) => executePlan(plan, targetCommit, resolvedCfg, { exec, git })),
+      plans.map((plan) => executePlan(plan, targetCommit, resolvedCfg, { exec, git, manifestClient })),
     );
 
     const failures = [];
@@ -1222,7 +1236,16 @@ export async function runAcrBuild(cfg, deps = {}) {
     log.field(imageSpec.name, `${resolvedCfg.ACR_LOGIN_SERVER}/${imageSpec.name}:${resolvedCfg[imageSpec.tagField]}`);
   }
 
-  return { targetCommit, plans };
+  return {
+    targetCommit,
+    plans,
+    provenanceCommits: Object.fromEntries(
+      plans.map((plan) => [
+        plan.image.name,
+        plan.action === "retag" ? plan.sourceCommit : targetCommit,
+      ]),
+    ),
+  };
 }
 
 export async function run(cfg, deps = {}) {

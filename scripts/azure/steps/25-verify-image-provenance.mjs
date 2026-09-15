@@ -22,7 +22,7 @@ import * as log from "../lib/log.mjs";
 import * as execDefault from "../lib/exec.mjs";
 import * as gitDefault from "../lib/git.mjs";
 import * as kubectlDefault from "../lib/kubectl.mjs";
-import { manifestDigestForTag } from "../lib/acr-manifest.mjs";
+import { createAcrManifestClient, manifestDigestForTag } from "../lib/acr-manifest.mjs";
 import { IMAGES } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
@@ -198,8 +198,21 @@ export async function verifyImage(label, image, paths, verifyCommit, cfg, deps =
     };
   }
 
-  const provenanceTag = `prov-${verifyCommit}`;
-  const provenanceDigest = await manifestDigestForTag(cfg.ACR_NAME, image, provenanceTag, { exec });
+  const provenanceCommit = cfg.PROVENANCE_COMMITS?.[image] ?? verifyCommit;
+  if (provenanceCommit !== verifyCommit) {
+    const unchanged = await git.diffIsQuiet(provenanceCommit, verifyCommit, paths, { cwd: cfg.repoRoot });
+    if (!unchanged) {
+      return {
+        status: "fail",
+        message: `${label}: provenance tag records ${provenanceCommit.slice(0, 12)}, but watched paths changed by ${verifyCommit.slice(0, 12)} -- STALE IMAGE`,
+      };
+    }
+  }
+  const provenanceTag = `prov-${provenanceCommit}`;
+  const provenanceDigest = await manifestDigestForTag(cfg.ACR_NAME, image, provenanceTag, {
+    exec,
+    manifestClient: deps.manifestClient,
+  });
   if (!provenanceDigest) {
     return {
       status: "fail",
@@ -244,6 +257,7 @@ export async function run(cfg, deps = {}) {
   const kubectl = deps.kubectl ?? kubectlDefault;
   const repoRoot = cfg.repoRoot ?? DEFAULT_REPO_ROOT;
   const resolvedCfg = { ...cfg, repoRoot };
+  const manifestClient = createAcrManifestClient(resolvedCfg.ACR_NAME, { exec });
 
   const verifyGitRef = resolvedCfg.VERIFY_GIT_REF || "HEAD";
   const verifyCommit = await git.revParseCommit(verifyGitRef, { cwd: repoRoot });
@@ -264,6 +278,7 @@ export async function run(cfg, deps = {}) {
       exec,
       git,
       kubectl,
+      manifestClient,
     });
     results.push({ image: imageSpec.name, ...result });
     if (result.status === "ok") {

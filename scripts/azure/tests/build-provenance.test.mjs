@@ -31,6 +31,7 @@ import {
   verifyImage,
   run as runProvenance,
 } from "../steps/25-verify-image-provenance.mjs";
+import { createAcrManifestClient } from "../lib/acr-manifest.mjs";
 import { getImage } from "../image-spec.mjs";
 
 const CFG = Object.freeze({
@@ -365,6 +366,44 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
       "tsv",
     ],
   );
+});
+
+test("ACR manifest client reuses one login and one repository token for exact HEAD lookups", async () => {
+  const digest = "sha256:" + "c".repeat(64);
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      assert.deepEqual(args.slice(0, 3), ["acr", "login", "--name"]);
+      return {
+        stdout: JSON.stringify({
+          accessToken: "refresh-token",
+          loginServer: CFG.ACR_LOGIN_SERVER,
+        }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (String(url).includes("/oauth2/token")) {
+      return { ok: true, status: 200, json: async () => ({ token: "repository-token" }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => name.toLowerCase() === "docker-content-digest" ? digest : null },
+    };
+  };
+  const client = createAcrManifestClient(CFG.ACR_NAME, { exec, fetchImpl });
+
+  assert.equal(await client.digestForTag("agentweaver-api", "first"), digest);
+  assert.equal(await client.digestForTag("agentweaver-api", "second"), digest);
+  assert.equal(exec.calls.capture.length, 1);
+  assert.equal(requests.filter((request) => request.url.includes("/oauth2/token")).length, 1);
+  const manifestRequests = requests.filter((request) => request.options.method === "HEAD");
+  assert.equal(manifestRequests.length, 2);
+  assert.match(manifestRequests[0].options.headers.Authorization, /^Bearer /);
 });
 
 test("acrRepositoryDigestForImage: returns absent when the image tag does not exist", async () => {
@@ -1255,6 +1294,70 @@ test("verifyImage: OK result when the deterministic provenance tag matches the l
       if (args.includes("show-metadata")) return { stdout: digest, stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
+  });
+
+  test("verifyImage: unchanged retag verifies the source provenance commit against the target commit", async () => {
+    const digest = "sha256:" + "6".repeat(64);
+    const sourceCommit = "1".repeat(40);
+    const targetCommit = "2".repeat(40);
+    const kubectl = {
+      desiredDeploymentReplicas: async () => "1",
+      podStatusForSelector: async () => [
+        { name: "p1", phase: "Running", ready: "true", imageRef: "img:new", imageId: `img@${digest}` },
+      ],
+    };
+    const comparisons = [];
+    const git = {
+      diffIsQuiet: async (from, to, paths) => {
+        comparisons.push({ from, to, paths });
+        return true;
+      },
+    };
+    const exec = fakeExec({
+      captureImpl: async (_cmd, args) => args.includes("show-metadata")
+        ? { stdout: digest, stderr: "", code: 0 }
+        : { stdout: "", stderr: "", code: 0 },
+    });
+    const result = await verifyImage(
+      "api",
+      "agentweaver-api",
+      getImage("agentweaver-api").watchedPaths,
+      targetCommit,
+      { ...CFG, PROVENANCE_COMMITS: { "agentweaver-api": sourceCommit } },
+      { exec, git, kubectl },
+    );
+
+    assert.equal(result.status, "ok");
+    assert.equal(comparisons.length, 1);
+    assert.equal(comparisons[0].from, sourceCommit);
+    assert.equal(comparisons[0].to, targetCommit);
+    assert.equal(
+      exec.calls.capture[0].args[exec.calls.capture[0].args.indexOf("--name") + 1],
+      `agentweaver-api:prov-${sourceCommit}`,
+    );
+  });
+
+  test("verifyImage: changed watched paths reject older retag provenance", async () => {
+    const digest = "sha256:" + "5".repeat(64);
+    const kubectl = {
+      desiredDeploymentReplicas: async () => "1",
+      podStatusForSelector: async () => [
+        { name: "p1", phase: "Running", ready: "true", imageRef: "img:new", imageId: `img@${digest}` },
+      ],
+    };
+    const exec = fakeExec();
+    const result = await verifyImage(
+      "api",
+      "agentweaver-api",
+      getImage("agentweaver-api").watchedPaths,
+      "2".repeat(40),
+      { ...CFG, PROVENANCE_COMMITS: { "agentweaver-api": "1".repeat(40) } },
+      { exec, git: { diffIsQuiet: async () => false }, kubectl },
+    );
+
+    assert.equal(result.status, "fail");
+    assert.match(result.message, /watched paths changed/);
+    assert.equal(exec.calls.capture.length, 0);
   });
   const result = await verifyImage("api", "agentweaver-api", getImage("agentweaver-api").watchedPaths, "verifycommit", CFG, {
     exec,
