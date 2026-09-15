@@ -42,6 +42,40 @@ Before the seam mutations, the runner sends that bearer to the protected
 `GET /api/auth/config` only to explain a `401` without retaining provider configuration
 in evidence.
 
+#### Check the token is actually live before dispatching a run
+
+A cached session token expires long before anything structural changes on disk.
+Confirm it is live *first* — a run dispatched against an expired token produces a
+uniform wall of `401`s that is easy to misread as a product bug:
+
+```powershell
+npm run demo:record -- status
+```
+
+Require the `Session token:` line to report time remaining. If it reports
+`EXPIRED`, refresh before doing anything else; `getSessionToken` will refuse an
+expired token rather than return it.
+
+Two traps make this easy to misdiagnose:
+
+- `GET /api/version` and `/openapi/v1.yaml` are **unauthenticated**. Fetching
+  either successfully proves nothing about auth. Probe an authenticated endpoint
+  such as `GET /api/blueprints` and require a non-`401`.
+- An expired token is **not a blocker**. Refresh it yourself and continue:
+
+  ```powershell
+  npm run demo:record -- signin
+  npm run demo:record -- open
+  ```
+
+  The recorder clicks Agentweaver's own **Sign in with Microsoft Entra ID**
+  button and cached SSO normally completes with no prompt. Do not report the
+  task blocked on authentication before running those commands and observing
+  the result. Only an Entra prompt that actually appears and actually blocks
+  progress justifies stopping for a human — and even then, say exactly what
+  appeared. See
+  [`scripts/demo-recording/README.md`](../demo-recording/README.md#microsoft-entra-boundary-for-agents).
+
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
 Before choosing a persona for a dynamic API run, check
