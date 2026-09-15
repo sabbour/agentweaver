@@ -127,7 +127,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  // vi.clearAllMocks() clears recorded calls but keeps queued mockResolvedValueOnce
+  // implementations. Several tests queue more "once" values than they consume, and the
+  // leftovers then shadow the defaults that beforeEach sets for later tests. Reset the
+  // implementations so each test starts from the same state whatever the run order.
+  vi.useRealTimers();
+  vi.resetAllMocks();
 });
 
 describe('TransactionTracePanel trace detail', () => {
