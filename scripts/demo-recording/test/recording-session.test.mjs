@@ -12,6 +12,8 @@ import {
   assertIgnoredAuthRoot,
   buildChromeLaunchOptions,
   captureRecordingPlan,
+  ensureRecordingAuthenticationFresh,
+  estimateCaptureOperationBudgetMs,
   openRecordingSession,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
@@ -19,6 +21,7 @@ import {
   pruneOrphanedAutomationProfileCopies,
   refreshRecordingAuthentication,
   recordingAuthPaths,
+  recordingStatus,
   resolveCaptureBeatPrerequisites,
   resolveLiteralChromeDefaultProfile,
   resolveSafeAuthDestination,
@@ -30,9 +33,37 @@ import {
   validateLiteralChromeDefaultProfile,
   waitForChromeToClose,
 } from '../lib/recording-session.mjs';
+import { DEFAULT_SESSION_STORAGE_PATH, inspectSessionToken } from '../lib/auth.mjs';
 
 const packageRoot = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 const repositoryRoot = path.resolve(packageRoot, '..', '..');
+const syntheticCredential = 'synthetic-test-token-never-log';
+
+function syntheticJwt(exp) {
+  const encode = (value) => Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ exp, marker: syntheticCredential })}.signature`;
+}
+
+async function writeAuthFixture(authRoot, token) {
+  const paths = recordingAuthPaths(authRoot);
+  await fs.mkdir(paths.root, { recursive: true });
+  await fs.writeFile(paths.storageStatePath, JSON.stringify({ cookies: [], origins: [] }), 'utf8');
+  await fs.writeFile(paths.sessionStoragePath, JSON.stringify({
+    origin: 'https://agentweaver.example.test',
+    entries: { 'agentweaver.sessionToken': token },
+  }), 'utf8');
+  return paths;
+}
+
+async function withAuthFixture(testName, fn) {
+  const scratchRoot = process.env.TEMP ?? os.tmpdir();
+  const root = await fs.mkdtemp(path.join(scratchRoot, `agentweaver-${testName}-`));
+  try {
+    return await fn(root);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
 
 test('recording commands use one canonical session and protected auth root', () => {
   assert.deepEqual(parseRecordingCommandOptions('open', []), {
@@ -110,6 +141,7 @@ test('full capture defers Bug Fix PR preparation until the preceding beats creat
     { session: 'demo', all: true },
     {
       openSession: async () => {},
+      ensureAuthenticationFresh: async () => {},
       prepareScripts: async (options, preparation = {}) => {
         preparations.push({ beat: options.beat, ...preparation });
         if (preparation.resolvePrerequisites === false) {
@@ -202,6 +234,90 @@ test('recording auth paths keep every authentication artifact under one root', (
     assert.equal(path.relative(paths.root, candidate).startsWith('..'), false);
   }
 });
+
+test('session token helpers default to the recorder auth root, not ui-harness auth', () => {
+  assert.equal(
+    DEFAULT_SESSION_STORAGE_PATH,
+    'scripts/demo-recording/.auth/recording.storageState.json.sessionStorage.json',
+  );
+});
+
+test('token inspection decodes expiry without exposing credential values', async () => withAuthFixture('token-inspect', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  const token = syntheticJwt(Math.floor((nowMs + 70 * 60_000) / 1_000));
+  const paths = await writeAuthFixture(authRoot, token);
+
+  const status = await inspectSessionToken(paths.sessionStoragePath, { now: () => nowMs });
+
+  assert.equal(status.present, true);
+  assert.equal(status.expired, false);
+  assert.equal(status.remainingMs, 70 * 60_000);
+  assert.equal(JSON.stringify(status).includes(syntheticCredential), false);
+  assert.equal(JSON.stringify(status).includes(token), false);
+}));
+
+test('auth freshness refreshes before a near-expiry token lapses', async () => withAuthFixture('near-expiry', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await writeAuthFixture(authRoot, syntheticJwt(Math.floor((nowMs + 14 * 60_000) / 1_000)));
+  const events = [];
+
+  const result = await ensureRecordingAuthenticationFresh(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      refreshAuthentication: async () => events.push('refresh'),
+      restoreAuthentication: async () => events.push('restore'),
+      write: (message) => events.push(message),
+    },
+  );
+
+  assert.equal(result.refreshed, true);
+  assert.deepEqual(events.filter((event) => event === 'refresh' || event === 'restore'), ['refresh', 'restore']);
+  assert.equal(events.join('').includes(syntheticCredential), false);
+}));
+
+test('auth freshness refreshes before starting an operation that exceeds remaining token life', async () => withAuthFixture('long-operation', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await writeAuthFixture(authRoot, syntheticJwt(Math.floor((nowMs + 25 * 60_000) / 1_000)));
+  const events = [];
+
+  const result = await ensureRecordingAuthenticationFresh(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      operationBudgetMs: 15 * 60_000,
+      refreshAuthentication: async () => events.push('refresh'),
+      restoreAuthentication: async () => events.push('restore'),
+      write: () => {},
+    },
+  );
+
+  assert.equal(result.refreshed, true);
+  assert.deepEqual(events, ['refresh', 'restore']);
+}));
+
+test('auth freshness does not refresh a healthy token with enough operation budget', async () => withAuthFixture('healthy-token', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await writeAuthFixture(authRoot, syntheticJwt(Math.floor((nowMs + 80 * 60_000) / 1_000)));
+  const events = [];
+
+  const result = await ensureRecordingAuthenticationFresh(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      operationBudgetMs: estimateCaptureOperationBudgetMs({
+        startUrl: 'https://agentweaver.example.test',
+        steps: [{ type: 'waitText', text: 'Done', timeout: 180_000 }],
+      }),
+      refreshAuthentication: async () => events.push('refresh'),
+      restoreAuthentication: async () => events.push('restore'),
+      write: () => {},
+    },
+  );
+
+  assert.equal(result.refreshed, false);
+  assert.deepEqual(events, []);
+}));
 
 test('Chrome sign-in is fixed to the literal Default profile and a disposable data root', () => {
   const profile = resolveLiteralChromeDefaultProfile('C:\\Users\\tester\\AppData\\Local');
@@ -377,6 +493,7 @@ test('open reuses an already-open verified recording session without refreshing 
       listSessions: () => new Map([['agentweaver-demo', { status: 'open' }]]),
       verifyAuthenticatedSnapshot: async (session) => events.push(`verify:${session}`),
       refreshAuthentication: async () => events.push('refresh-default'),
+      ensureAuthenticationFresh: async () => ({ refreshed: false }),
     },
   );
   assert.deepEqual(events, ['verify:agentweaver-demo']);
@@ -510,6 +627,31 @@ test('signin detects the post-click Entra boundary without inspecting IdP data',
   assert.match(output, /human-only step/);
 });
 
+test('unattended refresh reports an expired SSO session as a manual signin requirement', async () => {
+  let nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await assert.rejects(
+    () => waitForInteractiveSignInCompletion({
+      url: () => 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      evaluate: async () => {
+        throw new Error('must not inspect identity provider pages');
+      },
+    }, {
+      baseUrl: 'https://agentweaver.example.test',
+      timeoutMs: 60_000,
+      pollMs: 1_000,
+      allowInteractiveSignIn: false,
+      ssoReplayTimeoutMs: 2_000,
+      now: () => {
+        nowMs += 1_000;
+        return nowMs;
+      },
+      delayFn: async () => {},
+      write: () => {},
+    }),
+    /SSO session.*Run "npm run demo:record -- signin"/,
+  );
+});
+
 test('signin CLI routing cannot bypass the close-first authentication helper', async () => {
   const calls = [];
   await runRecordingCommand(
@@ -536,7 +678,7 @@ test('open routes directly to the Agentweaver sign-in recovery session', async (
   assert.equal(calls[0].session, 'agentweaver-demo');
 });
 
-test('open invokes interactive refresh when protected authentication is unavailable', async () => {
+test('open invokes unattended refresh when protected authentication is unavailable', async () => {
   const events = [];
   await assert.rejects(
     () => openRecordingSession(
@@ -544,12 +686,12 @@ test('open invokes interactive refresh when protected authentication is unavaila
       {
         listSessions: () => new Map(),
         hasAuthentication: async () => false,
-        refreshAuthentication: async () => events.push('refresh'),
+        refreshAuthentication: async (refreshOptions) => events.push(`refresh:${refreshOptions.allowInteractiveSignIn}`),
       },
     ),
     /could not be verified/,
   );
-  assert.deepEqual(events, ['refresh']);
+    assert.deepEqual(events, ['refresh:false']);
 });
 
 test('start self-directs recording session setup without a prior status or open command', async () => {
@@ -599,6 +741,85 @@ test('playwright-cli session status parsing finds named open sessions', () => {
   assert.equal(sessions.get('agentweaver-demo').status, 'open');
   assert.equal(sessions.get('other').status, 'closed');
 });
+
+test('recording status treats nearly expired auth as not ready and reports remaining lifetime', async () => withAuthFixture('status-near-expiry', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await writeAuthFixture(authRoot, syntheticJwt(Math.floor((nowMs + 10 * 60_000) / 1_000)));
+
+  const status = await recordingStatus(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      validateChromeProfile: async () => true,
+      assertProtectedRoot: async () => true,
+      listSessions: () => new Map(),
+    },
+  );
+
+  assert.equal(status.authReady, false);
+  assert.equal(status.authStatus.remainingMs, 10 * 60_000);
+  assert.match(status.authStatus.remainingText, /10m/);
+  assert.equal(JSON.stringify(status).includes(syntheticCredential), false);
+}));
+
+test('recording status and freshness use the same expiry threshold', async () => withAuthFixture('status-freshness', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  await writeAuthFixture(authRoot, syntheticJwt(Math.floor((nowMs + 16 * 60_000) / 1_000)));
+
+  const status = await recordingStatus(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      validateChromeProfile: async () => true,
+      assertProtectedRoot: async () => true,
+      listSessions: () => new Map(),
+    },
+  );
+  const freshness = await ensureRecordingAuthenticationFresh(
+    { session: 'agentweaver-demo', authRoot },
+    {
+      now: () => nowMs,
+      refreshAuthentication: async () => assert.fail('unexpected refresh'),
+      restoreAuthentication: async () => assert.fail('unexpected restore'),
+      write: () => {},
+    },
+  );
+
+  assert.equal(status.authReady, true);
+  assert.equal(freshness.refreshed, false);
+}));
+
+test('auth refresh errors and logs never include credential values', async () => withAuthFixture('credential-redaction', async (authRoot) => {
+  const nowMs = Date.UTC(2026, 8, 14, 18, 0, 0);
+  const token = syntheticJwt(Math.floor((nowMs - 60_000) / 1_000));
+  await writeAuthFixture(authRoot, token);
+  let output = '';
+  let failure;
+
+  try {
+    await ensureRecordingAuthenticationFresh(
+      { session: 'agentweaver-demo', authRoot },
+      {
+        now: () => nowMs,
+        refreshAuthentication: async () => {
+          const error = new Error('SSO session expired for synthetic fixture');
+          error.code = 'SSO_SESSION_EXPIRED';
+          throw error;
+        },
+        restoreAuthentication: async () => assert.fail('restore should not run after failed refresh'),
+        write: (message) => { output += message; },
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.match(failure?.message, /SSO session.*Run "npm run demo:record -- signin"/);
+  assert.equal(output.includes(syntheticCredential), false);
+  assert.equal(output.includes(token), false);
+  assert.equal(failure.message.includes(syntheticCredential), false);
+  assert.equal(failure.message.includes(token), false);
+}));
 
 test('Chrome process wait gives a clear close flow without terminating processes', async () => {
   let calls = 0;
