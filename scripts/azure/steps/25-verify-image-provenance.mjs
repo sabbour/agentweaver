@@ -22,11 +22,11 @@ import * as log from "../lib/log.mjs";
 import * as execDefault from "../lib/exec.mjs";
 import * as gitDefault from "../lib/git.mjs";
 import * as kubectlDefault from "../lib/kubectl.mjs";
+import { manifestDigestForTag } from "../lib/acr-manifest.mjs";
 import { IMAGES } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
 const DIGEST_RE = /(sha256:[0-9a-f]{64})/;
-const PROV_TAG_RE = /^prov-(?:[0-9a-f]{12}|[0-9a-f]{40})$/;
 
 /** Extracts the tag (portion after the final ':') from an image ref, or ''. */
 export function imageTagFromRef(imageRef) {
@@ -142,45 +142,11 @@ export async function liveDigestStateForSelector(
   return { ok: true, digest, tag, podCount };
 }
 
-/** Finds unique 'prov-<sha>' tag(s) on `image` whose manifest digest equals `digest`. */
-export async function provenanceTagsForDigest(image, digest, cfg, { exec = execDefault } = {}) {
-  try {
-    const { stdout } = await exec.capture(
-      "az",
-      [
-        "acr",
-        "repository",
-        "show-manifests",
-        "--name",
-        cfg.ACR_NAME,
-        "--repository",
-        image,
-        "--query",
-        `[?digest=='${digest}'].tags[]`,
-        "--output",
-        "tsv",
-      ],
-      { allowFailure: true },
-    );
-    const tags = stdout
-      .split(/[\t\n]/)
-      .map((t) => t.trim())
-      .filter((t) => PROV_TAG_RE.test(t));
-    return [...new Set(tags)].sort();
-  } catch {
-    return [];
-  }
-}
-
-/** Resolves a prov-<sha> tag's sha suffix to a full commit, via lib/git.mjs's resolveCommitish(). */
-export async function resolveProvenanceCommit(commitish, { cwd, git = gitDefault } = {}) {
-  return git.resolveCommitish(commitish, { cwd });
-}
-
 /**
  * Verifies one image's live provenance: the digest currently running must
- * carry a 'prov-<sha>' tag whose commit shows no diff in `paths` vs
- * `verifyCommit`. Mirrors verify_image()/Invoke-VerifyImage(). Returns
+ * match the deterministic 'prov-<verifyCommit>' tag stamped by the build
+ * pipeline. This exact-tag lookup avoids enumerating every manifest in the
+ * repository. Mirrors verify_image()/Invoke-VerifyImage(). Returns
  * `{ status: 'ok'|'fail', message }`.
  */
 export async function verifyImage(label, image, paths, verifyCommit, cfg, deps = {}) {
@@ -232,58 +198,26 @@ export async function verifyImage(label, image, paths, verifyCommit, cfg, deps =
     };
   }
 
-  const provTags = await provenanceTagsForDigest(image, liveState.digest, cfg, { exec });
-  if (provTags.length === 0) {
+  const provenanceTag = `prov-${verifyCommit}`;
+  const provenanceDigest = await manifestDigestForTag(cfg.ACR_NAME, image, provenanceTag, { exec });
+  if (!provenanceDigest) {
     return {
       status: "fail",
-      message: `${label}: no prov-<sha> tag found for live digest ${liveState.digest.slice(0, 19)} -- image predates the #251/#303 provenance fix, or was pushed by a route other than 20-build-push-images. Cannot verify provenance; treat as unverified, not passing.`,
+      message: `${label}: expected provenance tag ${image}:${provenanceTag} was not found -- image predates the #251/#303 provenance fix, or was pushed by a route other than 20-build-push-images. Cannot verify provenance; treat as unverified, not passing.`,
     };
-  }
-
-  // An unchanged image can accumulate multiple prov-<sha> tags across
-  // successive releases (each retag-forward stamps a fresh prov tag onto the
-  // SAME already-existing digest). Not ambiguous: it's sufficient for ANY one
-  // accumulated commit to show no drift vs verifyCommit.
-  const resolvedOk = [];
-  const resolvedStale = [];
-  const resolvedUnresolvable = [];
-  for (const provTag of provTags) {
-    const candidateCommit = await resolveProvenanceCommit(provTag.replace(/^prov-/, ""), { cwd: cfg.repoRoot, git });
-    if (!candidateCommit) {
-      resolvedUnresolvable.push(provTag);
-      continue;
-    }
-    const quiet = await git.diffIsQuiet(candidateCommit, verifyCommit, paths, { cwd: cfg.repoRoot });
-    if (quiet) {
-      resolvedOk.push(candidateCommit);
-    } else {
-      resolvedStale.push(candidateCommit);
-    }
   }
 
   const tagDisplay = liveState.tag || "<digest-only>";
-  if (resolvedOk.length > 0) {
-    const resolvedCommit = resolvedOk[0];
-    const extraNote =
-      provTags.length > 1
-        ? ` (${provTags.length} prov tags accumulated on this unchanged digest across releases; using ${resolvedCommit.slice(0, 12)})`
-        : "";
+  if (provenanceDigest === liveState.digest) {
     return {
       status: "ok",
-      message: `${label}: ${liveState.podCount} live pod(s) run ${image}:${tagDisplay} at ${liveState.digest.slice(0, 19)}, provably built from ${resolvedCommit.slice(0, 12)}; no drift in watched paths vs ${verifyCommit.slice(0, 12)}${extraNote}`,
-    };
-  }
-
-  if (resolvedStale.length > 0) {
-    return {
-      status: "fail",
-      message: `${label}: ${liveState.podCount} live pod(s) run ${image}:${tagDisplay} at ${liveState.digest.slice(0, 19)}, built from ${resolvedStale[0].slice(0, 12)}, but watched paths changed since then vs ${verifyCommit.slice(0, 12)} -- STALE IMAGE (this is exactly the #251 failure mode). Re-run the build step with FORCE_REBUILD=true for this image.`,
+      message: `${label}: ${liveState.podCount} live pod(s) run ${image}:${tagDisplay} at ${liveState.digest.slice(0, 19)}, matching deterministic provenance tag ${provenanceTag}`,
     };
   }
 
   return {
     status: "fail",
-    message: `${label}: none of the ${provTags.length} prov tag(s) for live digest ${liveState.digest.slice(0, 19)} resolve in local git history (shallow clone or rewritten history?): ${resolvedUnresolvable.join(", ")}`,
+    message: `${label}: ${liveState.podCount} live pod(s) run ${image}:${tagDisplay} at ${liveState.digest.slice(0, 19)}, but deterministic provenance tag ${provenanceTag} resolves to ${provenanceDigest.slice(0, 19)} -- STALE IMAGE (this is exactly the #251 failure mode). Re-run the build step with FORCE_REBUILD=true for this image.`,
   };
 }
 

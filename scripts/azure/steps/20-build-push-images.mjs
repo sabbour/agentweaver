@@ -34,6 +34,7 @@ import * as log from "../lib/log.mjs";
 import * as execDefault from "../lib/exec.mjs";
 import * as gitDefault from "../lib/git.mjs";
 import * as kubectlDefault from "../lib/kubectl.mjs";
+import { manifestDigestForTag } from "../lib/acr-manifest.mjs";
 import { githubReleaseExists, resolveGitHubRepository } from "../lib/github.mjs";
 import { IMAGES, buildArgsFor } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
@@ -159,7 +160,7 @@ export function ghcrImageReference(owner, image, ref) {
 const ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS = 2_000;
 const ACR_TAG_DIGEST_POLL_MAX_DELAY_MS = 15_000;
 const ACR_TAG_DIGEST_POLL_BUDGET_MS = 5 * 60_000;
-// `show-manifests` is read-only, so bounding this local CLI query cannot
+// The exact-tag metadata lookup is read-only, so bounding this local CLI query cannot
 // duplicate a build/import. ACR's repository-read path has taken more than
 // three minutes while concurrent preflight imports were in flight, so the
 // default must cover a loaded registry, not just an idle one.
@@ -182,7 +183,7 @@ function buildAcrTagDigestPollDelays() {
  * Polls ACR for the digest a tag currently resolves to.
  *
  * The large backoff window is deliberate: under concurrent multi-image `az acr import`
- * load, ACR's `show-manifests` read path has lagged the successful write by minutes in
+ * load, ACR's metadata read path has lagged the successful write by minutes in
  * production, so a short 10s loop causes false "unstamped image" deploy failures.
  */
 export async function waitForAcrTagDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
@@ -203,32 +204,10 @@ function defaultSleep(ms) {
 
 /** Looks up the manifest digest a single ACR tag currently resolves to, or null. */
 export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = {}) {
-  try {
-    const { stdout } = await exec.capture(
-      "az",
-      [
-        "acr",
-        "repository",
-        "show-manifests",
-        "--name",
-        cfg.ACR_NAME,
-        "--repository",
-        image,
-        "--query",
-        `[?tags[?@=='${tag}']].digest`,
-        "--output",
-        "tsv",
-      ],
-      { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
-    );
-    const first = stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find(Boolean);
-    return first || null;
-  } catch {
-    return null;
-  }
+  return manifestDigestForTag(cfg.ACR_NAME, image, tag, {
+    exec,
+    timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS,
+  });
 }
 
 function firstLine(value) {
