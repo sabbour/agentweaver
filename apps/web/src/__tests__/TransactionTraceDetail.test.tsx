@@ -207,7 +207,7 @@ describe('TransactionTracePanel trace detail', () => {
   });
 
   it('surfaces a bounded trace timeout without automatically repeating the long query', async () => {
-    const queryError = 'Application Insights trace telemetry did not respond within 15 seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly.';
+    const queryError = 'Application Insights trace telemetry did not respond within 30 seconds. Trace retrieval stopped for this request to protect responsiveness; retry shortly.';
     vi.mocked(apiClient.getRunTraces).mockResolvedValue({
       runId: 'run-47',
       spans: [],

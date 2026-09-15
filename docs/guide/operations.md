@@ -230,7 +230,7 @@ child agent that executed them using the persisted parent-run relationship; the 
 trace parent remains available in the span data. See
 [Transaction traces](../experience/transaction-traces.md) for the span and tool-call details.
 
-If the Application Insights workspace is unavailable or slow, trace retrieval uses a 15-second
+If the Application Insights workspace is unavailable or slow, trace retrieval uses a 30-second
 server-side query budget by default, separately from the three-second dashboard-metrics budget.
 Set `Metrics__AppInsights__TraceQueryTimeoutSeconds` or
 `APPINSIGHTS_TRACE_QUERY_TIMEOUT_SECONDS` (1–60 seconds) to tune that trace budget.

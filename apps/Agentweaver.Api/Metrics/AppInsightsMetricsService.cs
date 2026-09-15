@@ -28,7 +28,7 @@ public sealed class AppInsightsMetricsService
     private const int MaxConcurrentWorkspaceQueries = 16;
     private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
     private static readonly TimeSpan WorkspaceQueryTimeout = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan DefaultTraceWorkspaceQueryTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultTraceWorkspaceQueryTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan WorkspaceQueryCooldown = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan TracePageFallbackCacheLifetime = TimeSpan.FromMinutes(2);
     private const int MaxTracePageFallbackEntries = 128;

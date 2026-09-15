@@ -155,11 +155,11 @@ public class AppInsightsMetricsServiceCancellationTests
     }
 
     [Theory]
-    [InlineData(null, null, 15)]
+    [InlineData(null, null, 30)]
     [InlineData("7", null, 7)]
     [InlineData(null, "8", 8)]
     [InlineData("61", null, 60)]
-    [InlineData("0", null, 15)]
+    [InlineData("0", null, 30)]
     [InlineData("invalid", "9", 9)]
     public void ResolveTraceWorkspaceQueryTimeout_UsesValidatedConfiguredBudget(
         string? configuredSeconds,
