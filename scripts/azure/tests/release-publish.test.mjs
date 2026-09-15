@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isWorkingTreeClean, parseArgs, validateMainSha, run } from "../release-publish.mjs";
+import { ImagePublishError, isWorkingTreeClean, parseArgs, selectImageWorkflowRun, validateMainSha, run } from "../release-publish.mjs";
 
 const mirrors = new Map([["/repo/VERSION", "0.9.70\n"], ["/repo/package.json", '{"version":"0.9.70"}'], ["/repo/package-lock.json", '{"version":"0.9.70","packages":{"":{"version":"0.9.70"}}}'], ["/repo/CHANGELOG.md", "## 0.9.70\n\n- Prepared release note\n"]]);
 const readMirror = (file) => mirrors.get(file.replaceAll("\\", "/"));
@@ -8,9 +8,22 @@ const log = { info() {}, section() {}, field() {}, ok() {}, skip() {}, warn() {}
 function fakeExec({
   wrongMain = false,
   tag = false,
+  githubRelease = false,
   untracked = false,
   ignoredStatus = "",
   unexpectedIgnored = false,
+  imageRuns = [{
+    databaseId: 34915906644,
+    headBranch: "v0.9.70",
+    headSha: "abc",
+    status: "completed",
+    conclusion: "success",
+    event: "push",
+    createdAt: "2026-09-14T18:00:00Z",
+    url: "https://github.com/sabbour/agentweaver/actions/runs/34915906644",
+  }],
+  imageRunListFails = false,
+  imageWatchCode = 0,
 } = {}) {
   const calls = []; return { calls, setDryRun() {}, async run(cmd, args) { calls.push({ cmd, args }); return { code: 0 }; }, async capture(cmd, args) {
     calls.push({ cmd, args });
@@ -23,6 +36,13 @@ function fakeExec({
     if (args[0] === "cat-file") return { code: tag ? 0 : 1, stdout: tag ? "tag" : "" };
     if (args[0] === "rev-list") return { code: 0, stdout: "abc" };
     if (args[0] === "tag") return { code: 0, stdout: "v0.9.69\n" };
+    if (cmd === "gh" && args[0] === "release" && args[1] === "view") return { code: githubRelease ? 0 : 1, stdout: "" };
+    if (cmd === "gh" && args[0] === "run" && args[1] === "list") {
+      return imageRunListFails
+        ? { code: 1, stdout: "", json: null }
+        : { code: 0, stdout: JSON.stringify(imageRuns), json: imageRuns };
+    }
+    if (cmd === "gh" && args[0] === "run" && args[1] === "watch") return { code: imageWatchCode, stdout: "" };
     if (cmd === "gh") return { code: 1, stdout: "" };
     return { code: 0, stdout: "" };
   } };
@@ -64,3 +84,54 @@ test("publish requires a matching changelog section", async () => { const readFi
 test("publish tags and uses extracted changelog notes without writing version files", async () => { const exec = fakeExec(); const result = await run({ repoRoot: "/repo", exec, log, readFile: readMirror }); assert.equal(result.tag, "v0.9.70"); assert.equal(result.changelog, "## 0.9.70\n\n- Prepared release note"); assert.ok(exec.calls.some((c) => c.cmd === "git" && c.args[0] === "tag")); assert.ok(exec.calls.some((c) => c.cmd === "gh" && c.args.includes("--notes"))); assert.ok(!exec.calls.some((c) => c.args?.includes("commit") || c.args?.includes("add"))); });
 test("publish dry-run does not create a tag", async () => { const exec = fakeExec(); await run({ argv: ["--dry-run"], repoRoot: "/repo", exec, log, readFile: readMirror }); assert.ok(!exec.calls.some((c) => c.cmd === "git" && c.args[0] === "tag" && c.args[1] === "-a")); });
 test("resume creates a missing GitHub Release for an existing tag", async () => { const exec = fakeExec({ tag: true }); const result = await run({ argv: ["--resume", "v0.9.70"], repoRoot: "/repo", exec, log, readFile: readMirror }); assert.equal(result.ok, true); assert.ok(exec.calls.some((c) => c.cmd === "gh" && c.args[0] === "release")); });
+test("image run selection matches tag push and commit", () => {
+  const selected = selectImageWorkflowRun([
+    { databaseId: 1, event: "push", headBranch: "dev", headSha: "abc", createdAt: "2026-09-14T17:00:00Z" },
+    { databaseId: 2, event: "workflow_dispatch", headBranch: "v0.9.70", headSha: "abc", createdAt: "2026-09-14T18:00:00Z" },
+    { databaseId: 3, event: "push", headBranch: "v0.9.70", headSha: "abc", createdAt: "2026-09-14T19:00:00Z" },
+  ], { tag: "v0.9.70", commit: "abc" });
+  assert.equal(selected.databaseId, 3);
+});
+test("publish waits for tag images before it creates the GitHub Release", async () => {
+  const exec = fakeExec();
+  await run({ repoRoot: "/repo", exec, log, readFile: readMirror });
+  const pushTag = exec.calls.findIndex((c) => c.cmd === "git" && c.args[0] === "push" && c.args[2] === "v0.9.70");
+  const readRuns = exec.calls.findIndex((c) => c.cmd === "gh" && c.args[0] === "run" && c.args[1] === "list");
+  const createRelease = exec.calls.findIndex((c) => c.cmd === "gh" && c.args[0] === "release" && c.args[1] === "create");
+  assert.ok(pushTag >= 0);
+  assert.ok(readRuns > pushTag);
+  assert.ok(createRelease > readRuns);
+});
+test("publish watches a running tag image workflow", async () => {
+  const exec = fakeExec({
+    imageRuns: [{
+      databaseId: 34915906644,
+      headBranch: "v0.9.70",
+      headSha: "abc",
+      status: "in_progress",
+      conclusion: null,
+      event: "push",
+      createdAt: "2026-09-14T18:00:00Z",
+    }],
+  });
+  await run({ repoRoot: "/repo", exec, log, readFile: readMirror });
+  assert.ok(exec.calls.some((c) => c.cmd === "gh" && c.args[0] === "run" && c.args[1] === "watch"));
+});
+test("publish refuses a GitHub Release when the tag image workflow fails", async () => {
+  const exec = fakeExec({
+    imageRuns: [{
+      databaseId: 34915906644,
+      headBranch: "v0.9.70",
+      headSha: "abc",
+      status: "completed",
+      conclusion: "failure",
+      event: "push",
+      createdAt: "2026-09-14T18:00:00Z",
+    }],
+  });
+  await assert.rejects(
+    run({ repoRoot: "/repo", exec, log, readFile: readMirror }),
+    ImagePublishError,
+  );
+  assert.ok(!exec.calls.some((c) => c.cmd === "gh" && c.args[0] === "release" && c.args[1] === "create"));
+});

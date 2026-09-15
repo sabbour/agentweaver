@@ -304,8 +304,8 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      # Tests and lint deliberately share one job so npm ci runs only once.
-      - name: Run web tests and lint
+      # Typecheck, tests, and lint share one job so npm ci runs only once.
+      - name: Run web typecheck, tests, and lint
         run: node scripts/ci/validate.mjs --profile ci --area web
 
   docs-build:

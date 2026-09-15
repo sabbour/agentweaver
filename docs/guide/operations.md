@@ -20,7 +20,7 @@ npm run release:publish
 npm run azure:deploy-from-release -- vX.Y.Z
 ```
 
-`release:publish` creates the annotated tag and GitHub Release only.
+`release:publish` creates the annotated tag, waits for GHCR images, and creates the GitHub Release.
 `azure:deploy-from-release` requires that existing published tag, imports or
 rebuilds its images, deploys them, and verifies the live environment. By
 default it imports the images already published for that tag by
