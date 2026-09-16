@@ -552,6 +552,35 @@ public static class SandboxEndpoints
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
         {
+            if (!string.IsNullOrWhiteSpace(previewRunnerSessionId) && previewRunnerClient is not null)
+            {
+                try
+                {
+                    // Retain before route publication starts. Gateway convergence can outlive the
+                    // agent turn that owns the supervising relay; retaining only after convergence
+                    // lets the sidecar kill the app and the AgentHost reap its forwarder while the
+                    // Gateway is still probing it.
+                    await previewRunnerClient.RetainProcessAsync(
+                        runId,
+                        previewRunnerBearer,
+                        previewRunnerSessionId,
+                        ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Preview server retention failed for run {RunId}.", runId);
+                    const string message = "The preview server could not be retained for publication.";
+                    EmitPreviewFailure(
+                        streamStore, logger, runId, targetPort, "preview_retention_failed", message,
+                        previewRunnerSessionId);
+                    return Results.Problem(message, statusCode: StatusCodes.Status502BadGateway);
+                }
+            }
+
             var registration = await TryRegisterPreviewAsync(
                 runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId,
                 maintainPublicationLease: runStore is not null,
@@ -560,33 +589,6 @@ public static class SandboxEndpoints
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
                 var preview = registration.Session!;
-                if (!string.IsNullOrWhiteSpace(registration.PreviewRunnerSessionId)
-                    && previewRunnerClient is not null)
-                {
-                    try
-                    {
-                        await previewRunnerClient.RetainProcessAsync(
-                            runId,
-                            previewRunnerBearer,
-                            registration.PreviewRunnerSessionId,
-                            ct).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(
-                            ex,
-                            "Preview server retention failed for run {RunId}; removing the unusable preview route.",
-                            runId);
-                        await previewService.StopPreviewAsync(preview.Token, CancellationToken.None)
-                            .ConfigureAwait(false);
-                        const string message = "Preview was published but its server could not be retained.";
-                        EmitPreviewFailure(
-                            streamStore, logger, runId, targetPort, "preview_retention_failed", message,
-                            registration.PreviewRunnerSessionId);
-                        return Results.Problem(message, statusCode: StatusCodes.Status502BadGateway);
-                    }
-                }
-
                 var keepaliveUrl = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive";
                 var context = LatestPreviewContext(streamStore, runId);
                 var readyPayload = new
@@ -628,7 +630,8 @@ public static class SandboxEndpoints
             }
 
             // A superseded attempt joins the winning publication's outcome and must not emit a
-            // competing terminal event. Every other typed failure is owned by this caller.
+            // competing terminal event. Process cleanup remains with the endpoint/retry owner, which
+            // verifies publication-lease ownership before stopping a potentially shared session.
             if (registration.Status != PreviewRegistrationStatus.Superseded)
             {
                 EmitPreviewFailure(
