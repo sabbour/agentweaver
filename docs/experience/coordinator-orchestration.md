@@ -194,7 +194,7 @@ Each node in the topology carries an `executionPodName` field. The UI renders a 
 - **Coordinator node** — shows the API pod name when the coordinator process is running inside Kubernetes; null otherwise.
 - **Subtask node** — shows the pod name of the child run's bound AgentHost pod, populated by the backend from the pod registry (`IPodNameRegistry`) once the child run is dispatched. `null` before dispatch or on non-Kubernetes deployments.
 
-A node with no assigned pod shows no chip. `PodIndicator` reads that node's own `executionPodName`; it does not use an unrelated child pod or the API pod as a global fallback (`apps/web/src/components/CoordinatorTopologyGraph.tsx:293`).
+A node with no assigned pod shows no chip. The coordinator page reads that node's own `executionPodName`; it does not use an unrelated child pod or the API pod as a global fallback (`apps/web/src/pages/CoordinatorRunPage.tsx`).
 
 The UI also seeds the graph from `coordinator_work_plan_get` and `coordinator_children_get` equivalents so a finished run or a stream that connected after the first snapshot still renders immediately. Stream deltas reconcile on top of that seed.
 

@@ -52,7 +52,7 @@ A released pod can make a child non-resumable, choosing fresh dispatch over in-p
 | `coordinator.steering_decision` | The coordinator records its A/B/C/D decision before executing the effect. | `directiveId`, `decision`, `rationale`, `subtaskIds`, `attempt` |
 | `coordinator.steering` | Legacy directive lifecycle event for human steering. | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
 
-The web timeline renders `dispatch_fresh` as **fresh dispatch**, `in_place_steer` / `in-place` as **steered in place**, and `advisory` as **advisory noted** (`apps/web/src/components/LifecycleEventCard.tsx:260`).
+The decision values distinguish a fresh dispatch, an in-place steer, normal progress, and advice that takes no action. Clients can use the rationale and target subtask ids to explain the result.
 
 ## Failure and recovery semantics
 

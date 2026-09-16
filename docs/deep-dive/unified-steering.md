@@ -85,7 +85,7 @@ These caps bound **autonomous** convergence, not human participation. A human re
 | Assembly gate steering-only routing | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
 | Recovery routing for `assembly_steering` | `apps/Agentweaver.Api/Coordinator/CoordinatorRecoveryRouter.cs`, `CoordinatorReconciler.cs` |
 | Event type constants | `packages/Agentweaver.Domain/EventTypes.cs` |
-| Timeline rendering | `apps/web/src/components/LifecycleEventCard.tsx` |
+| Web run projection | `apps/web/src/timeline/runTimelineSteps.ts`, `apps/web/src/components/AgentSessionPanel.tsx` |
 
 ## See also
 

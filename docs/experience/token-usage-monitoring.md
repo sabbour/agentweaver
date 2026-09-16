@@ -48,7 +48,7 @@ Sources: `apps/web/src/components/costChipFormat.ts:1`; `apps/web/src/components
 
 ## Graph layout
 
-Cost chips, pod indicators, and status metadata contribute to card height. Shared DAG layout uses rendered-height hints so graphs can accommodate that metadata; this is presentation behavior, not another source of usage totals. See `apps/web/src/utils/dagLayout.ts` and `apps/web/src/components/CoordinatorTopologyGraph.tsx`.
+Cost chips, pod indicators, and status metadata contribute to card height. Shared DAG layout uses rendered-height hints so graphs can accommodate that metadata; this is presentation behavior, not another source of usage totals. See `apps/web/src/utils/dagLayout.ts` and `apps/web/src/pages/CoordinatorRunPage.tsx`.
 
 ## See also
 

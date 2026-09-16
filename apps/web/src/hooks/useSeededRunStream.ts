@@ -4,7 +4,7 @@ import { mergeRunEvents } from '../timeline/mergeRunEvents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventType, RunStreamEvent, StreamStatus } from '../api/sse';
 export interface SeededRunStream {
-  /** Persisted seed folded under the live SSE deltas — feed this to useTimelineItems. */
+  /** Persisted seed merged under the live SSE deltas. */
   events: RunStreamEvent[];
   /** The raw live SSE deltas (pre-merge). */
   liveEvents: RunStreamEvent[];
@@ -24,7 +24,7 @@ export interface SeededRunStream {
   seedError: string | null;
   /** Reload the durable event history without recreating the live SSE connection. */
   refresh: () => Promise<RunStreamEvent[]>;
-  /** Count of events evicted from the live buffer — forward to useTimelineItems. */
+  /** Count of events evicted from the live buffer. */
   droppedEventCount: number;
   reconnect: () => void;
 }

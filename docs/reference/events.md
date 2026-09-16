@@ -227,7 +227,7 @@ Emitted when a request-changes revision cycle begins. `revision` is a 1-based co
 
 ### `run.outcome`
 
-The agent's self-assessment of task completion. `achieved: true` when the agent reports the task was completed; `false` when a critical step failed or was blocked (for example, a required tool call was denied by the sandbox). Emitted by the `report_outcome` internal tool, which is suppressed from ToolCallCard rendering. The frontend uses this to style `run.completed`: green for achieved, amber warning for not achieved. If the agent never calls `report_outcome` (older prompts or prompts that don't include the instruction), `run.completed` renders as success by default.
+The agent's self-assessment of task completion. `achieved: true` when the agent reports the task was completed; `false` when a critical step failed or was blocked (for example, a required tool call was denied by the sandbox). Emitted by the `report_outcome` internal tool and kept out of normal tool activity. If the agent never calls `report_outcome`, consumers must rely on the terminal run event.
 
 ### `review.changes_requested`
 
