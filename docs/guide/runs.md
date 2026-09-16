@@ -52,9 +52,8 @@ The API binds an execution key to the caller, operation, project, and provider c
 The key expires after five minutes.
 Missing or expired keys require new context.
 
-Coordinator outcome drafting and Preview analysis use the effective model provider, including
-a configured BYOK provider. Other coordinator classifier actions can still require GitHub
-Copilot when their execution path is Copilot-specific.
+Coordinator outcome drafting, tool-less classification, and Preview analysis use the effective
+model provider, including a configured BYOK provider.
 Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
 
 Custom API clients prepare context through `POST /api/ai/execution-context`.

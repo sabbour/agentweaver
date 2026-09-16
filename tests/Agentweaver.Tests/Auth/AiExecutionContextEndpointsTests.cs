@@ -111,9 +111,6 @@ public sealed class AiExecutionContextEndpointsTests
         await invoke();
         (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
 
-        var copilotOnly = () => guard.PrepareAsync(run.Id.ToString(), CancellationToken.None, supportsByok: false);
-        (await copilotOnly.Should().ThrowAsync<AgentProviderException>())
-            .Which.ErrorCode.Should().Be("model_provider_changed");
         await SeedByokProviderAsync(factory);
         await invoke();
         (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(3);
@@ -192,9 +189,12 @@ public sealed class AiExecutionContextEndpointsTests
 
     [Theory]
     [InlineData("outcome_spec_generation")]
+    [InlineData("workflow_selection")]
+    [InlineData("story_independence_classification")]
+    [InlineData("assembly_gate_classification")]
     [InlineData("preview_classification")]
     [InlineData("preview_command_generation")]
-    public async Task Azure_byok_preflight_supports_outcome_drafting_and_preview_analysis(
+    public async Task Azure_byok_preflight_supports_coordinator_generation_and_classification(
         string operation)
     {
         await using var factory = new AgentweaverWebApplicationFactory();
@@ -229,18 +229,6 @@ public sealed class AiExecutionContextEndpointsTests
         {
             try { Directory.Delete(workingDirectory, recursive: true); } catch { /* best effort */ }
         }
-    }
-
-    [Theory]
-    [InlineData("workflow_selection")]
-    [InlineData("story_independence_classification")]
-    [InlineData("assembly_gate_classification")]
-    public void Copilot_only_coordinator_classification_operations_reject_byok(string operationName)
-    {
-        AiOperationCatalog.TryGet(operationName, out var operation).Should().BeTrue();
-
-        operation.SupportsByok.Should().BeFalse(
-            $"{operationName} remains a Copilot-only classifier despite sharing the effective-provider executor");
     }
 
     [Fact]
