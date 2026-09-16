@@ -146,8 +146,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   /**
    * When true, the node's connection handles are rendered visible and interactive so the
    * user can drag-to-connect nodes in the editable canvas (VisualWorkflowEditor). Defaults
-   * to false: read-only render surfaces keep handles as invisible, non-interactive edge
-   * anchors.
+   * to false: every read-only render surface (CoordinatorRunPage, WorkflowGraphPanel,
+   * LandingWorkflowDemo) keeps handles as invisible, non-interactive edge anchors.
    */
   connectable?: boolean;
   /** Stable harness selector for the editable node face. */
