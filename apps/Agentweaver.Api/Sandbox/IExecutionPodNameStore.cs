@@ -7,5 +7,6 @@ namespace Agentweaver.Api.Sandbox;
 public interface IExecutionPodNameStore
 {
     void Register(string runId, string podName);
+    void Unregister(string runId);
     string? TryGet(string runId);
 }
