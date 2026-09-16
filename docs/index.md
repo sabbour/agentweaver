@@ -48,12 +48,17 @@ npm run azure:provision-infra</code></pre>
     </div>
   </section>
 
-  <section id="see-it-run" class="aw-live-proof" aria-label="Agentweaver workflow run">
-    <img
-      class="aw-proof-fallback"
-      :src="withBase('/screenshots/workflow-run-graph.png')"
-      alt="An Agentweaver workflow run graph"
-    />
+  <section id="see-it-run" class="aw-live-proof" aria-label="Interactive Agentweaver scenario runs">
+    <ClientOnly>
+      <WorkflowProof />
+      <template #fallback>
+        <img
+          class="aw-proof-fallback"
+          :src="withBase('/screenshots/workflow-run-graph.png')"
+          alt="A still frame of an Agentweaver run. Turn on JavaScript to watch it play."
+        />
+      </template>
+    </ClientOnly>
   </section>
 
   <section class="aw-control-sequence" aria-labelledby="control-title">
