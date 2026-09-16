@@ -68,9 +68,10 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
+        IAgentHostReadinessProbe? readinessProbe = null,
         ILogger<KubernetesSandboxExecutor>? logger = null) =>
         new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
-            podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: null,
+            podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: readinessProbe,
             submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
@@ -127,6 +128,29 @@ public sealed class KubernetesSandboxExecutorClaimTests
             {
                 Content = new StringContent(_responseBody),
             };
+        }
+    }
+
+    private sealed class CallbackReadinessProbe(Action callback) : IAgentHostReadinessProbe
+    {
+        public Task WaitUntilReadyAsync(string readinessUrl, CancellationToken ct)
+        {
+            callback();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class SequencedCopilotCredentialProvider : IGitHubCopilotCapabilityCredentialProvider
+    {
+        public int CallCount { get; private set; }
+
+        public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
+            string runId,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromResult<GitHubCapabilitySnapshotCredential?>(
+                new("snapshot-test", $"credential-{CallCount}", DateTimeOffset.UtcNow.AddMinutes(5)));
         }
     }
 
@@ -387,6 +411,72 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "the real warm-pool configure payload must enable lifecycle-aware policy reads");
         configuredState.ToolApprovalApiAccess!.BearerToken.Should().Be(
             body.GetProperty("turnBearerToken").GetString());
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_refreshes_copilot_credential_after_readiness_before_configure()
+    {
+        const string runId = "run-claim-refreshed-credential";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var credentials = new SequencedCopilotCredentialProvider();
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: credentials,
+            readinessProbe: new CallbackReadinessProbe(
+                () => credentials.CallCount.Should().Be(1,
+                    "only the early validation credential should exist while provisioning/readiness is pending")));
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        credentials.CallCount.Should().Be(2);
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("copilotCredential").GetProperty("accessToken").GetString()
+            .Should().Be("credential-2",
+                "the configure request must redeem a fresh credential after the unbounded provisioning wait");
+    }
+
+    [Theory]
+    [InlineData("""{"error":"structured_configure_failure"}""", "structured_configure_failure")]
+    [InlineData(""""A live run-bound Copilot capability credential is required"""",
+        "A live run-bound Copilot capability credential is required")]
+    [InlineData("plain configure failure", "plain configure failure")]
+    public async Task LaunchAgentHostPod_preserves_configure_failure_reason(
+        string responseBody,
+        string expectedReason)
+    {
+        const string runId = "run-claim-configure-string-error";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler(
+            responseBody,
+            HttpStatusCode.BadRequest);
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var exception = await act.Should().ThrowAsync<AgentHostConfigureException>();
+        exception.Which.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
+        exception.Which.Reason.Should().Be(expectedReason);
+        exception.Which.Message.Should().Contain("HTTP 400").And.Contain(expectedReason);
     }
 
     [Fact]
