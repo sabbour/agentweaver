@@ -22,8 +22,6 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', {
         allowConstantExport: true,
         allowExportNames: [
-          'ARTIFACT_HOLD_MS',
-          'mountLandingWorkflowDemo',
           'ExecutionModalContext',
           'ActiveEdgeContext',
           'CoordinatorSessionContext',
