@@ -595,20 +595,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                         "but the replacement create still conflicted.");
                 }
             }
-            else if (!claimCreated && requestedWorkingDirectory is not null)
+            else if (!claimCreated)
             {
+                var existingRunId = await TryGetAgentHostClaimAnnotationAsync(
+                        claimName, SandboxClaimConventions.RunIdAnnotation, ct)
+                    .ConfigureAwait(false);
                 var existingWorkingDirectory = await TryGetAgentHostClaimWorkingDirectoryAsync(claimName, ct)
                     .ConfigureAwait(false);
-                var sameWorktree = string.Equals(
+                var sameRun = string.Equals(existingRunId, runId, StringComparison.Ordinal);
+                var sameWorktree = requestedWorkingDirectory is null || string.Equals(
                     existingWorkingDirectory, requestedWorkingDirectory, StringComparison.Ordinal);
                 var hasTurnToken = !string.IsNullOrWhiteSpace(_turnTokenRegistry?.TryGetTurnToken(runId));
 
-                if (!sameWorktree || !hasTurnToken)
+                if (!sameRun || !sameWorktree || !hasTurnToken)
                 {
                     _logger.LogWarning(
                         "KubernetesSandboxExecutor: existing AgentHost claim {Claim} for run {RunId} " +
-                        "is not reusable (sameWorktree={SameWorktree}, hasTurnToken={HasTurnToken}); recreating.",
-                        claimName, runId, sameWorktree, hasTurnToken);
+                        "is not reusable (sameRun={SameRun}, sameWorktree={SameWorktree}, hasTurnToken={HasTurnToken}); recreating.",
+                        claimName, runId, sameRun, sameWorktree, hasTurnToken);
                     await DeleteClaimAsync(claimName).ConfigureAwait(false);
                     _podRegistry?.Unregister(runId);
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
@@ -618,7 +622,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     if (!claimCreated)
                     {
                         throw new InvalidOperationException(
-                            $"AgentHost claim '{claimName}' for run '{runId}' was deleted for worktree reconfiguration, " +
+                            $"AgentHost claim '{claimName}' for run '{runId}' was deleted for run reconfiguration, " +
                             "but the replacement create still conflicted. Retrying later avoids reusing a token-less or stale pod.");
                     }
                 }
