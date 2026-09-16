@@ -536,15 +536,17 @@ by try/catch so one corrupt plan does not stop the sweep.
 
 Outcome-spec drafting has its own wall-clock bound because it includes provider setup and session
 creation before the normal streaming-turn watchdog begins. `Coordinator:OutcomeSpecDraftTimeoutSeconds`
-defaults to **120 seconds** and must be greater than zero. When it expires, the coordinator cancels
+defaults to **300 seconds** and must be greater than zero. When it expires, the coordinator cancels
 the draft without waiting for provider cancellation callbacks, transitions the durable run to
 `failed`, and emits `run.failed` with reason `outcome_spec_draft_timeout` instead of leaving the run
 indefinitely in `drafting`. The abandoned draft and cancellation work remain observed, and their
-linked cancellation source is disposed after both settle.
+linked cancellation source is disposed after both settle. Autopilot's unattended confirmation loop
+adds its separate five-minute confirmation window after this drafting allowance, so a valid slow
+draft cannot consume the confirmation budget before the gate opens.
 
 | Configuration key | Default | Effect |
 |---|---:|---|
-| `Coordinator:OutcomeSpecDraftTimeoutSeconds` | `120` | Maximum wall-clock time for provider setup, session creation, and the outcome-spec model turn before the coordinator fails with `outcome_spec_draft_timeout`; must be greater than zero. |
+| `Coordinator:OutcomeSpecDraftTimeoutSeconds` | `300` | Maximum wall-clock time for provider setup, session creation, and the outcome-spec model turn before the coordinator fails with `outcome_spec_draft_timeout`; must be greater than zero. |
 
 ### Bounded final-Scribe recovery
 

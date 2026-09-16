@@ -621,7 +621,8 @@ public sealed class CoordinatorRunService
     /// <c>awaiting_confirmation</c>, then resumes via the same <see cref="ConfirmOutcomeSpecAsync"/>
     /// seam a human uses, attributed to <paramref name="confirmedBy"/> (= the backlog task's
     /// CapturedBy, Principle IX). Stops on success, on a human beating it to the gate, on app
-    /// shutdown, or after a 5-minute deadline so it can never spin forever.
+    /// shutdown, or after the drafting deadline plus a 5-minute confirmation window so it can never
+    /// expire while a valid slow draft is still running.
     /// </summary>
     private void ScheduleUnattendedConfirm(string runId, string confirmedBy)
     {
@@ -629,7 +630,9 @@ public sealed class CoordinatorRunService
         {
             try
             {
-                var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+                var deadline = DateTimeOffset.UtcNow
+                    .Add(_factory.OutcomeSpecDraftTimeout)
+                    .AddMinutes(5);
                 while (DateTimeOffset.UtcNow < deadline && !_appStopping.IsCancellationRequested)
                 {
                     var spec = await GetOutcomeSpecAsync(runId, _appStopping).ConfigureAwait(false);

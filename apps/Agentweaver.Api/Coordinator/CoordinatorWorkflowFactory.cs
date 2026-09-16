@@ -31,7 +31,7 @@ public sealed class CoordinatorWorkflowFactory
     private const string InputStateKey = "coordinator-input";
     private const string InputStateScope = "run-context";
     private const string CoordinatorAgentName = "Coordinator";
-    private const int DefaultOutcomeSpecDraftTimeoutSeconds = 120;
+    private const int DefaultOutcomeSpecDraftTimeoutSeconds = 300;
 
     private const string FallbackCharter =
         "You are the Coordinator, the built-in orchestration agent. Restate the human's goal as a " +
@@ -66,13 +66,7 @@ public sealed class CoordinatorWorkflowFactory
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorWorkflowFactory>();
 
-        var outcomeSpecDraftTimeoutSeconds = configuration.GetValue(
-            "Coordinator:OutcomeSpecDraftTimeoutSeconds",
-            DefaultOutcomeSpecDraftTimeoutSeconds);
-        if (outcomeSpecDraftTimeoutSeconds <= 0)
-            throw new InvalidOperationException(
-                "Coordinator:OutcomeSpecDraftTimeoutSeconds must be greater than zero.");
-        _outcomeSpecDraftTimeout = TimeSpan.FromSeconds(outcomeSpecDraftTimeoutSeconds);
+        _outcomeSpecDraftTimeout = ResolveOutcomeSpecDraftTimeout(configuration);
 
         _checkpointDir = configuration["Coordinator:Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "coordinator-checkpoints");
@@ -99,6 +93,18 @@ public sealed class CoordinatorWorkflowFactory
 
     /// <summary>The request-port id surfaced to the resume seam when the run suspends.</summary>
     public const string ConfirmationGateId = "coordinator-confirmation-gate";
+    internal TimeSpan OutcomeSpecDraftTimeout => _outcomeSpecDraftTimeout;
+
+    internal static TimeSpan ResolveOutcomeSpecDraftTimeout(IConfiguration configuration)
+    {
+        var seconds = configuration.GetValue(
+            "Coordinator:OutcomeSpecDraftTimeoutSeconds",
+            DefaultOutcomeSpecDraftTimeoutSeconds);
+        if (seconds <= 0)
+            throw new InvalidOperationException(
+                "Coordinator:OutcomeSpecDraftTimeoutSeconds must be greater than zero.");
+        return TimeSpan.FromSeconds(seconds);
+    }
 
     private Workflow BuildWorkflow()
     {
