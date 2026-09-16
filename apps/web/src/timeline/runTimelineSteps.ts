@@ -1,11 +1,60 @@
 import type { RunStreamEvent } from '../api/sse';
-import { deriveHumanTitle, extractCallId, stripPathPrefix } from './reducer';
 import {
   formatOutcomeSpecMessage,
   isOutcomeSpecMessagePrefix,
   isSerializedWorkPlan,
   parseOutcomeSpecMessage,
 } from './coordinatorPlanFilter';
+
+function extractCallId(payload: Record<string, unknown>): unknown {
+  return payload['callId'] ?? payload['call_id'];
+}
+
+export function stripPathPrefix(value: string): string {
+  return value
+    .replace(/^\/(?:home|Users)\/[^/\\]+[/\\]/, '')
+    .replace(/^[A-Za-z]:[/\\]Users[/\\][^/\\]+[/\\]/, '')
+    .replace(/^[/\\][a-zA-Z][/\\]Users[/\\][^/\\]+[/\\]/, '');
+}
+
+export function deriveHumanTitle(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'report_intent') {
+    const intent = args['intent'];
+    return intent == null ? 'Intent' : String(intent).slice(0, 120);
+  }
+
+  if (toolName === 'run_command') {
+    const command = args['command'] ?? args['cmd'];
+    return command == null ? 'Run command' : `Run command · ${String(command).slice(0, 80)}`;
+  }
+
+  const path = args['path'] ?? args['file'] ?? args['dir'];
+  const displayPath = path == null ? null : stripPathPrefix(String(path));
+  const knownTools: Record<string, string> = {
+    read_file: 'Read file',
+    write_file: 'Write file',
+    create_file: 'Create file',
+    create: 'Create file',
+    delete_file: 'Delete file',
+    list_directory: 'List directory',
+    search_files: 'Search files',
+    grep_search: 'Search',
+    file_search: 'Find files',
+    edit_file: 'Edit file',
+    edit: 'Edit file',
+    str_replace_editor: 'Edit file',
+    apply_patch: 'Apply patch',
+    move_file: 'Move file',
+  };
+  const label = knownTools[toolName] ?? toolName.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+
+  if (displayPath) return `${label} · ${displayPath}`;
+  const command = args['command'] ?? args['cmd'];
+  if (command != null) return `${label} · ${String(command).slice(0, 80)}`;
+  const pattern = args['pattern'] ?? args['query'];
+  if (pattern != null) return `${label} · ${String(pattern).slice(0, 60)}`;
+  return label;
+}
 
 /**
  * Count the subtask drafts inside the decompose agent's serialized work-plan JSON array, so the
@@ -25,16 +74,14 @@ function serializedWorkPlanSubtaskCount(content: string): number | null {
 }
 
 /**
- * Intent-driven Timeline model.
+ * Intent-driven timeline model.
  *
- * Unlike the turn-grouping timelineReducer (which groups by agent.turn), the run
- * Timeline groups the stream by the agent's REPORTED INTENTS: every `agent.intent`
+ * The run timeline groups the stream by the agent's reported intents: every `agent.intent`
  * event opens a step, and every tool call / agent message emitted afterwards (until
  * the next intent or the turn ends) is nested UNDER that intent. This mirrors the
  * Copilot "chain of thought" reading order: intent → the things that ran for it.
  *
- * Tool-call correlation reuses the reducer's callId logic (extractCallId) and its
- * human-title / sandbox-violation derivation so the two surfaces stay consistent.
+ * Tool-call correlation accepts both live and persisted call-id shapes.
  */
 
 export type RunTimelineStepStatus = 'pending' | 'running' | 'complete' | 'warning';
@@ -249,8 +296,7 @@ function deriveLineRange(args: Record<string, unknown>): string | undefined {
 
 /**
  * Split a tool call into a primary title (verb + target) and an optional muted secondary
- * argument. Reuses stripPathPrefix / deriveHumanTitle so paths/labels stay consistent with
- * the other timeline surface.
+ * argument. Uses the shared path and tool-title helpers.
  */
 export function deriveToolTitle(
   category: RunTimelineToolCategory,
@@ -916,6 +962,3 @@ export function buildRunTimeline(
     running: collapsedSteps.some((s) => s.active),
   };
 }
-
-/** Human-readable tool result path stripping, exported for the row renderer. */
-export { stripPathPrefix };

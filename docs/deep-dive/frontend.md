@@ -250,15 +250,16 @@ The hook keeps a bounded event buffer so a runaway stream does not grow the DOM 
 
 Coordinator runs pause the stream at the confirmation gate: when the run enters `awaiting_confirmation`, the backend closes the stream with a `done` event. At that point `OutcomeSpecPanel` fetches the latest spec directly from the REST API (`fetchSpec()`) so the panel always shows the persisted, authoritative spec rather than reconstructed stream state. The internal `terminalRef` is reset and `reconnectKey` is incremented, which causes `useRunStream` to re-open a fresh stream against the same run ID. When the user clicks **Confirm**, the frontend calls `onReconnect()`, which triggers the same `reconnectKey` increment and stream re-open. New coordinator events — work-plan creation, subtask dispatch, child run starts — start flowing immediately after confirmation without a manual page refresh.
 
-The timeline reducer is pure: given prior timeline state and the next event, it returns the next display state. It groups messages into turns, pairs tool calls with results, surfaces approvals, tracks outcomes, and bounds large text fields. Because it is pure, the same event sequence should produce the same timeline whether it came live from SSE or from a persisted event log.
+The timeline builder is pure: given an event list, it returns the display model. It groups activity by reported intent, pairs tool calls with results, and keeps messages with the step that produced them. The same event sequence produces the same timeline whether it came live from SSE or from a persisted event log.
 
 This is the key mental model: **SSE events are not rendered directly. They are normalized into durable UI concepts.**
 
 Where this lives:
 
 - `apps/web/src/api/sse.ts`
-- `apps/web/src/timeline/`
-- `apps/web/src/components/Timeline.tsx`
+- `apps/web/src/timeline/runTimelineSteps.ts`
+- `apps/web/src/components/RunTimeline.tsx`
+- `apps/web/src/components/AgentSessionPanel.tsx`
 - `apps/web/src/pages/CoordinatorRunPage.tsx`
 
 ## Snapshot + Stream Synchronization
@@ -270,7 +271,7 @@ Agentweaver solves this by merging independent inputs; opening the stream does n
 1. **REST seed** — load the latest known snapshot or persisted event list.
 2. **SSE stream** — subscribe concurrently and buffer live changes.
 3. **Deduplication** — avoid showing the same event twice, usually by sequence id.
-4. **Reducer fold** — derive display state from the merged event list. Run/generation guards reject stale seed responses; positive sequences are deduplicated, with restricted handling for sequence-zero singleton events.
+4. **Timeline projection** — derive display state from the merged event list. Run/generation guards reject stale seed responses; positive sequences are deduplicated, with restricted handling for sequence-zero singleton events.
 
 The backend side of reconnect is a durable cursor, not a cross-replica live channel.
 The Postgres event provider reads ordered rows after the last delivered sequence;
@@ -300,7 +301,7 @@ Inspection of an existing single-agent or coordinator-child run follows this pat
 7. The timeline and graph update as events arrive.
 8. Review, request-changes, commit, and merge actions call the API and then refresh or reconnect the stream projection.
 
-Run inspection is deliberately built from reusable pieces: timeline, graph/workflow panels, review controls, sandbox/files panels, and stream hooks. A rebuild should keep the stream/reducer logic independent from the visual layout so the same run projection can appear in different contexts.
+Run inspection is deliberately built from reusable pieces: timeline, graph/workflow panels, review controls, sandbox/files panels, and stream hooks. A rebuild should keep the stream projection independent from the visual layout so the same run projection can appear in different contexts.
 
 Important edge case: coordinator child runs may not appear in the parent project run list because they are children, not top-level project runs. Embedded inspection can still resolve them directly by run id and treat that run id as the stream/graph key.
 
@@ -336,7 +337,6 @@ Where this lives:
 - `apps/web/src/components/StartOrchestrationDialog.tsx`
 - `apps/web/src/pages/CoordinatorRunPage.tsx`
 - `apps/web/src/state/topologyReducer.ts`
-- `apps/web/src/components/CoordinatorTopologyGraph.tsx`
 - `apps/web/src/components/AgentRail.tsx`
 
 ## How the UI Stays in Sync
@@ -370,15 +370,15 @@ A rebuild should distinguish between fatal and non-fatal failures. Failure to fe
 
 ## Content and Safety Considerations
 
-Timeline text is rendered as React text, not interpreted HTML. Large content fields are capped before being stored in timeline state to reduce unbounded DOM growth. Display helpers shorten noisy file paths in card headers while preserving fuller details where expansion is supported.
+Timeline text is rendered through the shared safe Markdown surface. Display helpers shorten noisy file paths in row titles while the full result remains available in details.
 
 The important design principle is to make untrusted run output observable without making it executable. Agent and tool output should be treated as data.
 
 Where this lives:
 
-- `apps/web/src/timeline/reducer.ts`
-- `apps/web/src/components/ToolCallCard.tsx`
-- `apps/web/src/components/Timeline.tsx`
+- `apps/web/src/timeline/runTimelineSteps.ts`
+- `apps/web/src/components/RunTimeline.tsx`
+- `apps/web/src/components/SafeMarkdown.tsx`
 
 ## Rebuild Checklist
 
