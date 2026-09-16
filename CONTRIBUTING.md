@@ -484,6 +484,12 @@ up: it **hard-fails** a PR when a committed generated reference (e.g.
 doc-relevant paths (API endpoints, workflows, blueprints, MCP tools) changes without any
 `docs/**` update.
 
+Keep the published documentation tree current. When an implementation plan is complete
+or replaced, update the current docs to point to the working code and operator skills,
+then delete the old plan. Git history keeps the plan and its review trail. Do not apply
+this cleanup rule to decision records or ADRs, release history, legal notices, or active
+product specs.
+
 When documentation changes introduce, update, invalidate, consolidate, or remove
 architectural/process visuals, the
 [`docs-diagram-audit`](.github/skills/docs-diagram-audit/SKILL.md) workflow is a required
