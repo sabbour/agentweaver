@@ -20,9 +20,9 @@ public sealed class EffectiveRunModelTurnExecutor(
 
     public async Task<string?> RunAsync(
         string runId, string? projectId, string? modelId, string charter, string prompt,
-        bool supportsByok, CancellationToken ct)
+        CancellationToken ct)
     {
-        var boundary = await invocationGuard.PrepareAsync(runId, ct, supportsByok).ConfigureAwait(false);
+        var boundary = await invocationGuard.PrepareAsync(runId, ct).ConfigureAwait(false);
         var byok = await ResolveByokConfigurationAsync(boundary, ct).ConfigureAwait(false);
         await using var client = byok is null
             ? await clientFactory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
@@ -45,7 +45,7 @@ public sealed class EffectiveRunModelTurnExecutor(
                 InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
             }, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var validatedBoundary = await invocationGuard.PrepareAsync(runId, ct, supportsByok).ConfigureAwait(false);
+            var validatedBoundary = await invocationGuard.PrepareAsync(runId, ct).ConfigureAwait(false);
             _ = await ResolveByokConfigurationAsync(validatedBoundary, ct).ConfigureAwait(false);
             return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
                 agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);

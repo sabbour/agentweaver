@@ -112,8 +112,8 @@ reason code. It never reveals repository names, installation IDs, permission map
 credentials. Its **GitHub Copilot account** control shows the effective background AI source:
 the verified login bound to this project, the platform-default GitHub Copilot account, or the
 deployment's custom-key provider when BYOK is active. Agentweaver shows the resolved provider,
-model, and scope before AI work starts; an active Azure BYOK provider can run **Preview tasks**,
-**Direct**, and **Define Outcome** without GitHub Copilot authorization. A Project Owner can start the separate
+model, and scope before AI work starts; an active Azure BYOK provider can run full project
+orchestration, **Preview tasks**, **Direct**, and **Define Outcome** without GitHub Copilot authorization. A Project Owner can start the separate
 Copilot App binding when that is the missing prerequisite. If a project binding is stale or its
 credential is missing, select **Reconnect GitHub Copilot** to repeat the same authorization flow
 and replace the broken binding. When readiness reports
