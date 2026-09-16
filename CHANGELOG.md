@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.32.7
+
+### Patch Changes
+
+- 9fe2c00: Keep approved managed Preview servers alive while public routing converges, and coordinate
+  publication ownership durably across API replicas so retries cannot reap another active preview.
+- 9fe2c00: Preserve the selected Copilot or custom model provider through worker assembly and run retries,
+  including Foundry/BYOK resumes that must not require a GitHub Copilot connection.
+- 9fe2c00: Make linked-worktree Azure deployments discover operator parameters reliably and accelerate exact
+  image provenance checks without broad registry enumeration or hanging tag-lock operations.
+- 9fe2c00: Use the available page width for cluster resource details and give transaction traces a dedicated,
+  configurable query budget with bounded retries so cold telemetry loads no longer fail prematurely.
+- 9fe2c00: Add deterministic viewport-equivalent zoom controls to the UI harness so wide layouts can be
+  validated and captured without browser CSS zoom clipping the page.
+
 ## 0.32.6
 
 ### Patch Changes
