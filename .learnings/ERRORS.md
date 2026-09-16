@@ -246,6 +246,38 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
 
 ---
 
+## [ERR-20260915-DOTNET-LOGLEVEL-USING] focused TcpPortForwarder test build
+
+**Logged**: 2026-09-15T21:12:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The focused TCP forwarder test build failed because the new `LogLevel.Warning` assertion lacked the `Microsoft.Extensions.Logging` namespace import.
+
+### Error
+```
+TcpPortForwarderTests.cs(77,33): error CS0103: The name 'LogLevel' does not exist in the current context
+```
+
+### Context
+- Command: locked restore, build, and focused `TcpPortForwarderTests` run.
+- The production project compiled; only the updated test file failed.
+
+### Suggested Fix
+Import `Microsoft.Extensions.Logging` in the test before rerunning the existing build output.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Tests/Preview/TcpPortForwarderTests.cs
+
+### Resolution
+- **Resolved**: 2026-09-15T21:13:00-07:00
+- **Notes**: Added the missing namespace import; focused build and all three tests then passed.
+
+---
+
 ## [ERR-20260902-RG1] rg
 
 **Logged**: 2026-09-02T02:44:17-07:00
@@ -839,5 +871,71 @@ Use smaller patches after cross-context repository changes and reread files that
 ### Resolution
 - **Resolved**: 2026-09-15T01:31:00-07:00
 - **Notes**: Retried only the unapplied hunks against current file content.
+
+---
+
+## [ERR-20260915-KUBECTL-EXEC-QUOTING] PowerShell kubectl exec inline Node quoting
+
+**Logged**: 2026-09-15T20:52:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A PowerShell-launched `kubectl exec -- sh -lc` command mangled nested JavaScript quotes, so the intended short-lived diagnostic server never started.
+
+### Error
+```text
+Syntax error: Unterminated quoted string
+```
+
+### Context
+- Attempted to embed `node -e` JavaScript inside PowerShell, `kubectl exec`, and `sh -lc` quoting layers.
+- The subsequent HTTP 503 probe was invalid because no diagnostic listener was running.
+- A later `Start-Process -ArgumentList` retry also split the JavaScript at spaces; direct
+  `kubectl exec ... -- node -e '...'` preserved it correctly.
+
+### Suggested Fix
+Avoid nested inline JavaScript quoting. Pass a simple Node expression directly after `kubectl exec`, or base64-encode the script before invoking the remote shell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T20:52:00-07:00
+- **Notes**: Discarded the invalid probe result and reran with quoting that preserves the remote command.
+
+---
+
+## [ERR-20260915-KUBECTL-CP-WINDOWS-PATH] kubectl cp misread Windows drive path
+
+**Logged**: 2026-09-15T20:59:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+`kubectl cp` interpreted the colon in an absolute Windows drive path as the remote-path separator.
+
+### Error
+```text
+error: one of src or dest must be a local file specification
+```
+
+### Context
+- Source was an absolute `C:\...` path.
+- `kubectl cp` uses `pod:path` syntax and cannot disambiguate that drive colon.
+
+### Suggested Fix
+Change to the source directory and pass a relative local path to `kubectl cp`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T20:59:00-07:00
+- **Notes**: Retried from the worktree with a relative source path.
 
 ---

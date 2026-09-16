@@ -160,7 +160,22 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
             using (inbound)
             using (var outbound = new TcpClient())
             {
-                await outbound.ConnectAsync(IPAddress.Loopback, _appPort, ct).ConfigureAwait(false);
+                try
+                {
+                    await outbound.ConnectAsync(IPAddress.Loopback, _appPort, ct).ConfigureAwait(false);
+                }
+                catch (SocketException ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "TcpPortForwarder: outbound connect failed for public port {PublicPort} -> app port {AppPort}; exception={ExceptionType}; socketError={SocketError}.",
+                        PublicPort,
+                        _appPort,
+                        ex.GetType().Name,
+                        ex.SocketErrorCode);
+                    return;
+                }
+
                 inbound.NoDelay = true;
                 outbound.NoDelay = true;
 
@@ -171,8 +186,8 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
                 // on the destination so the peer sees a clean EOF and can flush its trailing bytes
                 // (e.g. the rest of an HTML body) before the connection is torn down.
                 using var connCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                var clientToApp = HalfDuplexCopyAsync(clientSock, appSock, connCts.Token);
-                var appToClient = HalfDuplexCopyAsync(appSock, clientSock, connCts.Token);
+                var clientToApp = HalfDuplexCopyAsync(clientSock, appSock, "client-to-app", connCts.Token);
+                var appToClient = HalfDuplexCopyAsync(appSock, clientSock, "app-to-client", connCts.Token);
 
                 await Task.WhenAny(clientToApp, appToClient).ConfigureAwait(false);
 
@@ -184,7 +199,12 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "TcpPortForwarder: connection pump ended with error.");
+            _logger.LogWarning(
+                ex,
+                "TcpPortForwarder: connection pump failed for public port {PublicPort} -> app port {AppPort}; exception={ExceptionType}.",
+                PublicPort,
+                _appPort,
+                ex.GetType().Name);
         }
         finally
         {
@@ -195,7 +215,7 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
     }
 
     /// <summary>Copies <paramref name="src"/> → <paramref name="dst"/> then half-closes the destination's send side.</summary>
-    private static async Task HalfDuplexCopyAsync(Socket src, Socket dst, CancellationToken ct)
+    private async Task HalfDuplexCopyAsync(Socket src, Socket dst, string direction, CancellationToken ct)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(81920);
         try
@@ -204,7 +224,11 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
             {
                 int read;
                 try { read = await src.ReceiveAsync(buffer, SocketFlags.None, ct).ConfigureAwait(false); }
-                catch (SocketException) { break; }
+                catch (SocketException ex)
+                {
+                    LogCopyFailure(ex, direction, "receive");
+                    break;
+                }
                 catch (ObjectDisposedException) { break; }
 
                 if (read <= 0)
@@ -215,7 +239,11 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
                 {
                     int sent;
                     try { sent = await dst.SendAsync(buffer.AsMemory(offset, read - offset), SocketFlags.None, ct).ConfigureAwait(false); }
-                    catch (SocketException) { return; }
+                    catch (SocketException ex)
+                    {
+                        LogCopyFailure(ex, direction, "send");
+                        return;
+                    }
                     catch (ObjectDisposedException) { return; }
                     if (sent <= 0)
                         return;
@@ -231,6 +259,19 @@ internal sealed class TcpPortForwarder : IAsyncDisposable
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    private void LogCopyFailure(SocketException ex, string direction, string operation)
+    {
+        _logger.LogWarning(
+            ex,
+            "TcpPortForwarder: {Direction} {Operation} failed for public port {PublicPort} -> app port {AppPort}; exception={ExceptionType}; socketError={SocketError}.",
+            direction,
+            operation,
+            PublicPort,
+            _appPort,
+            ex.GetType().Name,
+            ex.SocketErrorCode);
     }
 
     public async ValueTask DisposeAsync()
