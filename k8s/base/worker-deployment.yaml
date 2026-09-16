@@ -158,6 +158,15 @@ spec:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
+            # Coordinator assembly executes on workers and revalidates each run's immutable
+            # provider snapshot before every model turn. Those snapshots live in Key Vault, so
+            # workers must use the same durable secret store as API replicas rather than the
+            # production fallback InMemorySecretStore.
+            - name: Auth__KeyVault__Uri
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: KEYVAULT_URI
             # OTEL telemetry — Azure Monitor via Application Insights.
             - name: OTEL_SERVICE_NAME
               value: agentweaver-worker

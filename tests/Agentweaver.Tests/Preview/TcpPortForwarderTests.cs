@@ -3,7 +3,9 @@ extern alias agenthost;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using TcpPortForwarder = agenthost::Agentweaver.AgentHost.TcpPortForwarder;
 using NoPublicPortAvailableException = agenthost::Agentweaver.AgentHost.NoPublicPortAvailableException;
@@ -56,7 +58,8 @@ public sealed class TcpPortForwarderTests
     {
         // Arrange: forwarder pointed at a port with nothing listening (truly-unreachable app).
         var deadPort = GetFreePort();
-        await using var forwarder = new TcpPortForwarder(deadPort, RangeMin, RangeMax, NullLogger.Instance);
+        var logger = new CapturingLogger();
+        await using var forwarder = new TcpPortForwarder(deadPort, RangeMin, RangeMax, logger);
         forwarder.Start();
 
         forwarder.PublicPort.Should().BeInRange(RangeMin, RangeMax);
@@ -72,6 +75,10 @@ public sealed class TcpPortForwarderTests
         var read = await stream.ReadAsync(buffer, cts.Token);
 
         read.Should().Be(0, "the forwarder must not fake reachability for a dead app");
+        logger.HasEntryMatching(LogLevel.Warning, "outbound connect failed").Should().BeTrue();
+        logger.HasEntryContaining($"public port {forwarder.PublicPort}").Should().BeTrue();
+        logger.HasEntryContaining($"app port {deadPort}").Should().BeTrue();
+        logger.HasEntryContaining(nameof(SocketException)).Should().BeTrue();
     }
 
     [Fact]
@@ -165,4 +172,3 @@ public sealed class TcpPortForwarderTests
         }
     }
 }
-

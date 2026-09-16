@@ -20,6 +20,7 @@ public sealed record PreviewSession(
 
 public sealed class PreviewPublicationException(string message) : InvalidOperationException(message);
 public sealed class PreviewPublicationRunEndedException(string message) : InvalidOperationException(message);
+public sealed class PreviewPublicationLeaseLostException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// Durable run-level preview lifecycle derived from unexpired HTTPRoutes.
@@ -74,7 +75,8 @@ public interface ISandboxPreviewService
     /// </summary>
     Task<PreviewSession> StartRunBoundPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
-        string? previewRunnerSessionId = null) =>
+        string? previewRunnerSessionId = null,
+        string? publicationLeaseOwner = null) =>
         StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
 
     /// <summary>
@@ -211,9 +213,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     public Task<PreviewSession> StartRunBoundPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
-        string? previewRunnerSessionId = null) =>
+        string? previewRunnerSessionId = null,
+        string? publicationLeaseOwner = null) =>
         StartPreviewCoreAsync(
-            runId, targetPort, ownerUserId, maintainPublicationLease: true, ct, previewRunnerSessionId);
+            runId, targetPort, ownerUserId, maintainPublicationLease: true, ct,
+            previewRunnerSessionId, publicationLeaseOwner);
 
     private async Task<PreviewSession> StartPreviewCoreAsync(
         string runId,
@@ -221,7 +225,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         string ownerUserId,
         bool maintainPublicationLease,
         CancellationToken ct,
-        string? previewRunnerSessionId)
+        string? previewRunnerSessionId,
+        string? publicationLeaseOwner = null)
     {
         EnsureReady();
         if (targetPort is <= 0 or > 65535)
@@ -341,7 +346,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 runId, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
             await WaitForPublicationAsync(
                 runId, new Uri(previewUrl), previewSettings.GatewayConvergenceTimeoutSeconds,
-                maintainPublicationLease, ct).ConfigureAwait(false);
+                maintainPublicationLease, publicationLeaseOwner, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             published = true;
         }
@@ -370,6 +375,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         Uri previewUrl,
         int gatewayConvergenceTimeoutSeconds,
         bool maintainPublicationLease,
+        string? publicationLeaseOwner,
         CancellationToken ct)
     {
         var publicationWindow = TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds);
@@ -387,6 +393,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         using var leaseRenewalFailed = new CancellationTokenSource();
         Exception? leaseRenewalFailure = null;
         var leaseRenewalRefused = false;
+        var leaseRenewalRunEnded = false;
         var leaseRenewal = leaseRunId is { } leasedRunId
             ? MaintainPublicationLeaseAsync(leasedRunId)
             : Task.CompletedTask;
@@ -494,10 +501,15 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 throw new InvalidOperationException(
                     "Failed to renew the preview publication lease.", leaseRenewalFailure);
             }
-            if (leaseRenewalRefused)
+            if (leaseRenewalRunEnded)
             {
                 throw new PreviewPublicationRunEndedException(
                     "The run became terminal before preview publication completed.");
+            }
+            if (leaseRenewalRefused)
+            {
+                throw new PreviewPublicationLeaseLostException(
+                    "Another preview publication attempt took ownership before this attempt completed.");
             }
             throw;
         }
@@ -537,12 +549,30 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 {
                     await Task.Delay(
                         _publicationLeaseRenewalInterval, _clock, leaseRenewalStop.Token).ConfigureAwait(false);
-                    if (!await _runStore!.TryBeginPreviewPublicationAsync(
+                    var renewed = string.IsNullOrWhiteSpace(publicationLeaseOwner)
+                        ? await _runStore!.TryBeginPreviewPublicationAsync(
                             leasedRunId,
                             _clock.GetUtcNow() + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
-                            leaseRenewalStop.Token).ConfigureAwait(false))
+                            leaseRenewalStop.Token).ConfigureAwait(false)
+                        : await _runStore!.TryRenewPreviewPublicationAsync(
+                            leasedRunId,
+                            publicationLeaseOwner,
+                            _clock.GetUtcNow() + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                            leaseRenewalStop.Token).ConfigureAwait(false);
+                    if (!renewed)
                     {
-                        leaseRenewalRefused = true;
+                        if (string.IsNullOrWhiteSpace(publicationLeaseOwner))
+                        {
+                            leaseRenewalRunEnded = true;
+                        }
+                        else
+                        {
+                            var currentRun = await _runStore.GetAsync(leasedRunId, leaseRenewalStop.Token)
+                                .ConfigureAwait(false);
+                            leaseRenewalRunEnded = currentRun is null
+                                || Endpoints.EndpointHelpers.IsTerminal(currentRun.Status);
+                            leaseRenewalRefused = !leaseRenewalRunEnded;
+                        }
                         leaseRenewalFailed.Cancel();
                         return;
                     }

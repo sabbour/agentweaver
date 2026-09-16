@@ -62,6 +62,110 @@ public class SandboxPreviewTests
     }
 
     [Fact]
+    public async Task StartPreviewForRunAsync_RetainsManagedServerBeforeGatewayPublication()
+    {
+        var calls = new List<string>();
+        var (runId, run, streams) = CreateActiveRun();
+        var runner = new RecordingPreviewRunnerClient(calls);
+
+        await SandboxEndpoints.StartPreviewForRunAsync(
+            runId,
+            5173,
+            run,
+            new FakePreviewService(calls),
+            null!,
+            streams,
+            NullLogger.Instance,
+            CancellationToken.None,
+            previewRunnerSessionId: "managed-session",
+            previewRunnerClient: runner,
+            previewRunnerBearer: "turn-token");
+
+        calls.Should().Equal("retain", "register");
+        runner.RetainedSession.Should().Be("managed-session");
+        runner.StoppedSession.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartPreviewForRunAsync_LeavesFailedPublicationCleanupToOwningEndpoint()
+    {
+        var calls = new List<string>();
+        var (runId, run, streams) = CreateActiveRun();
+        var runner = new RecordingPreviewRunnerClient(calls);
+
+        await SandboxEndpoints.StartPreviewForRunAsync(
+            runId,
+            5173,
+            run,
+            new FakePreviewService(calls, failRegistration: true),
+            null!,
+            streams,
+            NullLogger.Instance,
+            CancellationToken.None,
+            previewRunnerSessionId: "managed-session",
+            previewRunnerClient: runner,
+            previewRunnerBearer: "turn-token");
+
+        calls.Should().Equal("retain", "register");
+        runner.StoppedSession.Should().BeNull();
+        streams.Get(runId)!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(e => e.Type == EventTypes.SandboxPreviewFailed);
+    }
+
+    [Fact]
+    public async Task StartPreviewForRunAsync_DoesNotPublishWhenEarlyRetentionFails()
+    {
+        var calls = new List<string>();
+        var (runId, run, streams) = CreateActiveRun();
+        var runner = new RecordingPreviewRunnerClient(calls, failRetention: true);
+
+        await SandboxEndpoints.StartPreviewForRunAsync(
+            runId,
+            5173,
+            run,
+            new FakePreviewService(calls),
+            null!,
+            streams,
+            NullLogger.Instance,
+            CancellationToken.None,
+            previewRunnerSessionId: "managed-session",
+            previewRunnerClient: runner,
+            previewRunnerBearer: "turn-token");
+
+        calls.Should().Equal("retain");
+        streams.Get(runId)!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(e =>
+                e.Type == EventTypes.SandboxPreviewFailed
+                && JsonSerializer.Serialize(e.Payload).Contains("preview_retention_failed"));
+    }
+
+    [Fact]
+    public async Task StartPreviewForRunAsync_DoesNotStopSharedServerWhenPublicationIsSuperseded()
+    {
+        var calls = new List<string>();
+        var (runId, run, streams) = CreateActiveRun();
+        var runner = new RecordingPreviewRunnerClient(calls);
+
+        await SandboxEndpoints.StartPreviewForRunAsync(
+            runId,
+            5173,
+            run,
+            new FakePreviewService(calls, supersedeRegistration: true),
+            null!,
+            streams,
+            NullLogger.Instance,
+            CancellationToken.None,
+            previewRunnerSessionId: "managed-session",
+            previewRunnerClient: runner,
+            previewRunnerBearer: "turn-token");
+
+        calls.Should().Equal("retain", "register");
+        runner.StoppedSession.Should().BeNull();
+        streams.Get(runId)!.GetSnapshotSince(0).Events
+            .Should().NotContain(e => e.Type == EventTypes.SandboxPreviewFailed);
+    }
+
+    [Fact]
     public void HostLabel_appends_preview_suffix_as_single_dns_label()
     {
         for (var i = 0; i < 500; i++)
@@ -399,7 +503,31 @@ public class SandboxPreviewTests
         PreviewReaper.RunMatches("", "run-owner").Should().BeFalse();
     }
 
-    private sealed class FakePreviewService : ISandboxPreviewService
+    private static (string RunId, Run Run, RunStreamStore Streams) CreateActiveRun()
+    {
+        var runId = RunId.New().ToString();
+        var streams = new RunStreamStore();
+        streams.Create(runId, "alice");
+        return (
+            runId,
+            new Run
+            {
+                Id = RunId.Parse(runId),
+                RepositoryPath = ".",
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = "t",
+                SubmittingUser = "alice",
+                Status = RunStatus.InProgress,
+                StartedAt = DateTimeOffset.UtcNow,
+            },
+            streams);
+    }
+
+    private sealed class FakePreviewService(
+        List<string>? calls = null,
+        bool failRegistration = false,
+        bool supersedeRegistration = false) : ISandboxPreviewService
     {
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
@@ -410,14 +538,21 @@ public class SandboxPreviewTests
             int targetPort,
             string ownerUserId,
             CancellationToken ct = default,
-            string? previewRunnerSessionId = null) =>
-            Task.FromResult(new PreviewSession(
+            string? previewRunnerSessionId = null)
+        {
+            calls?.Add("register");
+            if (failRegistration)
+                throw new InvalidOperationException("gateway failed");
+            if (supersedeRegistration)
+                throw new PreviewPublicationLeaseLostException("another attempt owns publication");
+            return Task.FromResult(new PreviewSession(
                 "tok",
                 runId,
                 "pod-1",
                 targetPort,
                 "https://preview.example.test",
                 new DateTimeOffset(2026, 7, 9, 3, 0, 0, TimeSpan.Zero)));
+        }
 
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PreviewSession>>([]);
@@ -434,5 +569,49 @@ public class SandboxPreviewTests
         public Task StopPreviewAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<int> ReapAsync(CancellationToken ct = default) => Task.FromResult(0);
+    }
+
+    private sealed class RecordingPreviewRunnerClient(
+        List<string> calls,
+        bool failRetention = false) : IPreviewRunnerHttpClient
+    {
+        public string? RetainedSession { get; private set; }
+        public string? StoppedSession { get; private set; }
+        public string? StopReason { get; private set; }
+
+        public Task<PreviewRunnerStartResult> StartProcessAsync(
+            string runId, string? bearer, string command, string cwd, int? workPlanId, string? treeHash,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<PreviewRunnerPortResult> ObserveBoundPortAsync(
+            string runId, string? bearer, string sessionId, int timeoutSeconds, string healthPath,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<PreviewRunnerHealthResult> HealthCheckAsync(
+            string runId, string? bearer, string sessionId, int port, string path,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<PreviewRunnerHealthResult> HealthCheckByOriginAsync(
+            string origin, string? bearer, string sessionId, int port, string path,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task RetainProcessAsync(
+            string runId, string? bearer, string sessionId, CancellationToken ct)
+        {
+            calls.Add("retain");
+            if (failRetention)
+                throw new InvalidOperationException("retain failed");
+            RetainedSession = sessionId;
+            return Task.CompletedTask;
+        }
+
+        public Task StopProcessAsync(
+            string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
+        {
+            calls.Add("stop");
+            StoppedSession = sessionId;
+            StopReason = reason;
+            return Task.CompletedTask;
+        }
     }
 }

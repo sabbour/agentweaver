@@ -12,7 +12,7 @@
 //
 //   - `az acr import --force`  -- re-importing the same source to the same tag
 //                                 converges on the same digest.
-//   - read-only queries (`show`, `show-manifests`) -- no remote mutation at all.
+//   - read-only queries (`show`, `manifest show-metadata`) -- no remote mutation at all.
 //
 // Each call site documents its own idempotency justification. Do not wrap a
 // non-idempotent operation with this helper.

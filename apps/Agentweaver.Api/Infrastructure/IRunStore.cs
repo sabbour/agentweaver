@@ -48,12 +48,37 @@ public interface IRunStore
         Task.FromResult(true);
 
     /// <summary>
+    /// Atomically acquires a preview-publication lease for one publication attempt. A current lease
+    /// owned by another attempt must be refused until it expires.
+    /// </summary>
+    Task<bool> TryAcquirePreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Renews a preview-publication lease only when <paramref name="ownerId"/> still owns it.</summary>
+    Task<bool> TryRenewPreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>
     /// Releases the preview-publication lease claimed by
     /// <see cref="TryBeginPreviewPublicationAsync"/>, letting any deferred terminal transition
     /// proceed at once instead of waiting out the lease. Safe to call when no lease is held.
     /// </summary>
     Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         Task.CompletedTask;
+
+    /// <summary>Releases a preview-publication lease only when <paramref name="ownerId"/> owns it.</summary>
+    Task EndPreviewPublicationAsync(RunId runId, string ownerId, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Returns whether <paramref name="ownerId"/> is still the recorded publication owner. Expiry
+    /// alone does not revoke ownership; a competing successful acquire changes the owner.
+    /// </summary>
+    Task<bool> IsPreviewPublicationOwnerAsync(
+        RunId runId, string ownerId, CancellationToken ct = default) =>
+        Task.FromResult(false);
 
     /// <summary>
     /// Returns the instant the current preview-publication lease expires, or <c>null</c> when no

@@ -264,15 +264,7 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
                 },
                 Tools = [],
                 Model = configuration.Model,
-                Provider = new ProviderConfig
-                {
-                    Type = configuration.Type,
-                    BaseUrl = configuration.BaseUrl,
-                    ApiKey = configuration.ApiKey,
-                    WireApi = configuration.WireApi ?? "responses",
-                    Headers = ByokProviderConfigMapper.ToHeaderDictionary(configuration.Headers),
-                    Azure = ByokProviderConfigMapper.ToAzureOptions(configuration),
-                },
+                Provider = ByokProviderConfigMapper.ToProviderConfig(configuration),
                 EnableConfigDiscovery = false,
                 Streaming = true,
                 EnableSessionStore = false,

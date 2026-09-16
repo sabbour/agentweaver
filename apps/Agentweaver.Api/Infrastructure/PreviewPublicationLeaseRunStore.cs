@@ -143,8 +143,23 @@ public sealed class PreviewPublicationLeaseRunStore(
         RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
         Inner.TryBeginPreviewPublicationAsync(runId, leaseUntil, ct);
 
+    public Task<bool> TryAcquirePreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+
+    public Task<bool> TryRenewPreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+
     public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         Inner.EndPreviewPublicationAsync(runId, ct);
+
+    public Task EndPreviewPublicationAsync(RunId runId, string ownerId, CancellationToken ct = default) =>
+        Inner.EndPreviewPublicationAsync(runId, ownerId, ct);
+
+    public Task<bool> IsPreviewPublicationOwnerAsync(
+        RunId runId, string ownerId, CancellationToken ct = default) =>
+        Inner.IsPreviewPublicationOwnerAsync(runId, ownerId, ct);
 
     public Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(RunId runId, CancellationToken ct = default) =>
         Inner.GetPreviewPublicationLeaseAsync(runId, ct);

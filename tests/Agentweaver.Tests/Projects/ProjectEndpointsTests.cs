@@ -76,7 +76,8 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
     private async Task SeedPlatformDefaultCopilotBindingAsync(
         string login = "platform-bot",
-        string grantDigest = "digest")
+        string grantDigest = "digest",
+        DateTimeOffset? expiresAt = null)
     {
         await ResetBackgroundAiConfigurationAsync();
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -95,7 +96,13 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         });
         await secrets.SetSecretAsync(
             "copilot-app-platform-default-version",
-            $$"""{"status":"signed-in","accessToken":"ghu_platform","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"{{login}}"}""");
+            JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "ghu_platform",
+                expiresAt = expiresAt ?? new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                githubLogin = login,
+            }));
         await db.SaveChangesAsync();
     }
 
@@ -462,6 +469,23 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         body.GetProperty("github_login").GetString().Should().Be("platform-bot");
         body.GetProperty("effective_source").GetString().Should().Be("platform_default");
         body.GetProperty("platform_default_connected").GetBoolean().Should().BeTrue();
+        body.GetProperty("byok_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetProjectCopilotConnection_DoesNotReportExpiredPlatformCredentialAsConnected()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedPlatformDefaultCopilotBindingAsync(expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_connected");
+        body.GetProperty("github_login").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("effective_source").GetString().Should().Be("none");
+        body.GetProperty("platform_default_connected").GetBoolean().Should().BeFalse();
         body.GetProperty("byok_configured").GetBoolean().Should().BeFalse();
     }
 

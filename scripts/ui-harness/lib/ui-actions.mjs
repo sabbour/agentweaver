@@ -22,6 +22,14 @@ export function readinessOptions(args) {
   return { timeout, target: readinessTarget(args) };
 }
 
+export function zoomPercent(args) {
+  const value = Number(args.percent);
+  if (!Number.isFinite(value) || value < 25 || value > 200) {
+    throw new Error('zoom requires --percent between 25 and 200');
+  }
+  return value;
+}
+
 export async function navigateForAppEvidence(runtime, destination, options) {
   await runtime.goto(destination);
   return waitForAppReadiness(runtime.page, options);
@@ -84,6 +92,14 @@ export async function executeUiAction({
         target: keyedLocator(runtime.page, { testId: toTestId }),
         ...dragOptions,
       });
+    } else if (command === 'zoom') {
+      const percent = zoomPercent(args);
+      const viewport = {
+        width: Math.round(1280 * (100 / percent)),
+        height: Math.round(720 * (100 / percent)),
+      };
+      target = { percent, viewport };
+      await runtime.page.setViewportSize(viewport);
     } else if (command === 'resolve-approval') {
       assertApprovalAllowed({
         adapterText: session.persona.text,

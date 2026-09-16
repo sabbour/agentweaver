@@ -457,9 +457,9 @@ export async function expandIndexChildren(client, repository, digest) {
 }
 
 /**
- * Deletes one manifest, lifting a provenance write-lock if the registry
- * refuses with 405. Provenance tags are deliberately locked read-only, so the
- * lock is lifted only for a manifest already chosen for deletion.
+ * Deletes one manifest, lifting a legacy provenance write-lock if the registry
+ * refuses with 405. The lock is lifted only for a manifest already chosen for
+ * deletion.
  */
 export async function deleteManifest(client, repository, manifest, { log = logDefault } = {}) {
   const scope = client.repositoryScope(repository);

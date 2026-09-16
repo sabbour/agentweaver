@@ -108,6 +108,7 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --p
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
 node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> --from-test-id <source-test-id> --to-test-id <target-test-id>
+node scripts/ui-harness/agent-driver-ui/tools.mjs zoom --session <sessionId> --percent 75
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 ```
 
@@ -125,6 +126,11 @@ for handles or node repositioning. Offsets must remain inside the selected eleme
 For the visual workflow editor, targets include `workflow-canvas`,
 `workflow-node-<node-id>`, and `workflow-node-<node-id>-handle-source|target`.
 Failed drags release the pointer and append a failed evidence turn before exiting `2`.
+
+`zoom` changes the evidence viewport to the equivalent effective browser zoom for
+subsequent actions and captures, which is useful for wide topology, trace, and
+dashboard layouts that would otherwise be cropped. `--percent` accepts 25 through
+200; for example, 50% captures a 2560x1440 viewport.
 
 `goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
 after `domcontentloaded`; a transient authentication spinner is allowed to resolve
