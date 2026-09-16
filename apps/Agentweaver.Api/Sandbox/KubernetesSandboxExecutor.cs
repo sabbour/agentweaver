@@ -701,8 +701,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 var repositoryAccessToken = _repositoryCredentials is null
                     ? null
                     : await _repositoryCredentials.MintAsync(runId, ct).ConfigureAwait(false);
+                var configureCopilotCredential = copilotCredential;
+                if (_httpClientFactory is not null && byokProvider is null)
+                {
+                    configureCopilotCredential = await _copilotCredentials!
+                        .GetCredentialAsync(runId, ct)
+                        .ConfigureAwait(false);
+                    if (configureCopilotCredential is null)
+                        throw effectiveProvider.ToConnectionRequiredException(providerScopeProjectId);
+                }
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
-                    podIp, _options.AgentHostPort, runId, submittingUser ?? string.Empty, turnToken, copilotCredential,
+                    podIp, _options.AgentHostPort, runId, submittingUser ?? string.Empty, turnToken,
+                    configureCopilotCredential,
                     repositoryAccessToken,
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
@@ -1323,14 +1333,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             try
             {
                 using var document = JsonDocument.Parse(detail);
-                if (document.RootElement.TryGetProperty("error", out var error)
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.TryGetProperty("error", out var error)
                     && error.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(error.GetString()))
                     reason = error.GetString()!;
+                else if (root.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(root.GetString()))
+                    reason = root.GetString()!;
             }
             catch (JsonException)
             {
-                // Plain-text legacy errors keep the generic typed reason.
+                if (!string.IsNullOrWhiteSpace(detail))
+                    reason = detail.Trim();
             }
 
             throw new AgentHostConfigureException(
