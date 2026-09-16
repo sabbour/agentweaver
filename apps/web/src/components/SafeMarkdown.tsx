@@ -26,7 +26,7 @@ export interface SafeMarkdownProps {
 /**
  * Shared GFM + sanitized markdown renderer. Single source of truth for how agent /
  * timeline text is rendered so tables, task-lists and links stay consistent and safe
- * across surfaces (AgentMessageBubble, the run Timeline messages, …).
+ * across run messages and other agent-output surfaces.
  */
 export const SafeMarkdown = memo(function SafeMarkdown({ children }: SafeMarkdownProps) {
   return (

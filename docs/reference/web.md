@@ -207,7 +207,7 @@ Two muted **audit milestones** appear in the session timeline when automation ac
 A child run can ask a question or request tool approval; the coordinator re-projects these onto its own stream as `coordinator.child_question` `{ childRunId, subtaskId, requestId, question }` and `coordinator.child_approval_required` `{ childRunId, subtaskId, requestId, toolName, url?, message? }`. The **Action required** block renders each as an actionable item labelled with its source subtask (`Subtask {n}`):
 
 - A child **question** renders the embedded answer card, but the answer is POSTed against the **`childRunId`** from the payload (`apiClient.answerQuestion(childRunId, requestId, value)`), **not** the coordinator run id — the child is the run that is blocked.
-- A child **approval** reuses the existing HITL tool-approval card (`LifecycleEventCard` with a synthetic `tool.approval_required` event) targeted at the **`childRunId`**, so Allow/Deny POST against the child's `tool-approvals`/`tool-denials` endpoints. The tool name, URL, and message are shown.
+- A child **approval** appears in the child session panel targeted at the **`childRunId`**, so Allow/Deny POST against the child's `tool-approvals`/`tool-denials` endpoints. The tool name, URL, and message are shown.
 - Each item collapses once resolved (a question on `agent.question_answered` for the same `requestId`, or optimistically on submit; an approval on the card's own allow/deny action).
 
 #### Assembly-review affordance
@@ -216,7 +216,7 @@ When the orchestration reaches the collective human-review stage, the page prese
 
 - **`awaiting_assembly` / `assembling`** — an "Assembling collective output…" panel with a spinner.
 - **`in_review`** (or a `coordinator.assembly_review_requested` event) — an **Assembly review** panel that surfaces the integration diff/summary (read from the event payload's `diff` / `summary` / `treeHash` fields) and **Approve** / **Request changes** / **Decline** buttons. These POST to `POST /api/runs/{coordinatorRunId}/assembly/review` via `apiClient.reviewAssembly(runId, { decision, comment? })`. A comment is required for request-changes and decline.
-- **`coordinator.steering_received` / `coordinator.steering_decision`** — correction feedback is shown as a source-agnostic steering signal followed by the coordinator's decision. The timeline labels distinguish **steered in place** from **fresh dispatch**, so a reset is never presented as an unexplained graph jump (`apps/web/src/components/LifecycleEventCard.tsx:564`).
+- **`coordinator.steering_received` / `coordinator.steering_decision`** — correction feedback and the coordinator's decision remain available in the run event stream for inspection and recovery.
 - **`failed` / `blocked` / `declined`** — the human-readable **reason** (from the `coordinator.assembly_failed`/`blocked`/`declined` event payload or `coordinator_status_reason`) plus guidance that the subtasks are parked and can be redirected/amended via the steering chat box. The stuck state never renders a bare "Failed" with no explanation.
 
 #### Steering bar
