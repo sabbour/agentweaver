@@ -119,7 +119,7 @@ From [`apps/web/src/api/types.ts:1169`](#source).
 | `local_port` | number | Loopback port on the API host (local fallback only). In the preview path this is `0` — the preview is a public URL, not a loopback. |
 | `target_port` | number | Port **inside** the sandbox pod being exposed. For manual previews this is the user-requested app port. For platform live-preview this is the forwarder's pod-IP-reachable public port; the app's real port is observed separately by AgentHost. |
 | `pod_name` | string | Bound sandbox pod the preview targets (resolved from the run's `SandboxClaim` status). |
-| `started_at` | string | ISO timestamp of when the preview started. |
+| `started_at` | string | ISO timestamp when the public HTTPS Preview became usable. |
 | `preview_url` / `previewUrl` | string \| null | Public HTTPS capability URL `https://{token}-preview.{ZoneSuffix}` (preview path). The web UI embeds it in a `no-referrer` iframe and offers **Open preview**. |
 | `keepalive_url` / `keepaliveUrl` | string \| null | Relative URL the frontend pings ~every 60 s to keep the preview alive (preview path). |
 
@@ -134,7 +134,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` | Shared Gateway the per-preview HTTPRoute attaches to. Applied from `k8s/base/gateway-preview.yaml`. |
 | `Sandbox:Preview:GatewayNamespace` | `agentweaver` | Namespace of the shared preview Gateway. |
 | `Sandbox:Preview:Namespace` | `agentweaver` | Namespace where the per-preview Service / HTTPRoute / pod live. |
-| `Sandbox:Preview:LifetimeMinutes` | `1440` | Preview lifetime fallback for legacy/non-project runs. It is used for both sliding expiry and the hard cap. Project-backed previews use their project lifetime setting. |
+| `Sandbox:Preview:LifetimeMinutes` | `1440` | Usable Preview lifetime fallback for legacy/non-project runs, measured from successful public HTTPS publication rather than route creation. It is used for both sliding expiry and the hard cap. Project-backed previews use their project lifetime setting. |
 | `Sandbox:Preview:KeepAfterRun` | `true` | Keep routing after completion while a live preview defers backing-pod release; expiry, stop and missing-pod reconciliation still bound cleanup; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
