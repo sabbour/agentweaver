@@ -182,6 +182,29 @@ describe('RunCard — Retry button', () => {
   });
 });
 
+describe('RunCard — agent owner', () => {
+  it('shows the assigned agent', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ agent_name: 'Trinity' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    expect(screen.getByTestId('run-card-agent').textContent).toContain('Trinity');
+  });
+
+  it('shows the coordinator fallback when no agent is assigned', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ agent_name: undefined })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    expect(screen.queryByTestId('run-card-agent')).toBeNull();
+    expect(screen.getByText('Owner: Coordinator assigning agent')).toBeTruthy();
+  });
+});
+
 describe('RunCard — card navigation', () => {
   it('clicking the card navigates to the orchestration detail', () => {
     render(

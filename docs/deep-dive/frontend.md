@@ -307,8 +307,8 @@ Important edge case: coordinator child runs may not appear in the parent project
 
 Where this lives:
 
-- `apps/web/src/components/NewRunDialog.tsx`
-- `apps/web/src/components/ReviewPanel.tsx`
+- `apps/web/src/pages/AssistantRunPage.tsx`
+- `apps/web/src/components/ArtifactBrowser.tsx`
 
 ## Coordinator Orchestration Flow
 
@@ -337,7 +337,7 @@ Where this lives:
 - `apps/web/src/components/StartOrchestrationDialog.tsx`
 - `apps/web/src/pages/CoordinatorRunPage.tsx`
 - `apps/web/src/state/topologyReducer.ts`
-- `apps/web/src/components/AgentRail.tsx`
+- `apps/web/src/pages/FlowPage.tsx`
 
 ## How the UI Stays in Sync
 
@@ -516,7 +516,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 <tr><td>Rendered controls</td><td>Operator decisions become new API calls</td></tr>
 <tr><td>Rendered controls</td><td>CoordinatorRunPage.tsx</td></tr>
 <tr><td>AppShell</td><td>AppShell</td></tr>
-<tr><td>AppShell</td><td>TopBar · LeftNav · project switcher</td></tr>
+<tr><td>AppShell</td><td>LeftNav · project switcher · floating actions</td></tr>
 <tr><td>AppShell</td><td>ProjectList + Notifications providers</td></tr>
 <tr><td>AppShell</td><td>AppShell.tsx:134-182</td></tr>
 <tr><td>Client projection</td><td>Client projection</td></tr>
