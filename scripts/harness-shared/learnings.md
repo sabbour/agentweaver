@@ -916,14 +916,33 @@ This explains why the earlier #578 TTL-renewal attempt was live-refuted even wit
 
 ---
 
-## Operator staging deploys must override Azure env vars explicitly
+## Deployment targets must be resolved from the active operator context
 
 - date: 2026-07-30
 - category: environment-fact
 - surface: all
-- status: open
+- status: corrected 2026-09-15
 
-scripts/azure/variables.mjs still defaults RESOURCE_GROUP=agentweaver-rg, ACR_NAME=agentweaverregistry, and CLUSTER_NAME=agentweaver-aks, but this operator's real staging environment in subscription 'AKS INT/Staging Test' is RESOURCE_GROUP=asabbour2, ACR_NAME=agwv2acr, CLUSTER_NAME=agwv2, KEYVAULT_NAME=agwv2kv. For this staging environment, every azure:deploy-from-commit / azure:deploy-from-local invocation must set all four env vars explicitly or the deploy will target the wrong or nonexistent resources. This was confirmed only after two failed defaulted deploy attempts, then by checking az account list, az group list, and az resource list --resource-group asabbour2.
+Do not reuse subscription, resource-group, cluster, registry, or Key Vault names from
+historical harness findings. Operator targets change, and this entry previously contained
+an obsolete `AKS INT/Staging Test` / `asabbour2` mapping that caused a later deployment
+attempt to target the wrong subscription.
+
+Before every deployment, derive the environment from live state:
+
+1. Confirm the intended subscription with `az account show`; switch only when explicitly
+   directed by the operator.
+2. Resolve the active cluster from the current kube context and verify it exists in that
+   subscription with `az aks list`.
+3. Resolve the matching resource group, ACR, and Key Vault from `az aks list`,
+   `az acr list`, and `az keyvault list`; do not infer names from an old note.
+4. Pass the verified values explicitly to `azure:deploy-from-commit` or
+   `azure:deploy-from-local`.
+
+For the 2026-09-15 run, the operator explicitly selected the active
+`asabbour - Microsoft Internal Consumption` subscription. Live discovery found cluster
+`agentweaver` in resource group `agentweaver-rg`, ACR `agentweaverasabbour`, and Key Vault
+`agentweaver-kv-eus2euap`. These values are evidence for that run, not permanent defaults.
 
 ---
 
