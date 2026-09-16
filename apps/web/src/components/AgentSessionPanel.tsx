@@ -1526,6 +1526,8 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       const reason = readString(p, ['reason', 'capacityReason', 'capacity_reason']);
       return `Subtask waiting for capacity: ${subtaskDescription(p, subtasks)}${reason ? ` — ${reason}` : ''}.`;
     }
+    case 'coordinator.child_provisioning_pending':
+      return `Waiting for sandbox capacity: ${subtaskDescription(p, subtasks)}. Kubernetes will schedule it when capacity becomes available.`;
     case 'subtask.running':
       return `Subtask running: ${subtaskDescription(p, subtasks)}.`;
     case 'subtask.assemble_ready':
@@ -1659,6 +1661,7 @@ function coordinatorEventIntent(evt: RunStreamEvent): string {
     case 'coordinator.children_complete': return 'Subtasks complete';
     case 'subtask.dispatched': return 'Dispatched subtask';
     case 'subtask.pending_capacity': return 'Waiting for capacity';
+    case 'coordinator.child_provisioning_pending': return 'Waiting for sandbox capacity';
     case 'subtask.running': return 'Subtask running';
     case 'subtask.assemble_ready': return 'Ready for assembly';
     case 'subtask.rai_flagged': return 'RAI flagged';
@@ -1766,7 +1769,20 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
     });
   }
 
+  const latestProvisioningByChild = new Map<string, number>();
   for (const evt of events) {
+    if (evt.type !== 'coordinator.child_provisioning_pending') continue;
+    const key = readString(evt.payload, ['childRunId', 'child_run_id', 'claimName', 'claim_name'])
+      ?? String(evt.sequence);
+    latestProvisioningByChild.set(key, evt.sequence);
+  }
+
+  for (const evt of events) {
+    if (evt.type === 'coordinator.child_provisioning_pending') {
+      const key = readString(evt.payload, ['childRunId', 'child_run_id', 'claimName', 'claim_name'])
+        ?? String(evt.sequence);
+      if (latestProvisioningByChild.get(key) !== evt.sequence) continue;
+    }
     const line = coordinatorActivityLine(evt, subtasks, gateLabelBySequence);
     if (!line) continue;
     const requestId = readString(evt.payload, ['requestId', 'request_id', 'RequestId'])
