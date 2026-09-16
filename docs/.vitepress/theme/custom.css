@@ -542,16 +542,10 @@ html.dark .mermaid .sequenceNumber {
   line-height: 1.68;
 }
 
-.aw-workflow-proof,
 .aw-proof-fallback {
   width: 100%;
   min-height: 760px;
   border-radius: 16px;
-}
-
-.aw-workflow-proof {
-  overflow: hidden;
-  background: var(--aw-surface);
 }
 
 .aw-proof-fallback {
@@ -1039,7 +1033,6 @@ html.dark .mermaid .sequenceNumber {
     padding-left: 18px;
   }
 
-  .aw-workflow-proof,
   .aw-proof-fallback {
     min-height: 840px;
   }
