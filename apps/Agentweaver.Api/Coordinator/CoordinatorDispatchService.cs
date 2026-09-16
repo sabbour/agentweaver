@@ -2311,8 +2311,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         SeqCounter topologySeq,
         CancellationToken ct)
     {
-        if (evt.Type != RunEventExecutionPodNameStore.EventType
-            || RunEventExecutionPodNameStore.ReadPodName(evt.Payload) is null)
+        if (evt.Type != RunEventExecutionPodNameStore.UnboundEventType
+            && (evt.Type != RunEventExecutionPodNameStore.EventType
+                || RunEventExecutionPodNameStore.ReadPodName(evt.Payload) is null))
             return;
 
         var entry = _streamStore.Get(coordinatorRunId);

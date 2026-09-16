@@ -14,6 +14,7 @@ namespace Agentweaver.Api.Sandbox;
 public sealed class RunEventExecutionPodNameStore : IExecutionPodNameStore
 {
     public const string EventType = "sandbox.execution_pod.bound";
+    public const string UnboundEventType = "sandbox.execution_pod.unbound";
 
     private readonly IRunEventStream _eventStream;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -55,6 +56,24 @@ public sealed class RunEventExecutionPodNameStore : IExecutionPodNameStore
         }
     }
 
+    public void Unregister(string runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        try
+        {
+            _eventStream.AppendAsync(runId, new Agentweaver.Domain.RunEvent(0, UnboundEventType, new
+            {
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            })).AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist execution pod unbinding for run {RunId}", runId);
+        }
+    }
+
     public string? TryGet(string runId)
     {
         if (string.IsNullOrWhiteSpace(runId))
@@ -64,13 +83,16 @@ public sealed class RunEventExecutionPodNameStore : IExecutionPodNameStore
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var payloadJson = db.RunEvents.AsNoTracking()
-                .Where(e => e.RunId == runId && e.EventType == EventType)
+            var latest = db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId &&
+                    (e.EventType == EventType || e.EventType == UnboundEventType))
                 .OrderByDescending(e => e.Sequence)
-                .Select(e => e.PayloadJson)
+                .Select(e => new { e.EventType, e.PayloadJson })
                 .FirstOrDefault();
 
-            return ReadPodName(payloadJson);
+            return latest?.EventType == EventType
+                ? ReadPodName(latest.PayloadJson)
+                : null;
         }
         catch (Exception ex)
         {
