@@ -94,3 +94,19 @@ merge. A green stack top does not replace that check. Restack and rerun after a 
 layer merges. Validation logs an identity derived from the exact commit/tree, dirty
 digest, profile version, environment, and toolchain; test results are never reused
 across Git SHAs.
+
+## Persona harnesses
+
+Use the executable harness contract for the surface you are testing. Copilot users can
+invoke the matching repository skill.
+
+| Scope | Executable contract | Copilot skill |
+| --- | --- | --- |
+| API | [`scripts/api-harness/SKILL.md`](https://github.com/sabbour/agentweaver/blob/dev/scripts/api-harness/SKILL.md) | [`agentweaver-api-harness`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-api-harness/SKILL.md) |
+| UI | [`scripts/ui-harness/SKILL.md`](https://github.com/sabbour/agentweaver/blob/dev/scripts/ui-harness/SKILL.md) | [`agentweaver-ui-harness`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-ui-harness/SKILL.md) |
+| MCP | [`scripts/mcp-harness/SKILL.md`](https://github.com/sabbour/agentweaver/blob/dev/scripts/mcp-harness/SKILL.md) | [`agentweaver-mcp-harness`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-mcp-harness/SKILL.md) |
+| All surfaces | [`scripts/combined-harness/README.md`](https://github.com/sabbour/agentweaver/blob/dev/scripts/combined-harness/README.md) | [`agentweaver-harness`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-harness/SKILL.md) |
+
+Use the
+[`agentweaver-harness-scenarios`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-harness-scenarios/SKILL.md)
+skill to list or create persona scenarios.
