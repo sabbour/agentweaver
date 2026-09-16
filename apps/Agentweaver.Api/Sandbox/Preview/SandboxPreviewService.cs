@@ -308,10 +308,16 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         await CreateServiceIdempotentAsync(service, ct).ConfigureAwait(false);
 
         // e. HTTPRoute (gateway.networking.k8s.io/v1) attaching to the shared preview Gateway.
-        var expiresAt = now.AddMinutes(previewSettings.LifetimeMinutes);
-        var maxUntil = now.AddMinutes(previewSettings.LifetimeMinutes);
+        // Keep the route alive while DNS and Gateway publication converge, but do not charge that
+        // infrastructure time against the user-selected usable Preview lifetime. Once publication
+        // succeeds below, both deadlines are reset from the ready timestamp.
+        var provisioningUntil = now
+            .AddSeconds(previewSettings.GatewayConvergenceTimeoutSeconds)
+            .AddSeconds(_options.PublicationTimeoutSeconds)
+            .AddMinutes(previewSettings.LifetimeMinutes);
         var httpRoute = BuildHttpRoute(
-            token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now, expiresAt, maxUntil,
+            token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now,
+            provisioningUntil, provisioningUntil,
             runId, previewRunnerSessionId);
 
         try
@@ -339,6 +345,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
 
         var published = false;
+        var publishedAt = now;
         try
         {
             // Retain the sandbox while DNS and Gateway configuration converge.
@@ -348,6 +355,9 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 runId, new Uri(previewUrl), previewSettings.GatewayConvergenceTimeoutSeconds,
                 maintainPublicationLease, publicationLeaseOwner, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
+            publishedAt = _clock.GetUtcNow();
+            var usableUntil = publishedAt.AddMinutes(previewSettings.LifetimeMinutes);
+            await SetPublishedPreviewLifetimeAsync(serviceName, publishedAt, usableUntil, ct).ConfigureAwait(false);
             published = true;
         }
         finally
@@ -367,7 +377,29 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             "SandboxPreviewService: published preview {Fingerprint} for run {RunId} -> pod {Pod} port {Port}",
             Fingerprint(token), runId, podName, targetPort);
 
-        return new PreviewSession(token, runId, podName, targetPort, previewUrl, now);
+        return new PreviewSession(token, runId, podName, targetPort, previewUrl, publishedAt);
+    }
+
+    private async Task SetPublishedPreviewLifetimeAsync(
+        string routeName, DateTimeOffset publishedAt, DateTimeOffset usableUntil, CancellationToken ct)
+    {
+        var deadline = Rfc3339(usableUntil);
+        var patchJson = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                annotations = new Dictionary<string, string>
+                {
+                    [PreviewReaper.AnnotationStartedAt] = Rfc3339(publishedAt),
+                    [PreviewReaper.AnnotationExpiresAt] = deadline,
+                    [PreviewReaper.AnnotationMaxUntil] = deadline,
+                },
+            },
+        });
+        var patch = new V1Patch(patchJson, V1Patch.PatchType.MergePatch);
+        await _client!.CustomObjects.PatchNamespacedCustomObjectAsync(
+            patch, HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural, routeName,
+            cancellationToken: ct).ConfigureAwait(false);
     }
 
     private async Task WaitForPublicationAsync(
