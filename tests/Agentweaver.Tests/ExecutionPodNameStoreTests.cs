@@ -38,6 +38,24 @@ public sealed class ExecutionPodNameStoreTests : IDisposable
         readerWithEmptyCache.TryGet(runId).Should().Be("agent-host-pod-a");
     }
 
+    [Fact]
+    public void PodNameRegistry_UnregistersSharedBinding_AndAllowsReplacement()
+    {
+        var runId = "child-run-2";
+        var writer = new PodNameRegistry(CreateStore());
+        writer.Register(runId, "agent-host-pod-stale");
+
+        writer.Unregister(runId);
+
+        var readerAfterRelease = new PodNameRegistry(CreateStore());
+        readerAfterRelease.TryGet(runId).Should().BeNull();
+
+        readerAfterRelease.Register(runId, "agent-host-pod-replacement");
+
+        var readerAfterReplacement = new PodNameRegistry(CreateStore());
+        readerAfterReplacement.TryGet(runId).Should().Be("agent-host-pod-replacement");
+    }
+
     public void Dispose()
     {
         foreach (var provider in _providers)

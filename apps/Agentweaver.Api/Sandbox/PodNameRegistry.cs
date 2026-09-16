@@ -32,6 +32,7 @@ public sealed class PodNameRegistry : IPodNameRegistry, IAgentHostTurnTokenRegis
         _agentEndpoints.TryRemove(runId, out _);
         _effectiveWorkingDirectories.TryRemove(runId, out _);
         _turnTokens.TryRemove(runId, out _);
+        _executionPods?.Unregister(runId);
     }
 
     public string? TryGet(string runId)
