@@ -246,6 +246,107 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
 
 ---
 
+## [ERR-20260915-AZURE-BYOK-BASE-PATH] Copilot SDK Azure provider routing
+
+**Logged**: 2026-09-15T22:55:00-07:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Azure BYOK model turns failed with HTTP 404 even though the configured deployment existed and direct Responses API probes succeeded.
+
+### Error
+```
+Session error: Resource not found on provider at
+https://asabbour-demo-resource.cognitiveservices.azure.com/ (HTTP 404).
+Check the base URL and model name.
+```
+
+### Context
+- The active provider used type `azure`, wire API `responses`, model/deployment `gpt-5.4`, and API version `2025-04-01-preview`.
+- Azure confirmed the `gpt-5.4` deployment was running.
+- Direct requests to both `/openai/responses?api-version=2025-04-01-preview` and `/openai/v1/responses` returned HTTP 200.
+- Agentweaver passed the Azure resource host directly as the SDK `ProviderConfig.BaseUrl`.
+- The Copilot SDK Azure contract expects the API base path, such as `<resource-host>/openai`; it then appends the wire endpoint.
+
+### Suggested Fix
+Centralize SDK provider construction. For Azure configurations, append `/openai` to the validated host-only stored URL and explicitly map the configured deployment as both `ModelId` and `WireModel`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.AgentRuntime/ByokProviderConfigMapper.cs
+
+### Resolution
+- **Resolved**: 2026-09-15T23:01:00-07:00
+- **Notes**: Added shared provider mapping and routed every BYOK SDK construction site through it; focused build and tests passed.
+
+---
+
+## [ERR-20260915-UI-HARNESS-PROFILE-LOCK] login-chrome-default
+
+**Logged**: 2026-09-15T22:44:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The UI-harness authentication refresh could not open Chrome's Default profile because the demo-recording session still held the profile lock.
+
+### Error
+```
+Login failed: Google Chrome is running and may hold the Default profile lock.
+```
+
+### Context
+- `npm run demo:record -- open` had left the managed `agentweaver-demo` Chrome session open.
+- The API harness uses `scripts/ui-harness/.auth`, not the separate demo-recording cache.
+
+### Suggested Fix
+Close the managed demo-recording session before running `scripts/ui-harness/login-chrome-default.mjs`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/ui-harness/login-chrome-default.mjs, scripts/demo-recording/cli.mjs
+
+### Resolution
+- **Resolved**: 2026-09-15T22:45:00-07:00
+- **Notes**: Closed the managed recorder session and retried the UI-harness login.
+
+---
+
+## [ERR-20260915-AGENTHOST-CONTAINER-NAME] kubectl logs
+
+**Logged**: 2026-09-15T22:46:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The initial live AgentHost log follower used the logical component name `agent-host` instead of the pod's actual container name.
+
+### Error
+```
+error: container agent-host is not valid for pod ... out of: agentweaver-agent-host, agentweaver-exec
+```
+
+### Context
+- Command targeted warm-pool pods with `-l app=agentweaver-agent-host`.
+- The correct main-container name is `agentweaver-agent-host`.
+
+### Suggested Fix
+Inspect the pod's reported container names and use `-c agentweaver-agent-host`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: k8s/base/sandbox-template-agenthost.yaml
+
+### Resolution
+- **Resolved**: 2026-09-15T22:46:00-07:00
+- **Notes**: Restarted the log follower with the actual container name.
+
+---
+
 ## [ERR-20260915-DOTNET-LOGLEVEL-USING] focused TcpPortForwarder test build
 
 **Logged**: 2026-09-15T21:12:00-07:00

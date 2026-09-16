@@ -76,15 +76,9 @@ public sealed class CopilotBacklogDecomposeAgentRunner : IBacklogDecomposeAgentR
                 },
                 Tools = [],
                 Model = byokProviderConfiguration?.Model ?? modelId,
-                Provider = byokProviderConfiguration is null ? null : new ProviderConfig
-                {
-                    Type = byokProviderConfiguration.Type,
-                    BaseUrl = byokProviderConfiguration.BaseUrl,
-                    ApiKey = byokProviderConfiguration.ApiKey,
-                    WireApi = byokProviderConfiguration.WireApi ?? "responses",
-                    Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProviderConfiguration.Headers),
-                    Azure = ByokProviderConfigMapper.ToAzureOptions(byokProviderConfiguration),
-                },
+                Provider = byokProviderConfiguration is null
+                    ? null
+                    : ByokProviderConfigMapper.ToProviderConfig(byokProviderConfiguration),
                 EnableConfigDiscovery = false,
                 Streaming = true,
                 EnableSessionStore = false,

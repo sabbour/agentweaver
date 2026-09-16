@@ -38,15 +38,7 @@ public sealed class EffectiveRunModelTurnExecutor(
                 AvailableTools = [],
                 OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = byok?.Model ?? modelId,
-                Provider = byok is null ? null : new ProviderConfig
-                {
-                    Type = byok.Type,
-                    BaseUrl = byok.BaseUrl,
-                    ApiKey = byok.ApiKey,
-                    WireApi = byok.WireApi ?? "responses",
-                    Headers = ByokProviderConfigMapper.ToHeaderDictionary(byok.Headers),
-                    Azure = ByokProviderConfigMapper.ToAzureOptions(byok),
-                },
+                Provider = byok is null ? null : ByokProviderConfigMapper.ToProviderConfig(byok),
                 EnableConfigDiscovery = false,
                 Streaming = true,
                 EnableSessionStore = false,

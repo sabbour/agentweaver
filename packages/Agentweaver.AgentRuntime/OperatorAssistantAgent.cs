@@ -568,15 +568,9 @@ public sealed class OperatorAssistantAgent(
             EnableSessionStore = false,
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
             Model = byokProviderConfiguration?.Model ?? modelId,
-            Provider = byokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
-            {
-                Type = byokProviderConfiguration.Type,
-                BaseUrl = byokProviderConfiguration.BaseUrl,
-                ApiKey = byokProviderConfiguration.ApiKey,
-                WireApi = byokProviderConfiguration.WireApi ?? "responses",
-                Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProviderConfiguration.Headers),
-                Azure = ByokProviderConfigMapper.ToAzureOptions(byokProviderConfiguration),
-            },
+            Provider = byokProviderConfiguration is null
+                ? null
+                : ByokProviderConfigMapper.ToProviderConfig(byokProviderConfiguration),
             Tools = tools.ToList(),
             // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
             // pod with NO OS-level sandbox (unlike sandboxed agent runs, which are contained by the
