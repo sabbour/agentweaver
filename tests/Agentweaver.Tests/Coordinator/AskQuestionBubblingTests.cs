@@ -151,6 +151,55 @@ public sealed class AskQuestionBubblingTests : IDisposable
     }
 
     [Fact]
+    public void BubbleChildInteraction_ProvisioningPending_ReProjectsStatusOntoCoordinatorStream()
+    {
+        const string coordinatorRunId = "coord-bubble-capacity";
+        const string childRunId = "child-bubble-capacity";
+        const int subtaskId = 4;
+
+        var streamStore = new RunStreamStore();
+        streamStore.Create(coordinatorRunId, "alice");
+        var sut = NewDispatchService(streamStore);
+
+        var evt = new RunEvent(1, EventTypes.SandboxProvisioningPending, new
+        {
+            claimName = "agent-child-bubble-capacity",
+            timestamp_utc = "2026-09-16T22:00:00Z",
+        });
+        sut.BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
+
+        var bubbled = streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Should().ContainSingle(e => e.Type == EventTypes.CoordinatorChildProvisioningPending).Subject;
+        var payload = JsonSerializer.SerializeToElement(bubbled.Payload);
+        payload.GetProperty("childRunId").GetString().Should().Be(childRunId);
+        payload.GetProperty("subtaskId").GetInt32().Should().Be(subtaskId);
+        payload.GetProperty("claimName").GetString().Should().Be("agent-child-bubble-capacity");
+    }
+
+    [Fact]
+    public void BubbleChildInteraction_RepeatedProvisioningHeartbeats_EmitOnceUntilChildProgresses()
+    {
+        const string coordinatorRunId = "coord-bubble-capacity-dedupe";
+        const string childRunId = "child-bubble-capacity-dedupe";
+
+        var streamStore = new RunStreamStore();
+        streamStore.Create(coordinatorRunId, "alice");
+        var sut = NewDispatchService(streamStore);
+        var pending = new RunEvent(1, EventTypes.SandboxProvisioningPending,
+            new { claimName = "agent-child-capacity" });
+
+        sut.BubbleChildInteraction(coordinatorRunId, 4, childRunId, pending);
+        sut.BubbleChildInteraction(coordinatorRunId, 4, childRunId, pending);
+        sut.BubbleChildInteraction(coordinatorRunId, 4, childRunId,
+            new RunEvent(2, EventTypes.AgentMessage, new { content = "bound" }));
+        sut.BubbleChildInteraction(coordinatorRunId, 4, childRunId, pending);
+
+        streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Count(e => e.Type == EventTypes.CoordinatorChildProvisioningPending)
+            .Should().Be(2);
+    }
+
+    [Fact]
     public void BubbleChildInteraction_NonInteractionEvent_DoesNotEmit()
     {
         const string coordinatorRunId = "coord-bubble-3";

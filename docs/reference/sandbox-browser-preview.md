@@ -138,6 +138,8 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:KeepAfterRun` | `true` | Keep routing after completion while a live preview defers backing-pod release; expiry, stop and missing-pod reconciliation still bound cleanup; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
+| `Sandbox:Preview:MaxConcurrentSessionsPerRun` | `3` | Maximum active Preview routes for one run. Multiple routes for one run share its backing AgentHost pod. |
+| `Sandbox:Preview:MaxConcurrentSessionsGlobal` | `20` | Deployment-wide Preview route safeguard. It is not a Kubernetes capacity preflight: an admitted claim can remain pending until a retained lease expires, a user stops it, or the Kata pool finds capacity. |
 | `Sandbox:Preview:GatewayConvergenceTimeoutSeconds` | `600` | Upper-bound deadline for App Routing to create a new generated preview hostname and program the Gateway HTTPRoute. Publication probes immediately, then retries with a 1 s, 2 s, 4 s, 8 s, then 10 s-max backoff. This does not create or modify DNS records. This environment's App Routing `external-dns` reconciles every 3 minutes, so keep this budget above that interval. |
 | `Sandbox:Preview:DnsConvergenceTimeoutSeconds` | `600` | Supported legacy alias for `GatewayConvergenceTimeoutSeconds`. Existing deployments can keep this key. |
 | `Sandbox:Preview:PublicationTimeoutSeconds` | `90` | Bounded wait after a response proves the request reached a backend. `404`, `500`, and any status outside `502`/`503`/`504` start this window. Gateway `502`, `503`, and `504` stay in the convergence window. |
@@ -147,6 +149,12 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `1440` | Fallback for legacy/non-project runs. Values clamp to 1–1440 minutes. Project-backed runs use the project setting. |
 | `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:176`](#source). Keep `false` in production. |
 | Run `auto_approve_tools` policy | `false` | When explicitly selected at direct start or atomically captured from backlog pickup settings, auto-approves `start_preview` without creating an approval card, notification, or waiter. The decision cites the persisted immutable policy snapshot ID and sanitized target port. Port/process/ownership/publication validation remains enforced. |
+
+Preview routes are durable capacity leases: terminal or `assemble_ready` run status does not release
+their backing claims. Kubernetes owns scheduling, so an unbound claim remains nonterminal and emits
+`sandbox.provisioning_pending`; the coordinator shows **Waiting for sandbox capacity** until cleanup
+or Kubernetes makes room. Operators can inspect pending claims and pool saturation from Cluster
+diagnostics. Cleanup removes only stopped, expired, orphaned, or authoritatively stale leases.
 
 ## Status codes
 
