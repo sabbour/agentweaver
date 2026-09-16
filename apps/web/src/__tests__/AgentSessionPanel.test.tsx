@@ -1170,7 +1170,9 @@ describe('AgentSessionPanel', () => {
         payload: { subtasks: [{ id: '1', title: 'Build the feed', assignedAgent: 'Trinity' }] },
       },
       { sequence: 4, type: 'subtask.dispatched', payload: { subtaskId: '1' } },
-      { sequence: 5, type: 'subtask.completed', payload: { subtaskId: '1' } },
+      { sequence: 5, type: 'coordinator.child_provisioning_pending', payload: { subtaskId: '1', childRunId: 'child-run-1', claimName: 'agent-child-run-1' } },
+      { sequence: 6, type: 'coordinator.child_provisioning_pending', payload: { subtaskId: '1', childRunId: 'child-run-1', claimName: 'agent-child-run-1' } },
+      { sequence: 7, type: 'subtask.completed', payload: { subtaskId: '1' } },
     ];
 
     render(
@@ -1192,6 +1194,7 @@ describe('AgentSessionPanel', () => {
     // Each lifecycle event gets its own specific header — not every step repeating "Coordinator".
     expect(within(timeline).getByText('Coordinator started')).toBeDefined();
     expect(within(timeline).getByText('Dispatched subtask')).toBeDefined();
+    expect(within(timeline).getAllByText('Waiting for sandbox capacity')).toHaveLength(1);
     expect(within(timeline).getByText('Subtask completed')).toBeDefined();
     // The generic literal 'Coordinator' header must not be repeated across these steps.
     expect(within(timeline).queryAllByText('Coordinator').length).toBe(0);

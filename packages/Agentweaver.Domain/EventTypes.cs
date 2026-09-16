@@ -494,6 +494,14 @@ public static class EventTypes
     public const string CoordinatorChildQuestion = "coordinator.child_question";
 
     /// <summary>
+    /// Emitted once on the COORDINATOR run's stream when a coordinator CHILD run is waiting for
+    /// Kubernetes to bind its AgentHost SandboxClaim. Another child event clears the projection so
+    /// a later capacity wait can be emitted again.
+    /// Payload: { childRunId, subtaskId, claimName, timestamp_utc }.
+    /// </summary>
+    public const string CoordinatorChildProvisioningPending = "coordinator.child_provisioning_pending";
+
+    /// <summary>
     /// Emitted on the COORDINATOR run's stream when a coordinator CHILD run pauses on a tool
     /// approval gate. The coordinator watcher re-projects the child's
     /// <see cref="ToolApprovalRequired"/> event so the operator can grant/deny. The decision

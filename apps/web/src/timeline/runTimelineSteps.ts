@@ -632,7 +632,31 @@ export function buildRunTimeline(
 
   for (const evt of sorted) {
     const payload = evt.payload ?? {};
+    if (current?.intent === 'Waiting for sandbox capacity' && evt.type !== 'sandbox.provisioning_pending') {
+      closeStep(current);
+      current = null;
+    }
     switch (evt.type) {
+      case 'sandbox.provisioning_pending': {
+        if (current?.intent === 'Waiting for sandbox capacity') break;
+        if (current) closeStep(current);
+        const step: RunTimelineStep = {
+          id: `sandbox-provisioning-${evt.sequence}`,
+          intent: 'Waiting for sandbox capacity',
+          status: 'running',
+          active: true,
+          synthetic: true,
+          tools: [],
+          messages: [],
+          children: [],
+          sequence: evt.sequence,
+        };
+        steps.push(step);
+        current = step;
+        messageByStep.set(step.id, new Map());
+        break;
+      }
+
       case 'agent.intent': {
         const intent = asStr(payload['intent']).trim() || 'Working';
         // Close the previous intent step before opening a new one, otherwise every
@@ -949,6 +973,8 @@ export function buildRunTimeline(
     }
     if (step.tools.some((t) => t.status === 'error')) {
       step.status = 'warning';
+    } else if (step.intent === 'Waiting for sandbox capacity') {
+      step.status = 'complete';
     } else if (step.tools.length === 0 && step.messages.length === 0) {
       step.status = 'pending';
     } else {

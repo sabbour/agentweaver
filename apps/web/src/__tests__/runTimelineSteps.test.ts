@@ -53,6 +53,20 @@ describe('deriveToolTitle', () => {
 });
 
 describe('buildRunTimeline', () => {
+  it('shows an unbound sandbox claim as a nonterminal capacity wait', () => {
+    const model = buildRunTimeline([
+      evt(1, 'sandbox.provisioning_pending', { claimName: 'agent-run-1' }),
+      evt(2, 'sandbox.provisioning_pending', { claimName: 'agent-run-1' }),
+      evt(3, 'agent.message', { messageId: 'm1', content: 'Capacity became available.' }),
+    ]);
+
+    expect(model.steps).toHaveLength(2);
+    expect(model.steps[0].intent).toBe('Waiting for sandbox capacity');
+    expect(model.steps[0].status).toBe('complete');
+    expect(model.steps[1].intent).toBe('Working');
+    expect(model.steps[1].messages[0].text).toBe('Capacity became available.');
+  });
+
   it('groups tool calls and messages under the owning agent.intent step', () => {
     const model = buildRunTimeline([
       evt(1, 'agent.turn.start', { turnId: 't1' }),
