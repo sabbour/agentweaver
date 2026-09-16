@@ -9,7 +9,7 @@ namespace Agentweaver.Api.Auth;
 public sealed class RunModelInvocationGuard(IServiceScopeFactory scopeFactory) : IModelInvocationGuard
 {
     public async Task<ResolvedRunModelProviderBoundary> PrepareAsync(
-        string runId, CancellationToken ct, bool supportsByok = true, string? expectedProviderKey = null)
+        string runId, CancellationToken ct, string? expectedProviderKey = null)
     {
         using var scope = scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
@@ -26,12 +26,11 @@ public sealed class RunModelInvocationGuard(IServiceScopeFactory scopeFactory) :
                 boundary.Provider.ToModelSource(), AgentProviderFailureKind.Configuration,
                 "model_provider_changed", "The configured model provider no longer matches the accepted run.", isRetryable: true);
         }
-        if (boundary.Provider is EffectiveModelProviderResult.Unavailable
-            || (!supportsByok && boundary.Provider is EffectiveModelProviderResult.Byok))
+        if (boundary.Provider is EffectiveModelProviderResult.Unavailable)
         {
             throw new AgentProviderException(
                 boundary.Provider.ToModelSource(), AgentProviderFailureKind.Configuration,
-                "model_provider_changed", "This model operation requires GitHub Copilot.", isRetryable: true);
+                "model_provider_changed", "The accepted model provider is unavailable.", isRetryable: true);
         }
 
         if (boundary.Provider is not EffectiveModelProviderResult.Byok)
