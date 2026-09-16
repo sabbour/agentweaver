@@ -21,7 +21,6 @@ const expectedProviderSurfaces = [
   'components/BlueprintPicker.tsx',
   'components/DecomposePreviewDialog.tsx',
   'components/OutcomePlanPanel.tsx',
-  'components/ReviewPanel.tsx',
   'components/StartOrchestrationDialog.tsx',
   'components/StartOrchestrationFab.tsx',
   'components/board/KanbanBoard.tsx',
