@@ -1,5 +1,3 @@
-import type { AgentMessageItem, TimelineItem, TurnGroupItem } from './types';
-
 /**
  * The outcome-spec drafting turn (coordinator.outcome_spec) streams the drafting agent's raw JSON
  * object onto the run stream before it is confirmed (e.g. `{"desired_outcome":"...","scope":"..."}`).
@@ -66,13 +64,11 @@ export function formatOutcomeSpecMessage(spec: OutcomeSpecMessage): string {
  * The coordinator decomposition turn streams the planning agent's final assistant message onto the
  * coordinator run stream (CoordinatorOrchestratorExecutor.DecomposeWithModelAsync). That message is
  * the SERIALIZED work plan — a raw JSON array of subtask drafts
- * (e.g. [{"title":...,"scope":...,"role":...,"depends_on":[...]}, ...]). The reused run timeline
- * would otherwise render it verbatim as a giant code/text bubble next to the structured
- * "Decomposed into N subtasks" lifecycle chip (emitted by the coordinator.work_plan event).
+ * (e.g. [{"title":...,"scope":...,"role":...,"depends_on":[...]}, ...]). The run timeline
+ * replaces it with a short summary next to the structured work-plan view.
  *
- * This recognizes that serialized-plan message and drops it from the coordinator timeline, leaving
- * the structured work-plan affordance (the chip + the work-plan panel/graph) as the single source of
- * truth. It NEVER touches the shared timeline reducer, so normal per-run timelines are unaffected.
+ * This recognizes the serialized plan so the active timeline builder can keep the structured work
+ * plan as the single source of truth.
  */
 
 /** True when an assistant message body is the decompose agent's serialized work-plan JSON array. */
@@ -103,34 +99,4 @@ export function isSerializedWorkPlan(content: string): boolean {
       typeof (el as Record<string, unknown>).title === 'string' &&
       typeof (el as Record<string, unknown>).scope === 'string',
   );
-}
-
-/**
- * Returns a copy of <paramref name="items"/> with the decompose agent's serialized-plan message
- * removed. Turn groups that become empty (the plan JSON was their only step) are dropped so the
- * timeline does not show a hollow turn bubble.
- */
-export function stripSerializedWorkPlanMessages(items: TimelineItem[]): TimelineItem[] {
-  const result: TimelineItem[] = [];
-
-  for (const item of items) {
-    if (item.kind !== 'turn-group') {
-      result.push(item);
-      continue;
-    }
-
-    const steps = item.steps.filter(
-      (step) =>
-        !(step.kind === 'agent-message' && isSerializedWorkPlan((step as AgentMessageItem).content)),
-    );
-
-    // Drop a turn group only if it had message steps that were ALL serialized plans and nothing
-    // else remains; otherwise keep it with the plan message(s) stripped.
-    if (steps.length === 0) continue;
-
-    const trimmed: TurnGroupItem = { ...item, steps };
-    result.push(trimmed);
-  }
-
-  return result;
 }
