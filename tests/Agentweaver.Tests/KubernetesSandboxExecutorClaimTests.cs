@@ -882,6 +882,108 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_recreates_existing_shared_claim_without_working_directory_when_claim_belongs_to_synthetic_run()
+    {
+        const string runId = "e14667fe-25cf-4476-8da4-e3b44d9ed289";
+        const string syntheticRunId = runId + "-coordinator-decompose";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            $$"""
+            {
+              "metadata": {
+                "annotations": {
+                  "{{SandboxClaimConventions.RunIdAnnotation}}": "{{syntheticRunId}}"
+                }
+              },
+              "status": {
+                "conditions": [{"type":"Ready","status":"True"}],
+                "sandbox":{"name":"agent-pod-parent"}
+              }
+            }
+            """);
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-parent$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-parent"},"status":{"podIP":"10.0.0.10"}}""");
+
+        var conflictFirst = new ConflictFirstClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(syntheticRunId, "stale-synthetic-turn-token");
+        turnTokens.RegisterTurnToken(runId, "stale-parent-turn-token");
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflictFirst, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        conflictFirst.ClaimCreateRequests.Should().Be(2,
+            "a claim configured for a synthetic child is not owned by the parent run and must be replaced");
+        fake.Requests.Should().Contain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        using var body = JsonDocument.Parse(configureHandler.Body!);
+        body.RootElement.GetProperty("runId").GetString().Should().Be(runId);
+        turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_reuses_existing_shared_claim_without_working_directory_when_run_token_is_held()
+    {
+        const string runId = "run-claim-same-run-reuse";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            $$"""
+            {
+              "metadata": {
+                "annotations": {
+                  "{{SandboxClaimConventions.RunIdAnnotation}}": "{{runId}}"
+                }
+              },
+              "status": {
+                "conditions": [{"type":"Ready","status":"True"}],
+                "sandbox":{"name":"agent-pod-reused"}
+              }
+            }
+            """);
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-reused$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-reused"},"status":{"podIP":"10.0.0.11"}}""");
+
+        var alwaysConflict = new AlwaysConflictClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(runId, "exact-run-turn-token");
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(alwaysConflict, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(runId);
+
+        endpoint.Should().Be("http://10.0.0.11:8088/a2a/agent");
+        alwaysConflict.ClaimCreateRequests.Should().Be(1);
+        fake.Requests.Should().NotContain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        configureHandler.Body.Should().BeNull(
+            "an existing claim authenticated for this exact run is already configured");
+        turnTokens.TryGetTurnToken(runId).Should().Be("exact-run-turn-token");
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs()
     {
         const string runId = "run-claim-assembly";
