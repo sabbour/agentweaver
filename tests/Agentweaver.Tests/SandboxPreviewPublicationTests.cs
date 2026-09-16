@@ -99,6 +99,54 @@ public sealed class SandboxPreviewPublicationTests
     }
 
     [Fact]
+    public async Task SelectedLifetime_StartsWhenPublicationBecomesUsable()
+    {
+        var startedAt = new DateTimeOffset(2026, 9, 16, 20, 14, 50, TimeSpan.Zero);
+        var clock = new PublicationClock(startedAt);
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var publication = new PreviewPublicationHandler((_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                firstAttempt.SetResult();
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using var h = new Harness(
+            publication,
+            dnsConvergenceTimeoutSeconds: 600,
+            lifetimeMinutes: 3,
+            clock: clock);
+
+        var start = h.StartServiceAsync();
+        await firstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var session = await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+        session.StartedAt.Should().Be(startedAt.AddMinutes(2),
+            "the usable Preview lifetime begins only after the public HTTPS probe succeeds");
+        var routeCreate = h.Kube.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/httproutes")).Subject;
+        using var createBody = JsonDocument.Parse(routeCreate.Body!);
+        var creationAnnotations = createBody.RootElement.GetProperty("metadata").GetProperty("annotations");
+        creationAnnotations.GetProperty(PreviewReaper.AnnotationMaxUntil).GetDateTimeOffset()
+            .Should().Be(startedAt.AddMinutes(14.5),
+                "the temporary provisioning deadline must cover convergence, publication, and usable lifetime");
+        var routePatch = h.Kube.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.Contains("/httproutes/")).Subject;
+        using var body = JsonDocument.Parse(routePatch.Body!);
+        var annotations = body.RootElement.GetProperty("metadata").GetProperty("annotations");
+        annotations.GetProperty(PreviewReaper.AnnotationStartedAt).GetDateTimeOffset()
+            .Should().Be(startedAt.AddMinutes(2));
+        annotations.GetProperty(PreviewReaper.AnnotationExpiresAt).GetDateTimeOffset()
+            .Should().Be(startedAt.AddMinutes(5));
+        annotations.GetProperty(PreviewReaper.AnnotationMaxUntil).GetDateTimeOffset()
+            .Should().Be(startedAt.AddMinutes(5));
+    }
+
+    [Fact]
     public async Task Gateway503_DoesNotStartPublicationWindow()
     {
         var calls = 0;
@@ -431,6 +479,7 @@ public sealed class SandboxPreviewPublicationTests
             PreviewPublicationHandler handler,
             int timeoutSeconds = 90,
             int dnsConvergenceTimeoutSeconds = 600,
+            int lifetimeMinutes = 1440,
             TimeProvider? clock = null,
             IRunStore? runStore = null,
             TimeSpan? publicationLeaseRenewalInterval = null)
@@ -449,6 +498,7 @@ public sealed class SandboxPreviewPublicationTests
                 ZoneSuffix = "preview.example.test",
                 PublicationTimeoutSeconds = timeoutSeconds,
                 DnsConvergenceTimeoutSeconds = dnsConvergenceTimeoutSeconds,
+                LifetimeMinutes = lifetimeMinutes,
             }, NullLogger<SandboxPreviewService>.Instance,
                 clock: clock,
                 publicationClient: _http,
@@ -496,12 +546,19 @@ public sealed class SandboxPreviewPublicationTests
         }
     }
 
-    private sealed class PublicationClock : TimeProvider
+    private sealed class PublicationClock(DateTimeOffset? utcNow = null) : TimeProvider
     {
         private long _timestamp;
+        private long _utcTicks = (utcNow ?? DateTimeOffset.UtcNow).UtcTicks;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
-        public void Advance(TimeSpan elapsed) => Interlocked.Add(ref _timestamp, elapsed.Ticks);
+        public override DateTimeOffset GetUtcNow() =>
+            new(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+        public void Advance(TimeSpan elapsed)
+        {
+            Interlocked.Add(ref _timestamp, elapsed.Ticks);
+            Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+        }
     }
 }
 
