@@ -183,6 +183,34 @@ public sealed class A2ATurnBridgePerTurnContextTests
     }
 
     [Fact]
+    public async Task StreamTurnAsync_PerTurnApiAccess_ReplacesOnlyWhenComplete()
+    {
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.SetToolApprovalApiAccess(
+            "http://agentweaver-api.agentweaver.svc.cluster.local:8080",
+            "run-capability");
+        var bridge = CreateBridge(new RecordingTurnRunner(), runtimeState);
+
+        await DrainAsync(bridge, BuildTurnMessage(
+            "review the assembly", systemPromptContext: null,
+            projectId: "proj-rai", agentName: "Coordinator",
+            apiBaseUrl: "http://incomplete.example.test", apiKey: null));
+
+        runtimeState.ToolApprovalApiAccess.Should().NotBeNull();
+        runtimeState.ToolApprovalApiAccess!.BaseUrl.Should().Be(
+            "http://agentweaver-api.agentweaver.svc.cluster.local:8080");
+        runtimeState.ToolApprovalApiAccess.BearerToken.Should().Be("run-capability");
+
+        await DrainAsync(bridge, BuildTurnMessage(
+            "review again", systemPromptContext: null,
+            projectId: "proj-rai", agentName: "Coordinator",
+            apiBaseUrl: "http://replacement.example.test", apiKey: "replacement-key"));
+
+        runtimeState.ToolApprovalApiAccess.BaseUrl.Should().Be("http://replacement.example.test");
+        runtimeState.ToolApprovalApiAccess.BearerToken.Should().Be("replacement-key");
+    }
+
+    [Fact]
     public async Task StreamTurnAsync_WithoutPodBaseContext_DeliversPerTurnContextVerbatim()
     {
         // Non-warm / no recorded base context: the per-turn context is delivered as-is.
