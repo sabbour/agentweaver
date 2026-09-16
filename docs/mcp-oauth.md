@@ -4,6 +4,8 @@ Agentweaver uses OpenIddict as its OAuth authorization server and Microsoft Entr
 as the upstream human identity provider. Copilot CLI, GitHub Copilot desktop, and
 VS Code may use a configured static public client or the restricted RFC 7591
 registration endpoint.
+For browser sign-in and GitHub capability setup, see the
+[authentication guide](guide/authentication.md).
 
 The shared [authentication and security overview](deep-dive/auth-security.md)
 owns the OAuth trust-boundary visual. This page retains the protocol and key/session

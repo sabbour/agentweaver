@@ -13,6 +13,7 @@ headers. Hosted signing and encryption keys come from the active and previous us
 versions of configured Azure Key Vault certificate families.
 
 GitHub access is separate from sign-in. The Copilot App provides AI access. The Repo App provides repository access.
+MCP clients use the separate broker flow described in [MCP OAuth](../mcp-oauth.md).
 
 ## Signing in
 
