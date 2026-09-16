@@ -10,7 +10,7 @@ export type AgentOrchestrationQueue = {
   sampleTitles: string[];
 };
 
-// Locked component contract — Phase 2 will feed the same shape from a backend DTO.
+// Web model for the agent activity shown on the Flow page.
 export type AgentQueueItem = {
   agentName: string;
   active: number;
@@ -52,7 +52,7 @@ export function subtaskStatusToBucket(status: string): 'active' | 'queued' | 'bl
 
 /**
  * Maps a snake_case AgentQueueDto (from the board API) to the camelCase
- * AgentQueueItem used by the AgentRail component.
+ * AgentQueueItem used by the Flow page.
  */
 export function fromDto(dto: AgentQueueDto): AgentQueueItem {
   return {
@@ -83,7 +83,7 @@ export function fromDto(dto: AgentQueueDto): AgentQueueItem {
  * server-side before the children endpoint responds).
  *
  * sampleTitles: up to 3 subtask titles per agent (for tooltip/preview use).
- * runIds: the current coordinator run id (Phase 2 will aggregate across runs).
+ * runIds: the current coordinator run id.
  */
 export function deriveAgentQueues(
   workPlan: WorkPlanResponse,
@@ -122,8 +122,7 @@ export function deriveAgentQueues(
       done:    counts.done,
       runIds:      [runId],
       sampleTitles: counts.titles,
-      // Per-run derivation yields a single orchestration group (the run it derives from),
-      // so the per-orchestration card layout stays satisfied and AgentRail keeps working.
+      // Per-run derivation yields one orchestration group for the current run.
       orchestrations: [{
         runId,
         title:        null,
