@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.32.8
+
+### Patch Changes
+
+- cd6bc2f: Allow slower healthy GitHub Copilot outcome-spec turns to finish instead of failing at the former
+  two-minute coordinator deadline.
+- a805281: Prevent post-Preview assembly from reusing an AgentHost pod configured for a different
+  coordinator run that happens to share the same Kubernetes claim name.
+
 ## 0.32.7
 
 ### Patch Changes
