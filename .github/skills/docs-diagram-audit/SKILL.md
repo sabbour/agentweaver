@@ -64,6 +64,9 @@ For each area, launch a bounded GPT-6 Astra research agent that:
 
 Agents may run in parallel only when their diagram ownership does not overlap. Shared
 concepts have one `shared` owner. Reconcile area findings centrally before changing files.
+Write intermediate area research, planning, and reconciliation JSON to
+`.github/skills/docs-diagram-audit/reports/`. Generated JSON in that directory is ignored;
+only the report schemas are tracked.
 
 ## 3. Classify concepts and legacy diagrams
 
