@@ -246,6 +246,206 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
 
 ---
 
+## [ERR-20260915-KUBECTL-CUSTOM-COLUMNS-POWERSHELL] kubectl image query
+
+**Logged**: 2026-09-15T23:28:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+PowerShell parsed the unquoted custom-columns filter expression before `kubectl` received it.
+
+### Error
+```
+ParserError: Unrecognized token in source text.
+```
+
+### Context
+- The column expression contained `?(@.name=='agentweaver-agent-host')`.
+- The independent full deployment verifier still completed successfully with 36/36 checks.
+
+### Suggested Fix
+Use a single-quoted kubectl JSONPath expression or parse `-o json` in PowerShell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T23:28:00-07:00
+- **Notes**: Reissued the image query with a PowerShell-safe JSONPath.
+
+---
+
+## [ERR-20260915-WARMPOOL-READY-RACE] deploy-from-commit warm-pool wait
+
+**Logged**: 2026-09-15T23:25:00-07:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The exact-commit deployment completed rollout and 4/4 provenance verification but exited nonzero because its bounded warm-pool wait observed 0/2 for 180 seconds; immediately afterward the pool reported 2/2 ready.
+
+### Error
+```
+Timed out after 180000ms waiting for SandboxWarmPool 'agentweaver-agent-host'
+to become ready (last observed: 0/2).
+```
+
+### Context
+- API, frontend, MCP, and worker rollouts completed successfully.
+- Image provenance passed 4/4 for commit `d145a6822`.
+- No pods were manually deleted.
+- A post-command read showed `readyReplicas: 2` and `replicas: 2`.
+
+### Suggested Fix
+Treat the command as a transient post-rollout readiness timeout, rerun the normal verification command, and continue only after the pool and exact AgentHost image are independently verified.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: scripts/azure/deploy-from-local.mjs
+
+### Resolution
+- **Resolved**: 2026-09-15T23:26:00-07:00
+- **Notes**: The warm pool converged without manual resource deletion; follow-up verification was run against the deployed revision.
+
+---
+
+## [ERR-20260915-AZURE-BYOK-BASE-PATH] Copilot SDK Azure provider routing
+
+**Logged**: 2026-09-15T22:55:00-07:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Azure BYOK model turns failed with HTTP 404 even though the configured deployment existed and direct Responses API probes succeeded.
+
+### Error
+```
+Session error: Resource not found on provider at
+https://asabbour-demo-resource.cognitiveservices.azure.com/ (HTTP 404).
+Check the base URL and model name.
+```
+
+### Context
+- The active provider used type `azure`, wire API `responses`, model/deployment `gpt-5.4`, and API version `2025-04-01-preview`.
+- Azure confirmed the `gpt-5.4` deployment was running.
+- Direct requests to both `/openai/responses?api-version=2025-04-01-preview` and `/openai/v1/responses` returned HTTP 200.
+- Agentweaver passed the Azure resource host directly as the SDK `ProviderConfig.BaseUrl`.
+- The Copilot SDK Azure contract expects the API base path, such as `<resource-host>/openai`; it then appends the wire endpoint.
+
+### Suggested Fix
+Centralize SDK provider construction. For Azure configurations, append `/openai` to the validated host-only stored URL and explicitly map the configured deployment as both `ModelId` and `WireModel`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.AgentRuntime/ByokProviderConfigMapper.cs
+
+### Resolution
+- **Resolved**: 2026-09-15T23:01:00-07:00
+- **Notes**: Added shared provider mapping and routed every BYOK SDK construction site through it; focused build and tests passed.
+
+---
+
+## [ERR-20260915-UI-HARNESS-PROFILE-LOCK] login-chrome-default
+
+**Logged**: 2026-09-15T22:44:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The UI-harness authentication refresh could not open Chrome's Default profile because the demo-recording session still held the profile lock.
+
+### Error
+```
+Login failed: Google Chrome is running and may hold the Default profile lock.
+```
+
+### Context
+- `npm run demo:record -- open` had left the managed `agentweaver-demo` Chrome session open.
+- The API harness uses `scripts/ui-harness/.auth`, not the separate demo-recording cache.
+
+### Suggested Fix
+Close the managed demo-recording session before running `scripts/ui-harness/login-chrome-default.mjs`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/ui-harness/login-chrome-default.mjs, scripts/demo-recording/cli.mjs
+
+### Resolution
+- **Resolved**: 2026-09-15T22:45:00-07:00
+- **Notes**: Closed the managed recorder session and retried the UI-harness login.
+
+---
+
+## [ERR-20260915-AGENTHOST-CONTAINER-NAME] kubectl logs
+
+**Logged**: 2026-09-15T22:46:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The initial live AgentHost log follower used the logical component name `agent-host` instead of the pod's actual container name.
+
+### Error
+```
+error: container agent-host is not valid for pod ... out of: agentweaver-agent-host, agentweaver-exec
+```
+
+### Context
+- Command targeted warm-pool pods with `-l app=agentweaver-agent-host`.
+- The correct main-container name is `agentweaver-agent-host`.
+
+### Suggested Fix
+Inspect the pod's reported container names and use `-c agentweaver-agent-host`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: k8s/base/sandbox-template-agenthost.yaml
+
+### Resolution
+- **Resolved**: 2026-09-15T22:46:00-07:00
+- **Notes**: Restarted the log follower with the actual container name.
+
+---
+
+## [ERR-20260915-DOTNET-LOGLEVEL-USING] focused TcpPortForwarder test build
+
+**Logged**: 2026-09-15T21:12:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The focused TCP forwarder test build failed because the new `LogLevel.Warning` assertion lacked the `Microsoft.Extensions.Logging` namespace import.
+
+### Error
+```
+TcpPortForwarderTests.cs(77,33): error CS0103: The name 'LogLevel' does not exist in the current context
+```
+
+### Context
+- Command: locked restore, build, and focused `TcpPortForwarderTests` run.
+- The production project compiled; only the updated test file failed.
+
+### Suggested Fix
+Import `Microsoft.Extensions.Logging` in the test before rerunning the existing build output.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Tests/Preview/TcpPortForwarderTests.cs
+
+### Resolution
+- **Resolved**: 2026-09-15T21:13:00-07:00
+- **Notes**: Added the missing namespace import; focused build and all three tests then passed.
+
+---
+
 ## [ERR-20260902-RG1] rg
 
 **Logged**: 2026-09-02T02:44:17-07:00
@@ -839,5 +1039,184 @@ Use smaller patches after cross-context repository changes and reread files that
 ### Resolution
 - **Resolved**: 2026-09-15T01:31:00-07:00
 - **Notes**: Retried only the unapplied hunks against current file content.
+
+---
+
+## [ERR-20260915-KUBECTL-EXEC-QUOTING] PowerShell kubectl exec inline Node quoting
+
+**Logged**: 2026-09-15T20:52:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A PowerShell-launched `kubectl exec -- sh -lc` command mangled nested JavaScript quotes, so the intended short-lived diagnostic server never started.
+
+### Error
+```text
+Syntax error: Unterminated quoted string
+```
+
+### Context
+- Attempted to embed `node -e` JavaScript inside PowerShell, `kubectl exec`, and `sh -lc` quoting layers.
+- The subsequent HTTP 503 probe was invalid because no diagnostic listener was running.
+- A later `Start-Process -ArgumentList` retry also split the JavaScript at spaces; direct
+  `kubectl exec ... -- node -e '...'` preserved it correctly.
+
+### Suggested Fix
+Avoid nested inline JavaScript quoting. Pass a simple Node expression directly after `kubectl exec`, or base64-encode the script before invoking the remote shell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T20:52:00-07:00
+- **Notes**: Discarded the invalid probe result and reran with quoting that preserves the remote command.
+
+---
+
+## [ERR-20260915-KUBECTL-CP-WINDOWS-PATH] kubectl cp misread Windows drive path
+
+**Logged**: 2026-09-15T20:59:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+`kubectl cp` interpreted the colon in an absolute Windows drive path as the remote-path separator.
+
+### Error
+```text
+error: one of src or dest must be a local file specification
+```
+
+### Context
+- Source was an absolute `C:\...` path.
+- `kubectl cp` uses `pod:path` syntax and cannot disambiguate that drive colon.
+
+### Suggested Fix
+Change to the source directory and pass a relative local path to `kubectl cp`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T20:59:00-07:00
+- **Notes**: Retried from the worktree with a relative source path.
+
+---
+
+## [ERR-20260916-BWRAP-PDEATHSIG] supervised preview killed when spawning thread retired
+
+**Logged**: 2026-09-16T06:15:00Z
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Long-lived preview workloads launched by the executor sidecar exited with code 137 about
+20 seconds into a human-approval wait because their bubblewrap process used
+`--die-with-parent`.
+
+### Error
+```text
+PreviewRunner: process exited session=<id> exitCode=137
+Preview session has exited or is unreachable; a preview URL cannot be published.
+```
+
+### Context
+- Three independent healthy preview sessions were SIGKILLed 20-23 seconds after
+  `start_preview` entered its approval wait.
+- The AgentHost and executor containers remained running with zero restarts and no OOM
+  termination.
+- Linux parent-death signals are associated with the native thread that creates the child.
+  `PodExecServer` handles requests on .NET worker threads, which may retire while the
+  sidecar process remains healthy.
+- The supervised relay/socket lifecycle already stops unretained workloads on disconnect
+  and explicit stop, while container teardown reaps processes when the sidecar exits.
+
+### Suggested Fix
+Omit `--die-with-parent` only for sidecar-supervised long-lived processes. Preserve it for
+one-shot commands, and preserve `--new-session`, namespace isolation, disconnect cleanup,
+explicit stop, and container-exit cleanup.
+
+### Resolution
+- Commit `e12b343` split supervised and one-shot bubblewrap launch arguments.
+- A fresh Foundry/BYOK preview returned its exact marker twice 58.869 seconds apart.
+- A fresh project GitHub Copilot preview returned its exact marker twice 70.174 seconds apart.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs, packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs, apps/Agentweaver.AgentHost/PreviewRunner.cs
+- See Also: ERR-20260709-PREVLIFE
+
+---
+
+## [ERR-20260916-WORKER-KV] worker assembly cannot read run provider snapshots
+
+**Logged**: 2026-09-16T07:10:00Z
+**Priority**: critical
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Coordinator assembly model turns executed by `agentweaver-worker` failed with
+`model_provider_snapshot_unavailable` even though the snapshot owner row and Key Vault
+secret both existed.
+
+### Error
+```text
+The run's accepted model provider snapshot is unavailable. Retry the run to create a new snapshot.
+```
+
+### Context
+- API replicas had `Auth__KeyVault__Uri`; worker replicas did not.
+- Production `Program.cs` therefore wired workers to `InMemorySecretStore`.
+- Provider snapshots captured by API replicas were invisible to worker assembly, affecting both
+  project GitHub Copilot and Foundry/BYOK runs.
+
+### Resolution
+Configure `Auth__KeyVault__Uri` on the worker deployment from the shared
+`agentweaver-runtime-config/KEYVAULT_URI` value and pin API/worker parity with a manifest test.
+
+### Metadata
+- Reproducible: yes
+- Related Files: k8s/base/worker-deployment.yaml, apps/Agentweaver.Api/Program.cs, apps/Agentweaver.Api/Auth/RunModelProviderSnapshotStore.cs
+
+---
+
+## [ERR-20260916-DEPLOY-ENV] direct deployment helper omitted required Key Vault configuration
+
+**Logged**: 2026-09-16T08:00:00Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A direct Node invocation of `resolveVariables()` failed before ACR tag repair because `KEYVAULT_NAME` was not supplied.
+
+### Error
+```
+MissingRequiredVariableError: KEYVAULT_NAME is not set and there is no default
+```
+
+### Context
+- The normal deployment command receives environment configuration externally.
+- The bounded recovery script constructed only image-tag variables and therefore did not reproduce the required deployment environment.
+- PowerShell tool calls also start in the repository root unless the command explicitly changes to the intended worktree.
+- A one-shot ACR manifest read immediately after a successful provenance check can transiently return no digest; use the deployment helper's bounded polling method for verification.
+
+### Suggested Fix
+When invoking Azure deployment modules directly, explicitly change to the intended worktree, provide the known environment identifiers (`KEYVAULT_NAME`, resource group, ACR, AKS, and subscription as applicable), and use `waitForAcrTagDigest()` for post-write verification rather than a one-shot metadata read.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/azure/variables.mjs
+
+### Resolution
+- **Resolved**: 2026-09-16T08:00:00Z
+- **Notes**: Retry the bounded helper with the known live environment values from the deployment checkpoint.
 
 ---

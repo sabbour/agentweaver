@@ -50,7 +50,9 @@ type BadgeColor = 'subtle' | 'success' | 'warning' | 'danger';
 const initialTraceLoadRetryDelaysMs = [500, 1_500] as const;
 
 function shouldAutoRetryInitialTraceFailure(queryError: string | null | undefined): boolean {
-  return !!queryError && /temporarily unavailable|retry shortly|did not respond|dependency failure/i.test(queryError);
+  return !!queryError
+    && !/did not respond/i.test(queryError)
+    && /temporarily unavailable|retry shortly|dependency failure/i.test(queryError);
 }
 
 function waitForInitialTraceRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {

@@ -150,7 +150,7 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
             "BYOK operator turns must use the deployment-wide custom-provider model rather than a Copilot model override");
         config.Provider.Should().NotBeNull();
         config.Provider!.Type.Should().Be("azure");
-        config.Provider.BaseUrl.Should().Be("https://byok-resource.openai.azure.com");
+        config.Provider.BaseUrl.Should().Be("https://byok-resource.openai.azure.com/openai");
         config.Provider.ApiKey.Should().Be("test-byok-key");
         config.Provider.WireApi.Should().Be("responses");
     }

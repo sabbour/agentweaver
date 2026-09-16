@@ -397,15 +397,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = byokProvider?.Model ?? modelId,
-            Provider = byokProvider is null ? null : new GitHub.Copilot.ProviderConfig
-            {
-                Type = byokProvider.Type,
-                BaseUrl = byokProvider.BaseUrl,
-                ApiKey = byokProvider.ApiKey,
-                WireApi = byokProvider.WireApi ?? "responses",
-                Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProvider.Headers),
-                Azure = ByokProviderConfigMapper.ToAzureOptions(byokProvider),
-            },
+            Provider = byokProvider is null ? null : ByokProviderConfigMapper.ToProviderConfig(byokProvider),
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
             // concurrent load with multiple replicas.

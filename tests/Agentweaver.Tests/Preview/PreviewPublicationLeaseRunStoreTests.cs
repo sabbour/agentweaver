@@ -84,6 +84,27 @@ public class PreviewPublicationLeaseRunStoreTests
     }
 
     [Fact]
+    public async Task OwnedLease_RejectsCompetingPublicationAndFencesRenewalAndRelease()
+    {
+        var inner = new LeaseRunStore();
+        var store = Decorate(inner);
+        var firstExpiry = DateTimeOffset.UtcNow.AddMinutes(3);
+        var renewedExpiry = firstExpiry.AddMinutes(1);
+
+        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-a", firstExpiry)).Should().BeTrue();
+        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-b", firstExpiry)).Should().BeFalse();
+        (await store.TryRenewPreviewPublicationAsync(Run, "owner-b", renewedExpiry)).Should().BeFalse();
+
+        await store.EndPreviewPublicationAsync(Run, "owner-b");
+        (await store.GetPreviewPublicationLeaseAsync(Run)).Should().Be(firstExpiry);
+
+        (await store.TryRenewPreviewPublicationAsync(Run, "owner-a", renewedExpiry)).Should().BeTrue();
+        (await store.GetPreviewPublicationLeaseAsync(Run)).Should().Be(renewedExpiry);
+        await store.EndPreviewPublicationAsync(Run, "owner-a");
+        (await store.GetPreviewPublicationLeaseAsync(Run)).Should().BeNull();
+    }
+
+    [Fact]
     public void RunStoreChain_FindsAStoreThroughDecorators()
     {
         var guard = new RunActiveClaimGuardedRunStore(new LeaseRunStore(), new RunActiveClaimGuard());
@@ -99,6 +120,7 @@ public class PreviewPublicationLeaseRunStoreTests
     internal sealed class LeaseRunStore : IRunStore
     {
         private DateTimeOffset? _leaseUntil;
+        private string? _leaseOwner;
 
         public volatile bool Terminal;
         public int TerminalCalls;
@@ -114,11 +136,48 @@ public class PreviewPublicationLeaseRunStoreTests
             return Task.FromResult(true);
         }
 
+        public Task<bool> TryAcquirePreviewPublicationAsync(
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+        {
+            if (Terminal || (_leaseOwner is not null && _leaseUntil > DateTimeOffset.UtcNow))
+                return Task.FromResult(false);
+            _leaseOwner = ownerId;
+            _leaseUntil = leaseUntil;
+            LeaseExpirations.Add(leaseUntil);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TryRenewPreviewPublicationAsync(
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+        {
+            if (Terminal || _leaseOwner != ownerId)
+                return Task.FromResult(false);
+            _leaseUntil = leaseUntil;
+            LeaseExpirations.Add(leaseUntil);
+            return Task.FromResult(true);
+        }
+
         public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default)
         {
+            _leaseOwner = null;
             _leaseUntil = null;
             return Task.CompletedTask;
         }
+
+        public Task EndPreviewPublicationAsync(
+            RunId runId, string ownerId, CancellationToken ct = default)
+        {
+            if (_leaseOwner == ownerId)
+            {
+                _leaseOwner = null;
+                _leaseUntil = null;
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> IsPreviewPublicationOwnerAsync(
+            RunId runId, string ownerId, CancellationToken ct = default) =>
+            Task.FromResult(_leaseOwner == ownerId);
 
         public Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(RunId runId, CancellationToken ct = default) =>
             Task.FromResult(_leaseUntil);

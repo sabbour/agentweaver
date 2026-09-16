@@ -441,12 +441,97 @@ public sealed class SqliteRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryAcquirePreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_owner = $ownerId,
+                   preview_publication_lease_until = $leaseUntil
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled')
+               AND (preview_publication_lease_until IS NULL
+                    OR preview_publication_lease_until <= $now);
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$ownerId", ownerId);
+                cmd.Parameters.AddWithValue("$leaseUntil", Ts(leaseUntil));
+                cmd.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryRenewPreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_until = $leaseUntil
+             WHERE run_id = $runId
+               AND preview_publication_lease_owner = $ownerId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$ownerId", ownerId);
+                cmd.Parameters.AddWithValue("$leaseUntil", Ts(leaseUntil));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
     public async Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default)
     {
         await ExecuteNonQueryAsync(
-            "UPDATE runs SET preview_publication_lease_until = NULL WHERE run_id = $runId;",
+            """
+            UPDATE runs
+               SET preview_publication_lease_owner = NULL,
+                   preview_publication_lease_until = NULL
+             WHERE run_id = $runId;
+            """,
             cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
             ct).ConfigureAwait(false);
+    }
+
+    public async Task EndPreviewPublicationAsync(
+        RunId runId, string ownerId, CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_owner = NULL,
+                   preview_publication_lease_until = NULL
+             WHERE run_id = $runId
+               AND preview_publication_lease_owner = $ownerId;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$ownerId", ownerId);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            },
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> IsPreviewPublicationOwnerAsync(
+        RunId runId, string ownerId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT 1
+              FROM runs
+             WHERE run_id = $runId
+               AND preview_publication_lease_owner = $ownerId
+             LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$ownerId", ownerId);
+        return await command.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null;
     }
 
     public async Task<DateTimeOffset?> GetPreviewPublicationLeaseAsync(

@@ -10,6 +10,23 @@ namespace Agentweaver.AgentRuntime;
 /// </summary>
 public static class ByokProviderConfigMapper
 {
+    /// <summary>
+    /// Builds the SDK provider configuration, including the Azure OpenAI API base path and explicit
+    /// model mapping required by current Copilot runtimes.
+    /// </summary>
+    public static GitHub.Copilot.ProviderConfig ToProviderConfig(ByokProviderConfiguration configuration) =>
+        new()
+        {
+            Type = configuration.Type,
+            BaseUrl = ToProviderBaseUrl(configuration),
+            ApiKey = configuration.ApiKey,
+            WireApi = configuration.WireApi ?? "responses",
+            Headers = ToHeaderDictionary(configuration.Headers),
+            Azure = ToAzureOptions(configuration),
+            ModelId = configuration.Model,
+            WireModel = configuration.Model,
+        };
+
     /// <summary>Converts the optional custom-headers map to the dictionary shape the SDK expects,
     /// or <see langword="null"/> when there are none.</summary>
     public static Dictionary<string, string>? ToHeaderDictionary(IReadOnlyDictionary<string, string>? headers) =>
@@ -21,4 +38,13 @@ public static class ByokProviderConfigMapper
         configuration.Type == "azure" && !string.IsNullOrWhiteSpace(configuration.AzureApiVersion)
             ? new GitHub.Copilot.AzureOptions { ApiVersion = configuration.AzureApiVersion }
             : null;
+
+    internal static string ToProviderBaseUrl(ByokProviderConfiguration configuration)
+    {
+        var baseUrl = configuration.BaseUrl.TrimEnd('/');
+        return configuration.Type == "azure"
+            && !baseUrl.EndsWith("/openai", StringComparison.OrdinalIgnoreCase)
+                ? $"{baseUrl}/openai"
+                : baseUrl;
+    }
 }

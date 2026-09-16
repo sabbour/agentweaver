@@ -211,7 +211,9 @@ const useStyles = makeStyles({
   inspector: {
     display: 'grid',
     gap: tokens.spacingVerticalS,
-    maxWidth: '720px',
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
     padding: tokens.spacingHorizontalM,
   },
   inspectorHeading: {

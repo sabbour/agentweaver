@@ -375,7 +375,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             NetworkEnabled: networkEnabled);
         var process = new Process
         {
-            StartInfo = BuildProcessStartInfo(command),
+            StartInfo = BuildSupervisedProcessStartInfo(command),
             EnableRaisingEvents = true,
         };
 
@@ -591,7 +591,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
     }
 
-    internal ProcessStartInfo BuildProcessStartInfo(SandboxCommand command)
+    internal ProcessStartInfo BuildProcessStartInfo(SandboxCommand command) =>
+        BuildProcessStartInfo(command, dieWithParent: true);
+
+    internal ProcessStartInfo BuildSupervisedProcessStartInfo(SandboxCommand command) =>
+        BuildProcessStartInfo(command, dieWithParent: false);
+
+    private ProcessStartInfo BuildProcessStartInfo(SandboxCommand command, bool dieWithParent)
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("Kata bubblewrap isolation requires Linux.");
@@ -628,8 +634,15 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         Add(psi,
             "--unshare-user",
             "--unshare-ipc",
-            "--unshare-uts",
-            "--die-with-parent",
+            "--unshare-uts");
+        // Linux parent-death signals follow the native thread that called fork/clone, not merely the
+        // containing .NET process. Long-lived sidecar-supervised previews can therefore be SIGKILLed
+        // when an otherwise idle ThreadPool worker retires. Their relay/socket lifecycle already
+        // provides explicit disconnect, stop, and container-exit cleanup, so only one-shot commands
+        // retain bubblewrap's parent-death guard.
+        if (dieWithParent)
+            Add(psi, "--die-with-parent");
+        Add(psi,
             "--new-session",
             "--cap-drop",
             "ALL");

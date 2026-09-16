@@ -88,7 +88,9 @@ public sealed class PreviewStep
         ct = lifetime.Token;
         PreviewRunnerStartResult? started = null;
         string? bearer = null;
+        var publicationLeaseOwner = Guid.NewGuid().ToString("n");
         var keepProcess = false;
+        var skipProcessCleanup = false;
         var leased = false;
         var stopReason = "registration_failed";
 
@@ -167,7 +169,7 @@ public sealed class PreviewStep
             //    supervised so a fresh approval attempt can reuse it without duplicate execution.
             //    The publication lease starts here so process startup, observation, and the configured
             //    Gateway-convergence window cannot be cancelled by the run finishing its agent work.
-            leased = await TryLeaseAsync(runId, ct).ConfigureAwait(false);
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
             if (!leased)
             {
                 stopReason = "run_terminal";
@@ -239,8 +241,9 @@ public sealed class PreviewStep
             // 7. Register through the gate (honors Decision 1 — no auto-approve bypass).
             //    Release the lease first: an approval can wait for an operator, and a run must not
             //    be held open for that. The lease is claimed again once approval is granted.
-            await ReleaseLeaseAsync(runId, leased).ConfigureAwait(false);
+            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
             leased = false;
+            publicationLeaseOwner = started.SessionId;
             var approval = await _previewGate.RequestApprovalAsync(
                 runId, port.Port, ct, request.WorkPlanId, request.TreeHash).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
@@ -287,9 +290,22 @@ public sealed class PreviewStep
             }
 
             // Hold the run open again for registration and the preview_ready commit (#1315).
-            leased = await TryLeaseAsync(runId, ct).ConfigureAwait(false);
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
             if (!leased)
             {
+                if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
+                {
+                    if (RunId.TryParse(runId, out var parsedRunId))
+                    {
+                        skipProcessCleanup = await _runStore.IsPreviewPublicationOwnerAsync(
+                            parsedRunId, publicationLeaseOwner, ct).ConfigureAwait(false);
+                    }
+                    _logger.LogInformation(
+                        "PreviewStep: run {RunId} already has an active publication attempt; joining its outcome.",
+                        runId);
+                    return;
+                }
+
                 stopReason = "run_terminal";
                 EmitFailed(request, stopReason, "The run ended before preview publication started.", started.SessionId);
                 return;
@@ -299,7 +315,8 @@ public sealed class PreviewStep
             var registration = await SandboxEndpoints.TryRegisterPreviewAsync(
                 runId, port.Port, request.SubmittingUser, _previewService, ct,
                 previewRunnerSessionId: started.SessionId,
-                maintainPublicationLease: true).ConfigureAwait(false);
+                maintainPublicationLease: true,
+                publicationLeaseOwner: publicationLeaseOwner).ConfigureAwait(false);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
@@ -312,6 +329,14 @@ public sealed class PreviewStep
                 // SUCCESS: keep the process + forwarder alive to serve the preview.
                 keepProcess = true;
                 EmitWorkflowStep(runId, "completed", "Preview is ready.");
+                return;
+            }
+
+            if (registration.Status == PreviewRegistrationStatus.Superseded)
+            {
+                _logger.LogInformation(
+                    "PreviewStep: publication for run {RunId} was superseded by another active attempt.",
+                    runId);
                 return;
             }
 
@@ -345,12 +370,32 @@ public sealed class PreviewStep
         }
         finally
         {
-            await ReleaseLeaseAsync(runId, leased).ConfigureAwait(false);
-            if (started is not null && !keepProcess)
+            var shouldStopProcess = started is not null && !keepProcess && !skipProcessCleanup;
+            if (shouldStopProcess && leased && RunId.TryParse(runId, out var parsedRunId))
+            {
+                using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try
+                {
+                    shouldStopProcess = await _runStore.IsPreviewPublicationOwnerAsync(
+                        parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    shouldStopProcess = false;
+                    _logger.LogWarning(
+                        ex,
+                        "PreviewStep: could not verify publication ownership for run {RunId}; process cleanup skipped.",
+                        runId);
+                }
+            }
+
+            if (shouldStopProcess)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                await TryStopProcessAsync(runId, bearer, started.SessionId, stopReason, cleanup.Token).ConfigureAwait(false);
+                await TryStopProcessAsync(
+                    runId, bearer, started!.SessionId, stopReason, cleanup.Token).ConfigureAwait(false);
             }
+            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
         }
     }
 
@@ -358,12 +403,13 @@ public sealed class PreviewStep
     /// Claims the preview-publication lease so a run that finishes its agent work cannot terminalize
     /// while this step publishes (#1315). Returns <c>false</c> when the run is already terminal.
     /// </summary>
-    private async Task<bool> TryLeaseAsync(string runId, CancellationToken ct)
+    private async Task<bool> TryLeaseAsync(string runId, string ownerId, CancellationToken ct)
     {
         if (!RunId.TryParse(runId, out var parsed))
             return false;
-        return await _runStore.TryBeginPreviewPublicationAsync(
+        return await _runStore.TryAcquirePreviewPublicationAsync(
             parsed,
+            ownerId,
             DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
             ct).ConfigureAwait(false);
     }
@@ -373,14 +419,14 @@ public sealed class PreviewStep
     /// cancelled on the path that needs the release most. A failed release only delays a deferred
     /// terminal transition until the lease expires, so it is logged and never rethrown.
     /// </summary>
-    private async Task ReleaseLeaseAsync(string runId, bool leased)
+    private async Task ReleaseLeaseAsync(string runId, string ownerId, bool leased)
     {
         if (!leased || !RunId.TryParse(runId, out var parsed))
             return;
         using var release = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
-            await _runStore.EndPreviewPublicationAsync(parsed, release.Token).ConfigureAwait(false);
+            await _runStore.EndPreviewPublicationAsync(parsed, ownerId, release.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

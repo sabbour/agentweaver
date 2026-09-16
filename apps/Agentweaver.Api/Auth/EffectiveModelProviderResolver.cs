@@ -37,6 +37,8 @@ public sealed class EffectiveModelProviderResolver(
     private readonly IGitHubConnectionsCredentialVault _credentialVault =
         services?.GetService<IGitHubConnectionsCredentialVault>()
         ?? new GitHubConnectionsCredentialVault(secretStore);
+    private readonly CopilotCredentialRefreshService? _credentialRefresh =
+        services?.GetService<CopilotCredentialRefreshService>();
 
     public async Task<EffectiveModelProviderResult> ResolveAsync(ProjectId? projectId, CancellationToken ct)
     {
@@ -139,6 +141,12 @@ public sealed class EffectiveModelProviderResolver(
         catch (ArgumentException)
         {
             return null;
+        }
+
+        if (_credentialRefresh is not null)
+        {
+            await _credentialRefresh.EnsureFreshAsync(
+                locator.Key, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         }
 
         var secret = await _credentialVault.ReadCurrentAsync(locator, ct).ConfigureAwait(false);

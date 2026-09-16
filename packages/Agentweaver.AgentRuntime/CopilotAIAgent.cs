@@ -1418,15 +1418,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <see langword="null"/> when GitHub Copilot is the active model source.
     /// </summary>
     private GitHub.Copilot.ProviderConfig? BuildByokProviderConfig() =>
-        _activeByokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
-        {
-            Type = _activeByokProviderConfiguration.Type,
-            BaseUrl = _activeByokProviderConfiguration.BaseUrl,
-            ApiKey = _activeByokProviderConfiguration.ApiKey,
-            WireApi = _activeByokProviderConfiguration.WireApi ?? "responses",
-            Headers = ByokProviderConfigMapper.ToHeaderDictionary(_activeByokProviderConfiguration.Headers),
-            Azure = ByokProviderConfigMapper.ToAzureOptions(_activeByokProviderConfiguration),
-        };
+        _activeByokProviderConfiguration is null
+            ? null
+            : ByokProviderConfigMapper.ToProviderConfig(_activeByokProviderConfiguration);
 
     /// <summary>
     /// True when the run-bound GitHub Copilot credential must be re-redeemed before the next AI

@@ -317,7 +317,11 @@ export async function deployCommittedSha(cfg, opts = {}) {
   log.info("");
   log.info("Step 3/5: Verifying image provenance...");
   const provenanceResult = await provenanceStep.run(
-    { ...deploymentCfg, VERIFY_GIT_REF: verifyGitRef },
+    {
+      ...deploymentCfg,
+      VERIFY_GIT_REF: verifyGitRef,
+      PROVENANCE_COMMITS: buildResult.provenanceCommits,
+    },
     { exec, git, kubectl },
   );
 

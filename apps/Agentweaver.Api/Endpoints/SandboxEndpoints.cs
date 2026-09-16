@@ -138,20 +138,58 @@ public static class SandboxEndpoints
             }
 
             var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
-            using var publicationLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, runCt);
+            var publicationLeaseOwner = string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId)
+                ? Guid.NewGuid().ToString("n")
+                : request.PreviewRunnerSessionId;
+            // Approval transfers publication ownership to the server. The agent/tool HTTP request can
+            // disconnect while DNS and Gateway resources are still converging; tying that disconnect
+            // to publication tears down an otherwise healthy preview process. Run completion and the
+            // preview service's bounded convergence deadlines remain authoritative.
+            using var publicationLifetime = CreateApprovedPublicationLifetime(ct, runCt);
             var published = false;
             var leased = false;
+            var skipProcessCleanup = false;
             try
             {
                 // Claim the publication lease before any slow work. While it is held, a run that
                 // finishes its agent work cannot terminalize out from under the publication (#1315).
                 // A refused lease means the run is already terminal, which is the same conflict the
                 // active-run pre-read reported before, now decided in one atomic step.
-                leased = await runStore.TryBeginPreviewPublicationAsync(
+                leased = await runStore.TryAcquirePreviewPublicationAsync(
                     parsedRunId,
+                    publicationLeaseOwner,
                     DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
                     publicationLifetime.Token).ConfigureAwait(false);
-                if (!leased || !await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
+                if (!leased)
+                {
+                    var active = await IsPreviewRunActiveAsync(
+                        runId, runStore, publicationLifetime.Token).ConfigureAwait(false);
+                    var message = active
+                        ? "Preview publication is already in progress for this run."
+                        : "Preview session has exited; a preview URL cannot be published for a terminal run.";
+                    skipProcessCleanup = active
+                        && await runStore.IsPreviewPublicationOwnerAsync(
+                            parsedRunId, publicationLeaseOwner, publicationLifetime.Token).ConfigureAwait(false);
+                    if (active)
+                    {
+                        logger.LogInformation(
+                            "Preview request for run {RunId} joined an existing publication attempt.",
+                            runId);
+                    }
+                    else
+                    {
+                        EmitPreviewFailure(
+                            streamStore,
+                            logger,
+                            runId,
+                            request.TargetPort,
+                            "preview_session_exited",
+                            message,
+                            previewRunnerSessionId: request.PreviewRunnerSessionId);
+                    }
+                    return Results.Conflict(new { error = message });
+                }
+                if (!await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
                 {
                     const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
                     EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
@@ -180,14 +218,15 @@ public static class SandboxEndpoints
                     runStore,
                     previewRunnerClient,
                     await ResolveRetainedProcessBearerAsync(
-                        runId, turnTokens, secretStore, publicationLifetime.Token).ConfigureAwait(false))
+                        runId, turnTokens, secretStore, publicationLifetime.Token).ConfigureAwait(false),
+                    publicationLeaseOwner)
                     .ConfigureAwait(false);
                 published = result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
                 if (published && previewService.Enabled)
                     EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
                 return result;
             }
-            catch (OperationCanceledException) when (runCt.IsCancellationRequested && !ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (runCt.IsCancellationRequested)
             {
                 const string message = "The run ended before preview publication completed.";
                 EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "registration_failed", message,
@@ -196,33 +235,58 @@ public static class SandboxEndpoints
             }
             finally
             {
+                var shouldCleanupProcess =
+                    !published
+                    && !skipProcessCleanup
+                    && !string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId);
+                if (shouldCleanupProcess && leased)
+                {
+                    using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        shouldCleanupProcess = await runStore.IsPreviewPublicationOwnerAsync(
+                            parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        shouldCleanupProcess = false;
+                        logger.LogWarning(
+                            ex,
+                            "Could not verify preview publication ownership for run {RunId}; process cleanup skipped.",
+                            runId);
+                    }
+                }
+
+                if (shouldCleanupProcess)
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    try
+                    {
+                        var bearer = await ResolveRetainedProcessBearerAsync(
+                            runId, turnTokens, secretStore, cleanup.Token).ConfigureAwait(false);
+                        await previewRunnerClient.StopProcessAsync(
+                            runId, bearer, request.PreviewRunnerSessionId!,
+                            "preview_not_published", cleanup.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to stop unpublished preview process for run {RunId}", runId);
+                    }
+                }
+
                 if (leased)
                 {
                     using var release = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                     try
                     {
-                        await runStore.EndPreviewPublicationAsync(parsedRunId, release.Token).ConfigureAwait(false);
+                        await runStore.EndPreviewPublicationAsync(
+                            parsedRunId, publicationLeaseOwner, release.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
                         // The lease expires on its own, so a failed release only delays deferred
                         // terminal transitions. It must never mask the publication's own result.
                         logger.LogWarning(ex, "Failed to release preview publication lease for run {RunId}", runId);
-                    }
-                }
-
-                if (!published && !string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
-                {
-                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    try
-                    {
-                        await previewRunnerClient.StopProcessAsync(
-                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId,
-                            "preview_not_published", cleanup.Token).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Failed to stop unpublished preview process for run {RunId}", runId);
                     }
                 }
             }
@@ -473,7 +537,8 @@ public static class SandboxEndpoints
         string? previewRunnerSessionId = null,
         IRunStore? runStore = null,
         IPreviewRunnerHttpClient? previewRunnerClient = null,
-        string? previewRunnerBearer = null)
+        string? previewRunnerBearer = null,
+        string? publicationLeaseOwner = null)
     {
         // Only agent/deterministic publication is run-bound. Operator previews may start post-run.
         using var publicationLifetime = runStore is null ? null : CancellationTokenSource.CreateLinkedTokenSource(
@@ -489,40 +554,43 @@ public static class SandboxEndpoints
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
         {
+            if (!string.IsNullOrWhiteSpace(previewRunnerSessionId) && previewRunnerClient is not null)
+            {
+                try
+                {
+                    // Retain before route publication starts. Gateway convergence can outlive the
+                    // agent turn that owns the supervising relay; retaining only after convergence
+                    // lets the sidecar kill the app and the AgentHost reap its forwarder while the
+                    // Gateway is still probing it.
+                    await previewRunnerClient.RetainProcessAsync(
+                        runId,
+                        previewRunnerBearer,
+                        previewRunnerSessionId,
+                        ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Preview server retention failed for run {RunId}.", runId);
+                    const string message = "The preview server could not be retained for publication.";
+                    EmitPreviewFailure(
+                        streamStore, logger, runId, targetPort, "preview_retention_failed", message,
+                        previewRunnerSessionId);
+                    return Results.Problem(message, statusCode: StatusCodes.Status502BadGateway);
+                }
+            }
+
             var registration = await TryRegisterPreviewAsync(
                 runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId,
-                maintainPublicationLease: runStore is not null);
+                maintainPublicationLease: runStore is not null,
+                publicationLeaseOwner: publicationLeaseOwner);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
                 var preview = registration.Session!;
-                if (!string.IsNullOrWhiteSpace(registration.PreviewRunnerSessionId)
-                    && previewRunnerClient is not null)
-                {
-                    try
-                    {
-                        await previewRunnerClient.RetainProcessAsync(
-                            runId,
-                            previewRunnerBearer,
-                            registration.PreviewRunnerSessionId,
-                            ct).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(
-                            ex,
-                            "Preview server retention failed for run {RunId}; removing the unusable preview route.",
-                            runId);
-                        await previewService.StopPreviewAsync(preview.Token, CancellationToken.None)
-                            .ConfigureAwait(false);
-                        const string message = "Preview was published but its server could not be retained.";
-                        EmitPreviewFailure(
-                            streamStore, logger, runId, targetPort, "preview_retention_failed", message,
-                            registration.PreviewRunnerSessionId);
-                        return Results.Problem(message, statusCode: StatusCodes.Status502BadGateway);
-                    }
-                }
-
                 var keepaliveUrl = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive";
                 var context = LatestPreviewContext(streamStore, runId);
                 var readyPayload = new
@@ -563,16 +631,21 @@ public static class SandboxEndpoints
                 });
             }
 
-            // Single-owner emission: the helper emitted nothing — this caller emits exactly one
-            // preview_failed for the typed error and returns the matching HTTP status.
-            EmitPreviewFailure(
-                streamStore, logger, runId, targetPort, registration.Reason!, registration.Message!,
-                previewRunnerSessionId: previewRunnerSessionId);
+            // A superseded attempt joins the winning publication's outcome and must not emit a
+            // competing terminal event. Process cleanup remains with the endpoint/retry owner, which
+            // verifies publication-lease ownership before stopping a potentially shared session.
+            if (registration.Status != PreviewRegistrationStatus.Superseded)
+            {
+                EmitPreviewFailure(
+                    streamStore, logger, runId, targetPort, registration.Reason!, registration.Message!,
+                    previewRunnerSessionId: previewRunnerSessionId);
+            }
             return registration.Status switch
             {
                 PreviewRegistrationStatus.PortNotAllowed => Results.BadRequest(new { error = registration.Message }),
                 PreviewRegistrationStatus.Capacity =>
                     Results.Json(new { error = registration.Message }, statusCode: StatusCodes.Status429TooManyRequests),
+                PreviewRegistrationStatus.Superseded => Results.Conflict(new { error = registration.Message }),
                 PreviewRegistrationStatus.Conflict => Results.Conflict(new { error = registration.Message }),
                 _ => Results.Problem("Failed to start preview.", statusCode: 500),
             };
@@ -671,7 +744,8 @@ public static class SandboxEndpoints
         ISandboxPreviewService previewService,
         CancellationToken ct,
         string? previewRunnerSessionId = null,
-        bool maintainPublicationLease = false)
+        bool maintainPublicationLease = false,
+        string? publicationLeaseOwner = null)
     {
         if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
                 targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
@@ -686,7 +760,7 @@ public static class SandboxEndpoints
         {
             var preview = maintainPublicationLease
                 ? await previewService.StartRunBoundPreviewAsync(
-                    runId, targetPort, ownerUserId, ct, previewRunnerSessionId)
+                    runId, targetPort, ownerUserId, ct, previewRunnerSessionId, publicationLeaseOwner)
                 : await previewService.StartPreviewAsync(
                     runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
             return PreviewRegistrationResult.Ok(preview, previewRunnerSessionId);
@@ -705,6 +779,11 @@ public static class SandboxEndpoints
             return PreviewRegistrationResult.Error(
                 PreviewRegistrationStatus.Conflict, "run_terminal", ex.Message);
         }
+        catch (PreviewPublicationLeaseLostException ex)
+        {
+            return PreviewRegistrationResult.Error(
+                PreviewRegistrationStatus.Superseded, "publication_superseded", ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             return PreviewRegistrationResult.Error(PreviewRegistrationStatus.Conflict, PreviewFailureReason(ex), ex.Message);
@@ -718,14 +797,6 @@ public static class SandboxEndpoints
             return PreviewRegistrationResult.Error(
                 PreviewRegistrationStatus.GatewayFailed, "gateway_failed", "Failed to start preview.");
         }
-    }
-
-    private static string? BearerToken(HttpContext httpContext)
-    {
-        var authorization = httpContext.Request.Headers.Authorization.ToString();
-        return authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? authorization["Bearer ".Length..]
-            : null;
     }
 
     internal static async Task<bool> IsPreviewProcessHealthyAsync(
@@ -742,6 +813,14 @@ public static class SandboxEndpoints
         {
             return false;
         }
+    }
+
+    internal static CancellationTokenSource CreateApprovedPublicationLifetime(
+        CancellationToken requestAborted,
+        CancellationToken runCompletion)
+    {
+        _ = requestAborted;
+        return CancellationTokenSource.CreateLinkedTokenSource(runCompletion);
     }
 
     private static void EmitPreviewFailure(
@@ -791,6 +870,9 @@ public static class SandboxEndpoints
         CancellationToken ct)
     {
         var leased = false;
+        var publicationLeaseOwner = string.IsNullOrWhiteSpace(retry.PreviewRunnerSessionId)
+            ? Guid.NewGuid().ToString("n")
+            : retry.PreviewRunnerSessionId;
         try
         {
             var result = await attempt.Completion.ConfigureAwait(false);
@@ -820,19 +902,41 @@ public static class SandboxEndpoints
                 // Hold the run active for the length of the publication, exactly as the direct
                 // publish endpoint does (#1315). A refused lease means the run went terminal
                 // between the check above and here.
-                leased = await runStore.TryBeginPreviewPublicationAsync(
+                leased = await runStore.TryAcquirePreviewPublicationAsync(
                     run.Id,
+                    publicationLeaseOwner,
                     DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
                     ct).ConfigureAwait(false);
                 if (!leased)
                 {
-                    await TryStopRetainedProcessAsync(
-                        runId, retry.PreviewRunnerSessionId, "run_terminal",
-                        previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
-                    EmitPreviewFailure(
-                        streamStore, logger, runId, retry.TargetPort, "registration_failed",
-                        "The run became terminal before preview approval completed.",
-                        retry.PreviewRunnerSessionId);
+                    var active = await IsPreviewRunActiveAsync(runId, runStore, ct).ConfigureAwait(false);
+                    if (!active)
+                    {
+                        await TryStopRetainedProcessAsync(
+                            runId, retry.PreviewRunnerSessionId, "run_terminal",
+                            previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+                        EmitPreviewFailure(
+                            streamStore, logger, runId, retry.TargetPort, "registration_failed",
+                            "The run became terminal before preview approval completed.",
+                            retry.PreviewRunnerSessionId);
+                    }
+                    else
+                    {
+                        var joinsExisting = await runStore.IsPreviewPublicationOwnerAsync(
+                            run.Id, publicationLeaseOwner, ct).ConfigureAwait(false);
+                        if (joinsExisting)
+                        {
+                            logger.LogInformation(
+                                "Preview retry for run {RunId} joined an existing publication attempt.",
+                                runId);
+                        }
+                        else
+                        {
+                            await TryStopRetainedProcessAsync(
+                                runId, retry.PreviewRunnerSessionId, "publication_in_progress",
+                                previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+                        }
+                    }
                     return;
                 }
 
@@ -868,18 +972,24 @@ public static class SandboxEndpoints
                     runStore,
                     previewRunnerClient,
                     await ResolveRetainedProcessBearerAsync(runId, turnTokens, secretStore, ct)
-                        .ConfigureAwait(false)).ConfigureAwait(false);
+                        .ConfigureAwait(false),
+                    publicationLeaseOwner).ConfigureAwait(false);
                 var published = registrationResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
                 if (!published)
                 {
-                    await TryStopRetainedProcessAsync(
-                        runId,
-                        retry.PreviewRunnerSessionId,
-                        "registration_failed",
-                        previewRunnerClient,
-                        turnTokens,
-                        secretStore,
-                        logger).ConfigureAwait(false);
+                    using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    if (await runStore.IsPreviewPublicationOwnerAsync(
+                        run.Id, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false))
+                    {
+                        await TryStopRetainedProcessAsync(
+                            runId,
+                            retry.PreviewRunnerSessionId,
+                            "registration_failed",
+                            previewRunnerClient,
+                            turnTokens,
+                            secretStore,
+                            logger).ConfigureAwait(false);
+                    }
                 }
                 else if (previewService.Enabled)
                 {
@@ -945,7 +1055,8 @@ public static class SandboxEndpoints
                 using var release = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 try
                 {
-                    await runStore.EndPreviewPublicationAsync(run.Id, release.Token).ConfigureAwait(false);
+                    await runStore.EndPreviewPublicationAsync(
+                        run.Id, publicationLeaseOwner, release.Token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -1153,6 +1264,7 @@ public sealed record StartPreviewRequest
 public enum PreviewRegistrationStatus
 {
     Success,
+    Superseded,
     PortNotAllowed,
     Capacity,
     Conflict,

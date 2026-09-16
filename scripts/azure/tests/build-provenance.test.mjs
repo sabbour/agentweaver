@@ -31,6 +31,7 @@ import {
   verifyImage,
   run as runProvenance,
 } from "../steps/25-verify-image-provenance.mjs";
+import { createAcrManifestClient } from "../lib/acr-manifest.mjs";
 import { getImage } from "../image-spec.mjs";
 
 const CFG = Object.freeze({
@@ -66,6 +67,10 @@ function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
       return { code: 0 };
     },
   };
+}
+
+function manifestMetadataRef(args) {
+  return args[args.indexOf("--name") + 1];
 }
 
 async function collectStderr(fn) {
@@ -296,7 +301,7 @@ test("buildImage: az acr build invocation includes --build-arg IMAGE_TAG and GIT
   exec.capture = async (cmd, args, opts) => {
     exec.calls.capture.push({ cmd, args, opts });
     digestCalls += 1;
-    if (args.includes("show-manifests")) return { stdout: "sha256:" + "a".repeat(64), stderr: "", code: 0 };
+    if (args.includes("show-metadata")) return { stdout: "sha256:" + "a".repeat(64), stderr: "", code: 0 };
     return { stdout: "", stderr: "", code: 0 };
   };
   await buildImage(image, "v1.2.3", "targetcommit", CFG, { exec, git });
@@ -312,7 +317,7 @@ test("buildImage: az acr build invocation includes --build-arg IMAGE_TAG and GIT
 test("buildImage: forwards an opt-in local ACR build timeout without retrying", async () => {
   const image = getImage("agentweaver-mcp");
   const exec = fakeExec({
-    captureImpl: async (_cmd, args) => args.includes("show-manifests")
+    captureImpl: async (_cmd, args) => args.includes("show-metadata")
       ? { stdout: "sha256:" + "a".repeat(64), stderr: "", code: 0 }
       : { stdout: "", stderr: "", code: 0 },
   });
@@ -345,6 +350,60 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "\nsha256:" + "b".repeat(64) + "\n", stderr: "", code: 0 }) });
   const digest = await acrDigestForTag("agentweaver-api", "v1.2.3", CFG, { exec });
   assert.equal(digest, "sha256:" + "b".repeat(64));
+  assert.deepEqual(
+    exec.calls.capture[0].args,
+    [
+      "acr",
+      "manifest",
+      "show-metadata",
+      "--registry",
+      CFG.ACR_NAME,
+      "--name",
+      "agentweaver-api:v1.2.3",
+      "--query",
+      "digest",
+      "--output",
+      "tsv",
+    ],
+  );
+});
+
+test("ACR manifest client reuses one login and one repository token for exact HEAD lookups", async () => {
+  const digest = "sha256:" + "c".repeat(64);
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      assert.deepEqual(args.slice(0, 3), ["acr", "login", "--name"]);
+      return {
+        stdout: JSON.stringify({
+          accessToken: "refresh-token",
+          loginServer: CFG.ACR_LOGIN_SERVER,
+        }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (String(url).includes("/oauth2/token")) {
+      return { ok: true, status: 200, json: async () => ({ token: "repository-token" }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => name.toLowerCase() === "docker-content-digest" ? digest : null },
+    };
+  };
+  const client = createAcrManifestClient(CFG.ACR_NAME, { exec, fetchImpl });
+
+  assert.equal(await client.digestForTag("agentweaver-api", "first"), digest);
+  assert.equal(await client.digestForTag("agentweaver-api", "second"), digest);
+  assert.equal(exec.calls.capture.length, 1);
+  assert.equal(requests.filter((request) => request.url.includes("/oauth2/token")).length, 1);
+  const manifestRequests = requests.filter((request) => request.options.method === "HEAD");
+  assert.equal(manifestRequests.length, 2);
+  assert.match(manifestRequests[0].options.headers.Authorization, /^Bearer /);
 });
 
 test("acrRepositoryDigestForImage: returns absent when the image tag does not exist", async () => {
@@ -390,16 +449,16 @@ test("waitForAcrRepositoryDigest: keeps retrying past a hung CLI call and return
   assert.equal(attempts, 3);
 });
 
-test("stampProvenance: imports the source digest into prov-<sha> and then locks it read-only", async () => {
+test("stampProvenance: imports the source digest into prov-<sha> and verifies the result", async () => {
   const git = { revParseCommit: async () => "c".repeat(40) };
   const sourceDigest = "sha256:" + "d".repeat(64);
   const exec = fakeExec({
     captureImpl: async (cmd, args) => {
-      if (args.includes("show-manifests")) {
+      if (args.includes("show-metadata")) {
         // First lookup (source tag) resolves; second lookup (prov tag,
         // pre-import) does not exist yet; third lookup (prov tag,
         // post-import) resolves to the same digest as the source.
-        const showCalls = exec.calls.capture.filter((c) => c.args.includes("show-manifests")).length;
+        const showCalls = exec.calls.capture.filter((c) => c.args.includes("show-metadata")).length;
         if (showCalls <= 1) return { stdout: sourceDigest, stderr: "", code: 0 };
         if (showCalls === 2) return { stdout: "", stderr: "", code: 0 };
         return { stdout: sourceDigest, stderr: "", code: 0 };
@@ -417,47 +476,8 @@ test("stampProvenance: imports the source digest into prov-<sha> and then locks 
   assert.equal(result.tag, `prov-${"c".repeat(40)}`);
   const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
   assert.ok(importCall, "expected an `az acr import` invocation to stamp the provenance tag");
-  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
-  assert.ok(lockCall, "expected an `az acr repository update` invocation to lock the provenance tag");
-  assert.ok(lockCall.args.includes("--write-enabled"), "lock call must set --write-enabled");
-  assert.ok(lockCall.args.includes("false"), "lock call must set --write-enabled false");
-  assert.ok(lockCall.args.includes(`agentweaver-api:prov-${"c".repeat(40)}`), "lock call must target the stamped provenance tag");
-});
-
-test("stampProvenance: a timed-out provenance lock warns and returns", async () => {
-  const git = { revParseCommit: async () => "c".repeat(40) };
-  const sourceDigest = "sha256:" + "d".repeat(64);
-  let provReadCount = 0;
-  const exec = fakeExec({
-    captureImpl: async (_cmd, args) => {
-      if (args.includes("show-manifests")) {
-        const query = args[args.indexOf("--query") + 1];
-        if (query.includes("@=='v1.2.3'")) return { stdout: sourceDigest, stderr: "", code: 0 };
-        if (query.includes("@=='prov-")) {
-          provReadCount += 1;
-          return { stdout: provReadCount === 1 ? "" : sourceDigest, stderr: "", code: 0 };
-        }
-      }
-      if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
-      if (args[0] === "acr" && args[1] === "repository" && args[2] === "update") {
-        return {
-          stdout: "",
-          stderr: "Command timed out after 600000ms; remote operation state is unknown and was not retried: az acr repository update",
-          code: 124,
-          timedOut: true,
-        };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    },
-  });
-
-  const { result, stderr } = await collectStderr(() =>
-    stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, { exec, git, sleep: async () => {} }),
-  );
-
-  assert.equal(result.tag, `prov-${"c".repeat(40)}`);
-  assert.match(stderr, /WARNING:.*provenance tag agentweaver-api:prov-c+ lock timed out/i);
-  assert.match(stderr, /deployment will continue/i);
+  const repositoryUpdate = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.equal(repositoryUpdate, undefined, "provenance stamping must not add a second CLI mutation after verification");
 });
 
 test("stampProvenance: is a no-op when the provenance tag already points at the expected digest", async () => {
@@ -471,8 +491,8 @@ test("stampProvenance: is a no-op when the provenance tag already points at the 
 
   const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
   assert.equal(importCall, undefined, "must not re-import an already-stamped, matching provenance tag");
-  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
-  assert.equal(lockCall, undefined, "must not attempt to re-lock a tag that was never (re-)imported this run");
+  const repositoryUpdate = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.equal(repositoryUpdate, undefined, "must not issue a separate repository update");
 });
 
 test("retagImage: skips when source and target tags are identical", async () => {
@@ -538,8 +558,8 @@ test("importImagesFromGhcr: throttled staged import retries and then succeeds", 
         }
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (args.includes("show-manifests")) {
-        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) {
+        return { stdout: digestByImage.get(manifestMetadataRef(args).split(":")[0]), stderr: "", code: 0 };
       }
       if (isAcrRepositoryShow(args)) {
         const [image] = imageArg(args).split(":");
@@ -652,8 +672,8 @@ test("importImagesFromGhcr: staging cleanup timeout uses its own budget and depl
   const exec = fakeExec({
     captureImpl: async (_cmd, args, opts) => {
       if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
-      if (args.includes("show-manifests")) {
-        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) {
+        return { stdout: digestByImage.get(manifestMetadataRef(args).split(":")[0]), stderr: "", code: 0 };
       }
       if (isAcrRepositoryShow(args)) {
         const [image] = imageArg(args).split(":");
@@ -739,8 +759,9 @@ test("importImagesFromGhcr: failed digest read with matching existing tag recove
         }
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (args.includes("show-manifests")) {
-        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) {
+        const image = args[args.indexOf("--name") + 1].split(":")[0];
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
       }
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
@@ -789,7 +810,7 @@ test("importImagesFromGhcr: failed digest read with differing existing tag refus
         }
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (args.includes("show-manifests")) return { stdout: requestedDigest, stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: requestedDigest, stderr: "", code: 0 };
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
         if (ref.includes("ghcr-preflight")) return { stdout: requestedDigest, stderr: "", code: 0 };
@@ -826,7 +847,10 @@ test("importImagesFromGhcr: matching existing digest after retry skips final tag
   const exec = fakeExec({
     captureImpl: async (_cmd, args) => {
       if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
-      if (args.includes("show-manifests")) return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) {
+        const image = args[args.indexOf("--name") + 1].split(":")[0];
+        return { stdout: digestByImage.get(image), stderr: "", code: 0 };
+      }
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
         const [image, tag] = ref.split(":");
@@ -868,8 +892,8 @@ test("importImagesFromGhcr: slow matching existing digest read gets a 10 minute 
         );
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (args.includes("show-manifests")) {
-        return { stdout: digestByImage.get(args[args.indexOf("--repository") + 1]), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) {
+        return { stdout: digestByImage.get(manifestMetadataRef(args).split(":")[0]), stderr: "", code: 0 };
       }
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
@@ -911,7 +935,7 @@ test("importImagesFromGhcr: operator --force reaches promotion import after dige
   const exec = fakeExec({
     captureImpl: async (_cmd, args) => {
       if (isAcrImport(args)) return { stdout: "", stderr: "", code: 0 };
-      if (args.includes("show-manifests")) return { stdout: digest, stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: digest, stderr: "", code: 0 };
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
         if (ref.includes("ghcr-preflight")) return { stdout: digest, stderr: "", code: 0 };
@@ -965,7 +989,7 @@ test("importImagesFromGhcr: promotion Conflict with matching digest is retried w
         }
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (args.includes("show-manifests")) return { stdout: digest, stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: digest, stderr: "", code: 0 };
       if (isAcrRepositoryShow(args)) {
         const ref = imageArg(args);
         if (ref.includes("ghcr-preflight")) return { stdout: digest, stderr: "", code: 0 };
@@ -1003,10 +1027,8 @@ test("importImagesFromGhcr: a last-image conflict blocks every earlier promotion
   const exec = fakeExec({
     captureImpl: async (_cmd, args) => {
       if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
-      if (args.includes("show-manifests")) {
-        const image = args[args.indexOf("--repository") + 1];
-        const query = args[args.indexOf("--query") + 1];
-        const tag = /@=='([^']+)'/.exec(query)?.[1] ?? "";
+      if (args.includes("show-metadata")) {
+        const [image, tag] = manifestMetadataRef(args).split(":");
         if (tag.startsWith("prov-") || tag === "v1.2.3") {
           return { stdout: `${stageDigestByImage.get(image) ?? ""}\n`, stderr: "", code: 0 };
         }
@@ -1061,7 +1083,7 @@ test("importImagesFromGhcr: captures final digests and returns imported provenan
   const exec = fakeExec({
     captureImpl: async (_cmd, args) => {
       if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
-      if (args.includes("show-manifests")) return { stdout: "sha256:" + "4".repeat(64), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: "sha256:" + "4".repeat(64), stderr: "", code: 0 };
       if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
         const image = args[args.indexOf("--image") + 1];
         const count = (showCounts.get(image) ?? 0) + 1;
@@ -1178,7 +1200,7 @@ test("liveDigestStateForSelector: excludes terminating (deletionTimestamp) old-g
   assert.equal(state.podCount, 2);
 });
 
-test("verifyImage: fails when no prov-<sha> tag exists for the live digest (unstamped/legacy image)", async () => {
+test("verifyImage: fails when the deterministic provenance tag is absent", async () => {
   const digest = "sha256:" + "d".repeat(64);
   const kubectl = {
     desiredDeploymentReplicas: async () => "1",
@@ -1194,11 +1216,12 @@ test("verifyImage: fails when no prov-<sha> tag exists for the live digest (unst
     kubectl,
   });
   assert.equal(result.status, "fail");
-  assert.match(result.message, /no prov-<sha> tag found/);
+  assert.match(result.message, /expected provenance tag agentweaver-api:prov-verifycommit was not found/);
 });
 
-test("verifyImage: STALE result when the resolved provenance commit has watched-path drift", async () => {
+test("verifyImage: STALE result when the deterministic provenance tag has a different digest", async () => {
   const digest = "sha256:" + "e".repeat(64);
+  const provenanceDigest = "sha256:" + "a".repeat(64);
   const kubectl = {
     desiredDeploymentReplicas: async () => "1",
     podStatusForSelector: async () => [
@@ -1207,24 +1230,19 @@ test("verifyImage: STALE result when the resolved provenance commit has watched-
   };
   const exec = fakeExec({
     captureImpl: async (cmd, args) => {
-      if (args.includes("show-manifests")) return { stdout: `prov-${"a".repeat(40)}`, stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: provenanceDigest, stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
   });
-  const git = {
-    resolveCommitish: async (c) => c,
-    diffIsQuiet: async () => false, // watched paths changed since the provenance commit -> stale
-  };
   const result = await verifyImage("api", "agentweaver-api", getImage("agentweaver-api").watchedPaths, "verifycommit", CFG, {
     exec,
-    git,
     kubectl,
   });
   assert.equal(result.status, "fail");
   assert.match(result.message, /STALE IMAGE/);
 });
 
-test("verifyImage: OK result when the resolved provenance commit shows no watched-path drift", async () => {
+test("verifyImage: OK result when the deterministic provenance tag matches the live digest", async () => {
   const digest = "sha256:" + "f".repeat(64);
   const kubectl = {
     desiredDeploymentReplicas: async () => "1",
@@ -1234,18 +1252,81 @@ test("verifyImage: OK result when the resolved provenance commit shows no watche
   };
   const exec = fakeExec({
     captureImpl: async (cmd, args) => {
-      if (args.includes("show-manifests")) return { stdout: `prov-${"a".repeat(40)}`, stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: digest, stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
   });
-  const git = { resolveCommitish: async (c) => c, diffIsQuiet: async () => true };
+
+  test("verifyImage: unchanged retag verifies the source provenance commit against the target commit", async () => {
+    const digest = "sha256:" + "6".repeat(64);
+    const sourceCommit = "1".repeat(40);
+    const targetCommit = "2".repeat(40);
+    const kubectl = {
+      desiredDeploymentReplicas: async () => "1",
+      podStatusForSelector: async () => [
+        { name: "p1", phase: "Running", ready: "true", imageRef: "img:new", imageId: `img@${digest}` },
+      ],
+    };
+    const comparisons = [];
+    const git = {
+      diffIsQuiet: async (from, to, paths) => {
+        comparisons.push({ from, to, paths });
+        return true;
+      },
+    };
+    const exec = fakeExec({
+      captureImpl: async (_cmd, args) => args.includes("show-metadata")
+        ? { stdout: digest, stderr: "", code: 0 }
+        : { stdout: "", stderr: "", code: 0 },
+    });
+    const result = await verifyImage(
+      "api",
+      "agentweaver-api",
+      getImage("agentweaver-api").watchedPaths,
+      targetCommit,
+      { ...CFG, PROVENANCE_COMMITS: { "agentweaver-api": sourceCommit } },
+      { exec, git, kubectl },
+    );
+
+    assert.equal(result.status, "ok");
+    assert.equal(comparisons.length, 1);
+    assert.equal(comparisons[0].from, sourceCommit);
+    assert.equal(comparisons[0].to, targetCommit);
+    assert.equal(
+      exec.calls.capture[0].args[exec.calls.capture[0].args.indexOf("--name") + 1],
+      `agentweaver-api:prov-${sourceCommit}`,
+    );
+  });
+
+  test("verifyImage: changed watched paths reject older retag provenance", async () => {
+    const digest = "sha256:" + "5".repeat(64);
+    const kubectl = {
+      desiredDeploymentReplicas: async () => "1",
+      podStatusForSelector: async () => [
+        { name: "p1", phase: "Running", ready: "true", imageRef: "img:new", imageId: `img@${digest}` },
+      ],
+    };
+    const exec = fakeExec();
+    const result = await verifyImage(
+      "api",
+      "agentweaver-api",
+      getImage("agentweaver-api").watchedPaths,
+      "2".repeat(40),
+      { ...CFG, PROVENANCE_COMMITS: { "agentweaver-api": "1".repeat(40) } },
+      { exec, git: { diffIsQuiet: async () => false }, kubectl },
+    );
+
+    assert.equal(result.status, "fail");
+    assert.match(result.message, /watched paths changed/);
+    assert.equal(exec.calls.capture.length, 0);
+  });
   const result = await verifyImage("api", "agentweaver-api", getImage("agentweaver-api").watchedPaths, "verifycommit", CFG, {
     exec,
-    git,
     kubectl,
   });
   assert.equal(result.status, "ok");
-  assert.match(result.message, /provably built from/);
+  assert.match(result.message, /matching deterministic provenance tag prov-verifycommit/);
+  assert.equal(exec.calls.capture[0].args[exec.calls.capture[0].args.indexOf("--name") + 1], "agentweaver-api:prov-verifycommit");
 });
 
 test("verifyImage: imported GHCR digests are the source of truth when provided", async () => {
@@ -1311,30 +1392,6 @@ test("verifyImage: imported custom digests only verify deployed digest parity, n
   assert.match(result.message, /custom mode explicitly trusts that external image/i);
 });
 
-test("verifyImage: unresolvable prov tag (shallow clone/rewritten history) fails with a clear reason", async () => {
-  const digest = "sha256:" + "0".repeat(64);
-  const kubectl = {
-    desiredDeploymentReplicas: async () => "1",
-    podStatusForSelector: async () => [
-      { name: "p1", phase: "Running", ready: "true", imageRef: "img:v1", imageId: `img@${digest}` },
-    ],
-  };
-  const exec = fakeExec({
-    captureImpl: async (cmd, args) => {
-      if (args.includes("show-manifests")) return { stdout: `prov-${"1".repeat(40)}`, stderr: "", code: 0 };
-      return { stdout: "", stderr: "", code: 0 };
-    },
-  });
-  const git = { resolveCommitish: async () => null };
-  const result = await verifyImage("api", "agentweaver-api", getImage("agentweaver-api").watchedPaths, "verifycommit", CFG, {
-    exec,
-    git,
-    kubectl,
-  });
-  assert.equal(result.status, "fail");
-  assert.match(result.message, /resolve in local git history/);
-});
-
 // -------------------- VERIFY_GIT_REF bugfix preserved (25 via run()) --------------------
 
 test("run() (provenance): defaults VERIFY_GIT_REF to HEAD, never to IMAGE_TAG", async () => {
@@ -1344,8 +1401,6 @@ test("run() (provenance): defaults VERIFY_GIT_REF to HEAD, never to IMAGE_TAG", 
       seenRefs.push(ref);
       return "headcommit1234567890";
     },
-    resolveCommitish: async (c) => c,
-    diffIsQuiet: async () => true,
   };
   const kubectl = {
     desiredDeploymentReplicas: async () => "",
@@ -1390,7 +1445,7 @@ test("run() (build): aggregates a failure from one image without silently swallo
       return { code: 0 };
     },
     captureImpl: async (cmd, args) => {
-      if (args.includes("show-manifests")) return { stdout: "sha256:" + "9".repeat(64), stderr: "", code: 0 };
+      if (args.includes("show-metadata")) return { stdout: "sha256:" + "9".repeat(64), stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
   });

@@ -308,6 +308,7 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
     EffectiveModelProviderResolver modelProviderResolver,
+    CopilotCredentialRefreshService credentialRefresh,
     ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
@@ -329,11 +330,11 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
     if (result.Outcome == CopilotBindingOutcome.ProjectModelProviderReconnectRequired)
         return CopilotBindingFailure(result.Outcome);
 
-    var platformDefaultConnection = await GetPlatformDefaultCopilotConnectionAsync(
-        persistence, secretStore, ct).ConfigureAwait(false);
     // Uses the same resolver as run/generation startup, so the status shown here always matches
     // which model provider a project operation will actually use at runtime.
     var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    var platformDefaultConnection = await GetPlatformDefaultCopilotConnectionAsync(
+        persistence, secretStore, credentialRefresh, ct).ConfigureAwait(false);
     var byokConfigured = effectiveProvider is EffectiveModelProviderResult.Byok;
     var effectiveSource = effectiveProvider switch
     {
@@ -1811,33 +1812,22 @@ internal enum UnattendedProviderPurpose
 private static async Task<(bool Connected, string? GitHubLogin)> GetPlatformDefaultCopilotConnectionAsync(
     GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
+    CopilotCredentialRefreshService credentialRefresh,
     CancellationToken ct)
 {
     var binding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
     if (binding is null)
         return (false, null);
 
+    await credentialRefresh.EnsureFreshAsync(
+        binding.CredentialReference, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
     var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
-    if (!secret.Found || string.IsNullOrWhiteSpace(secret.Value))
+    if (!secret.Found ||
+        !GitHubCapabilityBroker.TryGetUsableCopilotCredential(
+            secret.Value, DateTimeOffset.UtcNow, out var credential))
         return (false, null);
 
-    try
-    {
-        using var document = JsonDocument.Parse(secret.Value);
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
-            return (false, null);
-
-        var status = GetJsonString(document.RootElement, "status");
-        var accessToken = GetJsonString(document.RootElement, "accessToken");
-        if (!string.Equals(status, "signed-in", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(accessToken))
-            return (false, null);
-
-        return (true, GetJsonString(document.RootElement, "GitHubLogin", "githubLogin", "github_login"));
-    }
-    catch (JsonException)
-    {
-        return (false, null);
-    }
+    return (true, credential.GitHubLogin);
 }
 
 private static string? GetJsonString(JsonElement element, params string[] propertyNames)

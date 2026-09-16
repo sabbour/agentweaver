@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
@@ -456,10 +457,11 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var routeName = routeDocument.RootElement.GetProperty("metadata").GetProperty("name").GetString();
         kube.OnGet($"{routes}/{routeName}", route.Body!);
         var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var terminalStore = RunStoreChain.Find<SqliteRunStore>(runStore) ?? runStore;
         if (conditionalAppendFails)
             persistence!.ConditionalFailure = new InvalidOperationException("conditional append failed");
         else
-            (await runStore.TrySetTerminalStatusAsync(
+            (await terminalStore.TrySetTerminalStatusAsync(
                 RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
         if (workflowStepFails)
             persistence!.WorkflowStepFailure = new InvalidOperationException("preview workflow-step append failed");
@@ -491,6 +493,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         runner.HealthCalls.Should().Be(1);
         runner.StopCalls.Should().Be(1);
+        runner.LastStopBearer.Should().Be(
+            "retained-test-credential",
+            "failed-publication cleanup must authenticate with the AgentHost preview credential");
         runner.StopCancellationToken.CanBeCanceled.Should().BeTrue("retained-process cleanup must be bounded");
         runner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
         var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
@@ -565,7 +570,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         (await factory.Services.GetRequiredService<IToolApprovalGate>()
             .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
         var healthCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        (await factory.Services.GetRequiredService<IRunStore>().TrySetTerminalStatusAsync(
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var terminalStore = RunStoreChain.Find<SqliteRunStore>(runStore) ?? runStore;
+        (await terminalStore.TrySetTerminalStatusAsync(
             RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
         if (completeLocalStream)
             streams.Complete(runId);
@@ -637,6 +644,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         (await request.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.OK);
         preview.StartCalls.Should().Be(1);
         runner.HealthCalls.Should().Be(hasProcessSession ? 1 : 0);
+        preview.HealthCallsAtStart.Should().Be(hasProcessSession ? 1 : -1);
         runner.StopCalls.Should().Be(0);
         var durable = await factory.Services.GetRequiredService<IRunEventStream>().GetPersistedEventsAsync(runId);
         durable.Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
@@ -647,6 +655,66 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
                 e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady).Should().Be(2);
         else
             streams.Get(runId).Should().BeNull("publication must not create an entry with incomplete history");
+    }
+
+    [Fact]
+    public void ApprovedPublicationLifetime_IgnoresCallerDisconnectAndObservesRunCompletion()
+    {
+        using var requestLifetime = new CancellationTokenSource();
+        using var runLifetime = new CancellationTokenSource();
+        using var publicationLifetime = SandboxEndpoints.CreateApprovedPublicationLifetime(
+            requestLifetime.Token,
+            runLifetime.Token);
+
+        requestLifetime.Cancel();
+        publicationLifetime.IsCancellationRequested.Should().BeFalse(
+            "an approved publication is server-owned and must survive the caller disconnecting");
+
+        runLifetime.Cancel();
+        publicationLifetime.IsCancellationRequested.Should().BeTrue(
+            "run completion remains authoritative after publication is detached from the caller");
+    }
+
+    [Fact]
+    public async Task AgentPreview_ConcurrentPublication_DoesNotStopSharedProcess()
+    {
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var preview = new RetainedPreviewService(runner);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        const string existingOwner = "retained-process";
+        (await runStore.TryAcquirePreviewPublicationAsync(
+            RunId.Parse(runId),
+            existingOwner,
+            DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3))).Should().BeTrue();
+        try
+        {
+            var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+            {
+                target_port = 5173,
+                preview_runner_session_id = "retained-process",
+            });
+            var approvalId = await WaitForApprovalAsync(streams, runId);
+            (await factory.Services.GetRequiredService<IToolApprovalGate>()
+                .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+
+            (await request.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.Conflict);
+            preview.StartCalls.Should().Be(0);
+            runner.StopCalls.Should().Be(0,
+                "a losing duplicate must not tear down the process owned by the active publication");
+        }
+        finally
+        {
+            await runStore.EndPreviewPublicationAsync(RunId.Parse(runId), existingOwner);
+        }
     }
 
     [Theory]
@@ -842,8 +910,10 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
     {
         public int HealthCalls;
         public int StopCalls;
+        public int RetainCalls;
         public string? LastSessionId;
         public string? LastBearer;
+        public string? LastStopBearer;
         public int LastPort;
         public CancellationToken HealthCancellationToken;
         public CancellationToken StopCancellationToken;
@@ -866,9 +936,19 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
         {
             StopCalls++;
+            LastStopBearer = bearer;
             StopCancellationToken = ct;
             sessionId.Should().Be("retained-process");
             Stopped.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task RetainProcessAsync(
+            string runId, string? bearer, string sessionId, CancellationToken ct)
+        {
+            RetainCalls++;
+            LastSessionId = sessionId;
+            LastBearer = bearer;
             return Task.CompletedTask;
         }
 
@@ -885,10 +965,20 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             throw new InvalidOperationException("Registration must check health by run identity, not keepalive.");
     }
 
-    private sealed class RetainedPreviewService(RetainedRunnerClient runner, bool requireHealthCheck = true) : ISandboxPreviewService
+    private sealed class RetainedPreviewService : ISandboxPreviewService
     {
+        private readonly RetainedRunnerClient _runner;
+        private readonly bool _requireHealthCheck;
+
+        public RetainedPreviewService(RetainedRunnerClient runner, bool requireHealthCheck = true)
+        {
+            _runner = runner;
+            _requireHealthCheck = requireHealthCheck;
+        }
+
         public int StartCalls;
         public int StopCalls;
+        public int HealthCallsAtStart;
         public string? SessionId;
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
@@ -898,8 +988,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
             string? previewRunnerSessionId = null)
         {
-            if (requireHealthCheck)
-                runner.HealthCalls.Should().Be(1, "fresh process health must precede registration");
+            HealthCallsAtStart = _requireHealthCheck ? _runner.HealthCalls : -1;
             StartCalls++;
             SessionId = previewRunnerSessionId;
             return Task.FromResult(new PreviewSession(
