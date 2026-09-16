@@ -1112,7 +1112,7 @@ Change to the source directory and pass a relative local path to `kubectl cp`.
 
 **Logged**: 2026-09-16T06:15:00Z
 **Priority**: critical
-**Status**: in_progress
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -1142,9 +1142,47 @@ Omit `--die-with-parent` only for sidecar-supervised long-lived processes. Prese
 one-shot commands, and preserve `--new-session`, namespace isolation, disconnect cleanup,
 explicit stop, and container-exit cleanup.
 
+### Resolution
+- Commit `e12b343` split supervised and one-shot bubblewrap launch arguments.
+- A fresh Foundry/BYOK preview returned its exact marker twice 58.869 seconds apart.
+- A fresh project GitHub Copilot preview returned its exact marker twice 70.174 seconds apart.
+
 ### Metadata
 - Reproducible: yes
 - Related Files: packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs, packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs, apps/Agentweaver.AgentHost/PreviewRunner.cs
 - See Also: ERR-20260709-PREVLIFE
+
+---
+
+## [ERR-20260916-WORKER-KV] worker assembly cannot read run provider snapshots
+
+**Logged**: 2026-09-16T07:10:00Z
+**Priority**: critical
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Coordinator assembly model turns executed by `agentweaver-worker` failed with
+`model_provider_snapshot_unavailable` even though the snapshot owner row and Key Vault
+secret both existed.
+
+### Error
+```text
+The run's accepted model provider snapshot is unavailable. Retry the run to create a new snapshot.
+```
+
+### Context
+- API replicas had `Auth__KeyVault__Uri`; worker replicas did not.
+- Production `Program.cs` therefore wired workers to `InMemorySecretStore`.
+- Provider snapshots captured by API replicas were invisible to worker assembly, affecting both
+  project GitHub Copilot and Foundry/BYOK runs.
+
+### Resolution
+Configure `Auth__KeyVault__Uri` on the worker deployment from the shared
+`agentweaver-runtime-config/KEYVAULT_URI` value and pin API/worker parity with a manifest test.
+
+### Metadata
+- Reproducible: yes
+- Related Files: k8s/base/worker-deployment.yaml, apps/Agentweaver.Api/Program.cs, apps/Agentweaver.Api/Auth/RunModelProviderSnapshotStore.cs
 
 ---

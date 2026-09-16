@@ -1561,12 +1561,14 @@ app.MapPost("/api/runs/{id}/retry", async (
                         // The source snapshot fences only an in-place continuation. A retry that has
                         // no recoverable source work falls through and mints a fresh run against the
                         // accepted current provider instead of being rejected by stale source state.
-                        if (!await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(
-                                run,
-                                resumeCt,
-                                expectedCopilotBindingId: execution.Plan.Provider.ProviderId(),
-                                expectedCopilotCredentialVersion: execution.Plan.Provider.CredentialVersion())
-                            .ConfigureAwait(false))
+                        if (execution.Plan.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                                or EffectiveModelProviderResult.PlatformGitHubCopilot
+                            && !await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(
+                                    run,
+                                    resumeCt,
+                                    expectedCopilotBindingId: execution.Plan.Provider.ProviderId(),
+                                    expectedCopilotCredentialVersion: execution.Plan.Provider.CredentialVersion())
+                                .ConfigureAwait(false))
                         {
                             throw execution.Plan.Provider.ToConnectionRequiredException(run.ProjectId);
                         }

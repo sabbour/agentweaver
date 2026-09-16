@@ -279,6 +279,54 @@ public sealed class RunRetryTests : IDisposable
     }
 
     [Fact]
+    public async Task InPlaceCoordinatorRetry_PodPerRunWithByokSnapshot_ResumesWithoutCopilotCapability()
+    {
+        using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();
+        using var owner = factory.CreateOwnerClient();
+        var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
+        ByokProviderConfiguration accepted;
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            accepted = await settings.AddAsync(
+                new ByokProviderConfiguration(
+                    "unused", "Accepted Azure", "azure", "https://accepted.example.test",
+                    "gpt-4.1", "accepted-key"),
+                CancellationToken.None);
+            await settings.SetActiveAsync(accepted.Id, CancellationToken.None);
+        }
+
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: RunOrigin.Interactive,
+            projectId: projectId,
+            modelSource: ModelSource.Byok,
+            factory: factory);
+        await SeedRecoverablePlanAsync(source, factory);
+        await factory.Services.GetRequiredService<RunModelProviderSnapshotStore>().CaptureAsync(
+            source,
+            new EffectiveModelProviderResult.Byok(
+                accepted.Id, accepted.Type, accepted.ExecutionFingerprint()),
+            accepted,
+            CancellationToken.None);
+        await factory.PrepareAiExecutionAsync(
+            owner, "orchestration", projectId.ToString(), source.Id.ToString());
+
+        var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        body.GetProperty("run_id").GetString().Should().Be(source.Id.ToString());
+        body.GetProperty("resumed").GetBoolean().Should().BeTrue();
+        body.GetProperty("status").GetString().Should().Be("in_progress");
+        (await factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(source.Id))!.Status
+            .Should().Be(RunStatus.InProgress);
+    }
+
+    [Fact]
     public async Task FreshCoordinatorRetry_IgnoresStaleSourceSnapshotAndUsesAcceptedCurrentProvider()
     {
         using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();

@@ -21,6 +21,17 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void ApiAndWorkerDeployments_UseTheSharedKeyVaultSecretStore()
+    {
+        var api = ReadManifest("api-deployment.yaml");
+        var worker = ReadManifest("worker-deployment.yaml");
+
+        KeyVaultConfigMapKey(api).Should().Be("KEYVAULT_URI");
+        KeyVaultConfigMapKey(worker).Should().Be("KEYVAULT_URI",
+            "workers execute assembly model turns and must read run-provider snapshots captured by API replicas");
+    }
+
+    [Fact]
     public void AgentHostTemplate_UsesClusterDnsAndNarrowSandboxLabels()
     {
         var template = ReadManifest("sandbox-template-agenthost.yaml");
@@ -292,6 +303,20 @@ public sealed class KubernetesRemoteApiManifestTests
 
         match.Success.Should().BeTrue($"{variable} must be configured");
         return match.Groups["value"].Value;
+    }
+
+    private static string KeyVaultConfigMapKey(string manifest)
+    {
+        var match = Regex.Match(
+            manifest,
+            @"(?m)^\s+- name: Auth__KeyVault__Uri\s*\r?\n" +
+            @"\s+valueFrom:\s*\r?\n" +
+            @"\s+configMapKeyRef:\s*\r?\n" +
+            @"\s+name: agentweaver-runtime-config\s*\r?\n" +
+            @"\s+key: (?<key>\S+)\s*$");
+
+        match.Success.Should().BeTrue("Auth__KeyVault__Uri must come from the runtime ConfigMap");
+        return match.Groups["key"].Value;
     }
 
     private static string DocumentNamed(string manifest, string name) =>
