@@ -95,7 +95,7 @@ export function makeBoardWorkflowUnavailable(): BoardDto {
   };
 }
 
-// Board fixture with agent_queues for Phase 2 AgentRail tests.
+// Board fixture with agent queue data for Flow page tests.
 export function makeAgentQueueDto(overrides?: Partial<AgentQueueDto>): AgentQueueDto {
   return {
     agent_name:    'Neo',
