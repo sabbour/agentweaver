@@ -1,5 +1,35 @@
 # Learnings
 
+## [LRN-20260916-RELEASE-NOTE-GRANULARITY] correction
+
+**Logged**: 2026-09-16T01:55:00-07:00
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+Large integration PRs need separate changeset fragments for distinct user-facing fixes.
+
+### Details
+One combined fragment obscured five independently meaningful changes: managed Preview durability,
+provider-consistent run resume, trace/topology observability, Azure deployment reliability, and UI
+harness wide-layout validation.
+
+### Suggested Action
+Before release preparation, compare the merged PR's behavioral surfaces with its pending changesets
+and split unrelated release-note concerns even when they all produce one patch release.
+
+### Metadata
+- Source: user_feedback
+- Related Files: .changeset/
+- Tags: release, changesets, release-notes
+
+### Resolution
+- **Resolved**: 2026-09-16T01:55:00-07:00
+- **Notes**: Replaced the combined fragment with five concern-specific changesets before recutting v0.32.7.
+
+---
+
 ## [LRN-20260915-RELEASE-FORWARD-PORT] correction
 
 **Logged**: 2026-09-15T01:25:24-07:00
