@@ -5,6 +5,9 @@ using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -180,6 +183,54 @@ public sealed class EffectiveModelProviderResolverTests
     }
 
     [Fact]
+    public async Task Expired_platform_credential_is_refreshed_before_project_resolution()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId));
+        db.PlatformDefaultCopilotBindings.Add(PlatformBinding());
+        await db.SaveChangesAsync();
+
+        var secrets = new CountingSecretStore();
+        await SetCredentialAsync(
+            secrets,
+            PlatformCredentialReference,
+            expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+            githubLogin: "platform-user",
+            refreshToken: "refresh-old");
+        var http = new RefreshHttpClientFactory();
+        var refresh = new CopilotCredentialRefreshService(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Auth:CopilotApp:BaseUrl"] = "https://github.test",
+                ["Auth:CopilotApp:ClientId"] = "client-id",
+                ["Auth:CopilotApp:ClientSecret"] = "client-secret",
+            }).Build(),
+            secrets,
+            http,
+            NullLogger<CopilotCredentialRefreshService>.Instance);
+        using var services = new ServiceCollection()
+            .AddSingleton(refresh)
+            .BuildServiceProvider();
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db),
+            new ByokProviderConfigurationService(secrets),
+            secrets,
+            services: services);
+
+        var result = await resolver.ResolveAsync(projectId, CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.PlatformGitHubCopilot(
+            PlatformDefaultCopilotBindingRecord.SingletonId,
+            "platform-user",
+            "version"));
+        http.Requests.Should().Be(1);
+        (await secrets.GetSecretAsync(PlatformCredentialReference)).Value
+            .Should().Contain("refreshed-access").And.Contain("refresh-next");
+    }
+
+    [Fact]
     public async Task Session_uses_platform_byok_before_personal_provider()
     {
         await using var connection = await OpenDatabaseAsync();
@@ -343,13 +394,15 @@ public sealed class EffectiveModelProviderResolverTests
         ISecretStore secrets,
         string reference,
         DateTimeOffset? expiresAt = null,
-        string? githubLogin = null) =>
+        string? githubLogin = null,
+        string? refreshToken = null) =>
         secrets.SetSecretAsync(
             reference,
             JsonSerializer.Serialize(new
             {
                 status = "signed-in",
                 accessToken = "token",
+                refreshToken,
                 expiresAt = expiresAt ?? DateTimeOffset.UtcNow.AddHours(1),
                 githubLogin,
             }));
@@ -388,5 +441,28 @@ public sealed class EffectiveModelProviderResolverTests
             _inner.DeleteSecretAsync(key, ct);
 
         internal int ReadCount(string key) => _reads.GetValueOrDefault(key);
+    }
+
+    private sealed class RefreshHttpClientFactory : IHttpClientFactory
+    {
+        public int Requests { get; private set; }
+
+        public HttpClient CreateClient(string name) =>
+            new(new RefreshHandler(this));
+
+        private sealed class RefreshHandler(RefreshHttpClientFactory owner) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                owner.Requests++;
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"access_token":"refreshed-access","refresh_token":"refresh-next","expires_in":3600}"""),
+                });
+            }
+        }
     }
 }
