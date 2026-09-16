@@ -99,8 +99,7 @@ public class CopilotPreviewClassifier : IPreviewClassifier
                 token => _effectiveModelTurn is null
                     ? RunModelTurnAsync(runId, charter, prompt, token)
                     : _effectiveModelTurn.RunAsync(
-                        runId, projectId, _modelId, charter, prompt,
-                        supportsByok: true, token),
+                        runId, projectId, _modelId, charter, prompt, token),
                 ClassificationTimeout,
                 responseProperty,
                 ct,
