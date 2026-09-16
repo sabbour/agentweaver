@@ -1186,3 +1186,37 @@ Configure `Auth__KeyVault__Uri` on the worker deployment from the shared
 - Related Files: k8s/base/worker-deployment.yaml, apps/Agentweaver.Api/Program.cs, apps/Agentweaver.Api/Auth/RunModelProviderSnapshotStore.cs
 
 ---
+
+## [ERR-20260916-DEPLOY-ENV] direct deployment helper omitted required Key Vault configuration
+
+**Logged**: 2026-09-16T08:00:00Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A direct Node invocation of `resolveVariables()` failed before ACR tag repair because `KEYVAULT_NAME` was not supplied.
+
+### Error
+```
+MissingRequiredVariableError: KEYVAULT_NAME is not set and there is no default
+```
+
+### Context
+- The normal deployment command receives environment configuration externally.
+- The bounded recovery script constructed only image-tag variables and therefore did not reproduce the required deployment environment.
+- PowerShell tool calls also start in the repository root unless the command explicitly changes to the intended worktree.
+- A one-shot ACR manifest read immediately after a successful provenance check can transiently return no digest; use the deployment helper's bounded polling method for verification.
+
+### Suggested Fix
+When invoking Azure deployment modules directly, explicitly change to the intended worktree, provide the known environment identifiers (`KEYVAULT_NAME`, resource group, ACR, AKS, and subscription as applicable), and use `waitForAcrTagDigest()` for post-write verification rather than a one-shot metadata read.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/azure/variables.mjs
+
+### Resolution
+- **Resolved**: 2026-09-16T08:00:00Z
+- **Notes**: Retry the bounded helper with the known live environment values from the deployment checkpoint.
+
+---
