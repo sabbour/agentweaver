@@ -262,8 +262,10 @@ public static class SandboxEndpoints
                     using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     try
                     {
+                        var bearer = await ResolveRetainedProcessBearerAsync(
+                            runId, turnTokens, secretStore, cleanup.Token).ConfigureAwait(false);
                         await previewRunnerClient.StopProcessAsync(
-                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId!,
+                            runId, bearer, request.PreviewRunnerSessionId!,
                             "preview_not_published", cleanup.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -795,14 +797,6 @@ public static class SandboxEndpoints
             return PreviewRegistrationResult.Error(
                 PreviewRegistrationStatus.GatewayFailed, "gateway_failed", "Failed to start preview.");
         }
-    }
-
-    private static string? BearerToken(HttpContext httpContext)
-    {
-        var authorization = httpContext.Request.Headers.Authorization.ToString();
-        return authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? authorization["Bearer ".Length..]
-            : null;
     }
 
     internal static async Task<bool> IsPreviewProcessHealthyAsync(

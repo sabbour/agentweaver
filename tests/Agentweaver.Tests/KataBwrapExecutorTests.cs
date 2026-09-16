@@ -360,16 +360,33 @@ public sealed class KataBwrapExecutorTests : IDisposable
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
-        var startInfo = executor.BuildProcessStartInfo(Command(_runA));
+        var startInfo = executor.BuildSupervisedProcessStartInfo(Command(_runA));
         var arguments = startInfo.ArgumentList.ToArray();
 
         startInfo.RedirectStandardOutput.Should().BeTrue();
         arguments.Should().NotContain("--info-fd");
+        arguments.Should().NotContain(
+            "--die-with-parent",
+            "a supervised preview outlives the transient native thread that launches bubblewrap");
         arguments.Should().Contain("--new-session");
         arguments.Should().NotContain("/usr/bin/setsid");
         var terminator = Array.IndexOf(arguments, "--");
         terminator.Should().BeGreaterThan(0);
         arguments[terminator + 1].Should().Be("/bin/bash");
+    }
+
+    [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
+    public void OneShotLaunch_RetainsParentDeathCleanup()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+
+        executor.BuildProcessStartInfo(Command(_runA)).ArgumentList
+            .Should().Contain("--die-with-parent");
     }
 
     /// <summary>

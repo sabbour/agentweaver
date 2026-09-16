@@ -246,6 +246,73 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
 
 ---
 
+## [ERR-20260915-KUBECTL-CUSTOM-COLUMNS-POWERSHELL] kubectl image query
+
+**Logged**: 2026-09-15T23:28:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+PowerShell parsed the unquoted custom-columns filter expression before `kubectl` received it.
+
+### Error
+```
+ParserError: Unrecognized token in source text.
+```
+
+### Context
+- The column expression contained `?(@.name=='agentweaver-agent-host')`.
+- The independent full deployment verifier still completed successfully with 36/36 checks.
+
+### Suggested Fix
+Use a single-quoted kubectl JSONPath expression or parse `-o json` in PowerShell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none (diagnostic command only)
+
+### Resolution
+- **Resolved**: 2026-09-15T23:28:00-07:00
+- **Notes**: Reissued the image query with a PowerShell-safe JSONPath.
+
+---
+
+## [ERR-20260915-WARMPOOL-READY-RACE] deploy-from-commit warm-pool wait
+
+**Logged**: 2026-09-15T23:25:00-07:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The exact-commit deployment completed rollout and 4/4 provenance verification but exited nonzero because its bounded warm-pool wait observed 0/2 for 180 seconds; immediately afterward the pool reported 2/2 ready.
+
+### Error
+```
+Timed out after 180000ms waiting for SandboxWarmPool 'agentweaver-agent-host'
+to become ready (last observed: 0/2).
+```
+
+### Context
+- API, frontend, MCP, and worker rollouts completed successfully.
+- Image provenance passed 4/4 for commit `d145a6822`.
+- No pods were manually deleted.
+- A post-command read showed `readyReplicas: 2` and `replicas: 2`.
+
+### Suggested Fix
+Treat the command as a transient post-rollout readiness timeout, rerun the normal verification command, and continue only after the pool and exact AgentHost image are independently verified.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: scripts/azure/deploy-from-local.mjs
+
+### Resolution
+- **Resolved**: 2026-09-15T23:26:00-07:00
+- **Notes**: The warm pool converged without manual resource deletion; follow-up verification was run against the deployed revision.
+
+---
+
 ## [ERR-20260915-AZURE-BYOK-BASE-PATH] Copilot SDK Azure provider routing
 
 **Logged**: 2026-09-15T22:55:00-07:00
@@ -1038,5 +1105,46 @@ Change to the source directory and pass a relative local path to `kubectl cp`.
 ### Resolution
 - **Resolved**: 2026-09-15T20:59:00-07:00
 - **Notes**: Retried from the worktree with a relative source path.
+
+---
+
+## [ERR-20260916-BWRAP-PDEATHSIG] supervised preview killed when spawning thread retired
+
+**Logged**: 2026-09-16T06:15:00Z
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+Long-lived preview workloads launched by the executor sidecar exited with code 137 about
+20 seconds into a human-approval wait because their bubblewrap process used
+`--die-with-parent`.
+
+### Error
+```text
+PreviewRunner: process exited session=<id> exitCode=137
+Preview session has exited or is unreachable; a preview URL cannot be published.
+```
+
+### Context
+- Three independent healthy preview sessions were SIGKILLed 20-23 seconds after
+  `start_preview` entered its approval wait.
+- The AgentHost and executor containers remained running with zero restarts and no OOM
+  termination.
+- Linux parent-death signals are associated with the native thread that creates the child.
+  `PodExecServer` handles requests on .NET worker threads, which may retire while the
+  sidecar process remains healthy.
+- The supervised relay/socket lifecycle already stops unretained workloads on disconnect
+  and explicit stop, while container teardown reaps processes when the sidecar exits.
+
+### Suggested Fix
+Omit `--die-with-parent` only for sidecar-supervised long-lived processes. Preserve it for
+one-shot commands, and preserve `--new-session`, namespace isolation, disconnect cleanup,
+explicit stop, and container-exit cleanup.
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs, packages/Agentweaver.SandboxExec/PodExec/PodExecServer.cs, apps/Agentweaver.AgentHost/PreviewRunner.cs
+- See Also: ERR-20260709-PREVLIFE
 
 ---

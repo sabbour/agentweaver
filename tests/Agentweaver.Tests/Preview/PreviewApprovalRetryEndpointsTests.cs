@@ -493,6 +493,9 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         await runner.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         runner.HealthCalls.Should().Be(1);
         runner.StopCalls.Should().Be(1);
+        runner.LastStopBearer.Should().Be(
+            "retained-test-credential",
+            "failed-publication cleanup must authenticate with the AgentHost preview credential");
         runner.StopCancellationToken.CanBeCanceled.Should().BeTrue("retained-process cleanup must be bounded");
         runner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
         var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
@@ -910,6 +913,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public int RetainCalls;
         public string? LastSessionId;
         public string? LastBearer;
+        public string? LastStopBearer;
         public int LastPort;
         public CancellationToken HealthCancellationToken;
         public CancellationToken StopCancellationToken;
@@ -932,6 +936,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
         {
             StopCalls++;
+            LastStopBearer = bearer;
             StopCancellationToken = ct;
             sessionId.Should().Be("retained-process");
             Stopped.TrySetResult();
