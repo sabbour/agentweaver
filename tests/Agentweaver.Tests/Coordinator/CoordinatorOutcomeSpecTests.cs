@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
@@ -62,6 +63,15 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     // =========================================================================
     // Start: draft + persist + emit + suspend at the gate, no dispatch.
     // =========================================================================
+    [Fact]
+    public void OutcomeSpecDraftTimeout_DefaultAllowsSlowProviderTurns()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        CoordinatorWorkflowFactory.ResolveOutcomeSpecDraftTimeout(configuration)
+            .Should().Be(TimeSpan.FromMinutes(5));
+    }
+
     [Fact]
     public async Task Start_DraftsSpec_PersistsAwaitingConfirmation_EmitsEvent_SuspendsAtGate()
     {
