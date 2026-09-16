@@ -2,9 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.SystemServerInfo;
 
@@ -52,35 +50,16 @@ public sealed class ServerInfoEndpointTests
 /// Factory that runs the real auth pipeline (no <c>Testing:BypassGitHubTokenAuth</c>), so an
 /// unauthenticated request genuinely exercises the middleware allowlists.
 /// </summary>
-file sealed class ServerInfoWebApplicationFactory(string authMode, string? repoAppSlug) : WebApplicationFactory<Program>
+file sealed class ServerInfoWebApplicationFactory(string authMode, string? repoAppSlug)
+    : ApiWebApplicationFactory("aw-si")
 {
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"] = Path.Combine(Path.GetTempPath(), $"aw-si-{Guid.NewGuid():N}.db"),
-                ["Worktrees:BasePath"] = Path.Combine(Path.GetTempPath(), $"aw-si-wt-{Guid.NewGuid():N}"),
-                ["Checkpoints:Path"] = Path.Combine(Path.GetTempPath(), $"aw-si-cp-{Guid.NewGuid():N}"),
-                ["Coordinator:Checkpoints:Path"] = Path.Combine(Path.GetTempPath(), $"aw-si-ccp-{Guid.NewGuid():N}"),
-                ["Auth:Mode"] = authMode,
-                ["Auth:Entra:TenantId"] = "72f988bf-86f1-41af-91ab-2d7cd011db47",
-                ["Auth:Entra:ClientId"] = "11111111-2222-3333-4444-555555555555",
-                ["Auth:ApiKey"] = "server-info-test-key",
-                ["Auth:RepoApp:Slug"] = repoAppSlug,
-                ["Auth:User"] = "server-info-test-user",
-                ["Git:Author:Name"] = "Test",
-                ["Git:Author:Email"] = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"] = "50",
-                ["RunBounds:MaxMinutes"] = "10",
-            });
-        });
+        configuration["Auth:Mode"] = authMode;
+        configuration["Auth:Entra:TenantId"] = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+        configuration["Auth:Entra:ClientId"] = "11111111-2222-3333-4444-555555555555";
+        configuration["Auth:ApiKey"] = "server-info-test-key";
+        configuration["Auth:RepoApp:Slug"] = repoAppSlug;
+        configuration["Auth:User"] = "server-info-test-user";
     }
 }

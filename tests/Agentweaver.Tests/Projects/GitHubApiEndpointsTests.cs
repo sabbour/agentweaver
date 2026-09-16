@@ -2,10 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Projects;
@@ -51,25 +49,19 @@ public sealed class GitHubApiEndpointsTests
 /// Per-test WebApplicationFactory. Stubs IGitHubAccessTokenProvider and replaces
 /// the "github" named HttpClient's primary handler with a caller-supplied UrlDispatchHandler.
 /// </summary>
-internal sealed class GitHubApiWebApplicationFactory : WebApplicationFactory<Program>
+internal sealed class GitHubApiWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = "gh-api-test-key-99999";
     public const string TestUser   = "accounts-test-user";
 
     private readonly UrlDispatchHandler _handler;
     private readonly string? _accessToken;
-    private readonly string _dbPath;
-    private readonly string _worktreesPath;
-    private readonly string _checkpointsPath;
 
     public GitHubApiWebApplicationFactory(UrlDispatchHandler handler, string? accessToken)
+        : base("agentweaver-gh")
     {
-        var uid          = Guid.NewGuid().ToString("N");
         _handler         = handler;
         _accessToken     = accessToken;
-        _dbPath          = Path.Combine(Path.GetTempPath(), $"agentweaver-gh-{uid}.db");
-        _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-gh-wt-{uid}");
-        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-gh-cp-{uid}");
     }
 
     /// <summary>Creates an HttpClient with the test API key pre-set.</summary>
@@ -81,38 +73,19 @@ internal sealed class GitHubApiWebApplicationFactory : WebApplicationFactory<Pro
         return client;
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"]                        = _dbPath,
-                ["Worktrees:BasePath"]                   = _worktreesPath,
-                ["Checkpoints:Path"]                     = _checkpointsPath,
-                ["Coordinator:Checkpoints:Path"]         = Path.Combine(_checkpointsPath, "coord"),
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
-                ["Testing:BypassGitHubTokenAuth"]        = "true",
-                ["Auth:Mode"]                            = "GitHubLegacy",
-                ["Auth:ApiKey"]                          = TestApiKey,
-                ["Auth:User"]                            = TestUser,
-                ["Auth:GitHub:ClientId"]                 = "test-github-client-id",
-                ["Auth:GitHub:BaseUrl"]                  = "https://github.com",
-                ["Git:Author:Name"]                      = "Test",
-                ["Git:Author:Email"]                     = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"]       = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"]     = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"]        = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"]    = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"]  = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"]= "gpt-4o",
-                ["RunBounds:MaxSteps"]                   = "50",
-                ["RunBounds:MaxMinutes"]                 = "10",
-            });
-        });
+        configuration["Testing:BypassGitHubOrgAuthorization"] = "true";
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:Mode"] = "GitHubLegacy";
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+        configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
+        configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
+    }
 
-        builder.ConfigureServices(services =>
-        {
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
             // Stub IGitHubAccessTokenProvider — return configured token or null for 401 tests.
             var existing = services.FirstOrDefault(d => d.ServiceType == typeof(IGitHubAccessTokenProvider));
             if (existing is not null) services.Remove(existing);
@@ -124,17 +97,6 @@ internal sealed class GitHubApiWebApplicationFactory : WebApplicationFactory<Pro
                 {
                     options.HttpMessageHandlerBuilderActions.Add(b => b.PrimaryHandler = _handler);
                 });
-        });
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        base.Dispose(disposing);
-        if (!disposing) return;
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-            try { File.Delete(p); } catch { }
-        try { Directory.Delete(_worktreesPath, recursive: true); } catch { }
-        try { Directory.Delete(_checkpointsPath, recursive: true); } catch { }
     }
 }
 

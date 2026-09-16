@@ -780,26 +780,14 @@ public sealed class WorkflowGeneratorTests
     }
 
     /// <summary>Project test factory that swaps in the stub generator for the generate endpoint test.</summary>
-    private sealed class StubWorkflowGeneratorFactory : Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>
+    private sealed class StubWorkflowGeneratorFactory : ApiWebApplicationFactory
     {
         public const string TestApiKey = "wfgen-test-api-key-77001";
         public const string TestUser = "wfgen-test-user";
 
-        private readonly string _dbPath;
-        private readonly string _workspaceRoot;
-        private readonly string _worktreesPath;
-        private readonly string _checkpointsPath;
-        private readonly string _coordinatorCheckpointsPath;
-
         public StubWorkflowGeneratorFactory()
+            : base("agentweaver-wfgen", createWorkspaceRoot: true)
         {
-            var unique = Guid.NewGuid().ToString("N");
-            _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wfgen-{unique}.db");
-            _workspaceRoot = Path.Combine(Path.GetTempPath(), $"agentweaver-wfgen-ws-{unique}");
-            _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wfgen-wt-{unique}");
-            _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wfgen-cp-{unique}");
-            _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wfgen-ccp-{unique}");
-            Directory.CreateDirectory(_workspaceRoot);
         }
 
         public HttpClient CreateAuthenticatedClient()
@@ -840,68 +828,23 @@ public sealed class WorkflowGeneratorTests
             client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
         }
 
-        public string NewWorkingDirectory()
+        public string NewWorkingDirectory() => CreateWorkspaceDirectory();
+
+        protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
         {
-            var dir = Path.Combine(_workspaceRoot, Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            return dir;
+            configuration["Auth:ApiKey"] = TestApiKey;
+            configuration["Auth:User"] = TestUser;
+            configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
+            configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
         }
 
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureTestServices(IServiceCollection services)
         {
-            builder.ConfigureAppConfiguration((_, cfg) =>
-            {
-                cfg.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Database:Path"] = _dbPath,
-                    ["Worktrees:BasePath"] = _worktreesPath,
-                    ["Checkpoints:Path"] = _checkpointsPath,
-                    ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
-                    ["Auth:ApiKey"] = TestApiKey,
-                    ["Auth:User"] = TestUser,
-                    ["Auth:GitHub:ClientId"] = "test-github-client-id",
-                    ["Auth:GitHub:BaseUrl"] = "https://github.com",
-                    ["Git:Author:Name"] = "Test",
-                    ["Git:Author:Email"] = "test@localhost",
-                    ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
-                    ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
-                    ["Providers:GitHubCopilot:Model"] = "gpt-4o",
-                    ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
-                    ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
-                    ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                    ["RunBounds:MaxSteps"] = "50",
-                    ["RunBounds:MaxMinutes"] = "10",
-                });
-            });
+            RemoveService<Agentweaver.Api.Git.ProjectGitInitializer>(services);
+            services.AddSingleton<Agentweaver.Api.Git.ProjectGitInitializer, NoOpProjectGitInitializer>();
 
-            builder.ConfigureServices(services =>
-            {
-                Remove<Agentweaver.Api.Git.ProjectGitInitializer>(services);
-                services.AddSingleton<Agentweaver.Api.Git.ProjectGitInitializer, NoOpProjectGitInitializer>();
-
-                Remove<IWorkflowGenerator>(services);
-                services.AddSingleton<IWorkflowGenerator, StubWorkflowGenerator>();
-            });
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-            if (!disposing) return;
-            foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-            {
-                try { File.Delete(p); } catch { /* best effort */ }
-            }
-            foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
-            }
-        }
-
-        private static void Remove<T>(IServiceCollection services)
-        {
-            var d = services.FirstOrDefault(x => x.ServiceType == typeof(T));
-            if (d is not null) services.Remove(d);
+            RemoveService<IWorkflowGenerator>(services);
+            services.AddSingleton<IWorkflowGenerator, StubWorkflowGenerator>();
         }
     }
 }
