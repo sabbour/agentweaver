@@ -1,7 +1,4 @@
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Blueprints;
@@ -18,29 +15,15 @@ namespace Agentweaver.Tests.Helpers;
 /// <see cref="IBlueprintGenerator"/> with <see cref="StubBlueprintGenerator"/> so the generate
 /// endpoint can be exercised without the live model.
 /// </summary>
-public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Program>
+public sealed class BlueprintsWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = "blueprints-test-api-key-99887";
     public const string TestUser   = "blueprints-test-user";
 
-    private readonly string _dbPath;
-    private readonly string _workspaceRoot;
-    private readonly string _worktreesPath;
-    private readonly string _checkpointsPath;
-    private readonly string _coordinatorCheckpointsPath;
-
     public StubBlueprintGenerator Generator { get; } = new();
 
-    public BlueprintsWebApplicationFactory()
+    public BlueprintsWebApplicationFactory() : base("agentweaver-bp", createWorkspaceRoot: true)
     {
-        var unique = Guid.NewGuid().ToString("N");
-        _dbPath          = Path.Combine(Path.GetTempPath(), $"agentweaver-bp-{unique}.db");
-        _workspaceRoot   = Path.Combine(Path.GetTempPath(), $"agentweaver-bp-ws-{unique}");
-        _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-bp-wt-{unique}");
-        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-bp-cp-{unique}");
-        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-bp-ccp-{unique}");
-
-        Directory.CreateDirectory(_workspaceRoot);
     }
 
     public HttpClient CreateAuthenticatedClient()
@@ -84,71 +67,25 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
         client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"]                         = _dbPath,
-                ["Worktrees:BasePath"]                    = _worktreesPath,
-                ["Checkpoints:Path"]                      = _checkpointsPath,
-                ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
-                ["Testing:BypassGitHubTokenAuth"]        = "true",
-                ["Auth:ApiKey"] = TestApiKey,
-                ["Auth:User"]                             = TestUser,
-                ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
-                ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
-                ["Git:Author:Name"]                       = "Test",
-                ["Git:Author:Email"]                      = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"]      = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"]         = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"]     = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"]   = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"]                    = "50",
-                ["RunBounds:MaxMinutes"]                  = "10",
-            });
-        });
-
-        builder.ConfigureServices(services =>
-        {
-            RemoveService<ProjectGitInitializer>(services);
-            services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();
-
-            RemoveService<IBlueprintGenerator>(services);
-            services.AddSingleton<IBlueprintGenerator>(Generator);
-        });
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+        configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
+        configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
     }
 
-    public string NewWorkingDirectory()
+    protected override void ConfigureTestServices(IServiceCollection services)
     {
-        var dir = Path.Combine(_workspaceRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        return dir;
+        RemoveService<ProjectGitInitializer>(services);
+        services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();
+
+        RemoveService<IBlueprintGenerator>(services);
+        services.AddSingleton<IBlueprintGenerator>(Generator);
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        base.Dispose(disposing);
-        if (!disposing) return;
-
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-        {
-            try { File.Delete(p); } catch { /* best effort */ }
-        }
-        foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
-        {
-            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
-        }
-    }
-
-    private static void RemoveService<T>(IServiceCollection services)
-    {
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(T));
-        if (descriptor is not null) services.Remove(descriptor);
-    }
+    public string NewWorkingDirectory() => CreateWorkspaceDirectory();
 }
 
 /// <summary>
