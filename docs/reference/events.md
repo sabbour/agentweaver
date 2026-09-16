@@ -47,6 +47,7 @@ Clients should order and deduplicate events by `sequence`.
 | `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
 | `sandbox.provisioning_pending` | Heartbeat re-emitted about every 20s on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is unbound (the pod is still being scheduled by Kubernetes — a node may be freeing up or the pool autoscaling). Keeps the child stream flowing so the parent coordinator's subtask-stall timer resets during a legitimate provisioning wait instead of firing `agent_stall_timeout` (issue #217). Non-terminal and idempotent; consumers may ignore it | `claimName`, `timestamp_utc` |
+| `coordinator.child_provisioning_pending` | Coordinator-scoped projection emitted once when a child enters the Kubernetes scheduling wait. Repeated child heartbeats are suppressed until another child event clears the state | `childRunId`, `subtaskId`, `claimName`, `timestamp_utc` |
 | `sandbox.preview_applicability` | Before assembly Build & Test approval is evaluated, records whether the assembled artifact needs a preview or is skipped as not applicable | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` |
 | `sandbox.preview_start_requested` | When the deterministic preview step resolves a run command and starts the platform-owned preview attempt | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` |
 | `sandbox.preview_pending` | When AgentPreviewGate is waiting for approval to expose the Build & Test preview port, including a fresh retry attempt | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id`, `expires_at`, `timeout_minutes`; optional `retry_of_request_id` |
@@ -264,6 +265,12 @@ A lightweight **heartbeat** emitted repeatedly on the child run's stream while a
 ### `sandbox.provisioning_pending`
 
 A **heartbeat** emitted repeatedly on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is still being provisioned — i.e. the claim is not yet bound because Kubernetes is still scheduling the pod (a node may need to free up or the pool may need to autoscale). It fires about every 20 seconds (`SandboxProvisioningHeartbeatInterval`) from `KubernetesSandboxExecutor` while the claim is unbound, carrying the `claimName` and a `timestamp_utc`. Like `tool.approval_pending` (issue #212), its purpose is operational: it keeps the child stream moving so the parent coordinator's subtask-stall timer resets during the (Kubernetes-paced) provisioning wait instead of false-firing `agent_stall_timeout` (issue #217). A **Pending** pod is therefore a legitimate wait, not a failure — the platform no longer pre-flights namespace capacity before launching. The frame is non-terminal and idempotent; consumers that do not care may ignore it, and the coordinator's exemption self-heals as soon as any other real event (the pod binding, agent output, or a terminal event) arrives. The emit is best-effort: a stream-append failure is logged and swallowed so it can never fail a launch Kubernetes would otherwise admit.
+
+The coordinator projects the first heartbeat in each uninterrupted wait as
+`coordinator.child_provisioning_pending`, adding `childRunId` and `subtaskId`. Repeated heartbeats
+remain on the child stream for stall protection but are not copied repeatedly to the coordinator
+stream. Any other child event clears that projection state, so a later scheduling wait is visible
+again.
 
 ### `workflow.step`
 

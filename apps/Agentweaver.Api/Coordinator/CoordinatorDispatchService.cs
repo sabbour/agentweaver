@@ -96,6 +96,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
+    private readonly ConcurrentDictionary<string, byte> _provisioningPendingChildren = new();
+
     /// <summary>
     /// Per-run cancellation source (linked to <see cref="_appStopping"/>) for each active dispatch
     /// loop. The lease heartbeat cancels this to FENCE the loop when the coordinator lease is lost to a
@@ -2251,6 +2253,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// </summary>
     internal void BubbleChildInteraction(string coordinatorRunId, int subtaskId, string childRunId, RunEvent evt)
     {
+        if (evt.Type != EventTypes.SandboxProvisioningPending)
+            _provisioningPendingChildren.TryRemove(childRunId, out _);
+
         if (evt.Type == EventTypes.AgentQuestionAsked)
         {
             var requestId = ReadString(evt.Payload, "requestId");
@@ -2299,6 +2304,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 requestId = ReadString(evt.Payload, "requestId"),
                 approved = ReadBool(evt.Payload, "approved"),
                 expired = ReadBool(evt.Payload, "expired"),
+            });
+        }
+        else if (evt.Type == EventTypes.SandboxProvisioningPending
+            && _provisioningPendingChildren.TryAdd(childRunId, 0))
+        {
+            var entry = _streamStore.Get(coordinatorRunId);
+            entry?.RecordNext(EventTypes.CoordinatorChildProvisioningPending, new
+            {
+                childRunId,
+                subtaskId,
+                claimName = ReadString(evt.Payload, "claimName"),
+                timestamp_utc = ReadString(evt.Payload, "timestamp_utc"),
             });
         }
     }
