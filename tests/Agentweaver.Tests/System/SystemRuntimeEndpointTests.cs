@@ -2,9 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Tests.Helpers;
@@ -87,7 +84,7 @@ public sealed class SystemRuntimeEndpointTests
 /// Minimal factory that replaces <see cref="IKubernetesEnvironment"/> with a stub
 /// so both detection branches can be tested without touching real environment variables.
 /// </summary>
-file sealed class SystemRuntimeWebApplicationFactory : WebApplicationFactory<Program>
+file sealed class SystemRuntimeWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = "system-runtime-test-key";
     public const string TestUser   = "system-runtime-test-user";
@@ -96,6 +93,7 @@ file sealed class SystemRuntimeWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string? _podName;
 
     public SystemRuntimeWebApplicationFactory(bool isKubernetes, string? podName)
+        : base("aw-sysrt")
     {
         _isKubernetes = isKubernetes;
         _podName      = podName;
@@ -109,42 +107,21 @@ file sealed class SystemRuntimeWebApplicationFactory : WebApplicationFactory<Pro
         return client;
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"]                         = Path.Combine(Path.GetTempPath(), $"aw-sysrt-{Guid.NewGuid():N}.db"),
-                ["Worktrees:BasePath"]                    = Path.Combine(Path.GetTempPath(), $"aw-sysrt-wt-{Guid.NewGuid():N}"),
-                ["Checkpoints:Path"]                      = Path.Combine(Path.GetTempPath(), $"aw-sysrt-cp-{Guid.NewGuid():N}"),
-                ["Coordinator:Checkpoints:Path"]          = Path.Combine(Path.GetTempPath(), $"aw-sysrt-ccp-{Guid.NewGuid():N}"),
-                ["Testing:BypassGitHubOrgAuthorization"]  = "true",
-                ["Testing:BypassGitHubTokenAuth"]         = "true",
-                ["Auth:Mode"]                             = "GitHubLegacy",
-                ["Auth:ApiKey"]                           = TestApiKey,
-                ["Auth:User"]                             = TestUser,
-                ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
-                ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
-                ["Git:Author:Name"]                       = "Test",
-                ["Git:Author:Email"]                      = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"]      = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"]         = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"]     = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"]   = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"]                    = "50",
-                ["RunBounds:MaxMinutes"]                  = "10",
-            });
-        });
+        configuration["Testing:BypassGitHubOrgAuthorization"] = "true";
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:Mode"] = "GitHubLegacy";
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+        configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
+        configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
+    }
 
-        builder.ConfigureServices(services =>
-        {
-            // Replace the real runtime detector with a stub.
-            services.AddSingleton<IKubernetesEnvironment>(
-                new StubKubernetesEnvironment(_isKubernetes, _podName));
-        });
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
+        services.AddSingleton<IKubernetesEnvironment>(
+            new StubKubernetesEnvironment(_isKubernetes, _podName));
     }
 }
 
