@@ -1513,7 +1513,7 @@ public sealed class AssistantRunEndpointsTests
 /// a configurable per-user concurrency bound. Mirrors <see cref="AgentweaverWebApplicationFactory"/>'s
 /// config (that type is sealed, so this is a sibling rather than a subclass).
 /// </summary>
-public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>
+public sealed class AssistantWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = AgentweaverWebApplicationFactory.TestApiKey;
     public const string TestUser = AgentweaverWebApplicationFactory.TestUser;
@@ -1544,11 +1544,11 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     /// counting it and parks it. Lets tests simulate a run stranded by an API pod restart.</summary>
     public TimeSpan StaleActiveRunThreshold { get; set; } = TimeSpan.FromMinutes(90);
 
-    private readonly string _ownDbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
-    private string _dbPath => SharedDatabasePath ?? _ownDbPath;
-    private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
-    private readonly string _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-cp-{Guid.NewGuid():N}");
-    private readonly string _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-ccp-{Guid.NewGuid():N}");
+    protected override string DatabasePath => SharedDatabasePath ?? base.DatabasePath;
+
+    public AssistantWebApplicationFactory() : base("agentweaver-assistant")
+    {
+    }
 
     public async Task PrepareAiExecutionAsync(HttpClient client)
     {
@@ -1588,48 +1588,29 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
         client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"] = _dbPath,
-                ["Worktrees:BasePath"] = _worktreesPath,
-                ["Checkpoints:Path"] = _checkpointsPath,
-                ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
-                ["Testing:BypassGitHubTokenAuth"] = "true",
-                ["Auth:Mode"] = "GitHubLegacy",
-                ["Auth:ApiKey"] = TestApiKey,
-                ["Auth:User"] = TestUser,
-                ["Auth:Keys:refreshed:Token"] = RefreshedTestToken,
-                ["Auth:Keys:refreshed:User"] = TestUser,
-                ["Auth:Keys:refreshed:PlatformRoles"] = PlatformRoles.Contributor,
-                ["Auth:Keys:newest:Token"] = NewestTestToken,
-                ["Auth:Keys:newest:User"] = TestUser,
-                ["Auth:Keys:newest:PlatformRoles"] = PlatformRoles.Contributor,
-                ["Git:Author:Name"] = "Test",
-                ["Git:Author:Email"] = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
-                ["Providers:Byok:ApiKey"] = "test-byok-key",
-                ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"] = "50",
-                ["RunBounds:MaxMinutes"] = "10",
-                ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
-                ["Assistant:PodIdleTimeout"] = PodIdleTimeout.ToString(),
-                ["Assistant:StaleActiveRunThreshold"] = StaleActiveRunThreshold.ToString(),
-                ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
-                ["Auth:OAuth:PublicOrigin"] = OAuthPublicOrigin,
-            });
-        });
+        configuration["Testing:BypassGitHubOrgAuthorization"] = "true";
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:Mode"] = "GitHubLegacy";
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+        configuration["Auth:Keys:refreshed:Token"] = RefreshedTestToken;
+        configuration["Auth:Keys:refreshed:User"] = TestUser;
+        configuration["Auth:Keys:refreshed:PlatformRoles"] = PlatformRoles.Contributor;
+        configuration["Auth:Keys:newest:Token"] = NewestTestToken;
+        configuration["Auth:Keys:newest:User"] = TestUser;
+        configuration["Auth:Keys:newest:PlatformRoles"] = PlatformRoles.Contributor;
+        configuration["Providers:Byok:ApiKey"] = "test-byok-key";
+        configuration["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString();
+        configuration["Assistant:PodIdleTimeout"] = PodIdleTimeout.ToString();
+        configuration["Assistant:StaleActiveRunThreshold"] = StaleActiveRunThreshold.ToString();
+        configuration["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api";
+        configuration["Auth:OAuth:PublicOrigin"] = OAuthPublicOrigin;
+    }
 
-        builder.ConfigureServices(services =>
-        {
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
             var existing = services.FirstOrDefault(d => d.ServiceType == typeof(IOperatorAssistantAgent));
             if (existing is not null) services.Remove(existing);
             services.AddSingleton<IOperatorAssistantAgent>(AgentOverride ?? Agent);
@@ -1664,21 +1645,6 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 if (existingLifecycle is not null) services.Remove(existingLifecycle);
                 services.AddSingleton(PodLifecycle);
             }
-        });
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        base.Dispose(disposing);
-        if (!disposing) return;
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-        {
-            try { File.Delete(p); } catch { /* best effort */ }
-        }
-        foreach (var d in new[] { _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
-        {
-            try { Directory.Delete(d, recursive: true); } catch { /* best effort */ }
-        }
     }
 }
 

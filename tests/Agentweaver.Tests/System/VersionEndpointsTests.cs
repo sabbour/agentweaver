@@ -2,11 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.SystemVersion;
 
@@ -85,7 +83,7 @@ public sealed class VersionEndpointsTests
 /// variables (avoids flakiness from process-wide IMAGE_TAG/GIT_SHA mutation across
 /// parallel test classes).
 /// </summary>
-file sealed class VersionWebApplicationFactory : WebApplicationFactory<Program>
+file sealed class VersionWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = "version-endpoint-test-key";
     public const string TestUser = "version-endpoint-test-user";
@@ -93,6 +91,7 @@ file sealed class VersionWebApplicationFactory : WebApplicationFactory<Program>
     private readonly IAppVersionProvider _versionProvider;
 
     public VersionWebApplicationFactory(IAppVersionProvider versionProvider)
+        : base("aw-ver")
     {
         _versionProvider = versionProvider;
     }
@@ -105,39 +104,18 @@ file sealed class VersionWebApplicationFactory : WebApplicationFactory<Program>
         return client;
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"] = Path.Combine(Path.GetTempPath(), $"aw-ver-{Guid.NewGuid():N}.db"),
-                ["Worktrees:BasePath"] = Path.Combine(Path.GetTempPath(), $"aw-ver-wt-{Guid.NewGuid():N}"),
-                ["Checkpoints:Path"] = Path.Combine(Path.GetTempPath(), $"aw-ver-cp-{Guid.NewGuid():N}"),
-                ["Coordinator:Checkpoints:Path"] = Path.Combine(Path.GetTempPath(), $"aw-ver-ccp-{Guid.NewGuid():N}"),
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
-                ["Testing:BypassGitHubTokenAuth"] = "true",
-                ["Auth:Mode"] = "GitHubLegacy",
-                ["Auth:ApiKey"] = TestApiKey,
-                ["Auth:User"] = TestUser,
-                ["Git:Author:Name"] = "Test",
-                ["Git:Author:Email"] = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"] = "50",
-                ["RunBounds:MaxMinutes"] = "10",
-            });
-        });
+        configuration["Testing:BypassGitHubOrgAuthorization"] = "true";
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:Mode"] = "GitHubLegacy";
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+    }
 
-        builder.ConfigureServices(services =>
-        {
-            // Replace the real (env-var/VERSION-file-driven) provider with a stub.
-            services.AddSingleton<IAppVersionProvider>(_versionProvider);
-        });
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
+        services.AddSingleton<IAppVersionProvider>(_versionProvider);
     }
 }
 
