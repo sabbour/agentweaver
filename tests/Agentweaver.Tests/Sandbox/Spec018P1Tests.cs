@@ -11,6 +11,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Sandbox;
 
@@ -655,77 +656,39 @@ public sealed class Issue350PodReleaseOnTerminalTests
 /// and overrides the <c>Sandbox:AgentExecutionMode</c> / <c>Sandbox:ReleasePodOnSuspend</c>
 /// config keys, enabling release-on-suspend unit tests against a fully-resolved DI graph.
 /// </summary>
-public sealed class Spec018PodReleaseWebAppFactory : WebApplicationFactory<Program>
+public sealed class Spec018PodReleaseWebAppFactory : ApiWebApplicationFactory
 {
     private readonly string _agentMode;
     private readonly bool _releasePodOnSuspend;
     private readonly TrackingPodLifecycle? _podLifecycle;
 
-    private readonly string _dbPath = Path.Combine(
-        Path.GetTempPath(), $"spec018-pr-{Guid.NewGuid():N}.db");
-    private readonly string _worktreesPath = Path.Combine(
-        Path.GetTempPath(), $"spec018-pr-wt-{Guid.NewGuid():N}");
-    private readonly string _checkpointsPath = Path.Combine(
-        Path.GetTempPath(), $"spec018-pr-cp-{Guid.NewGuid():N}");
-    private readonly string _coordCheckpointsPath = Path.Combine(
-        Path.GetTempPath(), $"spec018-pr-ccp-{Guid.NewGuid():N}");
-
     public Spec018PodReleaseWebAppFactory(
         string agentMode = "pod-per-run",
         bool releasePodOnSuspend = true,
         TrackingPodLifecycle? podLifecycle = null)
+        : base("spec018-pr")
     {
         _agentMode = agentMode;
         _releasePodOnSuspend = releasePodOnSuspend;
         _podLifecycle = podLifecycle;
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"]                          = _dbPath,
-                ["Worktrees:BasePath"]                     = _worktreesPath,
-                ["Checkpoints:Path"]                       = _checkpointsPath,
-                ["Coordinator:Checkpoints:Path"]           = _coordCheckpointsPath,
-                ["Testing:BypassGitHubOrgAuthorization"]   = "true",
-                ["Testing:BypassGitHubTokenAuth"]          = "true",
-                ["Auth:Mode"]                              = "GitHubLegacy",
-                ["Auth:ApiKey"]                            = "spec018-test-key",
-                ["Auth:User"]                              = "spec018-test-user",
-                ["Git:Author:Name"]                        = "Test",
-                ["Git:Author:Email"]                       = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"]         = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"]       = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"]          = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"]      = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"]    = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"]  = "gpt-4o",
-                ["RunBounds:MaxSteps"]                     = "50",
-                ["RunBounds:MaxMinutes"]                   = "10",
-                // spec-018 P1 overrides
-                ["Sandbox:AgentExecutionMode"]             = _agentMode,
-                ["Sandbox:ReleasePodOnSuspend"]            = _releasePodOnSuspend.ToString().ToLowerInvariant(),
-            }));
-
-        if (_podLifecycle is not null)
-        {
-            builder.ConfigureServices(services =>
-                services.AddSingleton<IAgentHostPodLifecycle>(_podLifecycle));
-        }
+        configuration["Testing:BypassGitHubOrgAuthorization"] = "true";
+        configuration["Testing:BypassGitHubTokenAuth"] = "true";
+        configuration["Auth:Mode"] = "GitHubLegacy";
+        configuration["Auth:ApiKey"] = "spec018-test-key";
+        configuration["Auth:User"] = "spec018-test-user";
+        configuration["Sandbox:AgentExecutionMode"] = _agentMode;
+        configuration["Sandbox:ReleasePodOnSuspend"] =
+            _releasePodOnSuspend.ToString().ToLowerInvariant();
     }
 
-    protected override void Dispose(bool disposing)
+    protected override void ConfigureTestServices(IServiceCollection services)
     {
-        base.Dispose(disposing);
-        if (!disposing) return;
-
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
-            try { File.Delete(p); } catch { /* best-effort */ }
-
-        foreach (var d in new[] { _worktreesPath, _checkpointsPath, _coordCheckpointsPath })
-            try { Directory.Delete(d, recursive: true); } catch { /* best-effort */ }
+        if (_podLifecycle is not null)
+            services.AddSingleton<IAgentHostPodLifecycle>(_podLifecycle);
     }
 }
 

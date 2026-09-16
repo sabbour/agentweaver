@@ -1,12 +1,10 @@
 using LibGit2Sharp;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Casting;
 
@@ -15,27 +13,13 @@ namespace Agentweaver.Tests.Casting;
 /// Uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
 /// and stubs out ProjectGitInitializer to skip real git operations.
 /// </summary>
-public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program>
+public sealed class CastingWebApplicationFactory : ApiWebApplicationFactory
 {
     public const string TestApiKey = "casting-test-api-key-99999";
     public const string TestUser   = "casting-test-user";
 
-    private readonly string _dbPath;
-    private readonly string _workspaceRoot;
-    private readonly string _worktreesPath;
-    private readonly string _checkpointsPath;
-    private readonly string _coordinatorCheckpointsPath;
-
-    public CastingWebApplicationFactory()
+    public CastingWebApplicationFactory() : base("agentweaver-cast", createWorkspaceRoot: true)
     {
-        var unique = Guid.NewGuid().ToString("N");
-        _dbPath          = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-{unique}.db");
-        _workspaceRoot   = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-ws-{unique}");
-        _worktreesPath   = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-wt-{unique}");
-        _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-cp-{unique}");
-        _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cast-ccp-{unique}");
-
-        Directory.CreateDirectory(_workspaceRoot);
     }
 
     /// <summary>
@@ -52,12 +36,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
     /// <summary>
     /// Creates a project working directory under the isolated workspace root.
     /// </summary>
-    public string NewProjectWorkingDirectory()
-    {
-        var dir = Path.Combine(_workspaceRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    public string NewProjectWorkingDirectory() => CreateWorkspaceDirectory();
 
     /// <summary>
     /// Creates a temp directory, initializes it as a real git repository using LibGit2Sharp,
@@ -66,8 +45,7 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
     /// </summary>
     public string NewGitRepository()
     {
-        var dir = Path.Combine(_workspaceRoot, $"repo-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = CreateWorkspaceDirectory($"repo-{Guid.NewGuid():N}");
 
         Repository.Init(dir);
         using var repo = new Repository(dir);
@@ -82,64 +60,18 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
         return dir;
     }
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
     {
-        builder.ConfigureAppConfiguration((_, cfg) =>
-        {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Database:Path"]                         = _dbPath,
-                ["Worktrees:BasePath"]                    = _worktreesPath,
-                ["Checkpoints:Path"]                      = _checkpointsPath,
-                ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
-                ["Auth:ApiKey"]                           = TestApiKey,
-                ["Auth:User"]                             = TestUser,
-                ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
-                ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
-                ["Git:Author:Name"]                       = "Test",
-                ["Git:Author:Email"]                      = "test@localhost",
-                ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",
-                ["Providers:GitHubCopilot:Endpoint"]      = "https://api.githubcopilot.com",
-                ["Providers:GitHubCopilot:Model"]         = "gpt-4o",
-                ["Providers:MicrosoftFoundry:ApiKey"]     = "test-foundry-key",
-                ["Providers:MicrosoftFoundry:Endpoint"]   = "https://test.openai.azure.com",
-                ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
-                ["RunBounds:MaxSteps"]                    = "50",
-                ["RunBounds:MaxMinutes"]                  = "10",
-            });
-        });
-
-        builder.ConfigureServices(services =>
-        {
-            // Replace ProjectGitInitializer with a no-op stub.
-            RemoveService<ProjectGitInitializer>(services);
-            services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializerForCasting>();
-        });
+        configuration["Auth:ApiKey"] = TestApiKey;
+        configuration["Auth:User"] = TestUser;
+        configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
+        configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
     }
 
-    protected override void Dispose(bool disposing)
+    protected override void ConfigureTestServices(IServiceCollection services)
     {
-        base.Dispose(disposing);
-        if (!disposing) return;
-
-        var memoryDbPath = SqliteMemoryDbPathResolver.Resolve(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = _dbPath })
-            .Build());
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm", memoryDbPath, memoryDbPath + "-wal", memoryDbPath + "-shm" })
-        {
-            try { File.Delete(p); } catch { /* best effort */ }
-        }
-
-        foreach (var dir in new[] { _workspaceRoot, _worktreesPath, _checkpointsPath, _coordinatorCheckpointsPath })
-        {
-            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
-        }
-    }
-
-    private static void RemoveService<T>(IServiceCollection services)
-    {
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(T));
-        if (descriptor is not null) services.Remove(descriptor);
+        RemoveService<ProjectGitInitializer>(services);
+        services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializerForCasting>();
     }
 }
 
