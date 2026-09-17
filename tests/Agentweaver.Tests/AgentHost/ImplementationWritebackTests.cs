@@ -369,6 +369,43 @@ public sealed class ImplementationWritebackTests : IDisposable
     }
 
     [Fact]
+    public async Task Impl_writeback_accepts_content_identical_moved_head()
+    {
+        var fixture = CreateFixture();
+        var local = CreateLocalManager();
+        var prepared = await local.PrepareAsync(
+            fixture.LocalSpec,
+            CancellationToken.None);
+        File.WriteAllText(Path.Combine(prepared.WorkspacePath, "local.txt"), "local result");
+        var writeback = await local.PrepareWritebackAsync();
+
+        File.WriteAllText(
+            Path.Combine(fixture.Worktree.WorktreePath, "local.txt"),
+            "local result");
+        fixture.WorktreeManager.CommitChanges(fixture.Worktree.WorktreePath, fixture.RunId);
+        var independentlyCommittedHead = fixture.WorktreeManager.GetBranchTipCommitSha(
+            fixture.Repository,
+            fixture.Worktree.BranchName);
+
+        var act = () => fixture.WorktreeManager.ApplyPreparedWriteback(
+            fixture.Repository,
+            fixture.Worktree.WorktreePath,
+            fixture.Worktree.BranchName,
+            fixture.RunId,
+            writeback);
+
+        act.Should().NotThrow();
+        fixture.WorktreeManager
+            .GetBranchTipTreeSha(fixture.Repository, fixture.Worktree.BranchName)
+            .Should().Be(writeback.ResultTreeSha);
+        fixture.WorktreeManager
+            .GetBranchTipCommitSha(fixture.Repository, fixture.Worktree.BranchName)
+            .Should().Be(independentlyCommittedHead);
+
+        await local.CleanupAsync();
+    }
+
+    [Fact]
     public async Task Impl_writeback_conflict_fails_with_structured_base_mismatch()
     {
         var fixture = CreateFixture();
