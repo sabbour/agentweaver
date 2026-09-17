@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.32.9
+
+### Patch Changes
+
+- efe1bc0: Accept prepared implementation write-back when the authoritative branch already has the exact result tree under a different commit identity.
+- 6951c13: Clear durable AgentHost pod bindings when a claim is released so assembly retries launch a replacement instead of reusing a deleted pod.
+- 20cb252: Keep coordinator workflow selection and tool-less classifiers on the run's accepted BYOK provider.
+- 3a8cd3a: Keep the configured AgentHost run capability when an assembly turn omits its optional API key.
+- 563705b: Refresh run-bound GitHub Copilot credentials after AgentHost provisioning delays and preserve configure failure reasons.
+- e8c61d4: Remove unused web modules that no active page loads, without changing the current steering,
+  review, agent activity, shell, or timeline experiences.
+- 0af7df1: Start each Preview's selected lifetime when its public URL becomes usable so DNS and Gateway provisioning no longer consume the promised viewing window.
+- 0d471ad: Keep capacity-blocked sandbox claims nonterminal and surface their Kubernetes scheduling wait.
+
 ## 0.32.8
 
 ### Patch Changes
