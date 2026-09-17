@@ -16,6 +16,91 @@ An actual stacked PR has **two or more logical PR layers**. A local one-branch t
 setup or an ordinary one-branch PR is not a stack. Use the normal Agentweaver PR workflow
 for ordinary PRs.
 
+`gh stack` v0.1.0 is optional and only fits a genuinely dependent, strictly linear
+cohort. It is never the admission queue for independent issues. Independent changes use
+the temporary integration branch workflow below.
+
+## Ponytail implementation and admission gate
+
+Coding agents use `ponytail` by default. After implementation they must:
+
+1. run the exact affected validation from `CONTRIBUTING.md`;
+2. rubber-duck the tested result, naming load-bearing assumptions, reused or deleted
+   complexity, and any flaw found and fixed; then
+3. stop and hand the exact branch tip to a different agent for `ponytail-review`.
+
+The reviewer writes `.squad/.scratch/ponytail-gates/<head-sha>.json` using this contract:
+
+```json
+{
+  "kind": "agentweaver.ponytail-review/v1",
+  "head_sha": "40-character commit SHA",
+  "implementer": "agent or contributor",
+  "reviewer": "different agent or contributor",
+  "implementer_validation": {
+    "commands": ["exact command"]
+  },
+  "rubber_duck": {
+    "assumptions": ["load-bearing assumption"],
+    "simplifications": ["what was deleted or reused"],
+    "flaw": "what was fixed, or an explicit statement that none was found"
+  },
+  "findings": [
+    {
+      "id": "PT-001",
+      "confidence": "high",
+      "summary": "unnecessary complexity",
+      "location": "repo/path:line",
+      "waiver": {
+        "justification": "why this complexity is necessary",
+        "approved_by": "accountable approver"
+      }
+    }
+  ]
+}
+```
+
+Omit `waiver` when none exists. Admission is derived: every high-confidence finding must
+have an explicit waiver with a non-empty justification and accountable approver, or the
+gate blocks. Lower-confidence findings remain review feedback. Git and PR history are
+the authoritative timestamps; the gate does not self-attest ceremony times or a
+redundant verdict. Validate the file against the exact candidate tip:
+
+```bash
+npm run workflow:ponytail-gate -- \
+  .squad/.scratch/ponytail-gates/<head-sha>.json \
+  --expect-tip "$(git rev-parse HEAD)"
+```
+
+The command failing blocks admission. Persist the validated JSON verbatim in the
+candidate PR as a comment (a raw JSON body is intentionally machine-readable and
+auditable), for example `gh pr comment <number> --body-file <gate.json>`. A waiver is an
+explicit accountable decision, not reviewer silence.
+
+## Temporary integration branch queue
+
+GitHub Merge Queue is not available for this repository, so the user owns one published,
+short-lived integration branch for each admission cohort:
+
+1. Create the branch from current `origin/dev` and publish it before admission begins.
+2. Admit candidates one at a time in declared order. Before each admission, update from
+   the latest published integration tip, verify the candidate's validated Ponytail gate
+   matches its exact head SHA, integrate it, run its affected validation, then publish
+   the new tip. A stale gate or failed validation stops the queue.
+3. After the last candidate, run `npm run validate:full` plus required live proofs on the
+   aggregate. Run `ponytail-debt` against that exact aggregate tip, capture its output
+   under `.squad/.scratch/`, and attach it with the aggregate SHA to the promotion PR.
+4. Promote only from that exact reviewed integration tip into `dev`; do not rebuild the
+   aggregate during promotion. Immediately before merge, verify the promotion PR head is
+   still the recorded integration SHA. After the repository's squash-only promotion,
+   record the resulting `dev` SHA and verify its tree hash equals the integration tip's
+   tree hash.
+5. Delete the remote and local temporary integration branch only after promotion is
+   confirmed. Preserve the PR comments and aggregate evidence as the audit trail.
+
+Never reuse a release branch as this queue, and never integrate work by mutating another
+agent's worktree.
+
 ## Authoritative operational reference
 
 Before deciding whether work belongs in a stack, or choosing its layers' count, order,

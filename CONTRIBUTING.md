@@ -102,6 +102,16 @@ The active topology is `dev → release/vX.Y.Z → main`:
 
 The complete operating flow is in [RELEASING.md](RELEASING.md).
 
+### Temporary integration branch queue
+
+GitHub Merge Queue is not currently available for this repository. Independent PR
+cohorts may instead use one published, short-lived integration branch as a serialized
+admission queue; it must not reuse a release branch. The canonical queue contract,
+Ponytail gate, aggregate debt capture, and promotion rules are in
+[gh-stack parallel work](.github/skills/gh-stack-parallel-work/SKILL.md). `gh stack`
+v0.1.0 remains optional only for genuinely dependent, strictly linear PR layers, never
+as the independent-issue queue.
+
 ## Testing
 
 Prepare dependencies once per worktree. Every package root keeps a physical, private
