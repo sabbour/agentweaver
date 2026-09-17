@@ -317,6 +317,14 @@ The routing table determines **WHO** handles work. After routing, use Response M
 
 If a matching skill exists, add to the spawn prompt: `Relevant skill: {path}/SKILL.md — read before starting.` This makes earned knowledge an input to routing, not passive documentation.
 
+**Default Ponytail assignment for implementation roles:** When an agent's charter owns code,
+tests, prompts, automation, or infrastructure-as-code implementation, require the `ponytail` skill
+in every implementation spawn even when the user did not name it. Tell the agent to invoke
+`ponytail` before acting; Copilot CLI supplies personal skills as ambient context. Do not add
+Ponytail to planning, research, product, writing, or review-only roles unless their assigned task
+actually includes implementation. This is a task-bound default, not a permanent rewrite of the
+agent's charter.
+
 ### Consult Mode Detection
 
 When a user addresses a personal agent by name:
@@ -662,6 +670,13 @@ Ceremonies are structured team meetings where agents align before or after work.
 4. For `before`: include ceremony summary in work batch spawn prompts. Spawn Scribe (background) to record.
 5. **Ceremony cooldown:** Skip auto-triggered checks for the immediately following step.
 6. Show: `📋 {CeremonyName} completed — facilitated by {Lead}. Decisions: {count} | Action items: {count}.`
+
+For software implementation, the project integration policy is always active even when
+`.squad/ceremonies.md` is absent: implementer validation and a meaningful rubber-duck must finish
+before a different agent runs `ponytail-review`. Follow
+`.github/skills/gh-stack-parallel-work/SKILL.md` for the machine-readable gate, waivers, ordered
+integration admission, and aggregate `ponytail-debt` capture. The implementer must not perform the
+independent review.
 
 ### Adding Team Members
 

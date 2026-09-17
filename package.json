@@ -33,6 +33,7 @@
     "deps:verify": "node scripts/ci/shared-deps.mjs verify",
     "validate:layer": "node scripts/ci/validate.mjs --profile layer",
     "validate:full": "node scripts/ci/validate.mjs --profile full",
+    "workflow:ponytail-gate": "node scripts/ci/ponytail-gate.mjs",
     "demo:record": "node scripts/demo-recording/cli.mjs",
     "changeset": "changeset add",
     "changeset:status": "changeset status --verbose",
