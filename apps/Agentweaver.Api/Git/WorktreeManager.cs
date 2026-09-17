@@ -573,9 +573,27 @@ public sealed class WorktreeManager
             }
             else if (!string.Equals(currentHead, writeback.BaseCommitSha, StringComparison.OrdinalIgnoreCase))
             {
-                throw new WorktreeWritebackException(
-                    "writeback_base_mismatch",
-                    $"The authoritative branch moved from base '{writeback.BaseCommitSha}' to '{currentHead}'.");
+                if (string.Equals(
+                        worktree.Head.Tip?.Tree.Sha,
+                        writeback.ResultTreeSha,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning(
+                        "Prepared write-back for run {RunId} already matches authoritative tree {ResultTree} " +
+                        "at moved HEAD {CurrentHead}; expected base {BaseCommit} or result commit {ResultCommit}.",
+                        runId,
+                        writeback.ResultTreeSha,
+                        currentHead,
+                        writeback.BaseCommitSha,
+                        writeback.ResultCommitSha);
+                    alreadyApplied = true;
+                }
+                else
+                {
+                    throw new WorktreeWritebackException(
+                        "writeback_base_mismatch",
+                        $"The authoritative branch moved from base '{writeback.BaseCommitSha}' to '{currentHead}'.");
+                }
             }
         }
 
