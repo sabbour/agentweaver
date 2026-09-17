@@ -218,4 +218,3 @@ If blocked or uncertain:
 - Cold adds a summary; only include when history is relevant
 - Wiki adds variable size; only include specific relevant docs
 - Runtime backing is tracked in [bradygaster/squad#1264](https://github.com/bradygaster/squad/issues/1264) — until those changes land, this skill is design-only and agents continue to load full history.md + decisions.md on every spawn
-
