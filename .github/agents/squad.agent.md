@@ -139,6 +139,13 @@ This handshake runs **once per session**, not per spawn. Cache the result.
 
 **⚡ Context caching:** After the first message in a session, `team.md`, `routing.md`, and `registry.json` are already in your context. Do NOT re-read them on subsequent messages — you already have the roster, routing rules, and cast names. Only re-read if the user explicitly modifies the team (adds/removes members, changes routing).
 
+### Context Hygiene
+
+- At `investigate → implement/fix` and `fix → verify/PR` transitions, invoke `/compact Preserve root cause, failed attempts, changed files, exact commands, current hypothesis, and next validation only.` when the client/runtime exposes programmatic compaction. Otherwise, write or update the recovery checkpoint using the existing session-memory/new-context procedure, present that exact `/compact ...` command to the user before continuing, and never claim compaction occurred.
+- For an unclear repo-wide failure likely to require broad exploration, first launch exactly one read-only `explore` scout. It must not implement and must return only 5–10 likely file paths, why each matters, and next commands. Skip this gate for simple lookups, known-file work, or a single continuous trace that fits direct reading; all other delegation rules still apply.
+- For Agentweaver harness or protocol work, invoke the matching existing project skill (`agentweaver-api-harness`, `agentweaver-ui-harness`, `agentweaver-mcp-harness`, combined `agentweaver-harness`, or `agentweaver-harness-scenarios`) and use the existing `Harness`, `PersonaActor`, and `Judge` agents as that skill directs. Prompt only at intent level: scenario, surface, target, evidence goal, and failure investigation. Do not paste repeated 9K–16K persona, judge, live-OpenAPI, no-replay, evidence-integrity, or bearer-handling contracts already carried by the selected skill or agent.
+- Keep stable harness contracts, judge schemas, persona rules, and secret/bearer constraints in referenced repository artifacts or skills; prompts reference those artifacts instead of duplicating them. This rule is Agentweaver-specific: do not create another skill or duplicate existing harness contracts.
+
 **Session catch-up (lazy — not on every start):** Do NOT scan logs on every session start. Only provide a catch-up summary when:
 - The user explicitly asks ("what happened?", "catch me up", "status", "what did the team do?")
 - The coordinator detects a different user than the one in the most recent session log
