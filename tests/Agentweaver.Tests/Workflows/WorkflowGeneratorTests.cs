@@ -52,6 +52,282 @@ public sealed class WorkflowGeneratorTests
     // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
     private const string InvalidWorkflowYaml = "name: Broken Workflow\n";
 
+    private const string SoftwareWorkflowWithoutHumanReviewYaml = """
+        id: software-without-sign-off
+        name: Software Without Sign-off
+        description: A software workflow missing mandatory human approval.
+        version: "1.0"
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+            role: backend-engineer
+            prompt: "Implement the requested feature."
+          - id: build-test
+            type: build_test
+            label: Build & Test
+            role: review
+            agent: qa-engineer
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: implement
+            to: build-test
+          - from: build-test
+            to: done
+            when: approved
+          - from: build-test
+            to: implement
+            when: request-changes
+          - from: build-test
+            to: declined
+            when: declined
+        """;
+
+    private const string SoftwareWorkflowWithoutBuildTestYaml = """
+        id: software-without-build-test
+        name: Software Without Build Test
+        description: A software workflow missing mandatory build and test validation.
+        version: "1.0"
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+            role: backend-engineer
+            prompt: "Implement the requested feature."
+          - id: human-review
+            type: check
+            label: Human Review
+            role: review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: implement
+            to: human-review
+          - from: human-review
+            to: done
+            when: approved
+          - from: human-review
+            to: implement
+            when: request-changes
+          - from: human-review
+            to: declined
+            when: declined
+        """;
+
+    private const string ContentWorkflowWithoutBuildTestYaml = """
+        id: newsletter
+        name: Newsletter
+        description: An editorial workflow.
+        version: "1.0"
+        start: draft
+        nodes:
+          - id: draft
+            type: prompt
+            label: Draft
+            role: writer
+            prompt: "Write the newsletter."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: draft
+            to: done
+        """;
+
+    private const string SoftwareWorkflowWithHumanReviewYaml = """
+        id: software-with-sign-off
+        name: Software With Sign-off
+        description: A software workflow with mandatory human approval.
+        version: "1.0"
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+            role: backend-engineer
+            prompt: "Implement the requested feature."
+          - id: build-test
+            type: build_test
+            label: Build & Test
+            role: review
+            agent: qa-engineer
+          - id: human-review
+            type: check
+            label: Human Review
+            role: review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: implement
+            to: build-test
+          - from: build-test
+            to: human-review
+            when: approved
+          - from: build-test
+            to: implement
+            when: request-changes
+          - from: build-test
+            to: declined
+            when: declined
+          - from: human-review
+            to: done
+            when: approved
+          - from: human-review
+            to: implement
+            when: request-changes
+          - from: human-review
+            to: declined
+            when: declined
+        """;
+
+    private const string SoftwareWorkflowWithUnreachableGatesYaml = """
+        id: software-with-unreachable-gates
+        name: Software With Unreachable Gates
+        description: A software workflow with disconnected mandatory gates.
+        version: "1.0"
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+            role: backend-engineer
+            prompt: "Implement the requested feature."
+          - id: build-test
+            type: build_test
+            label: Build & Test
+            role: review
+            agent: qa-engineer
+          - id: human-review
+            type: check
+            label: Human Review
+            role: review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: implement
+            to: done
+          - from: build-test
+            to: human-review
+            when: approved
+          - from: build-test
+            to: implement
+            when: request-changes
+          - from: build-test
+            to: declined
+            when: declined
+          - from: human-review
+            to: done
+            when: approved
+          - from: human-review
+            to: implement
+            when: request-changes
+          - from: human-review
+            to: declined
+            when: declined
+        """;
+
+    private const string SoftwareWorkflowWithRaiBeforeBuildTestYaml = """
+        id: software-with-rai-before-build-test
+        name: Software With RAI Before Build & Test
+        description: A software workflow with the required safety, build, and human review sequence.
+        version: "1.0"
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+            role: backend-engineer
+            prompt: "Implement the requested feature."
+          - id: rai-safety
+            type: check
+            label: RAI Safety
+            role: review
+            gate_kind: rai
+            branches:
+              - pass
+              - revise
+          - id: build-test
+            type: build_test
+            label: Build & Test
+            role: review
+            agent: qa-engineer
+          - id: human-review
+            type: check
+            label: Human Review
+            role: review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: implement
+            to: rai-safety
+          - from: rai-safety
+            to: build-test
+            when: pass
+          - from: rai-safety
+            to: implement
+            when: revise
+          - from: build-test
+            to: human-review
+            when: approved
+          - from: build-test
+            to: implement
+            when: request-changes
+          - from: build-test
+            to: declined
+            when: declined
+          - from: human-review
+            to: done
+            when: approved
+          - from: human-review
+            to: implement
+            when: request-changes
+          - from: human-review
+            to: declined
+            when: declined
+        """;
     private const string ScheduleTriggerWorkflowYaml = """
         id: monday-triage
         name: Monday Triage
@@ -216,6 +492,20 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateAsync_CreatePrompt_StatesStructuralRulesOnce()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("A simple manual workflow."));
+
+        var prompt = runner.LastTask!;
+        CountOccurrences(prompt, "fan_out").Should().Be(1);
+        CountOccurrences(prompt, "merge-and-scribe tail").Should().Be(1);
+        CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
+    }
+
+    [Fact]
     public async Task GenerateAsync_UsesGpt54GenerationModelByDefault()
     {
         var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
@@ -338,6 +628,219 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task SoftwareWorkflowWithoutHumanSignOff_TriggersCorrectionPass()
+    {
+        var runner = new ScriptedAgentRunner(
+            SoftwareWorkflowWithoutHumanReviewYaml,
+            SoftwareWorkflowWithHumanReviewYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement a software feature with automated tests.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+        var humanReview = result.Workflow.Nodes.Should().ContainSingle(node =>
+            node.Type == WorkflowNodeType.Check &&
+            string.Equals(node.GateKind, "human-review", StringComparison.OrdinalIgnoreCase)).Subject;
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == "build-test" && edge.To == humanReview.Id && edge.When == "approved");
+    }
+
+    [Fact]
+    public async Task SoftwareWorkflowWithoutBuildTest_TriggersCorrectionPass()
+    {
+        var runner = new ScriptedAgentRunner(
+            SoftwareWorkflowWithoutBuildTestYaml,
+            SoftwareWorkflowWithHumanReviewYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Create a compiler utility.",
+            TeamRoles: ["core-implementer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.BuildTest);
+    }
+
+    [Fact]
+    public async Task ContentAddWorkflowWithoutBuildTest_IsReturnedWithoutCorrection()
+    {
+        var runner = new ScriptedAgentRunner(ContentWorkflowWithoutBuildTestYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Add a section to the newsletter.",
+            TeamRoles: ["writer"]));
+
+        result.WasCorrected.Should().BeFalse();
+        runner.CallCount.Should().Be(1);
+        result.Workflow.Nodes.Should().NotContain(node => node.Type == WorkflowNodeType.BuildTest);
+    }
+
+    [Fact]
+    public async Task SoftwareWorkflowWithUnreachableGates_TriggersCorrectionPass()
+    {
+        var runner = new ScriptedAgentRunner(
+            SoftwareWorkflowWithUnreachableGatesYaml,
+            SoftwareWorkflowWithHumanReviewYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement the requested feature.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task SoftwareWorkflowWithRaiBeforeBuildTest_IsReturnedWithoutCorrection()
+    {
+        var runner = new ScriptedAgentRunner(SoftwareWorkflowWithRaiBeforeBuildTestYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement a software feature with safety review.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeFalse();
+        runner.CallCount.Should().Be(1);
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SoftwareWorkflowWithRaiAfterHumanReview_TriggersCorrectionPass()
+    {
+        var raiAfterHumanReview = SoftwareWorkflowWithRaiBeforeBuildTestYaml.Replace(
+            """
+              - id: rai-safety
+            """,
+            """
+              - id: after-human-review
+                type: prompt
+                label: Continue After Human Review
+                role: backend-engineer
+                prompt: "Continue the implementation after review."
+              - id: rai-safety
+            """,
+            StringComparison.Ordinal).Replace(
+            """
+              - from: implement
+                to: rai-safety
+            """,
+            """
+              - from: implement
+                to: human-review
+            """,
+            StringComparison.Ordinal).Replace(
+            """
+              - from: rai-safety
+                to: build-test
+                when: pass
+            """,
+            """
+              - from: after-human-review
+                to: rai-safety
+              - from: rai-safety
+                to: build-test
+                when: pass
+            """,
+            StringComparison.Ordinal).Replace(
+            """
+              - from: human-review
+                to: done
+                when: approved
+            """,
+            """
+              - from: human-review
+                to: after-human-review
+                when: approved
+            """,
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(raiAfterHumanReview, SoftwareWorkflowWithRaiBeforeBuildTestYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement a software feature with safety review.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain("must not be reachable before the build_test gate");
+    }
+
+    [Fact]
+    public async Task SoftwareWorkflowWithRaiBypass_TriggersCorrectionPass()
+    {
+        var raiBypass = SoftwareWorkflowWithRaiBeforeBuildTestYaml.Replace(
+            """
+              - from: implement
+                to: rai-safety
+            """,
+            """
+              - from: implement
+                to: rai-safety
+              - from: implement
+                to: build-test
+            """,
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(raiBypass, SoftwareWorkflowWithRaiBeforeBuildTestYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement a software feature with safety review.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain("must not be reachable before every reachable RAI safety gate");
+    }
+    [Fact]
+    public async Task SoftwareWorkflowWithDuplicateBuildTests_TriggersCorrectionPass()
+    {
+        var duplicateBuildTest = SoftwareWorkflowWithHumanReviewYaml.Replace(
+            """
+              - id: human-review
+            """,
+            """
+              - id: build-test-duplicate
+                type: build_test
+                label: Build & Test Again
+                role: review
+                agent: qa-engineer
+              - id: human-review
+            """,
+            StringComparison.Ordinal).Replace(
+            """
+              - from: build-test
+                to: human-review
+                when: approved
+            """,
+            """
+              - from: build-test
+                to: human-review
+                when: approved
+              - from: build-test-duplicate
+                to: human-review
+                when: approved
+            """,
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(duplicateBuildTest, SoftwareWorkflowWithHumanReviewYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Implement a software feature with automated tests.",
+            TeamRoles: ["backend-engineer"]));
+
+        result.WasCorrected.Should().BeTrue();
+        runner.CallCount.Should().Be(2);
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.BuildTest);
+    }
+
+    [Fact]
     public async Task BothPassesInvalid_ThrowsWorkflowGenerationException()
     {
         var runner = new ScriptedAgentRunner(InvalidWorkflowYaml, InvalidWorkflowYaml);
@@ -415,7 +918,7 @@ public sealed class WorkflowGeneratorTests
         var generator = CreateGenerator(runner);
 
         await generator.GenerateAsync(new WorkflowGenerationRequest(
-            "Add a build and test gate before human review.",
+            "Update the existing build and test gate placement.",
             BaseWorkflowId: "default",
             BaseWorkflowYaml: DefaultWorkflowTemplate.Yaml,
             BaseWorkflowIsBuiltIn: true));
@@ -431,6 +934,23 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task EditModePrompt_StatesSharedGatePlacementOnce()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml.Replace("id: generated-flow", "id: custom-default"));
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Update the existing build and test gate placement.",
+            BaseWorkflowId: "default",
+            BaseWorkflowYaml: DefaultWorkflowTemplate.Yaml,
+            BaseWorkflowIsBuiltIn: true));
+
+        var prompt = runner.LastTask!;
+        CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
+        CountOccurrences(prompt, "immediately after any RAI safety check").Should().Be(1);
+    }
+
+    [Fact]
     public async Task EditModeBuiltInReturningSameId_TriggersCorrectionPass()
     {
         var invalidSameId = ValidWorkflowYaml.Replace("id: generated-flow", "id: default");
@@ -439,7 +959,7 @@ public sealed class WorkflowGeneratorTests
         var generator = CreateGenerator(runner);
 
         var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
-            "Add a QA gate.",
+            "Update the QA gate.",
             BaseWorkflowId: "default",
             BaseWorkflowYaml: DefaultWorkflowTemplate.Yaml,
             BaseWorkflowIsBuiltIn: true));
@@ -502,6 +1022,9 @@ public sealed class WorkflowGeneratorTests
         var act = () => generator.GenerateAsync(new WorkflowGenerationRequest("   "));
         await act.Should().ThrowAsync<ArgumentException>();
     }
+
+    private static int CountOccurrences(string value, string text) =>
+        value.Split(text, StringSplitOptions.None).Length - 1;
 
     // ── Endpoint integration (stub generator) ────────────────────────────────────────────────────
 

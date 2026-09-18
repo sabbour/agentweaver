@@ -156,12 +156,11 @@ public sealed class CopilotBlueprintGeneratorTests
 
         runner.LastTask.Should().NotBeNullOrWhiteSpace();
         runner.LastTask.Should().Contain("GATE-AWARE WORKFLOW SELECTION");
-        runner.LastTask.Should().Contain("`build_test` is the platform-owned Build & Test gate that also lights up preview");
+        runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
         runner.LastTask.Should().Contain("`rai` is a `check` gate_kind");
         runner.LastTask.Should().Contain("`rubberduck` is a `check` gate_kind");
         runner.LastTask.Should().Contain("`human-review` is a `check` gate_kind");
-        runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
-        runner.LastTask.Should().Contain("build_test gate after any RAI safety check and IMMEDIATELY before the human-review gate");
+        runner.LastTask.Should().Contain("followed immediately by exactly one human-review check gate");
         runner.LastTask.Should().Contain("PREFER [] (generate)");
         runner.LastTask.Should().Contain("generic ungated catalog workflow");
     }
@@ -183,11 +182,28 @@ public sealed class CopilotBlueprintGeneratorTests
 
         runner.LastTask.Should().Contain("STRUCTURAL VALIDATION CHECKLIST");
         runner.LastTask.Should().Contain("Role completeness");
-        runner.LastTask.Should().Contain("Workflow graph fit");
         runner.LastTask.Should().Contain("Review-policy coherence");
         runner.LastTask.Should().Contain("Sandbox validity");
         runner.LastTask.Should().Contain("missing coordinator/owner role");
-        runner.LastTask.Should().Contain("missing review gate for user-facing output");
+    }
+
+    [Fact]
+    public async Task GenerateRawAsync_StatesWorkflowFitAndGateRulesOnce()
+    {
+        var runner = new CapturingAgentRunner();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync("Create a software delivery team", CancellationToken.None);
+
+        var prompt = runner.LastTask!;
+        CountOccurrences(prompt, "FULL-COVERAGE TEST").Should().Be(1);
+        CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
+        CountOccurrences(prompt, "immediately after any RAI safety check").Should().Be(1);
+        CountOccurrences(prompt, "generic ungated catalog workflow").Should().Be(1);
     }
 
     [Fact]
@@ -319,6 +335,9 @@ public sealed class CopilotBlueprintGeneratorTests
 
     private static DbContextOptions<MemoryDbContext> Options(SqliteConnection connection) =>
         new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connection).Options;
+
+    private static int CountOccurrences(string value, string text) =>
+        value.Split(text, StringSplitOptions.None).Length - 1;
 
     private sealed class CapturingAgentRunner : IAgentRunner
     {
