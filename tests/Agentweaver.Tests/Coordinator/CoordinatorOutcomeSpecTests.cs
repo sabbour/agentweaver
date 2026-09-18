@@ -73,6 +73,51 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Draft_MandatoryDecisionContextOverBudget_ThrowsBeforeCallingDrafter()
+    {
+        using var budgetFactory = new CoordinatorWebApplicationFactory(memoryContextMaxTokens: 1);
+        var projectId = $"project-{Guid.NewGuid():N}";
+        await using (var scope = budgetFactory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 128),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var drafter = budgetFactory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var coordinator = budgetFactory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var input = new CoordinatorDraftInput(
+            "run-oversized-mandatory-context",
+            projectId,
+            "Draft an outcome spec without dropping mandatory decisions.",
+            CoordinatorWebApplicationFactory.OwnerUser,
+            budgetFactory.NewWorkingDirectory(),
+            null);
+
+        var act = () => coordinator.DraftAndPersistAsync(input, CancellationToken.None);
+
+        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+        drafter.LastInput.Should().BeNull(
+            "mandatory decisions must not be dropped before outcome-spec drafting starts");
+    }
+
+    [Fact]
     public async Task Start_DraftsSpec_PersistsAwaitingConfirmation_EmitsEvent_SuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();
