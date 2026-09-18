@@ -58,6 +58,10 @@ test('parseArgs accepts --persona and --base-url aliases', () => {
   assert.equal(args.target, 'stdio');
 });
 
+test('parseArgs retains the capability-check opt-out CLI contract', () => {
+  assert.equal(parseArgs(['--no-capability-check']).skipCapabilityCheck, true);
+});
+
 test('retired credential argv options are rejected without echoing their values', () => {
   const canary = 'secret-canary-argv-55';
   const retiredOption = `--${'to'}${'ken'}`;
