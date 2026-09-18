@@ -588,7 +588,7 @@ public sealed class CoordinatorOrchestratorExecutor
     // Decomposition (real model turn + deterministic fallback)
     // -----------------------------------------------------------------------
 
-    private async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
+    internal async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
         CoordinatorDraftInput input, OutcomeSpec spec, WorkflowDefinition? selectedWorkflow, CancellationToken ct)
     {
         IWorkflowTurnAgent? agent = null;
@@ -1409,54 +1409,16 @@ public sealed class CoordinatorOrchestratorExecutor
             || kind is NodeKind.Rai or NodeKind.Rubberduck or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
     }
 
-    private async Task<string?> BuildCoordinatorSystemContextAsync(
+    internal async Task<string?> BuildCoordinatorSystemContextAsync(
         string projectId, string runId, CancellationToken ct)
     {
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var decisions = (await db.Decisions
-                .Where(d => d.ProjectId == projectId
-                         && d.Status == "active"
-                         && (d.Type == "architectural" || d.Type == "scope"))
-                .ToListAsync(ct).ConfigureAwait(false))
-                .OrderBy(d => d.CreatedAt)
-                .ToList();
-
             var compiler = scope.ServiceProvider.GetService<MemoryContextCompiler>();
-            var memorySummary = compiler is null
+            return compiler is null
                 ? null
                 : await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false);
-
-            if (decisions.Count == 0 && string.IsNullOrWhiteSpace(memorySummary))
-                return null;
-
-            var sb = new StringBuilder();
-            sb.AppendLine("Current architectural decisions:");
-            if (decisions.Count == 0)
-            {
-                sb.AppendLine("- (none recorded)");
-            }
-            else
-            {
-                foreach (var d in decisions)
-                {
-                    sb.Append("- ").Append(d.Title).Append(" [").Append(d.Type).Append("]: ")
-                        .AppendLine(CompactForPrompt(d.Content, 900));
-                    if (!string.IsNullOrWhiteSpace(d.Rationale))
-                        sb.Append("  Rationale: ").AppendLine(CompactForPrompt(d.Rationale, 300));
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(memorySummary))
-            {
-                sb.AppendLine();
-                sb.AppendLine("Current session memory summary:");
-                sb.AppendLine(memorySummary.Trim());
-            }
-
-            return sb.ToString();
         }
         catch (Exception ex)
         {
@@ -1487,7 +1449,7 @@ public sealed class CoordinatorOrchestratorExecutor
             runId, estimatedTokens, budgetTokens);
 
         if (budgetChars <= 0)
-            return baseCharter + "\n\nCurrent architectural decisions:\n- (omitted: prompt context window budget exceeded)";
+            return baseCharter + "\n\n[Project context omitted: prompt context window budget exceeded.]";
 
         var truncated = contextSection.Length <= budgetChars
             ? contextSection
@@ -1497,12 +1459,6 @@ public sealed class CoordinatorOrchestratorExecutor
 
     private static int EstimateTokens(string text) =>
         (int)Math.Ceiling((text?.Length ?? 0) / 4.0);
-
-    private static string CompactForPrompt(string text, int maxChars)
-    {
-        var compact = Regex.Replace(text, @"\s+", " ").Trim();
-        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
-    }
 
     // -----------------------------------------------------------------------
     // DAG validation + persistence
