@@ -232,41 +232,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # A `vX.Y.Z` tag push runs against the exact commit that
-      # `npm run release:publish` validated as HEAD of `main`. The `sha-<short>`
-      # image was normally built by the `push`-to-`main` run. Retagging the
-      # already-published digest with `imagetools create` is a manifest-only
-      # operation. It produces the same image under the release version tags.
-      - name: Check for already-published sha image (release retag fast path)
-        id: existing
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -euo pipefail
-          SHA_TAG=$(printf '%s\n' "${{ matrix.tags }}" | grep ':sha-' | head -n1)
-          if [ -z "$SHA_TAG" ]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
-          if docker buildx imagetools inspect "$SHA_TAG" >/dev/null 2>&1; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Retag already-published image for this release (skip rebuild)
-        if: startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true'
-        run: |
-          set -euo pipefail
-          args=()
-          while IFS= read -r t; do
-            [ -n "$t" ] && args+=(--tag "$t")
-          done <<< "${{ matrix.tags }}"
-          docker buildx imagetools create "${args[@]}" "${{ steps.existing.outputs.sha_tag }}"
-
       # IMAGE_TAG/GIT_SHA feed the org.opencontainers.image.version/revision
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
+      # Release tag pushes must build with their semver primary tag even when
+      # the same commit already has a sha-* image: manifest retagging cannot
+      # replace the IMAGE_TAG baked into the existing image.
       # The GitHub Actions layer cache keeps unchanged images (notably the
       # heavy agent-host) cheap on the runs where they do build.
       # `matrix` context is available in step-level `if` (not job-level), so
@@ -277,8 +248,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' ||
            startsWith(github.ref, 'refs/tags/v') ||
            github.ref == 'refs/heads/main' ||
-           needs.changes.outputs[matrix.name] == 'true') &&
-          !(startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true')
+           needs.changes.outputs[matrix.name] == 'true')
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
