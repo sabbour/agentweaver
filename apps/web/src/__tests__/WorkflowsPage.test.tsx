@@ -22,6 +22,7 @@ vi.mock('../api/apiClient', () => ({
     getWorkflowYaml: vi.fn(),
     saveWorkflowYaml: vi.fn(),
     runWorkflowNow: vi.fn(),
+    generateWorkflow: vi.fn(),
   },
 }));
 
@@ -367,6 +368,17 @@ trigger:
     expect(commandInputs).toHaveLength(2);
     expect((commandInputs[0] as HTMLInputElement).value).toBe('/agentweaver:triage');
     expect((commandInputs[1] as HTMLInputElement).value).toBe('/agentweaver:rerun');
+  });
+
+  it('forwards the content-only option when generating a draft', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
+    vi.mocked(apiClient.generateWorkflow).mockResolvedValue({ yaml: 'id: newsletter', workflowId: 'newsletter', wasCorrected: false });
+    renderPage('proj-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate workflow' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Describe the workflow you need' }), { target: { value: 'Draft a newsletter' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Content-only workflow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    await waitFor(() => expect(apiClient.generateWorkflow).toHaveBeenCalledWith('proj-1', 'Draft a newsletter', 'signed-provider-key', true));
   });
 
   it('queues a workflow-bound run from Run now', async () => {

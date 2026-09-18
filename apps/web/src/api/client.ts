@@ -1465,11 +1465,11 @@ export class AgentweaverApiClient {
   // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
   // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
   // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
-  generateWorkflow(projectId: string, description: string, providerKey?: string): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
+  generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
     return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
-      { description },
+      { description, content_only: contentOnly },
       undefined,
       providerHeaders(providerKey),
     );
