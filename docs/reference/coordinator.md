@@ -148,7 +148,7 @@ The coordinator dispatches subtasks as first-class **child runs** parented by th
 - A subtask with a dependency does not start until every prerequisite reaches `assemble_ready`/`completed`, so dependent work runs **serially** behind it.
 - A failed, blocked, or RAI-flagged predecessor does not satisfy a dependency, so its dependents stay blocked.
 
-Child workers receive charters plus active, approved architectural/scope decisions from `CompileDecisionsAsync`. Stored context is emitted as an `agentweaver.untrusted-context.v1` JSON envelope under `## Untrusted Project Context Data`, never trusted instructions. This path excludes the full memory/session stack.
+Child workers receive charters plus active, approved architectural/scope decisions from `CompileDecisionsAsync`. Stored context is emitted as an `agentweaver.untrusted-context.v1` JSON envelope under `## Untrusted Project Context Data`, never trusted instructions. The decision envelope has the same complete-envelope budget: active approved decisions are mandatory and an oversized set fails before the worker model call. This path excludes the full memory/session stack. Coordinator decomposition likewise omits the entire structured context block when its remaining prompt window cannot hold it; it never slices JSON or a record.
 
 A subtask's status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`, surfaced as `subtask.*` events. The dispatcher can also mark a pending dependent `blocked` when an upstream prerequisite stalls and therefore never satisfies its dependency. The dispatched child runs (paired with subtask status) are available from `GET /api/runs/{id}/children` or the `coordinator_children_get` MCP tool.
 
