@@ -63,6 +63,9 @@ public sealed class AssistantRunEndpointsTests
     [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->\n<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->")]
     [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->")]
     [InlineData("before <!-- BEGIN GENERATED:tool-map -->\nafter\n<!-- END GENERATED:tool-map -->")]
+    [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->\n <!-- BEGIN GENERATED:tool-map -->")]
+    [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->\n<!-- END GENERATED:tool-map --> ")]
+    [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->\ntext <!-- BEGIN GENERATED:tool-map --> text")]
     public void ProjectOperatorAgentDefinition_RejectsMalformedMarkers(string definition)
     {
         var act = () => AssistantRunService.ProjectOperatorAgentDefinition(definition);
