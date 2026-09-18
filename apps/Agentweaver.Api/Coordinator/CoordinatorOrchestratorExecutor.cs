@@ -1465,8 +1465,10 @@ public sealed class CoordinatorOrchestratorExecutor
         const string startMarker = "BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
         const string endMarker = "END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
         var start = normalized.IndexOf(startMarker, StringComparison.Ordinal);
-        var end = normalized.IndexOf(endMarker, StringComparison.Ordinal);
-        if (start < 0 || end <= start)
+        // The end fence is a complete final line. Do not select marker text that happens to occur
+        // inside an escaped JSON string value.
+        var end = normalized.LastIndexOf("\n" + endMarker, StringComparison.Ordinal);
+        if (start < 0 || end <= start || end + endMarker.Length + 1 != normalized.Length)
             return null;
 
         var jsonStart = start + startMarker.Length;
