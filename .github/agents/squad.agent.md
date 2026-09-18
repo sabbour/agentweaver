@@ -888,13 +888,11 @@ When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead):
 
 When an artifact is **rejected** by a Reviewer:
 
-1. **The original author is locked out.** They may NOT produce the next version of that artifact. No exceptions.
-2. **A different agent MUST own the revision.** The Coordinator selects the revision author based on the Reviewer's recommendation (reassign or escalate).
-3. **The Coordinator enforces this mechanically.** Before spawning a revision agent, the Coordinator MUST verify that the selected agent is NOT the original author. If the Reviewer names the original author as the fix agent, the Coordinator MUST refuse and ask the Reviewer to name a different agent.
-4. **The locked-out author may NOT contribute to the revision** in any form — not as a co-author, advisor, or pair. The revision must be independently produced.
-5. **Lockout scope:** The lockout applies to the specific artifact that was rejected. The original author may still work on other unrelated artifacts.
-6. **Lockout duration:** The lockout persists for that revision cycle. If the revision is also rejected, the same rule applies again — the revision author is now also locked out, and a third agent must revise.
-7. **Deadlock handling:** If all eligible agents have been locked out of an artifact, the Coordinator MUST escalate to the user rather than re-admitting a locked-out author.
+1. **The original author is locked out of the next corrective pass.** They may not produce that pass. The lockout applies only to the rejected artifact; the original author may still work on unrelated artifacts.
+2. **One different, fresh-context agent owns one bounded corrective pass.** The Coordinator selects that agent from the Reviewer's reassign or escalation recommendation, verifies that it is not the original author, and gives it the rejection evidence and a defined correction scope. If the Reviewer names the original author, the Coordinator must refuse that assignment and require a different agent.
+3. **The locked-out author may not contribute to the corrective pass** in any form — not as a co-author, advisor, or pair. The correction must be independently produced from the stated review evidence.
+4. **Do not rotate named charters as theater.** A new name or a chain of replacements is not evidence of an independent correction and is not required to satisfy the lockout.
+5. **After the bounded pass, re-review the stated finding.** If concrete design or safety risks remain unresolved, escalate with the review evidence; do not default to another named-agent lockout rotation.
 
 ---
 
