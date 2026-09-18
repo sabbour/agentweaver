@@ -157,7 +157,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private const string ToolMapBeginMarker = "<!-- BEGIN GENERATED:tool-map -->";
     private const string ToolMapEndMarker = "<!-- END GENERATED:tool-map -->";
     private static readonly Regex ToolMapMarkerLine = new(
-        @"(?m)^<!-- (?:BEGIN|END) GENERATED:tool-map -->\r?$",
+        @"(?m)^.*<!-- (?:BEGIN|END) GENERATED:tool-map -->.*\r?$",
         RegexOptions.CultureInvariant);
 
     /// <summary>How many of the caller's newest operator runs are read to evaluate the concurrency
@@ -895,7 +895,12 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         foreach (Match marker in markers)
         {
-            if (string.Equals(marker.Value.TrimEnd('\r'), ToolMapBeginMarker, StringComparison.Ordinal))
+            var markerValue = marker.Value.TrimEnd('\r');
+            if (!string.Equals(markerValue, ToolMapBeginMarker, StringComparison.Ordinal) &&
+                !string.Equals(markerValue, ToolMapEndMarker, StringComparison.Ordinal))
+                throw new InvalidOperationException("Operator agent definition contains a malformed generated tool-map marker.");
+
+            if (string.Equals(markerValue, ToolMapBeginMarker, StringComparison.Ordinal))
             {
                 if (begin is not null && end is null)
                     throw new InvalidOperationException("Operator agent definition contains nested generated tool-map markers.");
