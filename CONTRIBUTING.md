@@ -462,15 +462,13 @@ mechanically blocks a spec-less feature PR. Reviewers are responsible for catchi
 
 **Peer review and the reviewer-rejection protocol.** **Changes requested** is ordinary
 review feedback: the original author may revise the same PR normally, with no lockout.
-Lockout occurs only when a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI)
-explicitly declares **Rejected / independent rewrite required** — for example, with the
-exact PR comment marker `REJECTED — requires independent rewrite`. The Coordinator gives one
-different, fresh-context agent one bounded corrective pass; it does not rotate named
-charters merely to satisfy a lockout. If that pass leaves a real design or safety issue
-unresolved, the Coordinator escalates it. The rejection marker must remain on the PR so the
-correction path is auditable on GitHub without Coordinator session history; a
-`status:locked-out` PR label may additionally be used when the repository creates it. The
-full rules are in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
+When a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI) rejects an
+artifact, they provide evidence and a defined corrective scope for one bounded pass. The
+Coordinator uses one fresh agent context, which may use the original author's named agent
+and charter; it must not impose an original-author lockout or rotate charters as theater.
+The stated finding and its evidence are re-reviewed after the pass. The Coordinator
+escalates only when concrete design or safety risks remain unresolved. The full rules are
+in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
 
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for
