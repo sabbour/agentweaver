@@ -212,6 +212,8 @@ public sealed record GenerateWorkflowRequest
     [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
     /// <summary>Optional current draft YAML for iterative edits before the draft is saved.</summary>
     [JsonPropertyName("base_yaml")] public string? BaseYaml { get; init; }
+    /// <summary>Explicitly exempts a pure content workflow from mandatory software delivery gates.</summary>
+    [JsonPropertyName("content_only")] public bool ContentOnly { get; init; }
 }
 
 /// <summary>Response body for a generated workflow draft (US10). The YAML is unsaved — the client opens

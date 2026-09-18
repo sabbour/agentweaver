@@ -36,17 +36,47 @@ public sealed class WorkflowGeneratorTests
           - id: agent
             type: prompt
             label: Agent
-          - id: scribe
-            type: scribe
-            label: Scribe
+          - id: build-test
+            type: build_test
+            label: Build & Test
+            role: review
+            agent: qa-engineer
+          - id: human-review
+            type: check
+            label: Human Review
+            role: review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
           - id: done
             type: terminal
             label: Done
         edges:
           - from: agent
-            to: scribe
-          - from: scribe
+            to: build-test
+          - from: build-test
+            to: human-review
+            when: approved
+          - from: build-test
+            to: agent
+            when: request-changes
+          - from: build-test
+            to: declined
+            when: declined
+          - from: human-review
             to: done
+            when: approved
+          - from: human-review
+            to: agent
+            when: request-changes
+          - from: human-review
+            to: declined
+            when: declined
         """;
 
     // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
@@ -560,7 +590,7 @@ public sealed class WorkflowGeneratorTests
 
         result.WasCorrected.Should().BeFalse();
         result.Workflow.Id.Should().Be("generated-flow");
-        result.Workflow.Nodes.Should().HaveCount(3);
+        result.Workflow.Nodes.Should().HaveCount(5);
         result.GeneratedYaml.Should().Contain("id: generated-flow");
         runner.CallCount.Should().Be(1);
     }
@@ -587,7 +617,8 @@ public sealed class WorkflowGeneratorTests
 
         var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
             "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to Azure/AKS unless explicitly approved.",
-            TargetRepository: "Azure/AKS"));
+            TargetRepository: "Azure/AKS",
+            ContentOnly: true));
 
         result.WasCorrected.Should().BeFalse();
         result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
@@ -605,7 +636,8 @@ public sealed class WorkflowGeneratorTests
 
         var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
             "Generate an issue-triage workflow with a review and a final report.",
-            TargetRepository: "Azure/AKS"));
+            TargetRepository: "Azure/AKS",
+            ContentOnly: true));
 
         result.WasCorrected.Should().BeTrue();
         result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
@@ -673,7 +705,7 @@ public sealed class WorkflowGeneratorTests
 
         var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
             "Add a section to the newsletter.",
-            TeamRoles: ["writer"]));
+            ContentOnly: true));
 
         result.WasCorrected.Should().BeFalse();
         runner.CallCount.Should().Be(1);
@@ -769,7 +801,7 @@ public sealed class WorkflowGeneratorTests
 
         result.WasCorrected.Should().BeTrue();
         runner.CallCount.Should().Be(2);
-        runner.LastTask.Should().Contain("must not be reachable before the build_test gate");
+        runner.LastTask.Should().Contain("must not route its approved verdict to an agent");
     }
 
     [Fact]
@@ -872,7 +904,7 @@ public sealed class WorkflowGeneratorTests
         var runner = new ScriptedAgentRunner(ScheduleTriggerWorkflowYaml);
         var generator = CreateGenerator(runner);
 
-        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Run this every Monday at 9am UTC."));
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Run this every Monday at 9am UTC.", ContentOnly: true));
 
         result.Workflow.Trigger.Should().NotBeNull();
         result.Workflow.Trigger!.Type.Should().Be(WorkflowTriggerType.Schedule);
@@ -887,7 +919,7 @@ public sealed class WorkflowGeneratorTests
         var runner = new ScriptedAgentRunner(EventTriggerWorkflowYaml);
         var generator = CreateGenerator(runner);
 
-        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage."));
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage.", ContentOnly: true));
 
         result.Workflow.Trigger.Should().NotBeNull();
         result.Workflow.Trigger!.Type.Should().Be(WorkflowTriggerType.Event);
@@ -903,7 +935,7 @@ public sealed class WorkflowGeneratorTests
         var runner = new ScriptedAgentRunner(InvalidTriggerWorkflowYaml, EventTriggerWorkflowYaml);
         var generator = CreateGenerator(runner);
 
-        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage."));
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage.", ContentOnly: true));
 
         result.WasCorrected.Should().BeTrue();
         result.Workflow.Trigger.Should().NotBeNull();
@@ -1010,7 +1042,7 @@ public sealed class WorkflowGeneratorTests
         var runner = new ScriptedAgentRunner(noId);
         var generator = CreateGenerator(runner);
 
-        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Review and Merge PRs"));
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Review and Merge PRs", ContentOnly: true));
 
         result.Workflow.Id.Should().Be("review-and-merge-prs");
     }

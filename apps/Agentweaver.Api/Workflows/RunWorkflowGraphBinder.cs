@@ -187,7 +187,7 @@ internal static class RunWorkflowGraphBinder
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): non-terminal nodes must have at least one outgoing edge.");
             }
 
-            if (node.Type == WorkflowNodeType.Check && NormalizeDeclaredGateKind(node.GateKind) is null)
+            if (node.Type == WorkflowNodeType.Check && NodeClassifier.NormalizeGateKind(node) is null)
             {
                 var gate = string.IsNullOrWhiteSpace(node.GateKind) ? "(missing)" : node.GateKind;
                 errors.Add(
@@ -769,18 +769,6 @@ internal static class RunWorkflowGraphBinder
     private static bool HasVerdictRouting(WorkflowDefinition def, WorkflowNode node) =>
         def.Edges.Any(e => string.Equals(e.From, node.Id, StringComparison.Ordinal)
             && e.When is not null && VerdictWhens.Contains(e.When));
-
-    private static string? NormalizeDeclaredGateKind(string? gateKind)
-    {
-        if (string.IsNullOrWhiteSpace(gateKind)) return null;
-        return gateKind.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
-        {
-            "rai" => "rai",
-            "review" or "human-review" => "human-review",
-            "rubberduck" or "rubber-duck" => "rubberduck",
-            _ => null,
-        };
-    }
 
     private static bool CanBindTransition(
         WorkflowDefinition definition,
