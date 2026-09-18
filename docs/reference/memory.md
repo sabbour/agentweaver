@@ -9,13 +9,13 @@ it is historical data, never prompt structure or executable instructions.
 
 ## How context is built
 
-`MemoryContextCompiler.CompileAsync(projectId, agentName)` gathers approved decisions, eligible memory, and the current session. Decisions and session are selected separately. Core memories and eligible learnings/patterns share one importance/recency-ranked item/token budget; source categories are not an unconditional inclusion order.
+`MemoryContextCompiler.CompileAsync(projectId, agentName)` gathers approved decisions, eligible memory, and the current session into one envelope-aware compilation result. The total token budget applies to the complete serialized context block, not just memory content. Its bounded composition metadata reports only omitted memory/session counts and causes; it never exposes record content or identifiers.
 
 ```text
 Decisions: active, approved architectural/scope records, ordered by creation time
 Memory candidates: eligible own core context + learnings/patterns
-Selection: importance, then recency; one bounded item/token budget
-Session: most recent open session, selected separately
+Selection: decisions mandatory; then importance, recency, and record id for memory; one bounded item/envelope budget
+Session: most recent open session (ties by record id), included only as one complete record
 ```
 
 If all layers are empty the method returns `null` and no context block is injected.
@@ -43,7 +43,7 @@ governance and bookkeeping.
 `AgentMemory` rows where `Type = core_context`, scoped to this `agentName`, and
 `TrustState != legacy`, ordered by creation time.
 
-Core memories are eligible regardless of importance, not guaranteed inclusion. They share the ranked memory budget with eligible learnings/patterns. Defaults are 20 items and about 4,000 tokens at four characters per token. Positive call-site overrides precede `MemoryContext:MaxItems` / `MaxTokens`, then legacy `Memory:ContextMaxItems` / `ContextMaxTokens`. Selection stops when the next ranked item exceeds the budget. Decisions and session are outside this memory-item budget.
+Core memories are eligible regardless of importance, not guaranteed inclusion. They share the ranked memory item limit with eligible learnings/patterns. Defaults are 20 items and about 4,000 tokens at four characters per token. Positive call-site overrides precede `MemoryContext:MaxItems` / `MaxTokens`, then legacy `Memory:ContextMaxItems` / `ContextMaxTokens`. The complete serialized envelope must fit the token budget; selection stops before the next full record would exceed it. Active approved decisions are mandatory: compilation fails before a model call with a typed budget error if all decision records cannot fit. The session is included only if its entire serialized record fits the remaining envelope budget.
 
 ### Layer 3 — High-importance learnings & patterns
 
@@ -166,6 +166,8 @@ END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON
 ```
 
 If there is no memory yet for a project, the block is omitted entirely and the agent runs with only the base prompt.
+
+`memory.context_composition` records this structured-context selection on the run stream. Its payload is limited to `included`, `omittedMemoryCount`, `omittedSessionCount`, and `omissionCauses`; prompt text, stored records, identifiers, and character/token measurements are deliberately excluded. This is distinct from per-turn cross-section size telemetry.
 
 ---
 

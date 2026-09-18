@@ -1063,10 +1063,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                    childDecisions = await memoryCompiler.CompileDecisionsAsync(
-                        run.ProjectId.Value.ToString(), ct);
+                    childDecisions = (await memoryCompiler.CompileDecisionsAsync(
+                        run.ProjectId.Value.ToString(), ct))?.Text;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
                 {
                     _logger.LogWarning(ex, "Decision compilation failed for child run {RunId} — proceeding without", run.Id);
                 }
@@ -1088,10 +1088,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             {
                 using var scope = _scopeFactory.CreateScope();
                 var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                systemPromptContext = await memoryCompiler.CompileAsync(
+                var compilation = await memoryCompiler.CompileAsync(
                     run.ProjectId.Value.ToString(), run.AgentName, ct);
+                systemPromptContext = compilation?.Text;
+                EmitMemoryContextComposition(run.Id.ToString(), compilation);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
             {
                 _logger.LogWarning(ex, "Memory context compilation failed for run {RunId} — proceeding without", run.Id);
             }
@@ -1126,6 +1128,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
 
         return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext), run));
+    }
+
+    private void EmitMemoryContextComposition(string runId, MemoryContextCompilation? compilation)
+    {
+        _streamStore.Get(runId)?.RecordNext(EventTypes.MemoryContextComposition, new
+        {
+            included = compilation?.Text is not null,
+            omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
+            omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
+            omissionCauses = compilation?.OmissionCauses ?? [],
+        });
     }
 
     /// <summary>

@@ -548,7 +548,7 @@ public sealed class CoordinatorWorkflowFactory
         {
             using var scope = _scopeFactory.CreateScope();
             var compiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-            return await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false);
+            return (await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false))?.Text;
         }
         catch (Exception ex)
         {

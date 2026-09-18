@@ -10,6 +10,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -18,13 +19,16 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
 {
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
     private readonly ServiceProvider _services;
+    private readonly IConfigurationRoot _memoryConfiguration;
 
     public CoordinatorDecisionContextTests()
     {
         _connection.Open();
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(options => options.UseSqlite(_connection));
-        services.AddScoped<MemoryContextCompiler>();
+        _memoryConfiguration = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        services.AddScoped(sp => new MemoryContextCompiler(
+            sp.GetRequiredService<MemoryDbContext>(), _memoryConfiguration));
         _services = services.BuildServiceProvider();
 
         using var scope = _services.CreateScope();
@@ -37,7 +41,9 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
         const string projectId = "project-decisions";
         var now = DateTimeOffset.UtcNow;
         var agentFactory = new CapturingWorkflowAgentFactory();
-        var executor = CreateExecutor(agentFactory);
+        var streamStore = new RunStreamStore();
+        streamStore.Create("run-1", "owner");
+        var executor = CreateExecutor(agentFactory, streamStore);
 
         var approvedArchitectural = Decision(
             projectId, "Approved architectural", "architectural", "active",
@@ -77,6 +83,13 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
         firstTitles.Should().OnlyHaveUniqueItems();
         firstTitles.Should().OnlyContain(title => CountOccurrences(firstPrompt!, title) == 1,
             "each approved decision must be injected into the final coordinator prompt exactly once");
+        var composition = streamStore.Get("run-1")!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.MemoryContextComposition);
+        var compositionJson = JsonSerializer.Serialize(composition.Payload);
+        compositionJson.Should().Contain("\"included\":true");
+        compositionJson.Should().Contain("\"omittedMemoryCount\":0");
+        compositionJson.Should().NotContain("Approved architectural");
+        compositionJson.Should().NotContain("decision-content");
 
         await using (var scope = _services.CreateAsyncScope())
         {
@@ -101,37 +114,33 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task DecompositionPrompt_OversizedApprovedDecisionRetainsValidBoundedJsonContext()
+    public async Task DecompositionStopsBeforeModelCallWhenMandatoryDecisionsExceedContextBudget()
     {
         const string projectId = "project-oversized-decision";
-        const string title = "Non-negotiable deployment boundary";
-        const string oversizedContentPrefix = "oversized-approved-decision-content-";
-        var decision = Decision(
-            projectId, title, "architectural", "active",
-            MemoryTrustStates.Approved, DateTimeOffset.UtcNow);
-        decision.Content = oversizedContentPrefix + new string('x', 500_000);
+        var now = DateTimeOffset.UtcNow;
+        _memoryConfiguration["MemoryContext:MaxTokens"] = "1";
         var agentFactory = new CapturingWorkflowAgentFactory();
         var executor = CreateExecutor(agentFactory);
 
         await using (var scope = _services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var decision = Decision(
+                projectId,
+                "Mandatory boundary",
+                "architectural",
+                "active",
+                MemoryTrustStates.Approved,
+                now);
+            decision.Content = new string('d', 128);
             db.Decisions.Add(decision);
             await db.SaveChangesAsync();
         }
 
-        await DecomposeAsync(executor, projectId, "oversized-decision-run");
+        var act = () => DecomposeAsync(executor, projectId, "run-oversized");
 
-        var prompt = agentFactory.Agent.SystemPrompt;
-        prompt.Should().NotBeNull();
-        prompt.Should().Contain("BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
-        prompt.Should().Contain("END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
-        prompt.Should().NotContain(oversizedContentPrefix);
-        prompt.Should().NotContain("[Context truncated to fit the decomposition model window.]");
-        prompt!.Length.Should().BeLessThan(96_000 * 4);
-
-        var titles = DecisionTitles(prompt);
-        titles.Should().ContainSingle().Which.Should().Be(title);
+        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+        agentFactory.Agent.SystemPrompt.Should().BeNull("the model setup must not run after a mandatory context budget failure");
     }
 
     private async Task DecomposeAsync(
@@ -158,9 +167,11 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
             .Should().NotBeNull();
     }
 
-    private CoordinatorOrchestratorExecutor CreateExecutor(IWorkflowAgentFactory agentFactory) => new(
+    private CoordinatorOrchestratorExecutor CreateExecutor(
+        IWorkflowAgentFactory agentFactory,
+        RunStreamStore? streamStore = null) => new(
         agentFactory,
-        new RunStreamStore(),
+        streamStore ?? new RunStreamStore(),
         _services.GetRequiredService<IServiceScopeFactory>(),
         NullLoggerFactory.Instance,
         new FakeStoryIndependenceClassifier(),
