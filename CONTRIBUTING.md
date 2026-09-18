@@ -58,8 +58,8 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - **Squash-merge** so `dev` keeps **one commit per logical change**. GitHub
-     automatically deletes the source branch after merge.
+   - Use **Rebase and merge** for normal PRs whenever available. Keep each PR's commit
+     history focused; GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only.
    - Do **not** create a long-lived local `integration`/`staging` branch as a private
@@ -91,7 +91,7 @@ Bad: “feat: add export.” It repeats a commit title without explaining the us
 The active topology is `dev → release/vX.Y.Z → main`:
 
 - **`dev`** is the default, protected integration branch. Normal PRs target it and use
-  required PRs, blocking CI, up-to-date-before-merge, squash merge, and automatic source
+  required PRs, blocking CI, up-to-date-before-merge, rebase merge, and automatic source
   branch deletion.
 - **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
   `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
@@ -254,7 +254,7 @@ to build the tag images before it creates the GitHub Release.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, then squash-merge.** If another PR reaches `dev` first,
+- **Update, retest, then rebase-merge.** If another PR reaches `dev` first,
   GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts,
   rerun relevant tests/CI, and merge only after all required checks are green
   on the updated branch.
@@ -302,7 +302,7 @@ Rules:
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
 `upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
-up-to-date, review, and squash-merge rules as every other contribution.
+up-to-date, review, and rebase-merge rules as every other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
 `pull_request_target`) and its jobs do not use `secrets.*`. `CODEOWNERS` and a required
@@ -375,7 +375,7 @@ developed with **Squad**, a team of named agents (Trinity, Tank, Morpheus, Smith
 Seraph, Scribe, Ralph, Rai, and others), and can optionally route work to GitHub's
 `@copilot` coding agent when it is on the roster. This section documents how that
 agent-driven flow works. It does **not** replace the human workflow above — human
-contributors follow the same branch → up-to-date PR → squash-merge path in
+contributors follow the same branch → up-to-date PR → rebase-merge path in
 [Making a change](#making-a-change) and can skip this section.
 
 **Issue-driven lifecycle.** Agent work is anchored to a GitHub issue and follows
