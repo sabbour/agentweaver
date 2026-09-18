@@ -9,6 +9,7 @@ using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Projects;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -35,6 +36,77 @@ namespace Agentweaver.Tests.Assistant;
 /// </summary>
 public sealed class AssistantRunEndpointsTests
 {
+    [Fact]
+    public void ProjectOperatorAgentDefinition_RemovesOnlyExactLineDelimitedToolMap()
+    {
+        const string definition = """
+            before
+            <!-- BEGIN GENERATED:tool-map -->
+            generated tool list
+            <!-- END GENERATED:tool-map -->
+            after
+            """;
+
+        var projected = AssistantRunService.ProjectOperatorAgentDefinition(definition);
+
+        projected.Should().Be("""
+            before
+            after
+            """);
+    }
+
+    [Theory]
+    [InlineData("before\n<!-- END GENERATED:tool-map -->\nafter")]
+    [InlineData("before\nafter")]
+    [InlineData("before\n<!-- BEGIN GENERATED:tool-map -->\nafter")]
+    [InlineData("<!-- END GENERATED:tool-map -->\n<!-- BEGIN GENERATED:tool-map -->")]
+    [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->\n<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->")]
+    [InlineData("<!-- BEGIN GENERATED:tool-map -->\n<!-- BEGIN GENERATED:tool-map -->\n<!-- END GENERATED:tool-map -->")]
+    [InlineData("before <!-- BEGIN GENERATED:tool-map -->\nafter\n<!-- END GENERATED:tool-map -->")]
+    public void ProjectOperatorAgentDefinition_RejectsMalformedMarkers(string definition)
+    {
+        var act = () => AssistantRunService.ProjectOperatorAgentDefinition(definition);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SendMessage_ProjectsToolMapWithoutChangingTemplateOrLiveToolApproval()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        factory.Agent.EmitApproval = true;
+        factory.Agent.ApprovalToolName = "coordinator_start";
+        var client = AuthedClient(factory);
+
+        var template = AgentDefinitionTemplate.Content;
+        template.Should().Contain("<!-- BEGIN GENERATED:tool-map -->")
+            .And.Contain("<!-- END GENERATED:tool-map -->");
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        await PrepareAssistantExecutionAsync(factory, client);
+        var turnTask = client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "start coordinator" });
+        var requestId = await WaitForApprovalRequestIdAsync(factory.Agent);
+        var request = factory.Agent.LastRequest!;
+
+        request.AgentDefinition.Should().NotContain("<!-- BEGIN GENERATED:tool-map -->")
+            .And.NotContain("<!-- END GENERATED:tool-map -->")
+            .And.NotContain("The Agentweaver MCP server exposes");
+        AgentDefinitionTemplate.Content.Should().Be(template,
+            "operator projection must not mutate the embedded or materialized definition source");
+        request.McpBrokerToken.Should().NotBeNullOrWhiteSpace(
+            "the live MCP declaration remains available through the broker");
+
+        var approval = await client.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-approvals", new { request_id = requestId, scope = "once" });
+        approval.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await turnTask).StatusCode.Should().Be(HttpStatusCode.OK);
+        factory.Agent.LastApprovalGranted.Should().BeTrue(
+            "approval authority for consequential live MCP tools must remain with the operator");
+    }
+
     [Theory]
     [InlineData("model_provider_changed", 409)]
     [InlineData("provider_configuration_invalid", 503)]

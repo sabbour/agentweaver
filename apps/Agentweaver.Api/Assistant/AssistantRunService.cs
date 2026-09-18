@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
@@ -153,6 +154,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     internal const string PersonalSessionMarkerKind = "operator";
 
     private const int MaxHistoryMessages = 24;
+    private const string ToolMapBeginMarker = "<!-- BEGIN GENERATED:tool-map -->";
+    private const string ToolMapEndMarker = "<!-- END GENERATED:tool-map -->";
+    private static readonly Regex ToolMapMarkerLine = new(
+        @"(?m)^<!-- (?:BEGIN|END) GENERATED:tool-map -->\r?$",
+        RegexOptions.CultureInvariant);
 
     /// <summary>How many of the caller's newest operator runs are read to evaluate the concurrency
     /// bound. Generous enough that every genuinely-active conversation is seen in practice; because
@@ -807,7 +813,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 ProjectId: state.ProjectId,
                 RunId: contextRunId,
                 ModelId: state.ModelId,
-                AgentDefinition: AgentDefinitionTemplate.Content,
+                AgentDefinition: ProjectOperatorAgentDefinition(AgentDefinitionTemplate.Content),
                 McpBrokerToken: brokerToken,
                 History: state.HistorySnapshot(),
                 RenewMcpBrokerTokenAsync: IssueBrokerTokenAsync,
@@ -873,6 +879,49 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         {
             state.Turn.Release();
         }
+    }
+
+    /// <summary>
+    /// Removes the generated tool map from the definition sent to an operator session. The live MCP
+    /// server remains the tool declaration authority; malformed definition content fails closed.
+    /// </summary>
+    internal static string ProjectOperatorAgentDefinition(string definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var markers = ToolMapMarkerLine.Matches(definition);
+        Match? begin = null;
+        Match? end = null;
+
+        foreach (Match marker in markers)
+        {
+            if (string.Equals(marker.Value.TrimEnd('\r'), ToolMapBeginMarker, StringComparison.Ordinal))
+            {
+                if (begin is not null && end is null)
+                    throw new InvalidOperationException("Operator agent definition contains nested generated tool-map markers.");
+                if (begin is not null)
+                    throw new InvalidOperationException("Operator agent definition contains duplicate generated tool-map markers.");
+
+                begin = marker;
+                continue;
+            }
+
+            if (begin is null)
+                throw new InvalidOperationException("Operator agent definition has a generated tool-map end marker before its begin marker.");
+            if (end is not null)
+                throw new InvalidOperationException("Operator agent definition contains duplicate generated tool-map markers.");
+
+            end = marker;
+        }
+
+        if (begin is null || end is null)
+            throw new InvalidOperationException("Operator agent definition must contain exactly one line-delimited generated tool-map block.");
+
+        var endExclusive = end.Index + end.Length;
+        if (endExclusive < definition.Length && definition[endExclusive] == '\n')
+            endExclusive++;
+
+        return string.Concat(definition.AsSpan(0, begin.Index), definition.AsSpan(endExclusive));
     }
 
     /// <summary>
