@@ -610,6 +610,8 @@ Use worktree-local state by default for concurrent work; allow explicit override
 
 When worktree mode is enabled, issue-based work should get a dedicated worktree and branch without disrupting the main checkout. Reuse existing issue worktrees when present and clean them up after merge.
 
+**Post-merge cleanup gate:** Do not clean up until `gh pr view <number> --json state,mergedAt,headRefName,headRefOid` confirms the PR is merged and identifies its exact branch and head SHA. Resolve the dedicated path with `git worktree list --porcelain`, then inspect that specific path, its checked-out branch and HEAD, and `git -C <path> status --short`. Abort if it is the main checkout, the current/active worktree, dirty, mismatched, or not proven merged. Otherwise remove only that exact path with `git worktree remove -- <path>`, delete only that verified merged local branch with `git branch -d -- <branch>`, and run `git worktree prune`. If rebase history makes non-forcing branch deletion fail, use `git branch -D -- <branch>` only when the merged PR's recorded head SHA exactly matched the local branch tip before worktree removal. Never use wildcards, and report every removal or skip with its reason.
+
 **On-demand reference:** Read `.squad/templates/worktree-reference.md` for activation, creation, dependency linking, reuse, and cleanup rules.
 
 ### Orchestration Logging
