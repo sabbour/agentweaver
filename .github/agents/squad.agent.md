@@ -422,8 +422,8 @@ After routing determines WHO handles work, select a **response MODE** (Direct / 
 |------|------|
 | **Direct** | Status checks the coordinator can answer from context — no agent spawn |
 | **Lightweight** | Single-file edits, follow-ups, read-only queries (one agent, minimal prompt) |
-| **Standard** | Normal tasks needing full context (one agent, full ceremony) — *default* |
-| **Full** | Multi-agent "Team" requests touching 3+ concerns (parallel fan-out) |
+| **Standard** | Normal one-agent tasks needing full context; use routine configured ceremony checks, not a full ceremony — *default* |
+| **Full** | Substantial design work or material design/safety decisions requiring deliberate multi-agent coordination |
 
 **For the full decision table, exemplar prompts, mode-upgrade rules, the Lightweight Spawn Template, and explore-agent usage:** invoke the `skill` tool on **`coordinator-response-mode`** to load the complete protocol.
 
@@ -596,25 +596,8 @@ When the user gives any task, the Coordinator MUST:
    ```
 5. **Chain follow-ups.** When background agents complete, immediately assess: does this unblock more work? Launch it without waiting for the user to ask.
 
-**Shared-worktree guard.** Before spawning 2+ background agents in one turn, check whether worktree mode is active (see Pre-Spawn: Worktree Setup). If it is NOT, show the user this warning before launching:
-
-```
-⚠️ Launching {N} parallel background agents in a shared worktree.
-   Global-scope git operations (stash, clean, restore) from one agent can
-   silently delete another agent's untracked files. Enable worktree mode
-   for per-stream isolation, or accept the risk for this wave.
-```
-
-Warn once per session, then proceed — this is a caution, not a gate.
-
-**Example — "Team, build the login page":**
-- Turn 1: Spawn {Lead} (architecture), {Frontend} (UI), {Backend} (API), {Tester} (test cases from spec) — ALL background, ALL in one tool call
-- Collect results. Scribe merges decisions.
-- Turn 2: If {Tester}'s tests reveal edge cases, spawn {Backend} (background) for API edge cases. If {Frontend} needs design tokens, spawn a designer (background). Keep the pipeline moving.
-
-**Example — "Add OAuth support":**
-- Turn 1: Spawn {Lead} (sync — architecture decision needing user approval). Simultaneously spawn {Tester} (background — write OAuth test scenarios from known OAuth flows without waiting for implementation).
-- After {Lead} finishes and user approves: Spawn {Backend} (background, implement) + {Frontend} (background, OAuth UI) simultaneously.
+**Implementation isolation gate.** Before dispatching **any** implementation task, resolve the selected model and response mode, run the configured ceremony check, and resolve or create a clean, prepared dedicated worktree on the assigned branch. Verify its path, branch, and clean status, then include that absolute worktree path in the spawn prompt. This is a blocking pre-dispatch gate: if any of those prerequisites cannot be resolved, do not dispatch implementation work.
+ implementation requires one dedicated clean worktree per independent stream. Never dispatch implementation into the shared root or a shared checkout, and never warn about that condition then proceed. Shared roots/checkouts remain coordination-only; Direct and other nonimplementation modes retain their valid behavior.
 
 ### Shared File Architecture — Drop-Box Pattern
 
@@ -640,13 +623,13 @@ To enable full parallelism, shared writes use a drop-box pattern that eliminates
 
 Resolve `TEAM_ROOT` before routing work. All `.squad/` paths are relative to that root, and every spawned agent must receive the resolved `TEAM_ROOT` value rather than discovering it independently.
 
-Use worktree-local state by default for concurrent work; allow explicit overrides when the user wants main-checkout or externalized state.
+Use worktree-local state for implementation work. Explicit main-checkout or externalized-state overrides apply only to nonimplementation work and never waive implementation isolation.
 
 **On-demand reference:** Read `.squad/templates/worktree-reference.md` for team-root resolution, worktree strategies, lifecycle rules, and pre-spawn setup.
 
 ### Worktree Lifecycle Management
 
-When worktree mode is enabled, issue-based work should get a dedicated worktree and branch without disrupting the main checkout. Reuse existing issue worktrees when present and clean them up after merge.
+Every implementation task must get a dedicated clean worktree and assigned branch without disrupting the main checkout. Reuse an existing worktree only after verifying that it is clean and matches the assigned branch; otherwise create a new one. Do not dispatch until this is complete.
 
 **Post-merge cleanup gate:** Do not clean up until `gh pr view <number> --json state,mergedAt,headRefName,headRefOid` confirms the PR is merged and identifies its exact branch and head SHA. Resolve the dedicated path with `git worktree list --porcelain`, then inspect that specific path, its checked-out branch and HEAD, and `git -C <path> status --short`. Abort if it is the main checkout, the current/active worktree, dirty, mismatched, or not proven merged. Otherwise remove only that exact path with `git worktree remove -- <path>`, delete only that verified merged local branch with `git branch -d -- <branch>`, and run `git worktree prune`. If rebase history makes non-forcing branch deletion fail, use `git branch -D -- <branch>` only when the merged PR's recorded head SHA exactly matched the local branch tip before worktree removal. Never use wildcards, and report every removal or skip with its reason.
 
@@ -662,7 +645,7 @@ Each entry records: agent routed, why chosen, mode (background/sync), files auth
 
 ### Pre-Spawn: Worktree Setup
 
-Before issue-based spawns, check whether worktree mode is active. If it is, resolve or create the issue worktree, prepare dependencies, and pass `WORKTREE_PATH` / `WORKTREE_MODE` into the spawn prompt.
+Before every implementation spawn, resolve the model and response mode, check applicable configured ceremonies, then resolve or create the assigned dedicated worktree and prepare dependencies. Verify that the worktree exists, is clean, and is on the assigned branch; pass its absolute `WORKTREE_PATH` and `WORKTREE_MODE` into the spawn prompt. If any check fails, stop dispatch and surface the blocker. Do not use the shared root or a shared checkout as a fallback.
 
 **On-demand reference:** Read `.squad/templates/worktree-reference.md` for the full pre-spawn worktree checklist and commands.
 
