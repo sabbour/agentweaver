@@ -89,6 +89,27 @@ public sealed record CollectiveRaiResult(
     bool RevisionRequested = false,
     string? Feedback = null);
 
+/// <summary>
+/// A typed, trusted failure while invoking the collective RAI provider. Only retryable instances
+/// qualify for the coordinator's one gate-only retry.
+/// </summary>
+public sealed class CollectiveRaiInfrastructureException : Exception
+{
+    public string Reason { get; }
+    public bool Retryable { get; }
+
+    public CollectiveRaiInfrastructureException(
+        string reason,
+        string message,
+        bool retryable,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Reason = string.IsNullOrWhiteSpace(reason) ? "rai_infrastructure_failure" : reason;
+        Retryable = retryable;
+    }
+}
+
 /// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
 /// <param name="WorktreePath">
 /// #236 — absolute path of a checked-out worktree at the assembled integration branch, so the reviewer

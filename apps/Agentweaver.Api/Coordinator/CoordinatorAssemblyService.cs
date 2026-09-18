@@ -1107,17 +1107,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch, gateId = gate.Id });
 
-                var rai = await _pipeline.RunRaiAsync(
-                    new CollectiveRaiRequest(
-                        context.CoordinatorRunId,
-                        context.RepositoryPath,
-                        aggregateDiff,
-                        context.SubmittingUser,
-                        reviewerWorktreePath,
-                        assemblyProvider.ModelSource,
-                        assemblyProvider.ByokProviderFingerprint),
-                    ct)
-                    .ConfigureAwait(false);
+                var raiRequest = new CollectiveRaiRequest(
+                    context.CoordinatorRunId,
+                    context.RepositoryPath,
+                    aggregateDiff,
+                    context.SubmittingUser,
+                    reviewerWorktreePath,
+                    assemblyProvider.ModelSource,
+                    assemblyProvider.ByokProviderFingerprint);
+                var rai = await RunRaiWithPreservedAggregateAsync(
+                    context, aggregateTreeHash, raiRequest, workPlanId, gate.Id, ct).ConfigureAwait(false);
 
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
                 {
@@ -3679,6 +3678,41 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         throw new InvalidOperationException(
             $"Assembly integration branch build failed after {MaxAttempts} attempts for run {context.CoordinatorRunId}.");
+    }
+
+    private async Task<CollectiveRaiResult> RunRaiWithPreservedAggregateAsync(
+        CoordinatorDispatchContext context,
+        string aggregateTreeHash,
+        CollectiveRaiRequest request,
+        int workPlanId,
+        string gateId,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _pipeline.RunRaiAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (CollectiveRaiInfrastructureException ex) when (ex.Retryable)
+        {
+            var persisted = await _runStore.GetAsync(RunId.Parse(context.CoordinatorRunId), ct).ConfigureAwait(false);
+            if (persisted?.TreeHash != aggregateTreeHash
+                || persisted.Diff != request.AggregateDiff)
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because the persisted aggregate changed for run {context.CoordinatorRunId}.", ex);
+            }
+
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiRetry, new
+            {
+                workPlanId,
+                gateId,
+                attempt = 2,
+                retryOfAttempt = 1,
+                reason = ex.Reason,
+                treeHash = aggregateTreeHash,
+            });
+            return await _pipeline.RunRaiAsync(request, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task BlockAsync(
