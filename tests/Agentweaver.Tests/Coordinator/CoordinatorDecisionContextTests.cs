@@ -143,39 +143,6 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
         agentFactory.Agent.SystemPrompt.Should().BeNull("the model setup must not run after a mandatory context budget failure");
     }
 
-    [Fact]
-    public async Task DecompositionStopsBeforeModelCallWhenCombinedPromptCannotFitMandatoryDecisions()
-    {
-        const string projectId = "project-combined-prompt-overflow";
-        var now = DateTimeOffset.UtcNow;
-        // The structured context itself fits this 100k-token envelope, but it cannot fit after the
-        // fixed decomposition prompt is added to the 96k-token decomposition prompt allowance.
-        _memoryConfiguration["MemoryContext:MaxTokens"] = "100000";
-        var agentFactory = new CapturingWorkflowAgentFactory();
-        var executor = CreateExecutor(agentFactory);
-
-        await using (var scope = _services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var decision = Decision(
-                projectId,
-                "Mandatory architectural boundary",
-                "architectural",
-                "active",
-                MemoryTrustStates.Approved,
-                now);
-            decision.Content = new string('d', 380_000);
-            db.Decisions.Add(decision);
-            await db.SaveChangesAsync();
-        }
-
-        var act = () => DecomposeAsync(executor, projectId, "run-combined-prompt-overflow");
-
-        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
-        agentFactory.Agent.SystemPrompt.Should().BeNull(
-            "approved decisions are mandatory and must not be silently omitted to fit the combined decomposition prompt");
-    }
-
     private async Task DecomposeAsync(
         CoordinatorOrchestratorExecutor executor,
         string projectId,

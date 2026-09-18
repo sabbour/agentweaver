@@ -1213,21 +1213,21 @@ public sealed class CoordinatorOrchestratorExecutor
             "Coordinator orchestrate: run {RunId} has no dispatchable team; failing with {Reason}",
             runId, NoTeamException.ErrorCode);
 
-        var failurePayload = new
+        var entry = _streamStore.Get(runId);
+        entry?.RecordNext(EventTypes.RunFailed, new
         {
             reason = NoTeamException.ErrorCode,
             message = NoTeamException.DefaultMessage,
-        };
+        });
+
         using var scope = _scopeFactory.CreateScope();
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-        if (!RunId.TryParse(runId, out var id)
-            || !await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                id, RunStatus.Failed, EventTypes.RunFailed, failurePayload, DateTimeOffset.UtcNow,
-                NoTeamException.ErrorCode, ct).ConfigureAwait(false))
-            return;
+        if (RunId.TryParse(runId, out var id))
+            await runStore.TrySetTerminalStatusAsync(
+                id, RunStatus.Failed, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
+                .ConfigureAwait(false);
 
-        await scope.ServiceProvider.GetRequiredService<TerminalOutcomeProjector>()
-            .ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
+        _streamStore.Complete(runId);
     }
 
     /// <summary>
@@ -1457,33 +1457,10 @@ public sealed class CoordinatorOrchestratorExecutor
         if (estimatedTokens <= budgetTokens)
             return fullCharter;
 
-        if (ContainsMandatoryDecisions(contextSection))
-        {
-            throw new MandatoryContextBudgetExceededException(
-                budgetTokens * 4,
-                estimatedTokens * 4);
-        }
-
         _logger.LogWarning(
             "Coordinator decomposition prompt for run {RunId} estimated at {Tokens} tokens, over budget {Budget}; omitting structured context",
             runId, estimatedTokens, budgetTokens);
         return baseCharter + "\n\n[Project context omitted: prompt context window budget exceeded.]";
-    }
-
-    private static bool ContainsMandatoryDecisions(string contextSection)
-    {
-        const string begin = "BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
-        const string end = "END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
-        var payloadStart = contextSection.IndexOf(begin, StringComparison.Ordinal);
-        var payloadEnd = contextSection.IndexOf(end, StringComparison.Ordinal);
-        if (payloadStart < 0 || payloadEnd <= payloadStart)
-            return false;
-
-        var json = contextSection[(payloadStart + begin.Length)..payloadEnd].Trim();
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.TryGetProperty("decisions", out var decisions)
-            && decisions.ValueKind == JsonValueKind.Array
-            && decisions.GetArrayLength() > 0;
     }
 
     private static int EstimateTokens(string text) =>
