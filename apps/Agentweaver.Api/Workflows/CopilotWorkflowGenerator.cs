@@ -116,7 +116,107 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             return (yaml, null, ex.Message);
         }
 
+        var softwareReviewError = ValidateSoftwareReviewGate(result.Definition, request.TeamRoles);
+        if (softwareReviewError is not null)
+            return (yaml, null, softwareReviewError);
+
         return (yaml, result.Definition, null);
+    }
+
+    private static string? ValidateSoftwareReviewGate(
+        WorkflowDefinition workflow,
+        IReadOnlyList<string>? teamRoles)
+    {
+        var buildTests = workflow.Nodes.Where(node => node.Type == WorkflowNodeType.BuildTest).ToArray();
+        if (buildTests.Length == 0 && !(teamRoles?.Any(IsSoftwareDeliveryRole) ?? false))
+            return null;
+
+        var humanReviews = workflow.Nodes
+            .Where(node => node.Type == WorkflowNodeType.Check &&
+                           string.Equals(node.GateKind, "human-review", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (buildTests.Length != 1)
+            return "Software workflows must contain exactly one build_test gate immediately before the human-review sign-off gate.";
+
+        if (humanReviews.Length != 1)
+            return "Software workflows must contain exactly one human-review sign-off gate immediately after the build_test gate.";
+
+        var buildTestId = buildTests[0].Id;
+        var humanReviewId = humanReviews[0].Id;
+        if (!workflow.Edges.Any(edge =>
+                string.Equals(edge.From, buildTestId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(edge.When, "approved", StringComparison.OrdinalIgnoreCase)))
+            return "The build_test gate in a software workflow must route its approved verdict directly to the human-review sign-off gate.";
+
+        var reachableNodeIds = GetReachableNodeIds(workflow, workflow.Start);
+        var reachableSafetyGates = workflow.Nodes
+            .Where(node => node.Type == WorkflowNodeType.Check &&
+                           string.Equals(node.GateKind, "rai", StringComparison.OrdinalIgnoreCase) &&
+                           reachableNodeIds.Contains(node.Id))
+            .ToArray();
+        if (reachableSafetyGates.Any(safetyGate => !workflow.Edges.Any(edge =>
+                string.Equals(edge.From, safetyGate.Id, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(edge.To, buildTestId, StringComparison.OrdinalIgnoreCase) &&
+                IsApprovalVerdict(edge.When))))
+            return "Every reachable RAI safety gate in a software workflow must route its approved or pass verdict directly to the build_test gate.";
+
+        if (CanReachNodeAvoiding(workflow, humanReviewId, buildTestId))
+            return "The human-review sign-off gate in a software workflow must not be reachable before the build_test gate.";
+
+        if (reachableSafetyGates.Any(safetyGate =>
+                CanReachNodeAvoiding(workflow, humanReviewId, safetyGate.Id)))
+            return "The human-review sign-off gate in a software workflow must not be reachable before every reachable RAI safety gate and the build_test gate.";
+
+        if (!IsOnCompletionPath(workflow, buildTestId) ||
+            !IsOnCompletionPath(workflow, humanReviewId))
+            return "The build_test and human-review gates in a software workflow must be reachable from start and lead to a terminal completion.";
+
+        if (HasCompletionPathAvoiding(workflow, buildTestId))
+            return "Every software workflow completion path must pass through the build_test gate before reaching human review or a terminal.";
+
+        return null;
+    }
+
+    private static bool IsApprovalVerdict(string? verdict) =>
+        string.Equals(verdict, "approved", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(verdict, "pass", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CanReachNodeAvoiding(
+        WorkflowDefinition workflow, string targetNodeId, string excludedNodeId) =>
+        GetReachableNodeIds(workflow, workflow.Start, excludedNodeId).Contains(targetNodeId);
+
+    private static bool IsSoftwareDeliveryRole(string role) =>
+        role is "backend-engineer" or "core-implementer" or "data-engineer" or
+            "devops-engineer" or "frontend-engineer";
+
+    private static bool IsOnCompletionPath(WorkflowDefinition workflow, string nodeId) =>
+        GetReachableNodeIds(workflow, workflow.Start).Contains(nodeId) &&
+        GetReachableNodeIds(workflow, nodeId).Any(id =>
+            workflow.Nodes.Any(node => node.Type == WorkflowNodeType.Terminal &&
+                                       string.Equals(node.Id, id, StringComparison.Ordinal)));
+
+    private static bool HasCompletionPathAvoiding(WorkflowDefinition workflow, string nodeId) =>
+        GetReachableNodeIds(workflow, workflow.Start, nodeId).Any(id =>
+            workflow.Nodes.Any(node => node.Type == WorkflowNodeType.Terminal &&
+                                       string.Equals(node.Id, id, StringComparison.Ordinal)));
+
+    private static HashSet<string> GetReachableNodeIds(
+        WorkflowDefinition workflow, string startNodeId, string? excludedNodeId = null)
+    {
+        var reachable = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>([startNodeId]);
+
+        while (pending.TryDequeue(out var nodeId))
+        {
+            if (string.Equals(nodeId, excludedNodeId, StringComparison.Ordinal) || !reachable.Add(nodeId))
+                continue;
+
+            foreach (var edge in workflow.Edges.Where(edge => string.Equals(edge.From, nodeId, StringComparison.Ordinal)))
+                pending.Enqueue(edge.To);
+        }
+
+        return reachable;
     }
 
     private string BuildPrompt(WorkflowGenerationRequest request)
@@ -177,10 +277,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
-            NODE TYPES — use the following supported types. peer_review and build_test HAVE runtime executors and are
-            fully supported. Do NOT use fan_out, fan_in, serial, or coordinator_composed: those are accepted
-            by the schema loader but have NO runtime executor and will cause a binding error when the
-            workflow runs.
+            NODE TYPES — use only the following supported types. Do NOT use fan_out, fan_in, serial, or
+            coordinator_composed: the schema loader accepts them, but they have no runtime executor.
 
             - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
               `prompt` (the task instruction for the agent).
@@ -194,10 +292,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
               gates: `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
               pass | revise), `human-review` (human HITL review gate).
-            - merge: platform-owned action. DO NOT author merge nodes in generated workflows; the
-              coordinator appends merge after authored gates.
-            - scribe: platform-owned final action. DO NOT author scribe nodes; the coordinator appends
-              scribe after merge for every run.
+            - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
+              appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
             {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
@@ -210,9 +306,6 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               which remains valid and should be preserved unless the requested change adds another trigger.
             - `start` and every edge `from`/`to` MUST reference declared node ids.
             - A `check` node MUST declare `branches:` and have a matching outgoing edge for each verdict.
-            - Do NOT use fan_out, fan_in, serial, or coordinator_composed node types (no runtime executor).
-            - Author only workflow gates and work steps. Do NOT include merge or scribe nodes; end the last
-              authored step/gate at a terminal such as `done`, `declined`, or `safety-failed`.
 
             Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
             charters and are immediately runnable. Use a catalog id whenever one fits adequately:
@@ -300,9 +393,6 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               coordinator_composed because those node types are not currently bindable at runtime.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
-            - If the workflow is software-oriented, preserve or add a build_test gate after the RAI
-              safety check (when present) and immediately before human-review; never place rai after
-              build_test for software delivery.
 
             {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
 
@@ -372,8 +462,6 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - Are all nodes reachable from `start`, and do all edges reference declared nodes?
             - Does every check branch have a matching outgoing edge?
             - For built-in/library edits, did you produce a customized copy with a new id?
-            - For software delivery, is build_test after any RAI safety check and immediately before
-              human-review?
 
             Return ONLY valid YAML for the edited WorkflowDefinition draft. No markdown fences. No commentary.
             """;

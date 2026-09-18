@@ -6,30 +6,29 @@ internal static class WorkflowGatePromptGuidance
     public const string SoftwareBuildTestRequirement = """
         MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
         implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
-        etc.) — you MUST include a build_test gate after any RAI safety check and IMMEDIATELY before the human-review gate. This gate
-        is static, platform-owned, and always-on; never omit it, never make it optional, and never add
-        an inline prompt. Wire it exactly as:
+        etc.) — you MUST include exactly one build_test gate immediately after any RAI safety check,
+        followed immediately by exactly one human-review check gate. Every reachable RAI safety gate's
+        approved or pass edge MUST route directly to that build_test gate; no path may reach human review
+        before this RAI/build_test sequence. Neither gate is optional or omittable. The build_test gate is
+        static, platform-owned, and always-on; never add an inline
+        prompt. Wire it exactly as:
           - id: build-test
             type: build_test
             label: Build & Test
             role: review
             agent: qa-engineer
-        Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
-        loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
-        If a software workflow has no human-review gate, add one (a `check` node with
-        `gate_kind: human-review`) placed immediately after build-test. The build & test gate must run
-        after the RAI safety check whenever an RAI gate is present; never place RAI after build_test.
-        Consider adding `rai` before build_test for safety-sensitive work and `rubberduck` before
-        build_test for code-quality critique. Non-software
-        workflows (pure content authoring, discovery, incident response, evaluation) do NOT need this step.
+        Route `when: approved` directly to the human-review gate; `when: request-changes` loops back to
+        the implementation node (e.g. implement/fix); `when: declined` goes to a terminal. The
+        human-review gate MUST be `type: check` with `gate_kind: human-review` and branches `approved`,
+        `request-changes`, and `declined`; route its approved verdict to the workflow's appropriate
+        terminal/action, its request-changes verdict to implementation, and its declined verdict to a
+        terminal. Consider `rai` for safety-sensitive work and `rubberduck` for code-quality critique.
+        Non-software workflows (pure content authoring, discovery, incident response, evaluation) do NOT
+        need build_test.
         """;
 
     public const string BlueprintGateAwareness = """
         GATE-AWARE WORKFLOW SELECTION — blueprints must preserve or trigger specialized gates:
-        - `build_test` is the platform-owned Build & Test gate that also lights up preview. For any
-          blueprint whose deliverable is buildable/runnable software — app, service, library, feature,
-          bug fix, refactor, or other code change — the selected/generated workflow MUST include the
-          mandatory build_test gate after any RAI safety check and immediately before human review.
         - `rai` is a `check` gate_kind for responsible-AI safety review. Include it for safety-sensitive
           work, user-facing content, policy/compliance-sensitive decisions, or workflows that could affect
           users if the output is unsafe.
