@@ -57,13 +57,25 @@ or redeploying a `ProjectPreview`, the API creates one immutable `PreviewSourceA
 | `git_commit` / `tree_hash` | Exact committed source identity captured from the eligible run. |
 | `archive_uri` / `sha256` / `size_bytes` | Private object-store bundle and verified digest/size. The bundle is a deterministic archive of the committed tree, excluding `.git` and runtime material. |
 | `created_by` / `created_at` | Audit provenance. |
+| `object_version` / `retention_until` | Immutable object-store version identifier and the artifact retention deadline captured at creation. |
 
-Artifact creation streams a checked-out committed tree to private object storage, verifies the
-SHA-256 before persistence, and writes it once. The deployment controller receives only the
-artifact id and a short-lived, audience-scoped read credential for that one object. It never
-mounts, reads, or clones the archived source run worktree. Artifact retention is independent
-of run retention and is not deleted by run archive/delete; it is deleted only after all
-preview generations and their terminal audit-retention windows no longer reference it.
+Artifact creation atomically allocates an artifact row in `capturing` state, streams a
+checked-out committed tree to a private, versioned object key, verifies the SHA-256 and byte
+count against the stored object version, then transitions that row to `available`. The row is
+write-once after `available`: identity, provenance, digest, size, object URI/version, and
+retention metadata cannot be updated or reused for different bytes. The deployment controller
+receives only the artifact id and a short-lived, audience-scoped read credential for that exact
+object version. It never mounts, reads, or clones the archived source-run worktree.
+
+Artifact retention is independent of run retention and is not deleted by run archive/delete.
+Each generation holds an immutable reference to one `available` artifact. The reconciler
+repairs incomplete capture by deleting an unreferenced `capturing` row and its exact object
+version after its capture deadline; it never treats an incomplete object as deployable. It may
+purge an `available` artifact only after every referencing generation is terminal, every
+referencing preview audit deadline has elapsed, and the artifact's `retention_until` has
+elapsed. Purge first marks the row `purging`, deletes only its recorded object version, verifies
+absence, then records `purged`; a failed delete remains retryable and keeps the row/object
+inaccessible. No purge scans or deletes a prefix, mutable key, or unrecorded object.
 
 A source run without a project, a verified committed tree, or a successfully captured artifact
 is ineligible (`409 preview_source_ineligible`). The API never falls back to a mutable project
@@ -80,14 +92,23 @@ paired existing migration pattern:
 | Table | Required columns and indexes |
 | --- | --- |
 | `project_previews` | `id` (opaque), `project_id`, `display_name`, `state`, `generation`, `active_generation`, `current_source_artifact_id`, `created_by`, `created_at`, `ready_at`, `expires_at`, `policy_snapshot_json`, `quota_reservation_id`, `operation_id`, `operation_fence`, `lease_owner`, `lease_expires_at`, `last_error_code`, `last_error_message`, `terminal_at`, `audit_purge_at`, `deleted_at`. Unique `(project_id, display_name)` for non-deleted rows; index `(project_id, state, expires_at)`; index `(lease_expires_at)`; index `(audit_purge_at)`. |
-| `project_preview_generations` | `preview_id`, monotonically increasing `generation`, immutable `source_artifact_id`, `runtime_ref`, `route_ref`, `url_token_ciphertext`, `url_token_fingerprint`, `state`, `created_at`, `published_at`, `stopped_at`, `failure_code`, `failure_message`. Unique `(preview_id, generation)` and one filtered active-generation index. |
-| `project_preview_operations` | `operation_id`, `preview_id`, `kind`, caller-supplied `idempotency_key`, `request_fingerprint`, `status`, `generation`, `fence`, `requested_by`, `created_at`, `completed_at`, result/failure fields. Unique `(preview_id, kind, idempotency_key)`; same key with a different request fingerprint returns `409 idempotency_key_reused`. |
+| `preview_source_artifacts` | `artifact_id`, `project_id`, `source_run_id`, `git_commit`, `tree_hash`, `archive_uri`, `object_version`, `sha256`, `size_bytes`, `state` (`capturing`, `available`, `purging`, `purged`), `created_by`, `created_at`, `capture_deadline`, `retention_until`, `purged_at`. Immutable after `available`; unique `(project_id, source_run_id, git_commit, tree_hash, sha256)`; indexes on `state, capture_deadline` and `retention_until`. |
+| `project_preview_generations` | `preview_id`, monotonically increasing `generation`, immutable `source_artifact_id`, `runtime_profile_version`, `runtime_profile_snapshot_json`, `runtime_ref`, `route_ref`, `url_token_ciphertext`, `url_token_fingerprint`, `state`, `created_at`, `published_at`, `stopped_at`, `failure_code`, `failure_message`. Unique `(preview_id, generation)`; filtered indexes permit exactly one active generation and at most one candidate generation per preview. |
+| `project_preview_operations` | `operation_id`, `project_id`, required `preview_id` (allocated before the atomic create insert), `kind`, caller-supplied `idempotency_key`, `request_fingerprint`, `status`, `generation`, `fence`, `requested_by`, `created_at`, `completed_at`, result/failure fields. Unique `(project_id, kind, idempotency_key)`; a matching fingerprint replays the original operation/result and a different fingerprint returns `409 idempotency_key_reused`. |
 | `project_preview_quota_reservations` | `id`, `project_id`, `preview_id`, `generation`, `state` (`reserved`, `consumed`, `released`), `expires_at`, `created_at`, `released_at`. Unique active `(project_id, preview_id, generation)` and indexed expiration. |
+| `project_identity_archives` | `project_id`, immutable public identity snapshot (project display identity and deletion timestamp), `deleted_by`, `created_at`, `audit_purge_at`. This is the only project identity retained after parent deletion; it contains no workspace, membership, secret, or live authorization data. |
 
 `policy_snapshot_json` captures validated project defaults and limits (lifetime, maximum
-extension horizon, per-project quota, deployment profile, health/readiness budgets, and audit
-retention) at generation creation. Later policy changes apply only to newly requested
-generations; no controller reads mutable policy while reconciling a recorded generation.
+extension horizon, per-project quota, named runtime-profile version, health/readiness budgets,
+and audit retention) at generation creation. `runtime_profile_snapshot_json` is the complete,
+server-selected profile replay contract: source layout/archive extraction rules; builder and
+runtime image **digests**; fixed build and launch commands; fixed listening port and health
+probe; CPU/memory/ephemeral-storage limits; and bootstrap and steady-state network rules. A
+profile is an allowlisted, versioned server asset, never caller input. The controller reconciles
+only the stored snapshot, not a mutable profile definition. It rejects an artifact whose layout,
+manifest, or supported profile constraints do not validate before scheduling with closed-set
+`409 preview_artifact_unsupported` or `409 preview_runtime_profile_unsupported` codes.
+Later policy/profile changes apply only to newly requested generations.
 
 `url_token_ciphertext` is encrypted at rest using the platform secret protector. The raw token
 is generated with CSPRNG at 128 bits or greater, appears only in an authorized
@@ -118,8 +139,11 @@ Ingress remains Gateway-only. The API/controller never probes a workload pod IP;
 the generated Gateway hostname as the current preview implementation does. Egress defaults to
 DNS plus artifact download during bootstrap, then is disabled except explicit platform-required
 endpoints in the selected profile. The preview URL is an unauthenticated capability URL. It
-must be sent only after authorization, set `Referrer-Policy: no-referrer` in the web embed,
-and must not be exposed in list/status responses to callers without URL-disclosure permission.
+must be sent only after authorization and must not be exposed in list/status responses to callers
+without URL-disclosure permission. The Gateway-level preview route injects
+`Referrer-Policy: no-referrer` on **every** preview response, including application responses,
+Gateway redirects, and Gateway error responses; the web embed is defense in depth only and
+cannot substitute for this policy.
 
 The legacy run-preview endpoints and `start_preview` agent/MCP tool continue targeting the
 source run sandbox and using `AgentPreviewGate`; they do not create `ProjectPreview` rows and
@@ -131,16 +155,27 @@ generation link, never a raw capability URL or token.
 
 ### States
 
-`requested -> reserving -> provisioning -> publishing -> ready` is the success path.
-`ready -> stopping -> stopped` is an explicit stop; `ready -> expiring -> expired` is expiry;
-and `requested|reserving|provisioning|publishing -> failed` is terminal provisioning failure.
-`ready -> redeploying -> provisioning` creates generation N+1 while generation N remains
-serving. `deleting` is a project-delete administrative state that always converges to
-`stopped`/`expired` plus retained audit metadata. Terminal states are `stopped`, `expired`, and
-`failed`; only a new start or redeploy operation creates another generation.
+For an initial deployment, the aggregate transitions
+`requested -> reserving -> provisioning -> publishing -> ready`; provisioning failure is
+terminal `failed`. For blue/green redeploy, the aggregate is `redeploying` while generation N
+remains the sole `active_ready` generation and N+1 is a separate candidate state:
+`candidate_reserving -> candidate_provisioning -> candidate_publishing -> candidate_ready` or
+`candidate_failed`. Candidate states never replace N's state, expiry, URL-disclosure right, or
+cleanup lease. Only an atomic cutover changes N+1 to `active_ready` and marks N `superseded` for
+fenced cleanup. `active_ready -> stopping -> stopped` is an explicit stop;
+`active_ready -> expiring -> expired` is expiry. `deleting` is a project-delete administrative
+state that always converges to `stopped`/`expired` plus retained audit metadata. Terminal
+states are `stopped`, `expired`, and `failed`; only a new start or redeploy operation creates
+another generation.
 
-Every mutation requires an `Idempotency-Key`. The API persists the operation before scheduling
-work and returns its stored result for exact replay. A database compare-and-swap acquires the
+Every mutation requires an `Idempotency-Key`. For **create**, one database transaction inserts
+the project-scoped `(project_id, kind=create, idempotency_key)` operation, allocates the opaque
+preview id, creates its first generation record, and reserves quota **before artifact capture**.
+The unique constraint serializes concurrent identical create requests: the winner owns the
+allocation; a same-fingerprint loser loads and returns that exact stored operation/preview id;
+a different fingerprint returns `409 idempotency_key_reused`. Artifact capture and scheduling
+begin only after this committed transaction. The API persists every other operation before
+scheduling work and returns its stored result for exact replay. A database compare-and-swap acquires the
 aggregate lease by updating `lease_owner`, `lease_expires_at`, and incrementing
 `operation_fence`. Every controller write and Kubernetes projection carries that fence; a
 worker may publish, extend, stop, or clean up only when its fence remains current. Lease loss
@@ -149,13 +184,13 @@ expiry by the reconciler.
 
 | Trigger | Deterministic transition and race rule |
 | --- | --- |
-| Start | Validate project role, source eligibility, name, policy snapshot, and idempotency. Atomically reserve quota before `provisioning`; exhaustion returns `409 preview_quota_exhausted`, with no runtime object. The controller consumes the reservation only after it creates the isolated workload. |
+| Start | Validate project role, `sourceRun.ProjectId == target projectId`, same-project authorization, source eligibility, name, policy snapshot, and idempotency before capture. The atomic create transaction reserves quota before artifact capture; exhaustion returns `409 preview_quota_exhausted`, with no artifact or runtime object. The controller consumes the reservation only after it creates the isolated workload. |
 | Publication | Create workload, Service, and HTTPRoute tagged with preview id/generation/fence; wait through the recorded convergence/readiness budgets. Only a Gateway-hostname success can move to `ready`, set `ready_at`/`expires_at`, and disclose the URL. Any failure deletes route, Service, and workload, releases quota, redacts diagnostics, and becomes `failed`. |
 | Extend | `ready` only. Validate the recorded maximum horizon and policy snapshot; CAS updates `expires_at` under a new fence. The expiry reaper re-reads the row/fence immediately before deletion, so an extension committed before that check wins; a completed `expiring` transition returns `409 preview_not_ready` and requires redeploy. |
 | Stop | Idempotent for `stopping`, `stopped`, and `expired`; it fences/cancels in-flight publication, deletes route then Service then workload, releases reservation, and records `stopped`. A concurrent start/redeploy that has not published is cancelled; a stale publisher cannot restore resources because its fence is invalid. |
-| Redeploy | Capture/verify a new immutable artifact and reserve quota for N+1 before touching N. N remains `ready` until N+1 has a validated URL. On success atomically make N+1 active, revoke/delete N's route/runtime, release N's reservation, and publish the new URL exactly once. On failure clean only N+1 and keep N serving. |
+| Redeploy | A request with no `source_run_id` redeploys directly from the retained artifact referenced by active N; it does not load the source run and continues to work after that run is deleted. A request with `source_run_id` explicitly requests replacement bytes and must validate `sourceRun.ProjectId == target projectId`, same-project authorization, eligibility, and capture a new artifact before N+1 exists. In both cases reserve quota for candidate N+1 before touching N. N remains the active, URL-disclosable `ready` generation while N+1 is `candidate_provisioning`/`candidate_publishing`; its expiry can be extended and its normal cleanup remains fenced. Only validated candidate publication atomically changes active generation, revokes N's URL/route, then cleans N and releases N's reservation. Candidate failure or cleanup failure never changes N, its URL, expiry, or reservation. |
 | Expiry | Reaper selects `ready` rows with `expires_at <= now`, acquires a lease/fence, changes to `expiring`, and performs the same route/service/workload cleanup. It then releases quota and records `expired`; it never silently extends from browser activity. |
-| Project delete | `ProjectService.TryBeginDeleteAsync` must first mark dependent previews `deleting` transactionally and enqueue their cleanup. Project workspace/run deletion proceeds only after the preview cleanup barrier has terminalized every generation or a durable retry record exists. Access is denied after deletion begins except controller/reconciler operations. |
+| Project delete | `ProjectService.TryBeginDeleteAsync` transactionally writes an immutable `project_identity_archives` snapshot, revokes public preview routes/tokens at the Gateway publication boundary, marks every dependent preview/generation `deleting`, and persists cleanup obligations before deleting project workspace/runs. This revocation barrier commits before the parent deletion can commit; after it, public and project routes deny access, while only controller/reconciler cleanup identities can read retained metadata. Parent deletion may then complete with durable retry obligations, because audits/artifacts reference the immutable archive rather than a deleted parent. The reaper deletes route, Service, workload, and token material; retains sanitized lifecycle audit rows and artifact references until their recorded deadlines; then purges audit rows, archive identity, and eligible artifact object versions under the safe purge rules. |
 | Reconcile | A hosted service scans expired leases, nonterminal rows, stale quota reservations, and orphaned resources carrying the project-preview labels. It trusts row+fence state over object presence, recreates missing required objects only for the current nonterminal generation, and deletes objects with no current matching row/fence. It cannot resurrect terminal previews. |
 
 Cleanup failure is retryable and observable (`cleanup_pending` event/diagnostic) rather than
@@ -181,11 +216,13 @@ run preview, where a run-bound agent callback has a narrow allowance.
 | Start | `POST /api/projects/{projectId}/previews` | `project_preview_start(project_id, source_run_id, name, idempotency_key)` | Contributor | `202` operation/status; URL is absent until caller explicitly gets it after ready. |
 | Extend | `POST /api/projects/{projectId}/previews/{previewId}/extend` | `project_preview_extend(project_id, preview_id, minutes, idempotency_key)` | Contributor | `200` metadata, never URL. |
 | Stop | `DELETE /api/projects/{projectId}/previews/{previewId}` | `project_preview_stop(project_id, preview_id, idempotency_key)` | Contributor | `202`/stored operation, never URL. |
-| Redeploy | `POST /api/projects/{projectId}/previews/{previewId}/redeploy` | `project_preview_redeploy(project_id, preview_id, source_run_id, idempotency_key)` | Contributor | `202`; URL absent until ready and explicitly requested. |
+| Redeploy | `POST /api/projects/{projectId}/previews/{previewId}/redeploy` | `project_preview_redeploy(project_id, preview_id, idempotency_key, source_run_id?)` | Contributor | Without `source_run_id`, replay retained artifact; with it, explicitly replace source bytes after same-project validation. `202`; URL absent until ready and explicitly requested. |
 | Policy | `PUT /api/projects/{projectId}/preview-settings` | no mutation tool in this lane | Owner | Existing settings response; add durable-preview limits to the owner-only request/response. |
 
-Request bodies use the repository's snake_case DTO convention. `start`/`redeploy` accept only
-`source_run_id`, optional display `name` on start, and require the idempotency header; they
+Request bodies use the repository's snake_case DTO convention. `start` accepts
+`source_run_id` and optional display `name`; `redeploy` accepts an optional `source_run_id`
+only to explicitly replace bytes and otherwise uses the retained artifact. Both require the
+idempotency header; they
 never accept a URL, artifact URI, command, port, image, credentials, policy snapshot, or
 runtime specification. The create/redeploy response is `202 Accepted` with
 `operation_id`, `preview_id`, `generation`, `state`, and `status_url`; an exact idempotent
@@ -222,9 +259,11 @@ run capability can invoke these project-preview operations.
 
 | Layer | Required evidence |
 | --- | --- |
-| Domain/storage | Unit tests for every transition, idempotency fingerprint collision, lease takeover/fence rejection, token encryption/redaction, immutable artifact digest mismatch, audit retention, and SQLite/PostgreSQL migration upgrade from the current schema. |
-| Authorization | API and MCP tests covering Viewer/Contributor/Owner, cross-project denial, deleted project, legacy non-project run, internal-service key, and run-capability claim. Assert URL absence from list/get/events/errors and `no-store` URL response. |
-| Controller/race | Deterministic fake-clock and fake-Kubernetes tests for start/stop, extend-vs-expiry, start-vs-project-delete, stale publisher, crash/lease takeover, redeploy failure preserving generation N, publication rollback, orphan cleanup, and quota release exactly once. |
+| Domain/storage | Unit tests for every transition; atomic create allocation/operation/quota reservation before capture; same-key concurrent replay and fingerprint collision; lease takeover/fence rejection; token encryption/redaction; artifact write-once identity/object-version/digest/size validation; capture reconciliation; generation references; safe eventual purge; archive retention; and SQLite/PostgreSQL migration upgrade from the current schema. |
+| Authorization | API and MCP tests covering Viewer/Contributor/Owner, cross-project denial, **cross-project source-run start/redeploy denial**, deleted project, legacy non-project run, internal-service key, and run-capability claim. Assert URL absence from list/get/events/errors and `no-store` URL response. |
+| Controller/race | Deterministic fake-clock and fake-Kubernetes tests for start/stop, extend-vs-expiry, start-vs-project-delete revocation barrier, stale publisher, crash/lease takeover, retained-artifact redeploy after source-run deletion, explicit source replacement, candidate failure preserving active N's availability/URL/extension/expiry, publication rollback, orphan cleanup, and quota release exactly once. |
+| Runtime profile | Contract tests for each versioned profile snapshot/replay: fixed source layout, builder/runtime image digests, command, port, health probe, resource and network rules. Negative tests assert `preview_artifact_unsupported` and `preview_runtime_profile_unsupported` before workload scheduling. |
+| Gateway privacy | Direct-navigation and external-resource tests cover success, redirect, and error paths and assert the Gateway returns `Referrer-Policy: no-referrer` on every preview response. |
 | Sandbox/security | Manifest and adapter tests assert no source-run mounts, AgentHost endpoints, claims, run credentials, API key, or privileged service account; assert Gateway-only ingress, bounded egress, resource limits, and URL/token redaction. |
 | Compatibility | Existing `SandboxPreviewService`, `PreviewStep`, AgentHost preview-runner, and `start_preview` API/MCP suites run unchanged; tests prove no legacy route produces a `ProjectPreview`. |
 | Full repository | Run `npm run validate:layer -- --area dotnet --dotnet-filter "FullyQualifiedName~ProjectPreview"` for each backend lane, broaden to the affected existing preview/project/MCP filters, and run `npm run validate:full` at the integrated stack top. Run `npm run docs:build` when the published docs lane changes. |
@@ -232,7 +271,12 @@ run capability can invoke these project-preview operations.
 
 ## Acceptance criteria
 
-- [ ] A ready ProjectPreview stays reachable after its source run finishes, is archived, or is deleted.
+- [ ] Create atomically establishes the project-scoped idempotent operation, preview id, first generation, and quota reservation before artifact capture; exact and concurrent replays return the same operation/preview.
+- [ ] A ready ProjectPreview stays reachable after its source run finishes, is archived, or is deleted; retained-artifact redeploy works after deletion, while an explicitly supplied source run is validated as a same-project replacement.
+- [ ] Source artifacts are write-once, versioned, reconciled, generation-referenced, and purged only after all recorded retention and reference conditions hold.
+- [ ] Active and candidate redeploy generations remain separately fenced: failed candidates cannot reduce active availability, URL disclosure, extension, expiry, or cleanup safety.
+- [ ] Project deletion snapshots identity, commits public-route revocation before parent deletion, and retains/purges audits and artifacts safely without orphan access.
+- [ ] Every Gateway preview response, including redirects and errors, has `Referrer-Policy: no-referrer`.
 - [ ] No project-preview generation reuses a source run worktree, AgentHost, sandbox claim, or credential.
 - [ ] The aggregate, immutable source artifact, policy snapshot, quota reservation, operation lease/fence, and terminal audit record are durable in both supported stores.
 - [ ] API, MCP, and web expose the same project-role authorization and lifecycle semantics; raw URLs are disclosed only through the Contributor capability-URL operation.
