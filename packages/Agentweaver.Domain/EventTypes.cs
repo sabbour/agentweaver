@@ -418,6 +418,7 @@ public static class EventTypes
     /// <summary>Collective RAI review of the aggregate diff finished (advisory; never hard-blocks).
     /// Payload: { workPlanId, raiSafetyFlagged }.</summary>
     public const string CoordinatorAssemblyRaiCompleted = "coordinator.assembly_rai_completed";
+    public const string CoordinatorAssemblyRaiRetry = "coordinator.assembly_rai_retry";
 
     /// <summary>The ONE collective human-review gate was armed and is awaiting a decision.
     /// Payload: { workPlanId, integrationBranch, treeHash, raiSafetyFlagged }.</summary>

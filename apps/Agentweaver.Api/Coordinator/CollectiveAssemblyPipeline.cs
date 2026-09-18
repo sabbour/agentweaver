@@ -129,11 +129,24 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             ModelSource: request.ModelSource,
             ByokProviderFingerprint: request.ByokProviderFingerprint);
 
-        var output = await rai.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
-        return new CollectiveRaiResult(
-            SafetyFlagged: output.ContentSafetyFlagged,
-            RevisionRequested: output.RaiRevisionRequired,
-            Feedback: output.RaiFeedback);
+        try
+        {
+            var output = await rai.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+            return new CollectiveRaiResult(
+                SafetyFlagged: output.ContentSafetyFlagged,
+                RevisionRequested: output.RaiRevisionRequired,
+                Feedback: output.RaiFeedback);
+        }
+        catch (AgentProviderException ex)
+        {
+            throw new CollectiveRaiInfrastructureException(
+                ex.ErrorCode, ex.UserMessage, ex.IsRetryable, ex);
+        }
+        catch (WorkflowAgentInfrastructureException ex) when (ex.IsRetryable is not null)
+        {
+            throw new CollectiveRaiInfrastructureException(
+                ex.Reason, ex.Message, ex.IsRetryable.Value, ex);
+        }
     }
 
     public async Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)

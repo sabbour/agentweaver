@@ -178,6 +178,12 @@ cancellation, and typed timeouts or failures retain their original error code an
 retryability. A retryable terminal means the workflow may safely consider a bounded
 retry or redispatch; it never converts the interrupted turn into a success.
 
+For collective assembly, a typed retryable RAI provider or infrastructure failure receives
+one gate-only retry. The coordinator re-verifies the persisted aggregate tree hash and diff
+before retrying RAI; it does not rebuild integration, redispatch children, replace artifacts,
+or rerun completed Build & Test evidence. Content verdicts and revision feedback remain on
+the normal steering and human-review paths.
+
 To investigate:
 
 1. Inspect the persisted run events with `GET /api/runs/{id}/events` and record the
