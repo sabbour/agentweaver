@@ -122,10 +122,34 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function renderTracesPage(
+  items: Awaited<ReturnType<typeof apiClient.listProjectRuns>>['items'],
+  initialEntry = '/projects/p1/observability/traces',
+) {
+  vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+    items,
+    page: 1,
+    page_size: 100,
+    total_count: items.length,
+    total_pages: 1,
+  });
+
+  render(
+    <Wrapper initialEntry={initialEntry} path="/projects/:projectId/observability/traces">
+      <ObservabilityTracesPage />
+    </Wrapper>,
+  );
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('observability pages', () => {
   it('passes project team role titles into TransactionTracePanel on the traces page', async () => {
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [
+    await renderTracesPage([
         {
           workflow_run_id: 'coord-run-1',
           execution_id: 'coord-run-1',
@@ -135,23 +159,7 @@ describe('observability pages', () => {
           coordinator_status: 'dispatching',
           started_at: '2026-07-29T00:00:00.000Z',
         },
-      ],
-      page: 1,
-      page_size: 100,
-      total_count: 1,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      ]);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Preview trace' }));
@@ -170,8 +178,7 @@ describe('observability pages', () => {
   });
 
   it('renders recent coordinator runs newest-first and computes Latest as the max started_at', async () => {
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [
+    await renderTracesPage([
         {
           workflow_run_id: 'coord-run-newest',
           execution_id: 'coord-run-newest',
@@ -190,23 +197,7 @@ describe('observability pages', () => {
           coordinator_status: 'complete',
           started_at: '2026-08-21T00:00:00.000Z',
         },
-      ],
-      page: 1,
-      page_size: 100,
-      total_count: 2,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      ]);
 
     // "/runs" already returns newest-first — the page must not reverse that order.
     const taskLabels = screen.getAllByText(/(Most recent run|Older run)/).map((el) => el.textContent);
@@ -222,8 +213,7 @@ describe('observability pages', () => {
       'Keep the status, run identity, start date, and trace actions visible while the prompt is collapsed.',
       'Report the complete evidence after inspecting the trace tree and terminal diagnostics.',
     ].join('\n\n');
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [{
+    await renderTracesPage([{
         workflow_run_id: 'coord-run-long',
         execution_id: 'coord-run-long',
         task: longPrompt,
@@ -231,23 +221,7 @@ describe('observability pages', () => {
         status: 'in_progress',
         coordinator_status: 'dispatching',
         started_at: '2026-09-17T20:00:00.000Z',
-      }],
-      page: 1,
-      page_size: 100,
-      total_count: 1,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      }]);
 
     const promptBody = screen.getByTestId('trace-prompt-body-coord-run-long');
     Object.defineProperties(promptBody, {
@@ -281,8 +255,7 @@ describe('observability pages', () => {
 
   it('does not show prompt disclosure for a short trace prompt', async () => {
     const shortPrompt = 'Inspect the latest coordinator trace.';
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [{
+    await renderTracesPage([{
         workflow_run_id: 'coord-run-short',
         execution_id: 'coord-run-short',
         task: shortPrompt,
@@ -290,23 +263,7 @@ describe('observability pages', () => {
         status: 'complete',
         coordinator_status: 'complete',
         started_at: '2026-09-17T21:00:00.000Z',
-      }],
-      page: 1,
-      page_size: 100,
-      total_count: 1,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      }]);
 
     const promptBody = screen.getByTestId('trace-prompt-body-coord-run-short');
     expect(promptBody.textContent).toBe(shortPrompt);
@@ -317,8 +274,7 @@ describe('observability pages', () => {
   it('shows prompt disclosure for a sub-160-character trace prompt that wraps beyond two lines at narrow width', async () => {
     const wrappedPrompt = 'Inspect every coordinator handoff, preserve the action metadata, and identify the exact stage where the distributed trace stops reporting progress.';
     expect(wrappedPrompt.length).toBeLessThan(160);
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [{
+    await renderTracesPage([{
         workflow_run_id: 'coord-run-wrapped',
         execution_id: 'coord-run-wrapped',
         task: wrappedPrompt,
@@ -326,23 +282,7 @@ describe('observability pages', () => {
         status: 'in_progress',
         coordinator_status: 'dispatching',
         started_at: '2026-09-17T22:00:00.000Z',
-      }],
-      page: 1,
-      page_size: 100,
-      total_count: 1,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      }]);
 
     const promptBody = screen.getByTestId('trace-prompt-body-coord-run-wrapped');
     Object.defineProperties(promptBody, {
@@ -357,8 +297,7 @@ describe('observability pages', () => {
   });
 
   it('opens a focused trace directly from a ?run= deep link, e.g. from the run detail page', async () => {
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [
+    await renderTracesPage([
         {
           workflow_run_id: 'coord-run-1',
           execution_id: 'coord-run-1',
@@ -368,26 +307,7 @@ describe('observability pages', () => {
           coordinator_status: 'dispatching',
           started_at: '2026-07-29T00:00:00.000Z',
         },
-      ],
-      page: 1,
-      page_size: 100,
-      total_count: 1,
-      total_pages: 1,
-    });
-
-    render(
-      <Wrapper
-        initialEntry="/projects/p1/observability/traces?run=coord-run-1"
-        path="/projects/:projectId/observability/traces"
-      >
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      ], '/projects/p1/observability/traces?run=coord-run-1');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(350);
