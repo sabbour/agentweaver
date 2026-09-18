@@ -46,11 +46,6 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
     {
     }
 
-    public CoordinatorWebApplicationFactory(int memoryContextMaxTokens)
-        : this("in-api", memoryContextMaxTokens)
-    {
-    }
-
     public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null);
 
     public static CoordinatorWebApplicationFactory CreateWithMemoryContextMaxTokens(int memoryContextMaxTokens) =>
