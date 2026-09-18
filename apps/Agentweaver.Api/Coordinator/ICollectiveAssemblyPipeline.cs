@@ -42,6 +42,11 @@ public interface ICollectiveAssemblyPipeline
     /// </summary>
     string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
 
+    /// <summary>Verifies that the reviewer worktree still represents the reviewed aggregate.</summary>
+    bool ReviewerWorktreeMatchesAggregate(
+        string reviewerWorktreePath,
+        string aggregateTreeHash);
+
     /// <summary>Releases any coordinator-scoped Build/Test pod and detached worktree.</summary>
     Task CleanupBuildTestResourcesAsync(
         string coordinatorRunId,
