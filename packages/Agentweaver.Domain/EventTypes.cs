@@ -63,6 +63,12 @@ public static class EventTypes
     /// skillsContextIncluded, registeredToolCount }.
     /// </summary>
     public const string AgentRuntimeContext = "agent.runtime_context";
+    /// <summary>
+    /// Redacted structured-context selection result. Payload contains only whether a context block
+    /// was included, omission counts, and bounded cause labels; it never includes stored records,
+    /// identifiers, prompt text, or size measurements.
+    /// </summary>
+    public const string MemoryContextComposition = "memory.context_composition";
     public const string AgentIntent       = "agent.intent";
     /// <summary>
     /// Emitted when the agent calls report_outcome at the end of a run.
