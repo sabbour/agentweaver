@@ -58,10 +58,12 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Use **Rebase and merge** for normal PRs whenever available. Keep each PR's commit
-     history focused; GitHub automatically deletes the source branch after merge.
+   - Use **Rebase and merge** for normal PRs: enable it with
+     `gh pr merge <number> --rebase --auto`. Keep each PR's commit history focused;
+     GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
-     soaked release promotion or an audited emergency hotfix only.
+     soaked release promotion or an audited emergency hotfix only. A release promotion
+     may use a merge commit when repository policy permits it.
    - Do **not** create a long-lived local `integration`/`staging` branch as a private
      promotion pipeline. A disposable merge-test branch or worktree is fine, but delete
      it after validation.
@@ -254,10 +256,11 @@ to build the tag images before it creates the GitHub Release.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, then rebase-merge.** If another PR reaches `dev` first,
-  GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts,
-  rerun relevant tests/CI, and merge only after all required checks are green
-  on the updated branch.
+- **Update, retest, then enable rebase auto-merge:**
+  `gh pr merge <number> --rebase --auto`. If another PR reaches `dev` first,
+  GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts, rerun
+  relevant tests/CI, and enable auto-merge only after all required checks are green on
+  the updated branch.
 
 ### Target release milestone
 
