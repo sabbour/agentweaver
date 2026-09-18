@@ -151,7 +151,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
 
             {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
 
-            Available workflows (select only those whose PROCESS actually fits, or [] if none):
+            Available workflows:
             {{workflowsTable}}
 
             STRUCTURAL VALIDATION CHECKLIST — perform this self-critique before returning:
@@ -189,7 +189,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
               and "charter" (string, 2-4 sentences). Only include roles NOT in the catalog. Omit or use
               [] if all roster roles are from the catalog. Every id you place in bespoke_roles MUST ALSO
               appear in the roster array.
-            - "workflows": array of workflow id strings (only those whose process fits, or [] if none fit).
+            - "workflows": array of workflow id strings (or []).
             - "review_policy": string. Use "default".
             - "sandbox_profile": string. One of: {{sandboxList}}.
             """;

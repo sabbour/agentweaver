@@ -313,12 +313,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, start, and at least one node are required.
-            - If you add `triggers`, every entry MUST use one of the exact trigger shapes above.
             - Declare at most one schedule trigger and at most one event trigger.
             - Use `triggers` when automation is requested. Legacy input may contain one `trigger` object,
               which remains valid and should be preserved unless the requested change adds another trigger.
-            - `start` and every edge `from`/`to` MUST reference declared node ids.
-            - A `check` node MUST declare `branches:` and have a matching outgoing edge for each verdict.
 
             Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
             charters and are immediately runnable. Use a catalog id whenever one fits adequately:
@@ -471,11 +468,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             <<<END_EDIT_REQUEST>>>
 
             SELF-CHECK BEFORE RETURNING:
-            - Did you change only what the edit requested?
-            - If you changed `trigger` or `triggers`, does every entry use the exact schema above?
             - Are all nodes reachable from `start`, and do all edges reference declared nodes?
             - Does every check branch have a matching outgoing edge?
-            - For built-in/library edits, did you produce a customized copy with a new id?
 
             Return ONLY valid YAML for the edited WorkflowDefinition draft. No markdown fences. No commentary.
             """;
