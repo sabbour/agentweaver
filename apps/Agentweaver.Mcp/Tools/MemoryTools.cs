@@ -9,15 +9,10 @@ public sealed class MemoryTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    private static string FormatFailure(string toolName, Exception ex) =>
-        ex is McpApiException apiEx
-            ? $"{toolName} failed: HTTP {apiEx.StatusCode} — {apiEx.Message}"
-            : $"{toolName} failed: {ex.Message}";
-
     private static string SerializeResult<T>(T result) => JsonSerializer.Serialize(result, JsonOpts);
 
     private static async Task<string> ExecuteJsonAsync<T>(
-        string toolName,
+        string _,
         Func<CancellationToken, Task<T>> action,
         CancellationToken ct)
     {
@@ -30,14 +25,18 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         {
             throw;
         }
+        catch (McpApiException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            return FormatFailure(toolName, ex);
+            throw new McpApiException(0, ex.Message);
         }
     }
 
     private static async Task<string> ExecuteMessageAsync(
-        string toolName,
+        string _,
         Func<CancellationToken, Task> action,
         string successMessage,
         CancellationToken ct)
@@ -51,9 +50,13 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         {
             throw;
         }
+        catch (McpApiException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            return FormatFailure(toolName, ex);
+            throw new McpApiException(0, ex.Message);
         }
     }
 

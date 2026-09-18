@@ -137,6 +137,151 @@ public sealed class McpToolInvocationErrorSurfacingTests
         text.Should().Contain("proj-9");
     }
 
+    [Fact]
+    public async Task MemoryGet_BackendError_ReturnsProtocolErrorWithActionableDetail()
+    {
+        var tool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryGetAsync),
+            (request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = JsonContent.Create(new
+                {
+                    error = "memory_not_found",
+                    message = "Memory entry 42 was not found.",
+                    hint = "Call memory_list to find a valid memory entry."
+                })
+            }));
+
+        var result = await InvokeAsync(tool, "memory_get", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["memory_id"] = JsonDoc("42"),
+        });
+
+        result.IsError.Should().BeTrue();
+        var text = TextOf(result);
+        using var payload = ErrorPayloadOf(text);
+        payload.RootElement.GetProperty("error").GetString().Should().Be("memory_not_found");
+        payload.RootElement.GetProperty("message").GetString().Should().Be("Memory entry 42 was not found.");
+        payload.RootElement.GetProperty("hint").GetString()
+            .Should().Be("Call memory_list to find a valid memory entry.");
+        text.Should().NotContain("memory_get failed:");
+    }
+
+    [Fact]
+    public async Task MemoryRecord_BackendError_ReturnsProtocolErrorWithActionableDetail()
+    {
+        var tool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryAddAsync),
+            (request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+            {
+                Content = JsonContent.Create(new
+                {
+                    error = "memory_conflict",
+                    message = "The memory entry conflicts with existing state.",
+                    hint = "Refresh memory_list and retry."
+                })
+            }));
+
+        var result = await InvokeAsync(tool, "memory_record", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["type"] = JsonDoc("learning"),
+            ["content"] = JsonDoc("Preserve MCP protocol errors."),
+        });
+
+        result.IsError.Should().BeTrue();
+        var text = TextOf(result);
+        using var payload = ErrorPayloadOf(text);
+        payload.RootElement.GetProperty("error").GetString().Should().Be("memory_conflict");
+        payload.RootElement.GetProperty("message").GetString()
+            .Should().Be("The memory entry conflicts with existing state.");
+        payload.RootElement.GetProperty("hint").GetString().Should().Be("Refresh memory_list and retry.");
+        text.Should().NotContain("memory_record failed:");
+    }
+
+    [Fact]
+    public async Task MemoryReadAndWrite_Success_PreserveResultContent()
+    {
+        var readTool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryGetAsync),
+            (request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { id = 42, content = "Protocol errors stay errors." })
+            }));
+        var writeTool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryAddAsync),
+            (request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = JsonContent.Create(new { id = 43, content = "Cancellation stays cancellation." })
+            }));
+
+        var readResult = await InvokeAsync(readTool, "memory_get", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["memory_id"] = JsonDoc("42"),
+        });
+        var writeResult = await InvokeAsync(writeTool, "memory_record", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["type"] = JsonDoc("learning"),
+            ["content"] = JsonDoc("Cancellation stays cancellation."),
+        });
+
+        readResult.IsError.Should().NotBeTrue();
+        TextOf(readResult).Should().Contain("Protocol errors stay errors.");
+        writeResult.IsError.Should().NotBeTrue();
+        TextOf(writeResult).Should().Contain("Cancellation stays cancellation.");
+    }
+
+    [Fact]
+    public async Task MemoryGet_CancelledCall_RemainsCancelled()
+    {
+        var tool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryGetAsync),
+            async (_, ct) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new InvalidOperationException("Unreachable.");
+            });
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => InvokeAsync(tool, "memory_get", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["memory_id"] = JsonDoc("42"),
+        }, cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task MemoryGet_UnexpectedFailure_UsesStandardProtocolError()
+    {
+        var tool = BuildTool<MemoryTools>(
+            nameof(MemoryTools.MemoryGetAsync),
+            (_, _) => throw new InvalidOperationException("socket pipeline failed"));
+
+        var result = await InvokeAsync(tool, "memory_get", new()
+        {
+            ["project_id"] = JsonDoc("proj-1"),
+            ["agent_name"] = JsonDoc("link"),
+            ["memory_id"] = JsonDoc("42"),
+        });
+
+        result.IsError.Should().BeTrue();
+        var text = TextOf(result);
+        text.Should().Contain("The MCP tool failed before Agentweaver returned a response.");
+        text.Should().Contain("Retry once.");
+        text.Should().NotContain("memory_get failed:");
+    }
+
     // ---- helpers ----
 
     private static JsonElement JsonDoc(string value) =>
@@ -147,8 +292,14 @@ public sealed class McpToolInvocationErrorSurfacingTests
             "\n",
             result.Content.OfType<TextContentBlock>().Select(b => b.Text));
 
+    private static JsonDocument ErrorPayloadOf(string text) =>
+        JsonDocument.Parse(text[text.IndexOf('{')..]);
+
     private static async Task<CallToolResult> InvokeAsync(
-        McpServerTool tool, string toolName, Dictionary<string, JsonElement> arguments)
+        McpServerTool tool,
+        string toolName,
+        Dictionary<string, JsonElement> arguments,
+        CancellationToken cancellationToken = default)
     {
         var services = new ServiceCollection().BuildServiceProvider();
         var server = new StubMcpServer(services);
@@ -156,7 +307,7 @@ public sealed class McpToolInvocationErrorSurfacingTests
         {
             Params = new CallToolRequestParams { Name = toolName, Arguments = arguments }
         };
-        return await tool.InvokeAsync(request, CancellationToken.None);
+        return await tool.InvokeAsync(request, cancellationToken);
     }
 
     private static McpServerTool BuildTool<TTools>(

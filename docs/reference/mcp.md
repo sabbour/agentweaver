@@ -125,6 +125,10 @@ The MCP transport still raises a tool error, but the message is now actionable a
 - `409` review-state conflicts → `Call run_status to check current state.`
 - `-32001`, `408`, or `504` timeouts → `Call diagnostics_get to check health, then retry.`
 
+Memory API errors preserve the API's public error code, message, and hint in the tool-error
+content. For example, a missing entry returns
+`{ "error": "memory_not_found", "message": "Memory entry 42 was not found.", "hint": "Call memory_list to find a valid memory entry." }`.
+
 When the failure is the **run's** outcome rather than the **tool's** outcome, `run_task` returns a normal JSON payload with `status: "failed"` or `status: "timed_out"` instead of throwing a transport error.
 
 ### Model-provider execution context
