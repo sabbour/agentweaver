@@ -27,6 +27,11 @@ internal static class WorkflowGatePromptGuidance
         need build_test.
         """;
 
+    public const string ContentOnlyExemption = """
+        CONTENT-ONLY WORKFLOW: This request is explicitly limited to pure content authoring. Do not add
+        software delivery gates such as build_test. Preserve any requested safety and human-review gates.
+        """;
+
     public const string BlueprintGateAwareness = """
         GATE-AWARE WORKFLOW SELECTION — blueprints must preserve or trigger specialized gates:
         - `rai` is a `check` gate_kind for responsible-AI safety review. Include it for safety-sensitive

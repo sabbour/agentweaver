@@ -116,7 +116,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             return (yaml, null, ex.Message);
         }
 
-        var softwareReviewError = ValidateSoftwareReviewGate(result.Definition, request.TeamRoles);
+        var softwareReviewError = ValidateSoftwareReviewGate(result.Definition, request.ContentOnly);
         if (softwareReviewError is not null)
             return (yaml, null, softwareReviewError);
 
@@ -125,15 +125,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
     private static string? ValidateSoftwareReviewGate(
         WorkflowDefinition workflow,
-        IReadOnlyList<string>? teamRoles)
+        bool contentOnly)
     {
-        var buildTests = workflow.Nodes.Where(node => node.Type == WorkflowNodeType.BuildTest).ToArray();
-        if (buildTests.Length == 0 && !(teamRoles?.Any(IsSoftwareDeliveryRole) ?? false))
+        if (contentOnly)
             return null;
+        var buildTests = workflow.Nodes.Where(node => node.Type == WorkflowNodeType.BuildTest).ToArray();
 
         var humanReviews = workflow.Nodes
-            .Where(node => node.Type == WorkflowNodeType.Check &&
-                           string.Equals(node.GateKind, "human-review", StringComparison.OrdinalIgnoreCase))
+            .Where(node => NodeClassifier.Classify(node) == NodeKind.HumanReview)
             .ToArray();
         if (buildTests.Length != 1)
             return "Software workflows must contain exactly one build_test gate immediately before the human-review sign-off gate.";
@@ -151,15 +150,21 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         var reachableNodeIds = GetReachableNodeIds(workflow, workflow.Start);
         var reachableSafetyGates = workflow.Nodes
-            .Where(node => node.Type == WorkflowNodeType.Check &&
-                           string.Equals(node.GateKind, "rai", StringComparison.OrdinalIgnoreCase) &&
+            .Where(node => NodeClassifier.Classify(node) == NodeKind.Rai &&
                            reachableNodeIds.Contains(node.Id))
             .ToArray();
-        if (reachableSafetyGates.Any(safetyGate => !workflow.Edges.Any(edge =>
-                string.Equals(edge.From, safetyGate.Id, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(edge.To, buildTestId, StringComparison.OrdinalIgnoreCase) &&
-                IsApprovalVerdict(edge.When))))
+        if (reachableSafetyGates.Any(safetyGate => workflow.Edges
+                .Where(edge => string.Equals(edge.From, safetyGate.Id, StringComparison.OrdinalIgnoreCase) &&
+                               IsApprovalVerdict(edge.When))
+                .Any(edge => !string.Equals(edge.To, buildTestId, StringComparison.OrdinalIgnoreCase))))
             return "Every reachable RAI safety gate in a software workflow must route its approved or pass verdict directly to the build_test gate.";
+        if (workflow.Edges.Any(edge =>
+                string.Equals(edge.From, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(edge.When, "approved", StringComparison.OrdinalIgnoreCase) &&
+                NodeClassifier.Classify(workflow.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.OrdinalIgnoreCase))) == NodeKind.Agent))
+            return "The human-review sign-off gate in a software workflow must not route its approved verdict to an agent.";
+
 
         if (CanReachNodeAvoiding(workflow, humanReviewId, buildTestId))
             return "The human-review sign-off gate in a software workflow must not be reachable before the build_test gate.";
@@ -185,10 +190,6 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     private static bool CanReachNodeAvoiding(
         WorkflowDefinition workflow, string targetNodeId, string excludedNodeId) =>
         GetReachableNodeIds(workflow, workflow.Start, excludedNodeId).Contains(targetNodeId);
-
-    private static bool IsSoftwareDeliveryRole(string role) =>
-        role is "backend-engineer" or "core-implementer" or "data-engineer" or
-            "devops-engineer" or "frontend-engineer";
 
     private static bool IsOnCompletionPath(WorkflowDefinition workflow, string nodeId) =>
         GetReachableNodeIds(workflow, workflow.Start).Contains(nodeId) &&
@@ -238,6 +239,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var rolesList = roles.Count == 0 ? "(none — leave agent fields unset)" : string.Join("\n", roles);
 
         var examples = BuildFewShotExamples();
+        var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
 
         // SECURITY: the description is untrusted human input. Fence it and instruct the model to treat
         // the fenced content as data describing the workflow to author, never as instructions to follow.
@@ -296,7 +298,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
-            {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
+            {{gateRequirement}}
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, start, and at least one node are required.
@@ -370,6 +372,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 .ToList();
         var rolesList = roles.Count == 0 ? "(none — preserve existing agent fields when possible)" : string.Join("\n", roles);
         var baseId = string.IsNullOrWhiteSpace(request.BaseWorkflowId) ? "(unsaved draft)" : request.BaseWorkflowId!.Trim();
+        var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
         var builtInRule = request.BaseWorkflowIsBuiltIn
             ? $"The base workflow '{baseId}' is built-in/library and immutable. You MUST fork it into a project-owned customized copy: change `id` to a new kebab-case id that is NOT '{baseId}', keep the name recognizable, and preserve the original intent except for the requested edit."
             : $"The base workflow '{baseId}' is project-owned or an unsaved draft. Keep its `id` unchanged unless the edit explicitly asks to rename it.";
@@ -394,7 +397,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
 
-            {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
+            {{gateRequirement}}
 
             Available roles for `agent`/`role` fields:
             {{rolesList}}
