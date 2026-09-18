@@ -142,11 +142,13 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         var buildTestId = buildTests[0].Id;
         var humanReviewId = humanReviews[0].Id;
-        if (!workflow.Edges.Any(edge =>
-                string.Equals(edge.From, buildTestId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(edge.When, "approved", StringComparison.OrdinalIgnoreCase)))
-            return "The build_test gate in a software workflow must route its approved verdict directly to the human-review sign-off gate.";
+        var successfulBuildTestEdges = workflow.Edges
+            .Where(edge => string.Equals(edge.From, buildTestId, StringComparison.OrdinalIgnoreCase) &&
+                           IsApprovalVerdict(edge.When))
+            .ToArray();
+        if (successfulBuildTestEdges.Length == 0 || successfulBuildTestEdges.Any(edge =>
+                !string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase)))
+            return "Every approved or pass build_test route in a software workflow must target the human-review sign-off gate.";
 
         var reachableNodeIds = GetReachableNodeIds(workflow, workflow.Start);
         var reachableSafetyGates = workflow.Nodes
@@ -158,12 +160,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                                IsApprovalVerdict(edge.When))
                 .Any(edge => !string.Equals(edge.To, buildTestId, StringComparison.OrdinalIgnoreCase))))
             return "Every reachable RAI safety gate in a software workflow must route its approved or pass verdict directly to the build_test gate.";
-        if (workflow.Edges.Any(edge =>
-                string.Equals(edge.From, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(edge.When, "approved", StringComparison.OrdinalIgnoreCase) &&
-                NodeClassifier.Classify(workflow.Nodes.Single(node =>
-                    string.Equals(node.Id, edge.To, StringComparison.OrdinalIgnoreCase))) == NodeKind.Agent))
-            return "The human-review sign-off gate in a software workflow must not route its approved verdict to an agent.";
+        var successfulHumanReviewEdges = workflow.Edges
+            .Where(edge => string.Equals(edge.From, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
+                           IsApprovalVerdict(edge.When))
+            .ToArray();
+        if (successfulHumanReviewEdges.Length == 0 || successfulHumanReviewEdges.Any(edge =>
+                !IsTerminalOrFinalization(workflow.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.OrdinalIgnoreCase)))))
+            return "The human-review sign-off gate in a software workflow must route every approved or pass verdict only to a terminal or finalization node.";
 
 
         if (CanReachNodeAvoiding(workflow, humanReviewId, buildTestId))
@@ -177,8 +181,11 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             !IsOnCompletionPath(workflow, humanReviewId))
             return "The build_test and human-review gates in a software workflow must be reachable from start and lead to a terminal completion.";
 
-        if (HasCompletionPathAvoiding(workflow, buildTestId))
-            return "Every software workflow completion path must pass through the build_test gate before reaching human review or a terminal.";
+        if (HasSuccessfulCompletionPathAvoiding(workflow, buildTestId))
+            return "Every successful software workflow completion path must pass through the build_test gate before reaching human review or a terminal.";
+
+        if (HasSuccessfulCompletionPathAvoiding(workflow, humanReviewId))
+            return "Every successful software workflow completion path must pass through the human-review sign-off gate.";
 
         return null;
     }
@@ -197,13 +204,16 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             workflow.Nodes.Any(node => node.Type == WorkflowNodeType.Terminal &&
                                        string.Equals(node.Id, id, StringComparison.Ordinal)));
 
-    private static bool HasCompletionPathAvoiding(WorkflowDefinition workflow, string nodeId) =>
-        GetReachableNodeIds(workflow, workflow.Start, nodeId).Any(id =>
+    private static bool HasSuccessfulCompletionPathAvoiding(WorkflowDefinition workflow, string nodeId) =>
+        GetReachableNodeIds(workflow, workflow.Start, nodeId, successfulOnly: true).Any(id =>
             workflow.Nodes.Any(node => node.Type == WorkflowNodeType.Terminal &&
                                        string.Equals(node.Id, id, StringComparison.Ordinal)));
 
+    private static bool IsTerminalOrFinalization(WorkflowNode node) => node.Type is
+        WorkflowNodeType.Terminal or WorkflowNodeType.Merge or WorkflowNodeType.Scribe;
+
     private static HashSet<string> GetReachableNodeIds(
-        WorkflowDefinition workflow, string startNodeId, string? excludedNodeId = null)
+        WorkflowDefinition workflow, string startNodeId, string? excludedNodeId = null, bool successfulOnly = false)
     {
         var reachable = new HashSet<string>(StringComparer.Ordinal);
         var pending = new Queue<string>([startNodeId]);
@@ -213,7 +223,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             if (string.Equals(nodeId, excludedNodeId, StringComparison.Ordinal) || !reachable.Add(nodeId))
                 continue;
 
-            foreach (var edge in workflow.Edges.Where(edge => string.Equals(edge.From, nodeId, StringComparison.Ordinal)))
+            foreach (var edge in workflow.Edges.Where(edge => string.Equals(edge.From, nodeId, StringComparison.Ordinal) &&
+                         (!successfulOnly || string.IsNullOrWhiteSpace(edge.When) || IsApprovalVerdict(edge.When))))
                 pending.Enqueue(edge.To);
         }
 
