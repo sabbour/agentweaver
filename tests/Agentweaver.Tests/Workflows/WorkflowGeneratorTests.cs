@@ -801,7 +801,7 @@ public sealed class WorkflowGeneratorTests
 
         result.WasCorrected.Should().BeTrue();
         runner.CallCount.Should().Be(2);
-        runner.LastTask.Should().Contain("must not route its approved verdict to an agent");
+        runner.LastTask.Should().Contain("route every approved or pass verdict only to a terminal or finalization node");
     }
 
     [Fact]
