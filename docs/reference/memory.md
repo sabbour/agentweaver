@@ -147,7 +147,9 @@ Standalone completion and Coordinator finalization own their Scribe work. Coordi
 3. `update_session(summary)` — record what the agent accomplished in this run
 4. `export_memory()` — write updated state to `.squad/` and `.agentweaver/context/`
 
-For memories to accumulate, the **running agent must call `submit_inbox_entry`** when it discovers something worth remembering. The base prompt instructs agents to do this, but the agent has to judge relevance.
+For memories to accumulate, the **running agent must call `submit_inbox_entry`** when it discovers something worth remembering. The agent has to judge relevance.
+
+Runtime prompt guidance names project-memory and coordination tools only after the final session tool list is built. A turn with no callable project-memory tools receives no memory section; a partial tool set lists only its callable names. Tool declarations remain the authority for required arguments and scopes.
 
 ---
 

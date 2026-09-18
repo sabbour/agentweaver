@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.Extensions.AI;
+using Agentweaver.Api.Runs;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentTools;
@@ -82,30 +84,93 @@ public sealed class MemoryToolInjectionTests : IDisposable
         tools.Select(t => t.Name).Should().NotContain(MemoryAndDecisionTools);
     }
 
-    [Fact]
-    public void BasePrompt_MemoryAndDecisionToolNames_MatchRegisteredNativeTools()
+    [Theory]
+    [InlineData("CopilotAIAgent")]
+    [InlineData("GitHubCopilotAgentRunner")]
+    public void FinalPrompt_WithoutMemoryTools_OmitsMemorySection(string path)
     {
-        var registered = AgentweaverApiTools.ToolNames;
-        var prompt = AgentBasePrompt.Base + AgentBasePrompt.TeamCoordination;
+        var tools = GitHubCopilotAgentRunner.BuildSessionConfigTools(BuildContext());
+        var prompt = ComposeFinalPrompt(path, "child context", tools);
 
-        // #335 root cause #2: every memory/decision tool the prompt instructs agents to call must be
-        // an actually-registered native loopback tool name. The authority is the injected tool set,
-        // so this locks the prompt and the tool registration together against future drift.
-        string[] referenced = ["record_memory", "submit_decision", "list_decisions", "get_memory", "list_inbox"];
-        foreach (var name in referenced)
+        prompt.Should().NotContain("## Project memory and coordination");
+        prompt.Should().NotContainAny(AgentweaverApiTools.ToolNames);
+        prompt.Should().Contain("WORKSPACE BOUNDARY");
+    }
+
+    [Theory]
+    [InlineData("direct")]
+    [InlineData("child")]
+    [InlineData("revision")]
+    [InlineData("remote")]
+    public void CopilotFinalPrompt_WithCompleteMemoryTools_NamesOnlyRegisteredTools_AndOneBoundary(string executionPath)
+    {
+        var tools = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(), "project-1239", "Morpheus", "http://127.0.0.1:5000", "test-key");
+        var context = executionPath == "child"
+            ? RunOrchestrator.ComposeChildSystemPrompt("Charter")
+            : "Charter";
+        var prompt = CopilotAIAgent.ComposeFinalPrompt(context, tools.Select(tool => tool.Name));
+
+        prompt.Should().Contain("## Project memory and coordination");
+        AssertMemoryNamesMatchCallableTools(prompt, tools);
+        CountOccurrences(prompt, "WORKSPACE BOUNDARY").Should().Be(1);
+        if (executionPath == "child")
+            prompt.Should().Contain("## Deliverable files");
+    }
+
+    [Fact]
+    public void GitHubCopilotRunnerFinalPrompt_WithCompleteMemoryTools_NamesOnlyRegisteredTools()
+    {
+        var tools = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(), "project-1239", "Morpheus", "http://127.0.0.1:5000", "test-key");
+        var prompt = GitHubCopilotAgentRunner.ComposeFinalPrompt("Charter", tools.Select(tool => tool.Name));
+
+        prompt.Should().Contain("## Project memory and coordination");
+        AssertMemoryNamesMatchCallableTools(prompt, tools);
+        CountOccurrences(prompt, "WORKSPACE BOUNDARY").Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("CopilotAIAgent")]
+    [InlineData("GitHubCopilotAgentRunner")]
+    public void FinalPrompt_WithPartialMemoryTools_NamesOnlyTheCallableSubset(string path)
+    {
+        var completeTools = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(), "project-1239", "Morpheus", "http://127.0.0.1:5000", "test-key");
+        var tools = completeTools.Where(tool => tool.Name is "record_memory" or "get_memory").ToList();
+        var prompt = ComposeFinalPrompt(path, "Charter", tools);
+
+        prompt.Should().Contain("## Project memory and coordination");
+        AssertMemoryNamesMatchCallableTools(prompt, tools);
+    }
+
+    private static string ComposeFinalPrompt(string path, string? context, IEnumerable<AIFunction> tools) =>
+        path == "CopilotAIAgent"
+            ? CopilotAIAgent.ComposeFinalPrompt(context, tools.Select(tool => tool.Name))
+            : GitHubCopilotAgentRunner.ComposeFinalPrompt(context, tools.Select(tool => tool.Name));
+
+    private static void AssertMemoryNamesMatchCallableTools(string prompt, IEnumerable<AIFunction> tools)
+    {
+        var callable = tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var name in AgentweaverApiTools.ToolNames)
         {
-            prompt.Should().Contain(name, $"the system prompt is expected to instruct agents to use '{name}'");
-            registered.Should().Contain(name,
-                $"prompt references '{name}', so it must be a registered native tool (see AgentweaverApiTools)");
+            if (callable.Contains(name))
+                prompt.Should().Contain(name, $"'{name}' is registered in this final session tool set");
+            else
+                prompt.Should().NotContain(name, $"'{name}' is not callable in this final session tool set");
         }
+    }
 
-        // Guard against reintroducing the standalone MCP-server names (MemoryTools.cs), which are
-        // never injected into an in-run agent session and would silently break tool calls.
-        string[] mcpOnlyNames = ["memory_record", "memory_list", "memory_get", "memory_search"];
-        foreach (var mcpName in mcpOnlyNames)
-            prompt.Should().NotContain(mcpName,
-                $"'{mcpName}' is a standalone MCP-server tool not injected into agent sessions; " +
-                "the prompt must reference the native loopback tool name instead");
+    private static int CountOccurrences(string value, string token)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(token, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += token.Length;
+        }
+        return count;
     }
 
     private SandboxToolContext BuildContext() => new(
