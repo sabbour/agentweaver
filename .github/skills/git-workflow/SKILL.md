@@ -73,7 +73,7 @@ branch. No filesystem collisions, no branch-switching overhead.
 
 | Scenario | Strategy |
 |----------|----------|
-| Single issue | Standard workflow above — no worktree needed |
+| Single issue | Standard workflow above — one clean, dedicated issue worktree; implementation never runs in the main checkout |
 | 2+ simultaneous issues in same repo | Worktrees — one per issue |
 | Work spanning multiple repos | Separate clones as siblings (see Multi-Repo below) |
 
@@ -113,6 +113,8 @@ gh pr create --base dev --title "fix: stamp bug" --body "Closes #195" --draft
 ```
 
 All PRs target `dev` independently. Agents never interfere with each other's filesystem.
+
+The same isolation is mandatory for a single issue: prepare the dedicated issue worktree in the first workflow step and make it the agent's only implementation CWD. The main clone remains coordination-only.
 
 ### .squad/ State in Worktrees
 
