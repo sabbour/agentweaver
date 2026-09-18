@@ -335,7 +335,7 @@ public sealed class CoordinatorWorkflowFactory
         return spec.Id;
     }
 
-    private async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
+    internal async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
         CoordinatorDraftInput input, CancellationToken ct)
     {
         // On a revision, carry the already-reviewed previous draft forward so the drafter preserves
@@ -549,6 +549,10 @@ public sealed class CoordinatorWorkflowFactory
             using var scope = _scopeFactory.CreateScope();
             var compiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
             return (await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false))?.Text;
+        }
+        catch (MandatoryContextBudgetExceededException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
