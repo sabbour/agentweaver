@@ -110,3 +110,9 @@ invoke the matching repository skill.
 Use the
 [`agentweaver-harness-scenarios`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-harness-scenarios/SKILL.md)
 skill to list or create persona scenarios.
+
+API and MCP runners use the common lifecycle helpers in
+`scripts/harness-shared/persona-lifecycle.mjs` for argument parsing, normalized
+verdict persistence, judge invocation, result-line formatting, and deterministic
+exit handling. Their surface adapters retain their own transport validation,
+retries, evidence collection, output paths, and CLI option aliases.

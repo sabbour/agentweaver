@@ -9,9 +9,8 @@
 // from `judgeInputs` + `evidence`. Findings are the raw material for that judge and
 // for filing GitHub issues.
 
-import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { redact } from '../../harness-shared/redaction.mjs';
+import { writeLifecycleJson } from '../../harness-shared/persona-lifecycle.mjs';
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -25,9 +24,7 @@ const RESET = '\x1b[0m';
  * @param {string} outPath absolute path to write the JSON finding
  */
 export async function writeFinding(finding, outPath) {
-  await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, JSON.stringify(redact(finding), null, 2), 'utf8');
-  return outPath;
+  return writeLifecycleJson(outPath, redact(finding));
 }
 
 export function printReport(finding) {
