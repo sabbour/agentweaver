@@ -40,17 +40,24 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
     public const string OtherUser   = "coordinator-other-user";
 
     private readonly string _agentExecutionMode;
+    private readonly int? _memoryContextMaxTokens;
 
-    public CoordinatorWebApplicationFactory() : this("in-api")
+    public CoordinatorWebApplicationFactory() : this("in-api", null)
     {
     }
 
-    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run");
+    public CoordinatorWebApplicationFactory(int memoryContextMaxTokens)
+        : this("in-api", memoryContextMaxTokens)
+    {
+    }
 
-    private CoordinatorWebApplicationFactory(string agentExecutionMode)
+    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null);
+
+    private CoordinatorWebApplicationFactory(string agentExecutionMode, int? memoryContextMaxTokens)
         : base("agentweaver-coord", createWorkspaceRoot: true)
     {
         _agentExecutionMode         = agentExecutionMode;
+        _memoryContextMaxTokens = memoryContextMaxTokens;
     }
 
     public HttpClient CreateOwnerClient() => CreateClientWithKey(OwnerApiKey);
@@ -169,6 +176,8 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
         configuration["Coordinator:OutcomeSpecDraftTimeoutSeconds"] = "1";
         configuration["Coordinator:AutoDispatch"] = "false";
         configuration["Sandbox:AgentExecutionMode"] = _agentExecutionMode;
+        if (_memoryContextMaxTokens is not null)
+            configuration["MemoryContext:MaxTokens"] = _memoryContextMaxTokens.Value.ToString();
     }
 
     protected override void ConfigureTestServices(IServiceCollection services)
