@@ -87,29 +87,37 @@ Each dispatch supplies, in the task prompt:
    for this run (do not substitute a generic or self-invented goal for the one
    Harness gave you, and do not narrow or expand it beyond what it actually
    says).
-2. Fetch the live OpenAPI surface yourself, first thing:
+2. Fetch the live **JSON** OpenAPI surface yourself, first thing, and print only a
+   compact operation index:
    ```
-   node --input-type=module -e "console.log(await (await fetch(process.env.AGENTWEAVER_BASE_URL + '/openapi/v1.yaml')).text())"
+   node --input-type=module -e "const spec = await (await fetch(process.env.AGENTWEAVER_BASE_URL + '/openapi/v1.json')).json(); const methods = new Set(['get','put','post','delete','patch','head','options','trace']); const index = Object.entries(spec.paths ?? {}).flatMap(([path, pathItem]) => Object.entries(pathItem).filter(([method, operation]) => methods.has(method) && operation && typeof operation === 'object').map(([method, operation]) => ({ method: method.toUpperCase(), path, tags: operation.tags ?? [], summary: operation.summary ?? '', operationId: operation.operationId ?? '' }))); console.log(JSON.stringify(index, null, 2));"
    ```
-   Prefer the **YAML** form — it is more compact and token-efficient to read than
-   JSON, and is what the spec is served for by default. Only fetch the `.json`
-   variant instead if you have a specific reason (e.g. you need strict JSON
-   parsing for some reason the YAML doesn't support). This endpoint is exempt from
-   auth, so no `Authorization` header is required for this one call. Read every
-   operation's `tags`, `summary`, `description`, `operationId`, and `parameters` —
-   this is how you dynamically figure out what exists and what to call next. You
-   do not need to re-fetch it every turn; keep it in your own context for the rest
-   of this conversation, and only re-fetch if something you expected isn't there.
-   **Resolve every operation from the spec's tags/summaries/descriptions each time
-   you need to act — never from anything a persona brief pre-specifies about which
-   endpoint to call or how.** A persona brief describes *intent* ("propose the
-   goal", "inspect the draft", "push back with a revision") — it must never be
-   read as a literal endpoint/operationId mapping. If a brief or surface adapter
-   you are given ever reads like it's telling you exactly which route to hit for
-   each step, treat that as over-specification to route around, not as an
-   instruction to follow literally: still work it out fresh from the live spec. Do
-   not guess shapes; if the spec is ambiguous or a route you expected isn't there,
-   look again rather than inventing one.
+   This endpoint is exempt from auth, so no `Authorization` header is required.
+   The index deliberately contains only the method, path, tags, summary, and
+   `operationId`; do **not** print complete path items or component objects.
+   Keep the index in your context for discovery, but do not infer a request from
+   it. From the persona goal and the latest real response, select one listed
+   operation, then fetch the live JSON document again and print details for that
+   operation only:
+   ```
+   node --input-type=module -e "const [method, path] = process.argv.slice(1); const spec = await (await fetch(process.env.AGENTWEAVER_BASE_URL + '/openapi/v1.json')).json(); const pathItem = spec.paths?.[path]; const operation = pathItem?.[method.toLowerCase()]; if (!operation || typeof operation !== 'object') throw new Error('Selected operation is not present in the live OpenAPI index'); const pointer = ref => ref.slice(2).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~')).reduce((node, part) => node?.[part], spec); const expand = (value, trail = []) => { if (Array.isArray(value)) return value.map(item => expand(item, trail)); if (!value || typeof value !== 'object') return value; if (typeof value.$ref === 'string' && value.$ref.startsWith('#/')) { if (trail.includes(value.$ref)) return { ...value, circularReference: true }; const target = pointer(value.$ref); if (target === undefined) throw new Error('Unresolvable local OpenAPI reference: ' + value.$ref); const siblings = Object.fromEntries(Object.entries(value).filter(([key]) => key !== '$ref')); return expand({ ...target, ...siblings }, [...trail, value.$ref]); } return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item, trail)])); }; const parameters = [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])]; console.log(JSON.stringify({ method: method.toUpperCase(), path, tags: operation.tags ?? [], summary: operation.summary ?? '', operationId: operation.operationId ?? '', parameters: expand(parameters), requestBody: expand(operation.requestBody ?? null) }, null, 2));" GET /api/example
+   ```
+   Replace `GET /api/example` only with the method and path you selected from the
+   just-printed index. This resolves nested local `$ref` values reachable from
+   that operation's parameters and request schema; a circular local reference is
+   explicitly marked rather than silently guessed or discarded. Do not print
+   response schemas, unrelated paths, or unrelated components.
+
+   **Resolve every operation from the live index and its selected-operation
+   details each time you need to act — never from anything a persona brief
+   pre-specifies about which endpoint to call or how.** A persona brief describes
+   *intent* ("propose the goal", "inspect the draft", "push back with a revision")
+   — it must never be read as a literal endpoint/operationId mapping. If the
+   latest live response changes the next action, return to the compact index,
+   select the newly appropriate operation, and print only its details before
+   calling it. Do not guess a path, method, parameter, or request shape; if the
+   spec is ambiguous or a route you expected is absent, look again rather than
+   inventing one.
 3. Repeat, one call at a time, for as long as your persona's brief warrants:
    a. Decide the single next action your persona would take, grounded in the
       persona brief's intent and the REAL content of the previous response (or,
