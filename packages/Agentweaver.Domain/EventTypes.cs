@@ -58,9 +58,9 @@ public static class EventTypes
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
     /// <summary>
-    /// Bounded runtime configuration for a turn. Payload deliberately excludes the task,
-    /// system prompt, and arbitrary tool names: { provider, memoryContextIncluded,
-    /// skillsContextIncluded, registeredToolCount }.
+    /// Bounded, redacted context-composition measurements for a turn. Payload contains stable run
+    /// and project correlation, scalar section sizes, a fixed skill-delivery mode, and a derived
+    /// token estimate; it deliberately excludes prompt/task text, tool declarations, and secrets.
     /// </summary>
     public const string AgentRuntimeContext = "agent.runtime_context";
     /// <summary>

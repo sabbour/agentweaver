@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
@@ -318,14 +319,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Persist bounded operational context, never prompt/task text or arbitrary tool names.
-        Emit(EventTypes.AgentRuntimeContext, new
-        {
-            provider = "copilot",
-            memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext),
-            skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(systemPromptContext),
-            registeredToolCount = 9,
-        });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -371,6 +364,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
 
         var sessionTools = BuildSessionConfigTools(toolContext);
+        var toolDeclarations = sessionTools.Cast<AIFunctionDeclaration>().ToList();
+        var registeredToolNames = sessionTools.Select(tool => tool.Name).ToList();
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
@@ -385,14 +380,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // SandboxToolRegistry is NOT registered wholesale — that would conflict with native tools
             // and bypass governance. Native shell is denied in the permission handler; run_command is
             // the only shell path (ISandboxExecutor-backed).
-            Tools = sessionTools.Cast<AIFunctionDeclaration>().ToList(),
+            Tools = toolDeclarations,
             // Append workflow instructions as a system message so the model receives them
             // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
             // guardrails and tool-use guidance while layering our scaffold instructions on top.
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = ComposeFinalPrompt(systemPromptContext, sessionTools.Select(tool => tool.Name)),
+                Content = ComposeFinalPrompt(systemPromptContext, registeredToolNames),
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = byokProvider?.Model ?? modelId,
@@ -403,6 +398,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             EnableSessionStore = false,
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
+
+        Emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+            provider: "copilot",
+            runId,
+            projectId,
+            task,
+            systemPromptContext,
+            registeredToolNames,
+            toolDeclarations));
 
         AIAgent? agent = null;
         AgentSession session;

@@ -27,6 +27,7 @@ Clients should order and deduplicate events by `sequence`.
 | `agent.intent` | When the agent calls `report_intent` before a major step | `intent` |
 | `agent.system_prompt` | At run start, after the system prompt is set | `provider`, `prompt` (full text), `note` (optional) |
 | `agent.tools` | At run start, listing the tools registered for this run | `tools` (string array of tool names) |
+| `agent.runtime_context` | Once for each provider agent turn after the prompt and provider tool declarations are assembled | `provider`, `runId`, `projectId`, `baseCharacters`, `runContextCharacters`, `skillCharacters`, `separatorCharacters`, `taskCharacters`, `toolDeclarationCharacters`, `skillDeliveryMode` (`none`, `file`, `inline`, `mixed`), `totalCharacters`, `estimatedTokens` |
 | `memory.context_composition` | After the structured memory context is selected for a run or coordinator decomposition | `included`, `omittedMemoryCount`, `omittedSessionCount`, `omissionCauses`; no prompt text, records, identifiers, or size measurements |
 | `tool.call` | Before the runtime evaluates a tool invocation against the sandbox policy | `callId`, `toolName`, `arguments` |
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
@@ -116,6 +117,23 @@ inline through the streaming response.
 SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stream. `report_intent` is translated into an `agent.intent` event rather than suppressed — the raw tool call is hidden, but the intent text surfaces as a first-class event. `agent.tools` is a synthetic event emitted by the runtime, not an SDK tool.
 
 ## Event details
+
+### `agent.runtime_context`
+
+Both GitHub Copilot execution paths emit the same bounded composition record once per agent turn.
+It contains only scalar character counts, the stable run/project correlation, provider name, and the
+fixed delivery-mode token; it never contains prompt or task text, skill names or content, tool names,
+tool arguments or declarations, credentials, or exception text. This is separate from
+`memory.context_composition`, which reports #1241 structured-memory selection and omission facts.
+
+The counts measure the exact assembled fragments. `separatorCharacters` includes the base-to-context
+and run-context-to-skill separators. Provider tool declarations are measured from the declaration list
+passed to the SDK. The invariant is:
+
+`totalCharacters = baseCharacters + runContextCharacters + skillCharacters + separatorCharacters + taskCharacters + toolDeclarationCharacters`
+
+`estimatedTokens = ceil(totalCharacters / 4)` is a stable planning estimate, not provider-reported token usage.
+
 
 ### `rai.verdict`
 
