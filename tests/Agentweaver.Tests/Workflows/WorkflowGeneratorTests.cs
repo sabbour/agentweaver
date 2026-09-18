@@ -533,6 +533,8 @@ public sealed class WorkflowGeneratorTests
         CountOccurrences(prompt, "fan_out").Should().Be(1);
         CountOccurrences(prompt, "merge-and-scribe tail").Should().Be(1);
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
+        CountOccurrences(prompt, "`from`/`to` MUST reference existing node ids").Should().Be(1);
+        CountOccurrences(prompt, "at most one schedule trigger").Should().Be(1);
     }
 
     [Fact]
@@ -980,6 +982,8 @@ public sealed class WorkflowGeneratorTests
         var prompt = runner.LastTask!;
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
         CountOccurrences(prompt, "immediately after any RAI safety check").Should().Be(1);
+        CountOccurrences(prompt, "Apply ONLY the requested natural-language change").Should().Be(1);
+        CountOccurrences(prompt, "built-in/library and immutable").Should().Be(1);
     }
 
     [Fact]
