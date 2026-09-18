@@ -322,18 +322,6 @@ describe('observability pages', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature';
     const githubToken = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     const azureKey = `${'A'.repeat(86)}==`;
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
-      items: [{
-        workflow_run_id: 'coord-run-failed',
-        execution_id: 'coord-run-failed',
-        task: 'Failed coordinator flow',
-        agent_name: 'Coordinator',
-        status: 'failed',
-        coordinator_status: 'failed',
-        started_at: '2026-09-09T00:00:00.000Z',
-      }],
-      page: 1, page_size: 100, total_count: 1, total_pages: 1,
-    });
     vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
       code: 'agent_host_turn_incomplete',
       message: `${toolOutput} https://agentweaver.blob.core.windows.net/runs/log?sv=2025-01-05&ss=b&sp=rl&se=2030-01-01&sig=abc%2Bdef%3D`,
@@ -348,16 +336,15 @@ describe('observability pages', () => {
       cause_chain: ['IOException', 'https://operator:password@example.test/trace', 'at C:\\agent\\Worker.cs', jwt],
     });
 
-    render(
-      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
-        <ObservabilityTracesPage />
-      </Wrapper>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await renderTracesPage([{
+        workflow_run_id: 'coord-run-failed',
+        execution_id: 'coord-run-failed',
+        task: 'Failed coordinator flow',
+        agent_name: 'Coordinator',
+        status: 'failed',
+        coordinator_status: 'failed',
+        started_at: '2026-09-09T00:00:00.000Z',
+      }]);
 
     const diagnostic = screen.getByTestId('trace-terminal-diagnostic-coord-run-failed');
     expect(diagnostic.textContent).toContain('Terminal failure · agent_host');
