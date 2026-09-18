@@ -364,6 +364,15 @@ implementer to invoke `ponytail` before acting. Before integration, enforce the 
 Implementation Admission Gate from `.squad/ceremonies.md`; `ponytail-review` must be
 performed by someone other than the implementer.
 
+**Review gate:** Every change receives review. Apply the full three-review gate —
+independent code review, Seraph security review, and Ponytail review — when either
+(1) the change is high risk because it affects public contracts, authentication or
+authorization, model-provider selection or behavior, sandbox or runtime lifecycle,
+persistent data, or cross-surface API/MCP/UI behavior, or (2) it spans multiple files
+or crosses domains or subsystems. A small, isolated, low-risk change gets one focused
+review selected by its risk or domain; it does not skip review. Keep documentation and
+validation prerequisites proportional to the change.
+
 **Implementation lifecycle gates:**
 - During design, identify the appropriate GitHub milestone for each feature or fix and
   record it for the draft PR. If no suitable milestone exists, record that outcome
@@ -416,9 +425,17 @@ After routing determines WHO handles work, select a **response MODE** (Direct / 
 
 ### Per-Agent Model Selection
 
-Resolve a model before every spawn. Honor persistent config first, then session directives, charter preferences, and task-aware auto-selection; keep the cost-first rule unless code or prompt architecture is being written.
+Resolve a model before every spawn in this order: **per-agent override in persistent config → explicit user directive for the session → charter preference → task-aware default → platform default**. A higher-precedence choice always wins; do not replace an explicit override, directive, or charter preference with a task category. **Exception:** code review, security review, and Ponytail review must use `gpt-5.6-terra`; persistent per-agent overrides, session directives, charter preferences, task-aware defaults, and platform defaults cannot change that reviewer policy. Only an explicit user instruction for the current task may change it.
 
-Use silent fallback chains when a chosen model is unavailable, and omit the `model` parameter for the platform default fallback.
+When task-aware selection applies:
+- Use `gpt-5.6-luna` for routine PR monitoring, merge actions, and safe Git worktree or branch cleanup.
+- Reserve `gpt-5.6-sol` for genuinely complex reasoning.
+
+For code review, security review, and Ponytail review, if `gpt-5.6-terra` is unavailable,
+surface a blocking failure and require an explicit model override from the user for the
+current task before proceeding; never silently fall back. For all other work, use silent
+fallback chains when a chosen model is unavailable, and omit the `model` parameter for
+the platform default fallback.
 
 **On-demand reference:** Read `.squad/templates/model-selection-reference.md` for the full layer hierarchy, role mapping, fallback chains, spawn formatting, and valid models catalog.
 
@@ -1012,10 +1029,7 @@ Rai runs in background by default (like Scribe) — non-blocking. Only escalates
 
 **Performance budget:** 5-second cap per review pass. If timeout occurs, verdict is 🟡 Unknown (fail-open for advisory, but does NOT silently approve).
 
-**Fast-path bypass:** These change types skip full review:
-- Documentation-only changes (content + terminology check only)
-- Test files (credential check only)
-- Dependency updates (skip entirely)
+**Review scope:** Rai's fast-path handling never bypasses the Review gate above.
 
 ### Check Categories (Phase 1)
 
