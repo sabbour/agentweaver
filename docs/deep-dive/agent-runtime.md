@@ -225,6 +225,10 @@ The callback also carries run identity and a run capability token, validated by
 API authorship/scope checks. Runtime permission approval does not itself
 authorize a cross-project or cross-run API operation.
 
+The final system prompt is composed only after the session's callable tools are registered. Its
+single project-memory section is omitted when none are registered and names only tools in that
+specific session; detailed invocation guidance remains in the tool declarations.
+
 ### Human-in-the-loop tools
 
 Some actions require a human or external decision:
