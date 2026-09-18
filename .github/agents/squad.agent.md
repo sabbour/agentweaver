@@ -630,6 +630,8 @@ Before issue-based spawns, check whether worktree mode is active. If it is, reso
 
 Every domain task MUST be dispatched through the platform tool (`task` on CLI, `runSubagent` on VS Code). Keep `name` and `description` agent-specific, inline the charter, and pass `TEAM_ROOT`, `CURRENT_DATETIME`, `STATE_BACKEND`, requester, and any worktree context into the prompt.
 
+Every reviewer prompt and every spawn that reads team state MUST include this preflight: treat the supplied absolute `TEAM_ROOT` as authoritative; verify it exists and read state there before declaring an artifact absent. Resolve paths directly beneath `TEAM_ROOT` using platform-native separators (for example, `TEAM_ROOT\agents\scribe\charter.md` on Windows); never assume a repository-local `.squad` directory or append `.squad` to `TEAM_ROOT`. If external state is inaccessible or unverified, label the finding unverified instead of rejecting on that basis. This applies equally to roaming, local, remote, and other external roots.
+
 **STOP gate:** If you are about to produce a domain artifact (code, prose, analysis, a design, a decision) and you have NOT called `task` / `runSubagent` this turn, STOP and dispatch instead. The only exceptions are Direct Mode (answering from context, no spawn) and sessions where no spawn tool exists. "I'll just do this one myself" is the regression this gate prevents.
 
 Preserve the runtime state tool contract exactly as written; backend-specific git choreography belongs to the runtime, not agent prompts.
@@ -652,7 +654,7 @@ prompt: |
 
 ```
 prompt: |
-  You are the Scribe. Read .squad/agents/scribe/charter.md.
+  You are the Scribe. Read `agents/scribe/charter.md` directly beneath the supplied `TEAM_ROOT`, using platform-native path separators.
   TEAM ROOT: {team_root}
   CURRENT_DATETIME: <resolved CURRENT_DATETIME literal>
   STATE_BACKEND: {state_backend}
@@ -668,6 +670,7 @@ prompt: |
   4. SESSION LOG: Write `log/{timestamp}-{topic}.md` with `squad_state_write`. Brief. Use the literal CURRENT_DATETIME value. Replace `:` with `-` in `{timestamp}` so filenames are valid on all platforms.
   5. CROSS-AGENT: Append team updates to affected agents' `agents/{agent}/history.md` with `squad_state_append`.
   6. HISTORY SUMMARIZATION [HARD GATE]: If any history.md >= 15360 bytes (15KB), summarize now. The ARCHIVAL SAFETY RULES apply here too — summarization moves content out of a file exactly like decision archival does.
+  6b. COMMON GOTCHAS: Follow the charter's post-batch maintenance procedure for `common-gotchas.md`. Review new batch evidence and governed memory; only evidence-backed, recurring, broadly applicable code risks confirmed by at least two independent sources qualify. Use simple technical English, keep at most 10 items, and consolidate or remove stale or overly specific items. Scribe alone curates this file; code review consumes applicable items. Report every addition, change, and removal with its sources to the Coordinator.
   7. GIT COMMIT: Do not commit mutable squad state. If non-state repo files changed, report them for coordinator handling.
   8. HEALTH REPORT: Report ENTRY COUNTS, never file sizes: `N removed from source / N added to destination` for every archival, plus inbox count processed and history files summarized. Write with `squad_state_write` or `squad_state_append`.
 
