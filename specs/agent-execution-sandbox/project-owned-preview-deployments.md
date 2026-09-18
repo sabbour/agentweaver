@@ -1,6 +1,6 @@
 # Durable project-owned Preview deployments
 
-**Issue:** [#1455](https://github.com/sabbour/agentweaver/issues/1455)  
+**Issue:** [#1455](https://github.com/sabbour/agentweaver/issues/1455)
 **Area:** Agent execution & sandbox
 
 ## User story
