@@ -100,6 +100,40 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
             "each approved decision must be injected into the final coordinator prompt exactly once");
     }
 
+    [Fact]
+    public async Task DecompositionPrompt_OversizedApprovedDecisionRetainsValidBoundedJsonContext()
+    {
+        const string projectId = "project-oversized-decision";
+        const string title = "Non-negotiable deployment boundary";
+        const string oversizedContentPrefix = "oversized-approved-decision-content-";
+        var decision = Decision(
+            projectId, title, "architectural", "active",
+            MemoryTrustStates.Approved, DateTimeOffset.UtcNow);
+        decision.Content = oversizedContentPrefix + new string('x', 500_000);
+        var agentFactory = new CapturingWorkflowAgentFactory();
+        var executor = CreateExecutor(agentFactory);
+
+        await using (var scope = _services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(decision);
+            await db.SaveChangesAsync();
+        }
+
+        await DecomposeAsync(executor, projectId, "oversized-decision-run");
+
+        var prompt = agentFactory.Agent.SystemPrompt;
+        prompt.Should().NotBeNull();
+        prompt.Should().Contain("BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
+        prompt.Should().Contain("END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
+        prompt.Should().NotContain(oversizedContentPrefix);
+        prompt.Should().NotContain("[Context truncated to fit the decomposition model window.]");
+        prompt!.Length.Should().BeLessThan(96_000 * 4);
+
+        var titles = DecisionTitles(prompt);
+        titles.Should().ContainSingle().Which.Should().Be(title);
+    }
+
     private async Task DecomposeAsync(
         CoordinatorOrchestratorExecutor executor,
         string projectId,
