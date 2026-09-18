@@ -17,8 +17,8 @@ After routing determines WHO handles work, select the response MODE based on tas
 |------|------|-----|--------|
 | **Direct** | Status checks, factual questions the coordinator already knows, simple answers from context | Coordinator answers directly — NO agent spawn | ~2-3s |
 | **Lightweight** | Single-file edits, small fixes, follow-ups, simple scoped read-only queries | Spawn ONE agent with minimal prompt (see Lightweight Spawn Template below). Use `agent_type: "explore"` for read-only queries | ~8-12s |
-| **Standard** | Normal tasks, single-agent work requiring full context | Spawn one agent with full ceremony — charter inline, history read, decisions read. This is the current default | ~25-35s |
-| **Full** | Multi-agent work, complex tasks touching 3+ concerns, "Team" requests | Parallel fan-out, full ceremony, Scribe included | ~40-60s |
+| **Standard** | Normal tasks, single-agent work requiring full context | Spawn one agent with the context needed for the task | ~25-35s |
+| **Full** | Substantial design work across 3+ concerns, or a material design/safety decision | Parallel fan-out and full ceremony, Scribe included | ~40-60s |
 
 ## Direct Mode exemplars
 
@@ -51,9 +51,12 @@ One agent, full ceremony:
 
 Multi-agent, parallel fan-out:
 
-- *"Team, build the login page"*
-- *"Add OAuth support"*
-- Any request that touches 3+ agent domains.
+- *"Team, define the cross-service design for the login experience"*
+- *"Add OAuth support" when it requires a new cross-surface design*
+- Any substantial design task that touches 3+ agent domains.
+
+Routine isolated fixes use Lightweight or Standard mode plus their required focused review;
+they do not trigger a full ceremony merely because they modify code.
 
 ## Mode upgrade rules
 

@@ -398,23 +398,28 @@ to request Squad routing. Triage is a lightweight operating norm rather than a h
 handle P0 reports the same business day and route other new Squad issues within a few
 business days.
 
-The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
-conventional-commit message that references the issue (`Closes #{number}`, including the
-`Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
-`dev`. The full lifecycle, spawn context, and merge commands live in
+Before implementation dispatch, the Coordinator prepares the issue branch
+`squad/{issue-number}-{slug}` and a dedicated clean worktree, verifies that worktree's
+branch and CWD, and passes the absolute CWD to the assigned agent. The repository root is
+coordination-only when it is dirty or diverged: do not dispatch implementation from it.
+An agent commits the completed issue work on that branch before accepting another issue.
+After bounded independent review, it pushes and opens a draft PR with `gh pr create`
+against `dev`. Every delivery status reports the PR number (or no PR), branch, exact SHA,
+validation, and any blocker. The full lifecycle, spawn context, and merge commands live in
 [`.squad/templates/issue-lifecycle.md`](.squad/templates/issue-lifecycle.md); the
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.
 
 **Branches vs. worktrees.** A **locally run** Squad agent (including a Copilot CLI agent)
-must use one dedicated git worktree per issue under [`.worktrees/`](.worktrees/), reusing it
-when collaborating on that issue. This prevents concurrent local agents from sharing a
-working tree or index. A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the
-platform's isolated branch and environment instead — no local worktree applies. **Human
-contributors** may use a worktree as a convenience, but a plain short-lived branch in the
-main checkout is supported. The creation, reuse, dependency, team-root, and cleanup
-mechanics live in [`.squad/templates/worktree-reference.md`](.squad/templates/worktree-reference.md);
-do not duplicate them here.
+must use one dedicated clean git worktree per issue under [`.worktrees/`](.worktrees/),
+reusing it when collaborating on that issue. Parallel implementation is permitted only
+when every participating worktree is clean, prepared, and on its assigned issue branch.
+A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the platform's isolated
+branch and environment instead — no local worktree applies. **Human contributors** may use
+a worktree as a convenience, but a plain short-lived branch in the main checkout is
+supported. The creation, reuse, dependency, team-root, and cleanup mechanics live in
+[`.squad/templates/worktree-reference.md`](.squad/templates/worktree-reference.md); do not
+duplicate them here.
 
 **New feature workflow.** Proposing a new feature or capability (agent or human):
 
@@ -459,13 +464,13 @@ mechanically blocks a spec-less feature PR. Reviewers are responsible for catchi
 review feedback: the original author may revise the same PR normally, with no lockout.
 Lockout occurs only when a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI)
 explicitly declares **Rejected / independent rewrite required** — for example, with the
-exact PR comment marker `REJECTED — requires independent rewrite`. Then the original author
-is **locked out** of the next revision, a different agent must produce it, and the Reviewer
-chooses whether to reassign or escalate. The Coordinator enforces that rule mechanically.
-The rejection marker must remain on the PR so the author rotation is auditable on GitHub
-without Coordinator session history; a `status:locked-out` PR label may additionally be
-used when the repository creates it. The full rules are in the "Reviewer Rejection Protocol"
-section of `squad.agent.md`.
+exact PR comment marker `REJECTED — requires independent rewrite`. The Coordinator gives one
+different, fresh-context agent one bounded corrective pass; it does not rotate named
+charters merely to satisfy a lockout. If that pass leaves a real design or safety issue
+unresolved, the Coordinator escalates it. The rejection marker must remain on the PR so the
+correction path is auditable on GitHub without Coordinator session history; a
+`status:locked-out` PR label may additionally be used when the repository creates it. The
+full rules are in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
 
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for

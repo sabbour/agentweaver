@@ -27,24 +27,23 @@ When a team member has a **Reviewer** role:
 
 When an artifact is **rejected** by a Reviewer:
 
-1. **The original author is locked out.** They may NOT produce the next version of that artifact. No exceptions.
-2. **A different agent MUST own the revision.** The Coordinator selects the revision author based on the Reviewer's recommendation (reassign or escalate).
-3. **The Coordinator enforces this mechanically.** Before spawning a revision agent, the Coordinator MUST verify that the selected agent is NOT the original author. If the Reviewer names the original author as the fix agent, the Coordinator MUST refuse and ask the Reviewer to name a different agent.
-4. **The locked-out author may NOT contribute to the revision** in any form — not as a co-author, advisor, or pair. The revision must be independently produced.
-5. **Lockout scope:** The lockout applies to the specific artifact that was rejected. The original author may still work on other unrelated artifacts.
-6. **Lockout duration:** The lockout persists for that revision cycle. If the revision is also rejected, the same rule applies again — the revision author is now also locked out, and a third agent must revise.
-7. **Deadlock handling:** If all eligible agents have been locked out of an artifact, the Coordinator MUST escalate to the user rather than re-admitting a locked-out author.
+1. **The original author is locked out of the next revision.** They may not produce that corrective pass.
+2. **One different, fresh-context agent owns one bounded corrective pass.** The Coordinator selects that agent from the Reviewer's recommendation (reassign or escalate), verifies it is not the original author, and gives it the rejection evidence and a defined correction scope.
+3. **Do not rotate named charters as theater.** A new name or a chain of replacements is not evidence of independent correction; use the fresh context to address the stated finding.
+4. **The locked-out author may not contribute to the corrective pass** in any form — not as a co-author, advisor, or pair.
+5. **Lockout scope:** The lockout applies to the specific rejected artifact. The original author may still work on unrelated artifacts.
+6. **After the bounded pass, re-review the stated finding.** If a real design, safety, or other blocking issue remains unresolved, escalate it with the evidence; do not rotate another author by default.
 
 ## Examples
 
 **Example 1: Reassign after rejection**
 1. Fenster writes authentication module
 2. Hockney (Tester) reviews → rejects: "Error handling is missing. Verbal should fix this."
-3. Coordinator: Fenster is now locked out of this artifact
-4. Coordinator spawns Verbal to revise the authentication module
+3. Coordinator: Fenster is now locked out of the corrective pass
+4. Coordinator dispatches Verbal with fresh context and one bounded error-handling correction
 5. Verbal produces v2
 6. Hockney reviews v2 → approves
-7. Lockout clears for next artifact
+7. Lockout clears for the next artifact
 
 **Example 2: Escalate for expertise**
 1. Edie writes TypeScript config
@@ -54,12 +53,10 @@ When an artifact is **rejected** by a Reviewer:
 5. New agent produces v2
 6. Keaton reviews v2
 
-**Example 3: Deadlock handling**
-1. Fenster writes module → rejected
-2. Verbal revises → rejected
-3. Hockney revises → rejected
-4. All 3 eligible agents are now locked out
-5. Coordinator: "All eligible agents have been locked out. Escalating to user: [artifact details]"
+**Example 3: Escalation after corrective pass**
+1. Fenster writes module → rejected for an unresolved safety risk
+2. Verbal performs the one bounded corrective pass → safety risk remains
+3. Coordinator: "The bounded corrective pass did not resolve the safety risk. Escalating with the review evidence: [artifact details]"
 
 **Example 4: Reviewer accidentally names original author**
 1. Fenster writes module → rejected
@@ -72,7 +69,7 @@ When an artifact is **rejected** by a Reviewer:
 
 - ❌ Allowing the original author to self-revise after rejection
 - ❌ Treating the locked-out author as an "advisor" or "co-author" on the revision
-- ❌ Re-admitting a locked-out author when deadlock occurs (must escalate to user)
+- ❌ Rotating additional named charters after a corrective pass as a substitute for escalation
 - ❌ Applying lockout across unrelated artifacts (scope is per-artifact)
 - ❌ Accepting the Reviewer's assignment when they name the original author (must refuse and ask for a different agent)
 - ❌ Clearing lockout before the revision is approved (lockout persists through revision cycle)
