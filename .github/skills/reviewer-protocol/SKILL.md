@@ -1,6 +1,6 @@
 ---
 name: "reviewer-protocol"
-description: "Reviewer rejection workflow and strict lockout semantics"
+description: "Reviewer rejection workflow and corrective-pass semantics"
 domain: "orchestration"
 confidence: "high"
 source: "extracted"
@@ -8,7 +8,7 @@ source: "extracted"
 
 ## Context
 
-When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead), they may approve or reject work from other agents. On rejection, the coordinator enforces strict lockout rules to ensure the original author does NOT self-revise. This prevents defensive feedback loops and ensures independent review.
+When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead), they may approve or reject work from other agents. A rejection requires a bounded, evidence-based corrective pass and re-review of the stated finding.
 
 ## Patterns
 
@@ -17,60 +17,44 @@ When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead), 
 When a team member has a **Reviewer** role:
 
 - Reviewers may **approve** or **reject** work from other agents.
-- On **rejection**, the Reviewer may choose ONE of:
-  1. **Reassign:** Require a *different* agent to do the revision (not the original author).
-  2. **Escalate:** Require a *new* agent be spawned with specific expertise.
-- The Coordinator MUST enforce this. If the Reviewer says "someone else should fix this," the original agent does NOT get to self-revise.
+- On **rejection**, the Reviewer provides the evidence and corrective scope for one bounded corrective pass. The Reviewer may recommend expertise, and the Coordinator MUST preserve the stated review finding for re-review.
+- The Coordinator MUST use one fresh agent context for that pass. It may use the same named agent and charter as the original author.
 - If the Reviewer approves, work proceeds normally.
 
-### Strict Lockout Semantics
+### Reviewer Rejection Corrective-Pass Semantics
 
 When an artifact is **rejected** by a Reviewer:
 
-1. **The original author is locked out of the next revision.** They may not produce that corrective pass.
-2. **One different, fresh-context agent owns one bounded corrective pass.** The Coordinator selects that agent from the Reviewer's recommendation (reassign or escalate), verifies it is not the original author, and gives it the rejection evidence and a defined correction scope.
-3. **Do not rotate named charters as theater.** A new name or a chain of replacements is not evidence of independent correction; use the fresh context to address the stated finding.
-4. **The locked-out author may not contribute to the corrective pass** in any form — not as a co-author, advisor, or pair.
-5. **Lockout scope:** The lockout applies to the specific rejected artifact. The original author may still work on unrelated artifacts.
-6. **After the bounded pass, re-review the stated finding.** If a real design, safety, or other blocking issue remains unresolved, escalate it with the evidence; do not rotate another author by default.
+1. **Use one fresh agent context for one bounded corrective pass.** Give that context the rejection evidence and a defined correction scope.
+2. **The fresh context may use the same named agent and charter as the original author.** Do not require a different agent, lock out the original author, or treat charter rotation as independent review.
+3. **After the bounded pass, re-review the stated finding using the evidence.** If concrete design or safety risks remain unresolved, escalate with the review evidence.
 
 ## Examples
 
-**Example 1: Reassign after rejection**
+**Example 1: Fresh-context correction**
 1. Fenster writes authentication module
-2. Hockney (Tester) reviews → rejects: "Error handling is missing. Verbal should fix this."
-3. Coordinator: Fenster is now locked out of the corrective pass
-4. Coordinator dispatches Verbal with fresh context and one bounded error-handling correction
-5. Verbal produces v2
+2. Hockney (Tester) reviews → rejects: "Error handling is missing."
+3. Coordinator gives a fresh Fenster context the rejection evidence and one bounded error-handling correction
+4. Fenster produces v2
+5. Hockney re-reviews the stated finding using the evidence
 6. Hockney reviews v2 → approves
-7. Lockout clears for the next artifact
 
-**Example 2: Escalate for expertise**
+**Example 2: Expertise recommendation**
 1. Edie writes TypeScript config
-2. Keaton (Lead) reviews → rejects: "Need someone with deeper TS knowledge. Escalate."
-3. Coordinator: Edie is now locked out
-4. Coordinator spawns new agent (or existing TS expert) to revise
-5. New agent produces v2
-6. Keaton reviews v2
+2. Keaton (Lead) reviews → rejects: "Need someone with deeper TS knowledge."
+3. Coordinator uses a fresh agent context for one bounded correction and may use the recommended TS expertise
+4. Edie produces v2
+5. Keaton re-reviews the stated finding using the evidence
 
 **Example 3: Escalation after corrective pass**
 1. Fenster writes module → rejected for an unresolved safety risk
-2. Verbal performs the one bounded corrective pass → safety risk remains
+2. A fresh agent context performs the one bounded corrective pass → concrete safety risk remains
 3. Coordinator: "The bounded corrective pass did not resolve the safety risk. Escalating with the review evidence: [artifact details]"
-
-**Example 4: Reviewer accidentally names original author**
-1. Fenster writes module → rejected
-2. Hockney says: "Fenster should fix the error handling"
-3. Coordinator: "Fenster is locked out as the original author. Please name a different agent."
-4. Hockney: "Verbal, then"
-5. Coordinator spawns Verbal
 
 ## Anti-Patterns
 
-- ❌ Allowing the original author to self-revise after rejection
-- ❌ Treating the locked-out author as an "advisor" or "co-author" on the revision
-- ❌ Rotating additional named charters after a corrective pass as a substitute for escalation
-- ❌ Applying lockout across unrelated artifacts (scope is per-artifact)
-- ❌ Accepting the Reviewer's assignment when they name the original author (must refuse and ask for a different agent)
-- ❌ Clearing lockout before the revision is approved (lockout persists through revision cycle)
-- ❌ Skipping verification that the revision agent is not the original author
+- ❌ Requiring a different agent or locking out the original author rather than using a fresh context
+- ❌ Treating charter rotation as evidence of independent review
+- ❌ Omitting rejection evidence or a defined corrective scope
+- ❌ Skipping evidence-based re-review of the stated finding
+- ❌ Escalating without concrete unresolved design or safety risks
