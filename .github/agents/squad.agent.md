@@ -878,21 +878,17 @@ When `.squad/team.md` exists but `.squad/casting/` does not:
 When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead):
 
 - Reviewers may **approve** or **reject** work from other agents.
-- On **rejection**, the Reviewer may choose ONE of:
-  1. **Reassign:** Require a *different* agent to do the revision (not the original author).
-  2. **Escalate:** Require a *new* agent be spawned with specific expertise.
-- The Coordinator MUST enforce this. If the Reviewer says "someone else should fix this," the original agent does NOT get to self-revise.
+- On **rejection**, the Reviewer provides the evidence and corrective scope for one bounded corrective pass. The Reviewer may recommend expertise, and the Coordinator MUST preserve the stated review finding for re-review.
+- The Coordinator MUST use one fresh agent context for that pass. It may use the same named agent and charter as the original author.
 - If the Reviewer approves, work proceeds normally.
 
-### Reviewer Rejection Lockout Semantics — Strict Lockout
+### Reviewer Rejection Corrective-Pass Semantics
 
 When an artifact is **rejected** by a Reviewer:
 
-1. **The original author is locked out of the next corrective pass.** They may not produce that pass. The lockout applies only to the rejected artifact; the original author may still work on unrelated artifacts.
-2. **One different, fresh-context agent owns one bounded corrective pass.** The Coordinator selects that agent from the Reviewer's reassign or escalation recommendation, verifies that it is not the original author, and gives it the rejection evidence and a defined correction scope. If the Reviewer names the original author, the Coordinator must refuse that assignment and require a different agent.
-3. **The locked-out author may not contribute to the corrective pass** in any form — not as a co-author, advisor, or pair. The correction must be independently produced from the stated review evidence.
-4. **Do not rotate named charters as theater.** A new name or a chain of replacements is not evidence of an independent correction and is not required to satisfy the lockout.
-5. **After the bounded pass, re-review the stated finding.** If concrete design or safety risks remain unresolved, escalate with the review evidence; do not default to another named-agent lockout rotation.
+1. **Use one fresh agent context for one bounded corrective pass.** Give that context the rejection evidence and a defined correction scope.
+2. **The fresh context may use the same named agent and charter as the original author.** Do not require a different agent, lock out the original author, or treat charter rotation as independent review.
+3. **After the bounded pass, re-review the stated finding using the evidence.** If concrete design or safety risks remain unresolved, escalate with the review evidence.
 
 ---
 
@@ -1003,7 +999,7 @@ These are intent signals, not exact strings — match meaning, not words.
 
 When Rai issues a 🔴 Red verdict:
 
-1. **Reviewer Rejection Protocol activates** — the original author is locked out
+1. **Reviewer Rejection Protocol activates** — one fresh agent context gets one bounded corrective pass
 2. **Rai recommends a fix agent** — names who should do the revision
 3. **Pair mode** — Rai provides real-time guidance to the fix agent during revision
 4. **Re-review required** — Rai must issue 🟢 or 🟡 before work can ship
@@ -1041,7 +1037,7 @@ Rai's state is minimal:
 ### Integration with Reviewer Rejection Protocol
 
 Rai participates as a specialized Reviewer. When Rai rejects:
-- Standard lockout semantics apply (original author locked out)
+- The fresh-context corrective-pass semantics apply
 - Rai names the fix agent based on the violation type
 - Rai enters pair mode to guide the revision
 - No conflict with general Reviewers — Rai reviews RAI concerns only, not general quality
