@@ -16,15 +16,11 @@ function workflowSection(startMarker, endMarker) {
   return WORKFLOW.slice(start, end);
 }
 
-test("pull requests run image dry builds only for relevant paths", () => {
+test("pull requests never trigger image builds", () => {
   const trigger = workflowSection("on:\n", "\npermissions:\n");
 
-  assert.match(trigger, /pull_request:\n\s+paths:/);
-  assert.match(trigger, /- 'apps\/web\/\*\*'/);
-  assert.match(trigger, /- 'apps\/Agentweaver\.\*\/\*\*'/);
-  assert.match(trigger, /- 'packages\/\*\*'/);
-  assert.match(trigger, /- 'Directory\.Build\.props'/);
-  assert.match(trigger, /- '\*\*\/Dockerfile'/);
+  assert.doesNotMatch(trigger, /pull_request:/);
+  assert.match(trigger, /workflow_dispatch:/);
 });
 
 test("tag pushes publish release image tags before the GitHub Release exists", () => {
@@ -43,26 +39,25 @@ test("tag pushes rebuild with semver identity instead of retagging a sha image",
   assert.doesNotMatch(build, /steps\.existing/);
 });
 
-test("pull requests build but never push images", () => {
+test("manual dry runs can suppress image publication", () => {
   const build = workflowSection("  build:\n", "\n          labels: |\n");
 
-  assert.match(build, /github\.event_name == 'pull_request'/);
   assert.match(
     build,
-    /push: \$\{\{ github\.event_name != 'pull_request' && \(github\.event_name != 'workflow_dispatch' \|\| inputs\.push\) \}\}/,
+    /push: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.push \}\}/,
   );
   assert.match(
     build,
-    /if: github\.event_name != 'pull_request' && \(github\.event_name != 'workflow_dispatch' \|\| inputs\.push\)/,
+    /if: github\.event_name != 'workflow_dispatch' \|\| inputs\.push/,
   );
 });
 
-test("pull request image filters catch Dockerfile and project-reference drift", () => {
+test("push image filters catch Dockerfile and project-reference drift", () => {
   const changes = workflowSection("  changes:\n", "\n  build:\n");
 
   assert.match(
     changes,
-    /if: \(github\.event_name == 'push' && !startsWith\(github\.ref, 'refs\/tags\/'\)\) \|\| github\.event_name == 'pull_request'/,
+    /if: github\.event_name == 'push' && !startsWith\(github\.ref, 'refs\/tags\/'\)/,
   );
   assert.equal(changes.match(/- '\*\*\/Dockerfile'/g)?.length, 4);
   assert.equal(changes.match(/- '\.github\/workflows\/publish-images\.yml'/g)?.length, 4);
