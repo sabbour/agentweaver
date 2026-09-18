@@ -19,6 +19,13 @@ name, that counter measures nano-AIU cost, not token count. Project metrics and
 run traces query telemetry when available; Azure Monitor export is separate from
 durable operational-event persistence.
 
+Each provider agent turn also emits an `agent.runtime_context` durable event. It reports only
+run/project correlation, scalar sizes for the assembled base prompt, run context, assigned-skill
+block, separators, task, and provider declarations, plus a fixed skill delivery mode and
+`ceil(totalCharacters / 4)` planning estimate. Its section sizes always sum to `totalCharacters`.
+It is separate from `memory.context_composition`, which records the #1241 structured-context
+selection and omission results rather than prompt sizing.
+
 ## Operational use
 
 Use the run stream to explain a specific run. Use `GET /api/projects/{id}/metrics` for project performance and `GET /api/metrics/runs/{runId}/traces` for trace details. Use cluster diagnostics for runtime dependencies and sandbox inventory.
