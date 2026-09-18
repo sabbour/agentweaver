@@ -75,7 +75,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     [Fact]
     public async Task Draft_MandatoryDecisionContextOverBudget_ThrowsBeforeCallingDrafter()
     {
-        using var budgetFactory = new CoordinatorWebApplicationFactory(memoryContextMaxTokens: 1);
+        using var budgetFactory = CoordinatorWebApplicationFactory.CreateWithMemoryContextMaxTokens(1);
         var projectId = $"project-{Guid.NewGuid():N}";
         await using (var scope = budgetFactory.Services.CreateAsyncScope())
         {
