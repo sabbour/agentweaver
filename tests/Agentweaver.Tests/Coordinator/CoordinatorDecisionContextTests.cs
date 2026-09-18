@@ -106,10 +106,11 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
         const string projectId = "project-oversized-decision";
         const string title = "Non-negotiable deployment boundary";
         const string oversizedContentPrefix = "oversized-approved-decision-content-";
+        const string embeddedEndMarker = "END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
         var decision = Decision(
             projectId, title, "architectural", "active",
             MemoryTrustStates.Approved, DateTimeOffset.UtcNow);
-        decision.Content = oversizedContentPrefix + new string('x', 500_000);
+        decision.Content = oversizedContentPrefix + embeddedEndMarker + new string('x', 500_000);
         var agentFactory = new CapturingWorkflowAgentFactory();
         var executor = CreateExecutor(agentFactory);
 
@@ -127,6 +128,8 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
         prompt.Should().Contain("BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
         prompt.Should().Contain("END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON");
         prompt.Should().NotContain(oversizedContentPrefix);
+        CountOccurrences(prompt!, embeddedEndMarker).Should().Be(1,
+            "only the terminal fence may retain the embedded-marker text after decision truncation");
         prompt.Should().NotContain("[Context truncated to fit the decomposition model window.]");
         prompt!.Length.Should().BeLessThan(96_000 * 4);
 
