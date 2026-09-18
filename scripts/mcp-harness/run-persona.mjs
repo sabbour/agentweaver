@@ -49,34 +49,38 @@ import { loadCapabilitiesContract, checkCapabilities } from './lib/capabilities-
 import { computeMcpP0 } from './lib/mcp-p0.mjs';
 import { adaptMcpEvidence } from '../harness-judge/adapters/mcp.mjs';
 import { buildJudgePrompt, judgeEvidence } from '../harness-judge/core.mjs';
+import {
+  formatLifecycleLines,
+  judgeLifecycleEvidence,
+  lifecycleExitCode,
+  loadLifecyclePersona,
+  parseLifecycleArgs,
+  runLifecycleCli,
+  writeLifecycleJson,
+} from '../harness-shared/persona-lifecycle.mjs';
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const CHARTER_PATH = join(HERE, 'agent-driver', 'AGENT.md');
 export const CONTRACT_PATH = join(HERE, 'required-capabilities.json');
 
 export function parseArgs(argv) {
-  const out = { serverArgs: null };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--scenario' || a === '--persona') out.scenario = argv[++i];
-    else if (a === '--target' || a === '--base-url') out.target = argv[++i];
-    else if (a === '--project-id') out.projectId = argv[++i];
-    else if (a === '--batch-id') out.batchId = argv[++i];
-    else if (a === '--seed') out.seed = argv[++i];
-    else if (a === '--goal') out.goal = argv[++i];
-    else if (a === '--out') out.out = argv[++i];
-    else if (a === '--transcript') out.transcript = argv[++i];
-    else if (a === '--dump-evidence') out.dumpEvidence = argv[++i];
-    else if (a === '--prompt-out') out.promptOut = argv[++i];
-    else if (a === '--target-revision') out.targetRevision = argv[++i];
-    else if (a === '--server-command') out.serverCommand = argv[++i];
-    else if (a === '--server-args') out.serverArgs = argv[++i];
-    else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
-    else if (a === '--no-capability-check') out.skipCapabilityCheck = true;
-    else if (a === '--list') out.list = true;
-    else throw new Error(`unknown option: ${a.split('=', 1)[0]}`);
-  }
-  return out;
+  const args = parseLifecycleArgs(argv, {
+    initial: { serverArgs: null },
+    options: {
+      '--scenario': 'scenario', '--persona': 'scenario', '--target': 'target',
+      '--base-url': 'target', '--project-id': 'projectId', '--batch-id': 'batchId',
+      '--seed': 'seed', '--goal': 'goal', '--out': 'out', '--transcript': 'transcript',
+      '--dump-evidence': 'dumpEvidence', '--prompt-out': 'promptOut',
+      '--target-revision': 'targetRevision', '--server-command': 'serverCommand',
+      '--server-args': 'serverArgs', '--timeout': 'timeoutSeconds',
+      '--no-capability-check': true, '--list': true,
+    },
+  });
+  if (args.timeoutSeconds !== undefined) args.timeoutMs = Number(args.timeoutSeconds) * 1000;
+  delete args.timeoutSeconds;
+  if (args.noCapabilityCheck) args.skipCapabilityCheck = true;
+  delete args.noCapabilityCheck;
+  return args;
 }
 
 /**
@@ -316,10 +320,9 @@ export async function finalizeVerdict({
 }) {
   const prepared = prepareJudgeEvidence({ transcriptText, persona, metadata, capability, preflight });
   const { normalized, p0, parseErrors } = prepared;
-  const judged = await judgeEvidence(normalized, { judge, timeoutMs });
+  const judged = await judgeLifecycleEvidence(normalized, judgeEvidence, { judge, timeoutMs });
   const finalOut = outPath ?? join(HERE, 'verdicts', `${metadata.scenarioId}-${stamp(now)}.json`);
-  await mkdir(dirname(finalOut), { recursive: true });
-  await writeFile(finalOut, `${JSON.stringify(judged.verdict, null, 2)}\n`, 'utf8');
+  await writeLifecycleJson(finalOut, judged.verdict);
   return { verdict: judged.verdict, verdictPath: finalOut, p0, capability, parseErrors };
 }
 
@@ -373,7 +376,7 @@ async function main() {
 
   let persona;
   try {
-    persona = await loadPersona(args.scenario, 'mcp');
+    persona = await loadLifecyclePersona(loadPersona, args.scenario, 'mcp');
   } catch (err) {
     console.error(`error: cannot load persona "${args.scenario}" (mcp): ${err.message}`);
     return 2;
@@ -433,12 +436,14 @@ async function main() {
       await writeFile(args.dumpEvidence, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
       await writeFile(args.promptOut, `${prompt}\n`, 'utf8');
 
-      console.log(`Persona     : ${metadata.persona}`);
-      console.log(`Transcript  : ${relativize(resolve(args.transcript))}`);
-      console.log(`Capability  : ${capability.available ? (capability.report.ok ? 'PASS' : 'FAIL') : `not evaluated (${capability.reason})`}`);
-      console.log(`Driver P0   : ${p0.ok ? 'PASS' : 'FAIL'} (pushbacks=${p0.successfulPushbacks}, failedTurns=${p0.failedTurns.join(',') || 'none'})`);
-      console.log(`Evidence written: ${relativize(resolve(args.dumpEvidence))}`);
-      console.log(`Judge prompt written: ${relativize(resolve(args.promptOut))}`);
+      for (const line of formatLifecycleLines([
+        ['Persona', metadata.persona],
+        ['Transcript', relativize(resolve(args.transcript))],
+        ['Capability', capability.available ? (capability.report.ok ? 'PASS' : 'FAIL') : `not evaluated (${capability.reason})`],
+        ['Driver P0', `${p0.ok ? 'PASS' : 'FAIL'} (pushbacks=${p0.successfulPushbacks}, failedTurns=${p0.failedTurns.join(',') || 'none'})`],
+        ['Evidence written', relativize(resolve(args.dumpEvidence))],
+        ['Judge prompt written', relativize(resolve(args.promptOut))],
+      ])) console.log(line);
       console.log('Next: dispatch the Judge custom agent synchronously via the task tool using the prompt file content.');
       console.log(`Then save its raw response: node scripts/harness-judge/save-verdict.mjs <raw-judge-response.txt> --evidence ${relativize(resolve(args.dumpEvidence))} --out <verdict.json>`);
       return 0;
@@ -448,18 +453,21 @@ async function main() {
       transcriptText, persona, metadata, capability, outPath: args.out, timeoutMs: args.timeoutMs, now, preflight,
     });
 
-    console.log(`Persona     : ${metadata.persona}`);
-    console.log(`Transcript  : ${relativize(resolve(args.transcript))}`);
-    console.log(`Capability  : ${capability.available ? (capability.report.ok ? 'PASS' : 'FAIL') : `not evaluated (${capability.reason})`}`);
-    console.log(`Driver P0   : ${p0.ok ? 'PASS' : 'FAIL'} (pushbacks=${p0.successfulPushbacks}, failedTurns=${p0.failedTurns.join(',') || 'none'})`);
-    console.log(`Verdict     : p0=${verdict.p0?.verdict} p1=${verdict.p1?.verdict}`);
-    console.log(`Verdict written: ${relativize(verdictPath)}`);
+    for (const line of formatLifecycleLines([
+      ['Persona', metadata.persona],
+      ['Transcript', relativize(resolve(args.transcript))],
+      ['Capability', capability.available ? (capability.report.ok ? 'PASS' : 'FAIL') : `not evaluated (${capability.reason})`],
+      ['Driver P0', `${p0.ok ? 'PASS' : 'FAIL'} (pushbacks=${p0.successfulPushbacks}, failedTurns=${p0.failedTurns.join(',') || 'none'})`],
+      ['Verdict', `p0=${verdict.p0?.verdict} p1=${verdict.p1?.verdict}`],
+      ['Verdict written', relativize(verdictPath)],
+    ])) console.log(line);
 
     const contractFailed = capability.available && !capability.report.ok;
     const p0Failed = verdict.p0?.verdict === 'FAIL';
-    if (contractFailed || p0Failed) return 1;
-    if (verdict.p0?.verdict === 'CANNOT_DETERMINE') return 3;
-    return 0;
+    return lifecycleExitCode({
+      failed: contractFailed || p0Failed,
+      inconclusive: verdict.p0?.verdict === 'CANNOT_DETERMINE',
+    });
   }
 
   // ---- PREPARE phase: assemble + emit the dispatch, fail closed (no fabricated run). ----
@@ -500,10 +508,5 @@ async function main() {
 // Only run the CLI when executed directly — importing this module (e.g. from tests, to
 // reuse the pure helpers) must not trigger main() or process.exit.
 if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(redact(String(err?.stack ?? err?.message ?? err)));
-      process.exit(2);
-    });
+  runLifecycleCli(main, { redact });
 }
