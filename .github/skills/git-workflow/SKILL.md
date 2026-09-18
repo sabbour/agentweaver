@@ -49,18 +49,29 @@ Examples:
    git push -u origin squad/{issue-number}-{slug}
    gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-   Mark the PR ready only after any required follow-up is complete.
+   Mark the PR ready only after required validation and independent review/admission have
+   completed with no unresolved blocker:
+   ```bash
+   gh pr ready <number>
+   gh pr merge <number> --rebase --auto
+   ```
+   Confirm the PR reports `MERGED` before dispatching or merging dependent work. An
+   auto-merge request is not merge confirmation.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
    run, and any blocker.
 
-6. **After merge to dev:**
+6. **After confirmed merge to dev, clean up non-destructively:** First verify the PR is
+   merged and verify no unmerged or blocked dependent needs the local worktree. Then remove
+   the worktree and delete only the fully merged local branch:
    ```bash
-   git checkout dev
-   git pull origin dev
+   gh pr view <number> --json state,mergedAt
+   git worktree remove .worktrees/{issue-number}
+   git worktree prune
    git branch -d squad/{issue-number}-{slug}
-   git push origin --delete squad/{issue-number}-{slug}
    ```
+   Do not use `-D`, do not remove a worktree for an unmerged or blocked dependency, and do
+   not delete a remote branch that GitHub already removed after the confirmed merge.
 
 ## Parallel Multi-Issue Work (Worktrees)
 
@@ -125,17 +136,19 @@ The `.squad/` directory exists in each worktree as a copy. This is safe because:
 
 ### Cleanup After Merge
 
-After a worktree's PR is merged to dev:
+After a worktree's PR is confirmed merged to dev and no unmerged or blocked dependent
+requires it, use the same non-destructive cleanup checkpoint:
 
 ```bash
 # From the main clone
+gh pr view <number> --json state,mergedAt
 git worktree remove ../squad-195
 git worktree prune          # clean stale metadata
 git branch -d squad/195-fix-stamp-bug
-git push origin --delete squad/195-fix-stamp-bug
 ```
 
 If a worktree was deleted manually (rm -rf), `git worktree prune` recovers the state.
+Never use `git branch -D` or remove the worktree of an unmerged/blocked dependency.
 
 ---
 

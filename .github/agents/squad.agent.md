@@ -393,6 +393,30 @@ validation prerequisites proportional to the change.
   is created. Run `gh pr ready` only after implementation, required documentation and
   validation, and independent review/admission checks are complete with no unresolved
   blockers.
+- **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
+  then merge it with `gh pr merge <number> --rebase --auto`. Confirm the PR is actually
+  merged (not merely queued for auto-merge) before dispatching or merging work that depends
+  on it. A failed, blocked, or unmerged dependency remains in place and blocks its dependents.
+- **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
+  cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
+  verify the PR merged and that no unmerged or blocked dependent still needs the worktree;
+  never force-delete a branch or remove a worktree to clear a dependency.
+- **Milestone release trigger:** when every PR assigned to a milestone is confirmed merged,
+  start the release checkpoint from a clean checkout of current `origin/dev`. Follow
+  `RELEASING.md`'s npm-script release and deployment flow (`changeset:status`,
+  `release:plan`, release preparation/promotion, `release:publish`, and
+  `azure:deploy-from-release` as applicable). Do not replace that flow with local image
+  builds; the documented release deployment imports the published release images by default.
+- **Post-deployment acceptance checkpoint:** after deployment and `npm run azure:verify`,
+  invoke the `agentweaver-api-harness` skill and run focused API scenarios that exercise
+  each newly delivered feature behavior against the deployed release. Treat a clean focused
+  result as the milestone acceptance gate, and record the scenario evidence with release
+  evidence.
+- **Harness repair loop:** triage every harness finding into a narrow repair issue/patch.
+  Route each repair through the same clean issue-worktree, draft-review-ready-merge, and
+  confirmed-dependency gates; deploy the corrected release through the documented npm
+  scripts and rerun the affected focused API scenarios. Repeat until the acceptance gate is
+  clean; do not declare the milestone complete while findings remain.
 
 ### Consult Mode Detection
 
