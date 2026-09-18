@@ -26,30 +26,33 @@ Examples:
 
 ## Workflow for Issue Work
 
-1. **Branch from dev:**
+1. **Prepare a clean issue worktree and branch from dev before dispatching implementation:**
    ```bash
-   git checkout dev
-   git pull origin dev
-   git checkout -b squad/{issue-number}-{slug}
+   git fetch origin dev
+   git worktree add .worktrees/{issue-number} -b squad/{issue-number}-{slug} origin/dev
+   git -C .worktrees/{issue-number} status --short --branch
    ```
+   Confirm the worktree is clean, on the assigned branch, and pass its absolute path as the
+   agent's explicit CWD. A dirty or diverged root is coordination-only, never an
+   implementation CWD.
 
 2. **Mark issue in-progress:**
    ```bash
    gh issue edit {number} --add-label "status:in-progress"
    ```
 
-3. **Create draft PR targeting dev:**
-   ```bash
-   gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
-   ```
+3. **Do the work.** Make changes, write tests, and commit the completed issue on its own
+   branch before accepting another issue.
 
-4. **Do the work.** Make changes, write tests, commit with issue reference.
-
-5. **Push and mark ready:**
+4. **Run bounded independent review, then push and open a draft PR:**
    ```bash
    git push -u origin squad/{issue-number}-{slug}
-   gh pr ready
+   gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
+   Mark the PR ready only after any required follow-up is complete.
+
+5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
+   run, and any blocker.
 
 6. **After merge to dev:**
    ```bash
@@ -61,7 +64,10 @@ Examples:
 
 ## Parallel Multi-Issue Work (Worktrees)
 
-When the coordinator routes multiple issues simultaneously (e.g., "fix bugs X, Y, and Z"), use `git worktree` to give each agent an isolated working directory. No filesystem collisions, no branch-switching overhead.
+When the coordinator routes multiple issues simultaneously (e.g., "fix bugs X, Y, and Z"),
+use `git worktree` to give each agent an isolated working directory. Parallel implementation
+is allowed only after every worktree is clean, prepared, and verified on its assigned issue
+branch. No filesystem collisions, no branch-switching overhead.
 
 ### When to Use Worktrees vs Sequential
 
