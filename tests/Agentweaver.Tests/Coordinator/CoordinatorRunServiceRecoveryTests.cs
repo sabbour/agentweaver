@@ -789,6 +789,9 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch) =>
             throw new NotImplementedException();
 
+        public bool ReviewerWorktreeMatchesAggregate(string reviewerWorktreePath, string aggregateTreeHash) =>
+            throw new NotImplementedException();
+
         public Task<CollectiveMergeResult> MergeAsync(
             CollectiveMergeRequest request,
             CancellationToken ct) =>

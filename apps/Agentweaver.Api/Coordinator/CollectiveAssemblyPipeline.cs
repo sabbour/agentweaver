@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
+using LibGit2Sharp;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
@@ -139,15 +140,21 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
         catch (AgentProviderException ex)
         {
-            throw new CollectiveRaiInfrastructureException(
-                ex.ErrorCode, ex.UserMessage, ex.IsRetryable, ex);
+            throw ToCollectiveRaiInfrastructureException(ex);
         }
         catch (WorkflowAgentInfrastructureException ex) when (ex.IsRetryable is not null)
         {
-            throw new CollectiveRaiInfrastructureException(
-                ex.Reason, ex.Message, ex.IsRetryable.Value, ex);
+            throw ToCollectiveRaiInfrastructureException(ex);
         }
     }
+
+    internal static CollectiveRaiInfrastructureException ToCollectiveRaiInfrastructureException(
+        AgentProviderException exception) =>
+        new(exception.ErrorCode, exception.UserMessage, exception.IsRetryable, exception);
+
+    internal static CollectiveRaiInfrastructureException ToCollectiveRaiInfrastructureException(
+        WorkflowAgentInfrastructureException exception) =>
+        new(exception.Reason, exception.Message, exception.IsRetryable!.Value, exception);
 
     public async Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)
     {
@@ -433,6 +440,19 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             integrationBranch,
             BuildTestWorktreeName(coordinatorRunId));
         return info.WorktreePath;
+    }
+
+    public bool ReviewerWorktreeMatchesAggregate(string reviewerWorktreePath, string aggregateTreeHash)
+    {
+        if (string.IsNullOrEmpty(reviewerWorktreePath))
+            return true;
+        if (string.IsNullOrEmpty(aggregateTreeHash) || !Repository.IsValid(reviewerWorktreePath))
+            return false;
+
+        using var repository = new Repository(reviewerWorktreePath);
+        return repository.Head.Tip is { } tip
+            && string.Equals(tip.Tree.Sha, aggregateTreeHash, StringComparison.Ordinal)
+            && !repository.RetrieveStatus().IsDirty;
     }
 
     private void RemoveDetachedWorktreeBestEffort(string repositoryPath, string worktreePath)

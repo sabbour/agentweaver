@@ -986,6 +986,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // cleanup wiring). Skipped for empty-diff assemblies: the reviewers early-return approved
         // without touching a worktree, matching the HasChanges guard here.
         var reviewerWorktreePath = string.Empty;
+        var buildTestCompleted = false;
         if (integration.HasChanges)
         {
             reviewerWorktreePath = _pipeline.PrepareReviewerWorktree(
@@ -1098,6 +1099,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         ct).ConfigureAwait(false))
                     return;
 
+                buildTestCompleted = true;
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBuildTestCompleted, new
+                {
+                    workPlanId,
+                    gateId = gate.Id,
+                    treeHash = aggregateTreeHash,
+                });
+                await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -1116,7 +1125,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     assemblyProvider.ModelSource,
                     assemblyProvider.ByokProviderFingerprint);
                 var rai = await RunRaiWithPreservedAggregateAsync(
-                    context, aggregateTreeHash, raiRequest, workPlanId, gate.Id, ct).ConfigureAwait(false);
+                    context, aggregateTreeHash, raiRequest, workPlanId, gate.Id, buildTestCompleted, ct)
+                    .ConfigureAwait(false);
 
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
                 {
@@ -3686,6 +3696,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CollectiveRaiRequest request,
         int workPlanId,
         string gateId,
+        bool buildTestCompleted,
         CancellationToken ct)
     {
         try
@@ -3701,6 +3712,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 throw new InvalidOperationException(
                     $"RAI retry refused because the persisted aggregate changed for run {context.CoordinatorRunId}.", ex);
             }
+            if (buildTestCompleted
+                && !await HasPersistedBuildTestEvidenceAsync(
+                    context.CoordinatorRunId, aggregateTreeHash, ct).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because completed Build/Test evidence is not durable for run {context.CoordinatorRunId}.", ex);
+            }
+            if (!_pipeline.ReviewerWorktreeMatchesAggregate(request.WorktreePath, aggregateTreeHash))
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because the reviewer artifact changed for run {context.CoordinatorRunId}.", ex);
+            }
 
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiRetry, new
             {
@@ -3711,7 +3734,38 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 reason = ex.Reason,
                 treeHash = aggregateTreeHash,
             });
+            // The retry lineage must outlive a subsequent human-review wait or process restart.
+            await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
             return await _pipeline.RunRaiAsync(request, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<bool> HasPersistedBuildTestEvidenceAsync(
+        string coordinatorRunId,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var evidence = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == coordinatorRunId
+                && e.EventType == EventTypes.CoordinatorAssemblyBuildTestCompleted)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => e.PayloadJson)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (evidence is null)
+            return false;
+
+        try
+        {
+            using var payload = JsonDocument.Parse(evidence);
+            return payload.RootElement.TryGetProperty("treeHash", out var treeHash)
+                && string.Equals(treeHash.GetString(), aggregateTreeHash, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
