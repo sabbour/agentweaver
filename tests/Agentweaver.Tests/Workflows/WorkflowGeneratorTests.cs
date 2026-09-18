@@ -18,9 +18,9 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Workflows;
 
 /// <summary>
-/// Tests for the LLM workflow generator (Feature 015 US10, FR-056–FR-061). Unit tests exercise
+/// Tests for the LLM workflow generator (Feature 015 US10, FR-056â€“FR-061). Unit tests exercise
 /// <see cref="CopilotWorkflowGenerator"/> against a scripted <see cref="IAgentRunner"/> so the
-/// prompt → validate → correction-pass pipeline runs without the live model; an integration-style test
+/// prompt â†’ validate â†’ correction-pass pipeline runs without the live model; an integration-style test
 /// drives the generate endpoint through a stub generator. Validation reuses the real
 /// <see cref="WorkflowDefinitionLoader"/> (Principle VII).
 /// </summary>
@@ -79,7 +79,7 @@ public sealed class WorkflowGeneratorTests
             when: declined
         """;
 
-    // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
+    // YAML that parses but fails schema validation (no start/nodes) â†’ drives a correction pass.
     private const string InvalidWorkflowYaml = "name: Broken Workflow\n";
 
     private const string SoftwareWorkflowWithoutHumanReviewYaml = """
@@ -1017,7 +1017,7 @@ public sealed class WorkflowGeneratorTests
     public async Task MissingId_IsDerivedFromDescriptionSlug()
     {
         // Same valid workflow body but without an `id:` line; the generator injects a slug from the
-        // description (FR — id generation).
+        // description (FR â€” id generation).
         var noId = """
             name: No Id Flow
             description: A workflow with no id.
@@ -1058,7 +1058,7 @@ public sealed class WorkflowGeneratorTests
     private static int CountOccurrences(string value, string text) =>
         value.Split(text, StringSplitOptions.None).Length - 1;
 
-    // ── Endpoint integration (stub generator) ────────────────────────────────────────────────────
+    // â”€â”€ Endpoint integration (stub generator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task GenerateEndpoint_WithConfirmedTeam_ExcludesReservedRolesFromTeamRoles()
