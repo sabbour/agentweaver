@@ -370,6 +370,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
 
+        var sessionTools = BuildSessionConfigTools(toolContext);
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
@@ -384,16 +385,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // SandboxToolRegistry is NOT registered wholesale — that would conflict with native tools
             // and bypass governance. Native shell is denied in the permission handler; run_command is
             // the only shell path (ISandboxExecutor-backed).
-            Tools = BuildSessionConfigTools(toolContext).Cast<AIFunctionDeclaration>().ToList(),
+            Tools = sessionTools.Cast<AIFunctionDeclaration>().ToList(),
             // Append workflow instructions as a system message so the model receives them
             // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
             // guardrails and tool-use guidance while layering our scaffold instructions on top.
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = string.IsNullOrEmpty(systemPromptContext)
-                    ? AgentBasePrompt.Base
-                    : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
+                Content = ComposeFinalPrompt(systemPromptContext, sessionTools.Select(tool => tool.Name)),
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = byokProvider?.Model ?? modelId,
@@ -1001,6 +1000,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         return tools;
     }
+
+    internal static string ComposeFinalPrompt(
+        string? systemPromptContext,
+        IEnumerable<string> registeredToolNames) =>
+        AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);
 
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.

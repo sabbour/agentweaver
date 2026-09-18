@@ -137,10 +137,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private ISandboxExecutor? _activeExecutor;
     private SandboxPolicy? _sandboxPolicy;
     private IReadOnlyList<string> _registeredToolNames = [];
-    // Whether list_decisions/get_memory/list_inbox/submit_decision are registered for this
-    // session (see BuildSessionConfigTools) — gates whether the prompt tells the agent about
-    // them (#268: prompt/tool mismatch caused hallucinated tool calls).
-    private bool _includeTeamCoordinationPrompt;
     private SessionConfig? _sessionConfig;
     private ShellExecutionTracker? _shellExecutionTracker;
     // Whether this run uses the controlled Build/Test shell surface (purpose == AssemblyBuildTest).
@@ -544,12 +540,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     tool, EmitToolCallOnce, EmitToolResultOnce, EmitToolErrorOnce, StartToolSpan, CompleteToolSpan);
             });
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
-        // list_decisions/get_memory/list_inbox/submit_decision are only registered when
-        // Agentweaver API tools were built (projectId + agentName both supplied). Only tell the
-        // agent about them in the prompt when they're actually callable, or it hallucinates
-        // calls to nonexistent tools (#268).
-        _includeTeamCoordinationPrompt = _registeredToolNames.Contains("list_decisions");
-
         const bool denyNativeShell = true;
         // Keep the SDK lifecycle translator aligned with the permission handler: when native
         // shell is denied for this run, any lifecycle start event for the SDK's built-in shell
@@ -584,9 +574,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = string.IsNullOrEmpty(_systemPromptContext)
-                    ? BuildBasePrompt(_includeTeamCoordinationPrompt)
-                    : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext,
+                Content = ComposeFinalPrompt(_systemPromptContext, _registeredToolNames),
             },
             Model = ResolveSessionModel(
                 _activeByokProviderConfiguration,
@@ -2384,17 +2372,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
     }
 
-    /// <summary>
-    /// Builds the full base system prompt, optionally including the TEAM COORDINATION section.
-    /// That section references list_decisions/get_memory/list_inbox/submit_decision, which are
-    /// only registered as tools when Agentweaver API tools were built (see
-    /// <see cref="BuildSessionConfigTools"/>). Pass <c>false</c> when those tools are not part of
-    /// the session's tool list to avoid the agent hallucinating calls to them (#268).
-    /// </summary>
-    internal static string BuildBasePrompt(bool includeTeamCoordination) =>
-        includeTeamCoordination
-            ? AgentBasePrompt.Base + AgentBasePrompt.TeamCoordination
-            : AgentBasePrompt.Base;
+    internal static string ComposeFinalPrompt(
+        string? systemPromptContext,
+        IEnumerable<string> registeredToolNames) =>
+        AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);
 
     /// <summary>
     /// Builds the tool list for <see cref="SessionConfig.Tools"/>:

@@ -41,25 +41,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private readonly SemaphoreSlim _orchestrationWorktreeLock = new(1, 1);
 
     /// <summary>
-    /// Concise "Memory Protocol" appended to every worker (and coordinator child) system prompt so
-    /// agents actually turn the memory flywheel: record reusable learnings and submit notable
-    /// decisions. Deliberately short so it stays non-spammy. Never appended to the Scribe, which has
-    /// its own post-run memory note.
-    /// </summary>
-    internal const string WorkerMemoryProtocol =
-        """
-        ## Memory Protocol
-
-        You have native memory tools. Use them for SIGNIFICANT, reusable items only (not routine steps):
-        - record_memory(type: "learning" | "pattern", importance, content, tags) for a non-obvious
-          discovery, gotcha, or reusable pattern a teammate would want to know next time.
-        - submit_decision(slug, type, title, content, rationale) for a notable design, architecture,
-          or scope choice. Use type "architectural" or "scope" for team boundaries.
-
-        Record at most a few high-value items per run. Skip trivia and step-by-step progress.
-        """;
-
-    /// <summary>
     /// Assertive, imperative "Browser Preview" mandate, injected at the TOP of worker/child system
     /// prompts ONLY when Sandbox:Preview:Enabled=true. This is deliberately forceful: earlier passive
     /// wording ("if you start a server…") was routinely ignored, so the agent is now given explicit,
@@ -1077,7 +1058,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             // and do the actual work, so their assigned skills must reach them too. Child runs carry
             // AgentName/ProjectId/WorktreePath — everything the composer needs.
             childPrompt = await AppendAssignedSkillsAsync(run, childPrompt, ct);
-            return (run.Task, AppendCapabilities(AppendMemoryProtocol(childPrompt), run));
+            return (run.Task, AppendCapabilities(childPrompt ?? "", run));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -1127,7 +1108,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             systemPromptContext = await AppendAssignedSkillsAsync(run, systemPromptContext, ct);
         }
 
-        return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext), run));
+        return (run.Task, AppendCapabilities(systemPromptContext ?? "", run));
     }
 
     private void EmitMemoryContextComposition(string runId, MemoryContextCompilation? compilation)
@@ -1234,16 +1215,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             : BrowserPreviewCapability + "\n\n---\n\n" + systemPromptContext;
     }
 
-    /// <summary>
-    /// Appends the <see cref="WorkerMemoryProtocol"/> to a worker/child system prompt so the agent is
-    /// instructed to use its memory tools. Safe when <paramref name="systemPromptContext"/> is null
-    /// (the protocol then becomes the whole prompt context).
-    /// </summary>
-    internal static string AppendMemoryProtocol(string? systemPromptContext) =>
-        string.IsNullOrEmpty(systemPromptContext)
-            ? WorkerMemoryProtocol
-            : systemPromptContext + "\n\n---\n\n" + WorkerMemoryProtocol;
-
     private static void EmitRunStartedMetrics(Run run)
     {
         var tags = BuildRunTags(run);
@@ -1299,18 +1270,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// </summary>
     internal static string ComposeChildSystemPrompt(string? charter, string? decisions = null)
     {
-        const string boundary =
-            "## Working-directory sandbox boundary\n" +
-            "You are running inside an isolated git worktree. ALL file reads and writes MUST stay " +
-            "within your current working directory (this worktree) for deliverables. The ONLY " +
-            "approved location outside the worktree is the run-scoped scratch directory exposed in " +
-            "$AGENTWEAVER_SCRATCH, which you may access through shell commands for non-deliverable " +
-            "working files only. You must NEVER write to any other path outside the working " +
-            "directory — including session-state, .copilot, the home directory, or other temp " +
-            "directories. If a write is rejected because it targets a path outside the sandbox, do " +
-            "not retry the same path: adapt and write deliverables in the worktree or ephemeral " +
-            "scratch output in $AGENTWEAVER_SCRATCH instead.";
-
         const string deliverableCapture =
             "## Deliverable files\n" +
             "All deliverables produced by this task — documents, drafts, reports, code, " +
@@ -1326,7 +1285,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             sb.Append(charter).Append("\n\n---\n\n");
         if (!string.IsNullOrEmpty(decisions))
             sb.Append(decisions.TrimEnd()).Append("\n\n---\n\n");
-        sb.Append(boundary).Append("\n\n---\n\n").Append(deliverableCapture);
+        sb.Append(deliverableCapture);
         return sb.ToString();
     }
 
