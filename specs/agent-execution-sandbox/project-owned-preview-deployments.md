@@ -59,18 +59,22 @@ or redeploying a `ProjectPreview`, the API creates one immutable `PreviewSourceA
 | `created_by` / `created_at` | Audit provenance. |
 | `object_version` / `retention_until` | Immutable object-store version identifier and the artifact retention deadline captured at creation. |
 
-Artifact creation atomically allocates an artifact row in `capturing` state, streams a
-checked-out committed tree to a private, versioned object key, verifies the SHA-256 and byte
-count against the stored object version, then transitions that row to `available`. The row is
-write-once after `available`: identity, provenance, digest, size, object URI/version, and
-retention metadata cannot be updated or reused for different bytes. The deployment controller
-receives only the artifact id and a short-lived, audience-scoped read credential for that exact
-object version. It never mounts, reads, or clones the archived source-run worktree.
+Artifact creation atomically allocates one stable artifact record and opaque `artifact_id` in
+`capturing` state before any bytes are captured. It then streams a checked-out committed tree to
+a private, versioned object key, verifies the SHA-256 and byte count against the stored object
+version, and transitions that same record to `available`. The row is write-once after
+`available`: identity, provenance, digest, size, object URI/version, and retention metadata
+cannot be updated or reused for different bytes. The deployment controller receives only an
+`available` artifact id and a short-lived, audience-scoped read credential for that exact object
+version. It never mounts, reads, or clones the archived source-run worktree.
 
 Artifact retention is independent of run retention and is not deleted by run archive/delete.
-Each generation holds an immutable reference to one `available` artifact. The reconciler
-repairs incomplete capture by deleting an unreferenced `capturing` row and its exact object
-version after its capture deadline; it never treats an incomplete object as deployable. It may
+Each generation holds an immutable reference to one stable artifact identity. The initial
+generation may reference its atomically created `capturing` artifact while capture is in
+progress; it is not provisionable, publishable, or deployable until that same artifact becomes
+`available`. Candidate and later generations reference only `available` artifacts. The
+reconciler repairs incomplete capture by deleting an unreferenced `capturing` row and its exact
+object version after its capture deadline; it never treats an incomplete object as deployable. It may
 purge an `available` artifact only after every referencing generation is terminal, every
 referencing preview audit deadline has elapsed, and the artifact's `retention_until` has
 elapsed. Purge first marks the row `purging`, deletes only its recorded object version, verifies
@@ -155,26 +159,32 @@ generation link, never a raw capability URL or token.
 
 ### States
 
-For an initial deployment, the aggregate transitions
-`requested -> reserving -> provisioning -> publishing -> ready`; provisioning failure is
-terminal `failed`. For blue/green redeploy, the aggregate is `redeploying` while generation N
-remains the sole `active_ready` generation and N+1 is a separate candidate state:
+The aggregate state always represents the active generation lifecycle. For an initial
+deployment it transitions `requested -> reserving -> provisioning -> publishing -> ready`; its
+first generation cannot enter `provisioning` until its referenced `capturing` artifact has become
+`available`, and capture failure is terminal `failed`. During blue/green redeploy the aggregate
+remains `ready` for active generation N; N+1 has a separate candidate state:
 `candidate_reserving -> candidate_provisioning -> candidate_publishing -> candidate_ready` or
-`candidate_failed`. Candidate states never replace N's state, expiry, URL-disclosure right, or
-cleanup lease. Only an atomic cutover changes N+1 to `active_ready` and marks N `superseded` for
-fenced cleanup. `active_ready -> stopping -> stopped` is an explicit stop;
-`active_ready -> expiring -> expired` is expiry. `deleting` is a project-delete administrative
-state that always converges to `stopped`/`expired` plus retained audit metadata. Terminal
-states are `stopped`, `expired`, and `failed`; only a new start or redeploy operation creates
-another generation.
+`candidate_failed`. Candidate states never change N's state, expiry, URL-disclosure right, or
+cleanup lease, so the active URL, Extend operation, and mandatory expiry continue normally. Only
+an atomic cutover changes N+1 to `active_ready` and marks N `superseded` for fenced cleanup. A
+stalled candidate is reconciled under its own lease and recorded deadline: lease takeover either
+continues it or changes it to `candidate_failed`, cleans its objects, and releases only its
+candidate reservation; N remains ready. `active_ready -> stopping -> stopped` is an explicit
+stop; `active_ready -> expiring -> expired` is expiry. `deleting` is a project-delete
+administrative state that always converges to `stopped`/`expired` plus retained audit metadata.
+Terminal states are `stopped`, `expired`, and `failed`; only a new start or redeploy operation
+creates another generation.
 
 Every mutation requires an `Idempotency-Key`. For **create**, one database transaction inserts
 the project-scoped `(project_id, kind=create, idempotency_key)` operation, allocates the opaque
-preview id, creates its first generation record, and reserves quota **before artifact capture**.
-The unique constraint serializes concurrent identical create requests: the winner owns the
-allocation; a same-fingerprint loser loads and returns that exact stored operation/preview id;
-a different fingerprint returns `409 idempotency_key_reused`. Artifact capture and scheduling
-begin only after this committed transaction. The API persists every other operation before
+preview id, creates exactly one stable `capturing` artifact record/identity, creates its first
+generation with `source_artifact_id` referencing that identity, and reserves quota **before
+artifact capture**. The unique constraint serializes concurrent identical create requests: the
+winner owns the allocation; a same-fingerprint loser loads and returns that exact stored
+operation/preview id; a different fingerprint returns `409 idempotency_key_reused`. Artifact
+capture begins only after this committed transaction, and scheduling begins only after the
+referenced artifact has transitioned to `available`. The API persists every other operation before
 scheduling work and returns its stored result for exact replay. A database compare-and-swap acquires the
 aggregate lease by updating `lease_owner`, `lease_expires_at`, and incrementing
 `operation_fence`. Every controller write and Kubernetes projection carries that fence; a
@@ -186,9 +196,9 @@ expiry by the reconciler.
 | --- | --- |
 | Start | Validate project role, `sourceRun.ProjectId == target projectId`, same-project authorization, source eligibility, name, policy snapshot, and idempotency before capture. The atomic create transaction reserves quota before artifact capture; exhaustion returns `409 preview_quota_exhausted`, with no artifact or runtime object. The controller consumes the reservation only after it creates the isolated workload. |
 | Publication | Create workload, Service, and HTTPRoute tagged with preview id/generation/fence; wait through the recorded convergence/readiness budgets. Only a Gateway-hostname success can move to `ready`, set `ready_at`/`expires_at`, and disclose the URL. Any failure deletes route, Service, and workload, releases quota, redacts diagnostics, and becomes `failed`. |
-| Extend | `ready` only. Validate the recorded maximum horizon and policy snapshot; CAS updates `expires_at` under a new fence. The expiry reaper re-reads the row/fence immediately before deletion, so an extension committed before that check wins; a completed `expiring` transition returns `409 preview_not_ready` and requires redeploy. |
+| Extend | Targets the `active_ready` generation whenever the aggregate is `ready`, including while a candidate is redeploying. Validate the recorded maximum horizon and policy snapshot; CAS updates active N's `expires_at` under a new fence. The expiry reaper re-reads the active row/fence immediately before deletion, so an extension committed before that check wins; a completed `expiring` transition returns `409 preview_not_ready` and requires redeploy. |
 | Stop | Idempotent for `stopping`, `stopped`, and `expired`; it fences/cancels in-flight publication, deletes route then Service then workload, releases reservation, and records `stopped`. A concurrent start/redeploy that has not published is cancelled; a stale publisher cannot restore resources because its fence is invalid. |
-| Redeploy | A request with no `source_run_id` redeploys directly from the retained artifact referenced by active N; it does not load the source run and continues to work after that run is deleted. A request with `source_run_id` explicitly requests replacement bytes and must validate `sourceRun.ProjectId == target projectId`, same-project authorization, eligibility, and capture a new artifact before N+1 exists. In both cases reserve quota for candidate N+1 before touching N. N remains the active, URL-disclosable `ready` generation while N+1 is `candidate_provisioning`/`candidate_publishing`; its expiry can be extended and its normal cleanup remains fenced. Only validated candidate publication atomically changes active generation, revokes N's URL/route, then cleans N and releases N's reservation. Candidate failure or cleanup failure never changes N, its URL, expiry, or reservation. |
+| Redeploy | A request with no `source_run_id` redeploys directly from the retained `available` artifact referenced by active N; it does not load the source run and continues to work after that run is deleted. A request with `source_run_id` explicitly requests replacement bytes and must validate `sourceRun.ProjectId == target projectId`, same-project authorization, eligibility, and capture a new artifact before N+1 exists. In both cases reserve quota for candidate N+1 before touching N. The aggregate and N remain `ready` and URL-disclosable while N+1 is `candidate_provisioning`/`candidate_publishing`; Extend and expiry always target N, and N's normal cleanup remains fenced. Only validated candidate publication atomically changes active generation, revokes N's URL/route, then cleans N and releases N's reservation. Candidate failure, stalled-candidate timeout, or candidate cleanup failure never changes N, its URL, expiry, or reservation. |
 | Expiry | Reaper selects `ready` rows with `expires_at <= now`, acquires a lease/fence, changes to `expiring`, and performs the same route/service/workload cleanup. It then releases quota and records `expired`; it never silently extends from browser activity. |
 | Project delete | `ProjectService.TryBeginDeleteAsync` transactionally writes an immutable `project_identity_archives` snapshot, revokes public preview routes/tokens at the Gateway publication boundary, marks every dependent preview/generation `deleting`, and persists cleanup obligations before deleting project workspace/runs. This revocation barrier commits before the parent deletion can commit; after it, public and project routes deny access, while only controller/reconciler cleanup identities can read retained metadata. Parent deletion may then complete with durable retry obligations, because audits/artifacts reference the immutable archive rather than a deleted parent. The reaper deletes route, Service, workload, and token material; retains sanitized lifecycle audit rows and artifact references until their recorded deadlines; then purges audit rows, archive identity, and eligible artifact object versions under the safe purge rules. |
 | Reconcile | A hosted service scans expired leases, nonterminal rows, stale quota reservations, and orphaned resources carrying the project-preview labels. It trusts row+fence state over object presence, recreates missing required objects only for the current nonterminal generation, and deletes objects with no current matching row/fence. It cannot resurrect terminal previews. |
@@ -259,9 +269,9 @@ run capability can invoke these project-preview operations.
 
 | Layer | Required evidence |
 | --- | --- |
-| Domain/storage | Unit tests for every transition; atomic create allocation/operation/quota reservation before capture; same-key concurrent replay and fingerprint collision; lease takeover/fence rejection; token encryption/redaction; artifact write-once identity/object-version/digest/size validation; capture reconciliation; generation references; safe eventual purge; archive retention; and SQLite/PostgreSQL migration upgrade from the current schema. |
+| Domain/storage | Unit tests for every transition; atomic create allocation/operation/`capturing` artifact identity/first-generation reference/quota reservation before capture; no provisioning or deployment until that referenced artifact is `available`; same-key concurrent replay and fingerprint collision; lease takeover/fence rejection; token encryption/redaction; artifact write-once identity/object-version/digest/size validation; capture reconciliation; generation references; safe eventual purge; archive retention; and SQLite/PostgreSQL migration upgrade from the current schema. |
 | Authorization | API and MCP tests covering Viewer/Contributor/Owner, cross-project denial, **cross-project source-run start/redeploy denial**, deleted project, legacy non-project run, internal-service key, and run-capability claim. Assert URL absence from list/get/events/errors and `no-store` URL response. |
-| Controller/race | Deterministic fake-clock and fake-Kubernetes tests for start/stop, extend-vs-expiry, start-vs-project-delete revocation barrier, stale publisher, crash/lease takeover, retained-artifact redeploy after source-run deletion, explicit source replacement, candidate failure preserving active N's availability/URL/extension/expiry, publication rollback, orphan cleanup, and quota release exactly once. |
+| Controller/race | Deterministic fake-clock and fake-Kubernetes tests for start/stop, extend-vs-expiry, start-vs-project-delete revocation barrier, stale publisher, crash/lease takeover, retained-artifact redeploy after source-run deletion, explicit source replacement, candidate failure or timeout preserving active N's availability/URL/extension/mandatory expiry, publication rollback, orphan cleanup, and quota release exactly once. |
 | Runtime profile | Contract tests for each versioned profile snapshot/replay: fixed source layout, builder/runtime image digests, command, port, health probe, resource and network rules. Negative tests assert `preview_artifact_unsupported` and `preview_runtime_profile_unsupported` before workload scheduling. |
 | Gateway privacy | Direct-navigation and external-resource tests cover success, redirect, and error paths and assert the Gateway returns `Referrer-Policy: no-referrer` on every preview response. |
 | Sandbox/security | Manifest and adapter tests assert no source-run mounts, AgentHost endpoints, claims, run credentials, API key, or privileged service account; assert Gateway-only ingress, bounded egress, resource limits, and URL/token redaction. |
@@ -271,10 +281,10 @@ run capability can invoke these project-preview operations.
 
 ## Acceptance criteria
 
-- [ ] Create atomically establishes the project-scoped idempotent operation, preview id, first generation, and quota reservation before artifact capture; exact and concurrent replays return the same operation/preview.
+- [ ] Create atomically establishes the project-scoped idempotent operation, preview id, one `capturing` artifact identity, first-generation reference to that identity, and quota reservation before artifact capture; scheduling cannot begin until that artifact becomes `available`, and exact and concurrent replays return the same operation/preview.
 - [ ] A ready ProjectPreview stays reachable after its source run finishes, is archived, or is deleted; retained-artifact redeploy works after deletion, while an explicitly supplied source run is validated as a same-project replacement.
 - [ ] Source artifacts are write-once, versioned, reconciled, generation-referenced, and purged only after all recorded retention and reference conditions hold.
-- [ ] Active and candidate redeploy generations remain separately fenced: failed candidates cannot reduce active availability, URL disclosure, extension, expiry, or cleanup safety.
+- [ ] Active and candidate redeploy generations remain separately fenced: while a candidate runs, the aggregate remains ready and active URL availability, Extend, mandatory expiry, and cleanup safety target active N; failed or stalled candidates cannot reduce them.
 - [ ] Project deletion snapshots identity, commits public-route revocation before parent deletion, and retains/purges audits and artifacts safely without orphan access.
 - [ ] Every Gateway preview response, including redirects and errors, has `Referrer-Policy: no-referrer`.
 - [ ] No project-preview generation reuses a source run worktree, AgentHost, sandbox claim, or credential.
