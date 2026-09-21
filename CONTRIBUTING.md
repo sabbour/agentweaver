@@ -235,11 +235,14 @@ toolchain's single source of truth) through
 - push to `dev` → `:sha-<short>` and `:dev`
 - push to `release/vX.Y.Z` → `:sha-<short>` and `:rc-X.Y.Z`
 - push to `main` → `:sha-<short>` and `:main`
-- pull request paths that can affect images → build only, no push
 - tag push `vX.Y.Z` → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
 - manual `workflow_dispatch` → `:sha-<short>` plus the selected ref's channel tag
   for `dev`, `main`, or `release/vX.Y.Z`; other refs receive only `:sha-<short>`.
   An optional build-only dry run skips the push
+
+Pull requests do not trigger image builds; ordinary PR validation is provided by the
+[`CI` workflow](.github/workflows/ci.yml). Release images are built and published by the
+`vX.Y.Z` tag push that `npm run release:publish` creates.
 
 Every build publishes the immutable `sha-<short>` tag, so any image is addressable by
 the exact commit it was built from — the same identifier model

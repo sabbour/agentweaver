@@ -196,8 +196,8 @@ npm run release:sync-dev -- <release-preparation-sha>
 
 ## Published container images
 
-Alongside the Azure/ACR deployment path, every stage of the branch topology also
-publishes container images to GitHub's container/artifact registry via the
+Alongside the Azure/ACR deployment path, eligible branch and release-flow triggers
+publish container images to GitHub's container/artifact registry via the
 [`Publish images` workflow](.github/workflows/publish-images.yml):
 
 | Trigger | Tags applied to each `ghcr.io/<owner>/agentweaver-*` image |
@@ -213,6 +213,9 @@ This table follows `scripts/ci/ghcr-plan.mjs`: `workflow_dispatch` is classified
 by its selected ref, not forced into a commit-only channel. The checked-in workflow
 skips docs/specs/Markdown-only **pushes**. Manual runs have their own trigger.
 These are repository facts, not evidence that a specific image or release exists.
+
+Routine pull requests do not trigger image builds; the `CI` workflow performs PR
+validation. Release images are built and published through the `vX.Y.Z` tag flow.
 
 Release images are published from the `vX.Y.Z` tag push. The `release:publish`
 command waits for that image workflow before it creates the GitHub Release.
