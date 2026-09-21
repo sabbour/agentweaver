@@ -392,7 +392,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
             EDITING RULES:
             - Apply ONLY the requested natural-language change. Preserve the workflow's purpose,
-              unchanged steps, dependencies, trigger/entry structure, labels, prompts, roles, and
+              unchanged steps, dependencies, labels, prompts, roles, and
               terminal paths unless the edit explicitly asks to change them.
             - Support add, remove, reorder, and modify operations on steps, dependencies, gates,
               branches, and trigger/start structure.

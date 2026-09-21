@@ -984,6 +984,7 @@ public sealed class WorkflowGeneratorTests
         CountOccurrences(prompt, "immediately after any RAI safety check").Should().Be(1);
         CountOccurrences(prompt, "Apply ONLY the requested natural-language change").Should().Be(1);
         CountOccurrences(prompt, "built-in/library and immutable").Should().Be(1);
+        CountOccurrences(prompt, "preserve existing trigger structure unless the edit requests a change").Should().Be(1);
     }
 
     [Fact]
