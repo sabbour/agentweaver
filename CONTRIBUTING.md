@@ -59,7 +59,9 @@ they are not Agentweaver sign-in providers.
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
    - Before ready and immediately before merge, Ralph runs the Squad external-state
-     admission preflight. It resolves the live PR head and returns `<validated-sha>`;
+     admission preflight from the canonical validator materialized from `origin/dev`.
+     It binds the live PR head and trusted validator blob/version, then returns
+     `<validated-sha>`;
      merge manually with `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
@@ -211,7 +213,8 @@ non-.NET jobs count as passing when skipped; the named .NET shard jobs intention
 on every `dev` PR so GitHub emits each required context. The GitHub ruleset described in
 [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) provides ordinary
 branch and CI protection. **Squad/Ralph external-state preflight owns admission** and
-blocks manual squash merge until its findings ledger validates at the live PR head.
+blocks manual squash merge until its findings ledger validates at the live PR head with
+the trusted `origin/dev` validator blob/version.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 

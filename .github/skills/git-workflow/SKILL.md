@@ -56,8 +56,10 @@ Examples:
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
    Before ready and immediately before this command, Ralph runs the coordinator-owned
-   external-state admission preflight, which resolves and returns `<validated-sha>` for
-   the live PR head. Confirm the PR reports `MERGED`,
+   external-state admission preflight from a temporary validator materialized with
+   `git show origin/dev:scripts/ci/squad-admission-preflight.mjs`, never the candidate
+   checkout. It binds the live PR head and the trusted validator blob/version before it
+   returns `<validated-sha>`. Confirm the PR reports `MERGED`,
    `mergedAt`, and merge SHA before dispatching dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation

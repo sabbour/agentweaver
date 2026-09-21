@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { relative, resolve } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { relative, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { loadDirConfig, resolveExternalStateDir } from '@bradygaster/squad-sdk';
 
 export const KIND = 'agentweaver.squad-admission-findings/v1';
+export const VALIDATOR_VERSION = '1';
+export const VALIDATOR_PATH = 'scripts/ci/squad-admission-preflight.mjs';
 const SHA = /^[0-9a-f]{40}$/iu;
 const POLICIES = new Set(['advisory', 'required']);
 const runFile = promisify(execFile);
@@ -35,19 +39,26 @@ function isOutside(candidate, parent) {
   return path !== '' && (path === '..' || path.startsWith('..\\') || path.startsWith('../'));
 }
 
-function isChild(candidate, parent) {
-  const path = relative(resolve(parent), resolve(candidate));
-  return path !== '' && !isOutside(candidate, parent);
+function externalConfig(repositoryRoot) {
+  const squadDir = join(repositoryRoot, '.squad');
+  const configPath = join(squadDir, 'config.json');
+  if (!existsSync(configPath)) throw new Error('repository .squad/config.json is required to prove external state');
+  const config = loadDirConfig(squadDir);
+  if (!config) throw new Error('repository .squad/config.json is malformed');
+  if (config?.stateLocation !== 'external' || typeof config.projectKey !== 'string' || config.projectKey.trim() === '') {
+    throw new Error('repository .squad/config.json does not declare external state');
+  }
+  return { squadDir, config };
 }
 
-export function assertAuthoritativeState(status, repositoryRoot, appData = process.env.APPDATA) {
-  const active = /^ {2}Active squad:\s*external\s*$/imu.test(status);
-  const path = /^ {2}Path:\s*(.+?)\s*$/imu.exec(status)?.[1];
-  if (!active || !path || !appData) throw new Error('Squad state source cannot prove authoritative external state');
-  const expectedRoot = resolve(appData, 'squad', 'projects');
-  const statePath = resolve(path);
-  if (!isOutside(statePath, repositoryRoot) || !isChild(statePath, expectedRoot)) {
-    throw new Error('Squad state source is repository-controlled or outside the authoritative external state root');
+export function resolveAuthoritativeState(repositoryRoot) {
+  const { squadDir, config } = externalConfig(repositoryRoot);
+  const statePath = resolveExternalStateDir(config.projectKey, false);
+  if (!isOutside(statePath, repositoryRoot)) {
+    throw new Error('Squad state resolver returned a repository-controlled path');
+  }
+  if (!existsSync(statePath) || !statSync(statePath).isDirectory()) {
+    throw new Error('Squad CLI external state directory does not exist');
   }
   return statePath;
 }
@@ -134,8 +145,7 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
   const command = dependencies.command ?? runFile;
   const repositoryRoot = dependencies.repositoryRoot ?? process.cwd();
-  const status = await command('npx', ['-y', '@bradygaster/squad-cli@0.13.1', 'status']);
-  assertAuthoritativeState(status.stdout, repositoryRoot, dependencies.appData);
+  const stateDirectory = (dependencies.resolveState ?? resolveAuthoritativeState)(repositoryRoot);
 
   const bridge = (dependencies.openBridge ?? openStateBridge)();
   try {
@@ -143,17 +153,39 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
     const ledger = JSON.parse(await bridge.read(key));
     const head = JSON.parse((await command('gh', ['pr', 'view', String(prNumber), '--repo', repository, '--json', 'headRefOid'])).stdout);
     const headSha = exactSha(head.headRefOid, 'live PR head');
-    return validateAdmissionPreflight(ledger, { repository, prNumber, headSha });
+    return {
+      ...validateAdmissionPreflight(ledger, { repository, prNumber, headSha }),
+      stateDirectory,
+      validator: dependencies.validator,
+    };
   } finally {
     bridge.close();
   }
 }
 
+async function trustedBlob(command, repositoryRoot, trustedRef) {
+  return required((await command('git', ['rev-parse', `${trustedRef}:${VALIDATOR_PATH}`], { cwd: repositoryRoot })).stdout, 'trusted validator blob').toLowerCase();
+}
+
+export async function verifyTrustedValidator({ command = runFile, repositoryRoot = process.cwd(), validatorPath = process.argv[1], trustedRef = 'origin/dev', trustedValidatorBlob }) {
+  const trustedBlobHash = await trustedBlob(command, repositoryRoot, trustedRef);
+  if (!SHA.test(trustedBlobHash)) throw new Error('trusted validator blob must be a 40-character SHA');
+  if (trustedValidatorBlob !== trustedBlobHash) throw new Error('provided trusted validator blob does not match origin/dev');
+  const materializedBlob = required((await command('git', ['hash-object', validatorPath], { cwd: repositoryRoot })).stdout, 'materialized validator blob').toLowerCase();
+  if (materializedBlob !== trustedBlobHash) {
+    throw new Error('candidate-checkout validator substitution rejected: validator bytes do not match origin/dev');
+  }
+  return { path: VALIDATOR_PATH, ref: trustedRef, blobSha: trustedBlobHash, version: VALIDATOR_VERSION };
+}
+
 async function main() {
-  const [repository, value] = process.argv.slice(2);
+  const [repository, value, option, trustedValidatorBlob] = process.argv.slice(2);
   const prNumber = Number(value);
-  if (!repository || !value) throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number>');
-  console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber)));
+  if (!repository || !value || option !== '--trusted-validator-blob' || !trustedValidatorBlob) {
+    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --trusted-validator-blob <origin/dev-blob-sha>');
+  }
+  const validator = await verifyTrustedValidator({ trustedValidatorBlob });
+  console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, { validator })));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

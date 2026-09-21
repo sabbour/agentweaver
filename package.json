@@ -34,7 +34,6 @@
     "validate:layer": "node scripts/ci/validate.mjs --profile layer",
     "validate:full": "node scripts/ci/validate.mjs --profile full",
     "workflow:ponytail-gate": "node scripts/ci/ponytail-gate.mjs",
-    "squad:admission-preflight": "node scripts/ci/squad-admission-preflight.mjs",
     "demo:record": "node scripts/demo-recording/cli.mjs",
     "changeset": "changeset add",
     "changeset:status": "changeset status --verbose",
@@ -46,6 +45,8 @@
     "release:sync-dev": "node scripts/changesets/sync-dev.mjs"
   },
   "devDependencies": {
+    "@bradygaster/squad-cli": "0.13.1",
+    "@bradygaster/squad-sdk": "0.13.1",
     "@changesets/cli": "^3.0.0",
     "@types/node": "^26.2.0",
     "elkjs": "0.11.0",
