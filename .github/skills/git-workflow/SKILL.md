@@ -53,10 +53,12 @@ Examples:
    completed with no unresolved blocker:
    ```bash
    gh pr ready <number>
-   gh pr merge <number> --rebase --auto
+   gh pr merge <number> --squash
    ```
-   Confirm the PR reports `MERGED` before dispatching or merging dependent work. An
-   auto-merge request is not merge confirmation.
+   Immediately before `gh pr ready` and immediately before the squash command, run the
+   trusted admission-finding preflight against the current PR head. Confirm
+   `state=MERGED`, `mergedAt`, and `mergeCommit.oid`, then fetch `origin/dev` and verify
+   the merge SHA is present before dispatching dependent work or cleanup.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
    run, and any blocker.

@@ -20,7 +20,41 @@ for ordinary PRs.
 cohort. It is never the admission queue for independent issues. Independent changes use
 the temporary integration branch workflow below.
 
-## Ponytail implementation and admission gate
+## Admission findings ledger
+
+Ponytail remains one required reviewer source, but its candidate-branch JSON is not
+admission authority. The authoritative record is exactly one GitHub PR comment with the
+marker `<!-- agentweaver.admission-findings-ledger/v1 -->`, written by an admission owner
+independent from the candidate author. It binds the repository, PR number, current head
+SHA, owner, ordered cohort identity, every required reviewer source, every finding, and
+its complete transition history.
+
+Each reviewer submits an independent GitHub review at the exact current SHA containing
+an `agentweaver.findings-source/v1` payload. Required findings must transition exactly
+`recorded -> owned -> (corrective-pr | waived) -> revalidated -> resolved`; every
+transition records actor, timestamp, SHA, and evidence. The source payload controls a
+finding's severity and policy: the ledger cannot lower either. A corrective PR must be
+merged and included in the candidate. A waiver needs a rationale plus an authorized
+approver independent from both candidate author and ledger author. Revalidation is by a
+third independent actor against the current SHA. Any new head invalidates all evidence.
+The trusted workflow has repository-controlled reviewer-source and admission-owner
+allowlists; source labels in a review payload are never authority, and a candidate author
+or unlisted secondary account cannot satisfy them.
+
+The trusted `Admission findings` workflow uses `pull_request_target`, checks out only
+`dev`, and queries GitHub PR/review/comment metadata; it never checks out or executes
+candidate code. Run the same preflight before marking ready and immediately before
+merging:
+
+```bash
+gh workflow run "Admission findings" --ref dev -f pr-number=<pr>
+gh run watch --exit-status "$(gh run list --workflow 'Admission findings' --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Missing, duplicate, unknown, reordered, skipped, stale, self-approved, or incomplete
+evidence blocks admission.
+
+## Ponytail implementation evidence
 
 Coding agents use `ponytail` by default. After implementation they must:
 
@@ -157,8 +191,9 @@ blockers to the coordinator.
 
 ## Merge policy
 
-For a real stack, only the coordinator uses `gh stack merge`; never use raw `gh pr merge`
-for it. Ordinary one-branch PRs use the repository's normal PR merge policy.
+The only ordinary admission command is `gh pr merge <pr> --squash`. Do not use
+`--auto`, `--rebase`, `--merge`, or `gh stack merge`. Confirm `MERGED`, `mergedAt`, the
+merge SHA, and refreshed `origin/dev` state before cleanup.
 
 ## Agent assignment prompt
 

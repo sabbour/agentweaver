@@ -33,6 +33,7 @@ Create an **active branch ruleset** targeting only `dev`:
   - `Web tests`
   - `Docs build`
     - `Changeset advisory`
+  - `Admission findings`
 
 ## Repository merge settings
 
@@ -52,3 +53,11 @@ an audited `gh api` call at Ahmed's explicit direction. Repository merge setting
 advisory` was added to the required checks the same day, once the underlying
 `scripts/changesets/check.mjs` check was changed from an advisory-only warning to a
 real failure for missing changesets.
+
+## Admission findings required check
+
+Repository administrators must add **`Admission findings`** from the `Admission findings`
+workflow to the active `dev-integration-ruleset` required-status-check list. GitHub
+rulesets are repository settings and cannot be changed safely from a source PR. Until
+that setting is applied, the workflow records fail-closed evidence but is not mechanical
+merge enforcement.

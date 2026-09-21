@@ -1,0 +1,40 @@
+name: Admission findings
+
+on:
+  pull_request_target:
+    branches: [dev]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: PR number to preflight
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  admission-findings:
+    name: Admission findings
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request_target deliberately executes only the trusted dev workflow and source.
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Validate authoritative admission ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr-number }}
+          ADMISSION_FINDINGS_REQUIRED_SOURCES: code-review,security-review,ponytail-review
+          ADMISSION_FINDINGS_AUTHORIZED_REVIEWERS: code-review=sabbour;security-review=sabbour;ponytail-review=sabbour
+          ADMISSION_FINDINGS_ADMISSION_OWNERS: sabbour
+          ADMISSION_FINDINGS_WAIVER_APPROVERS: sabbour
+        run: node scripts/ci/admission-findings-gate.mjs github "$PR_NUMBER"

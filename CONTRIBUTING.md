@@ -59,7 +59,7 @@ they are not Agentweaver sign-in providers.
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
    - Use **Rebase and merge** for normal PRs: enable it with
-     `gh pr merge <number> --rebase --auto`. Keep each PR's commit history focused;
+     `gh pr merge <number> --squash`. Keep each PR's commit history focused;
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
@@ -260,7 +260,7 @@ to build the tag images before it creates the GitHub Release.
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
 - **Update, retest, then enable rebase auto-merge:**
-  `gh pr merge <number> --rebase --auto`. If another PR reaches `dev` first,
+  `gh pr merge <number> --squash`. If another PR reaches `dev` first,
   GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts, rerun
   relevant tests/CI, and enable auto-merge only after all required checks are green on
   the updated branch.
