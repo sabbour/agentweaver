@@ -80,9 +80,12 @@ explicit accountable decision, not reviewer silence.
 ## Coordinator-owned admission preflight
 
 GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ralph stores
-the versioned finding ledger in authoritative external Squad state and runs
-`npm run squad:admission-preflight -- <ledger.json> <repository> <pr> <head-sha>` before
-ready and immediately before manual squash merge. Required findings must be owned,
+the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
+authoritative external Squad state and runs
+`npm run squad:admission-preflight -- <repository> <pr>` before ready and immediately
+before manual squash merge. The preflight resolves the live PR head itself and returns
+`<validated-sha>`; merge with
+`gh pr merge <number> --squash --match-head-commit <validated-sha>`. Required findings must be owned,
 corrected or waived, freshly validated/reviewed at the current SHA, and resolved. PR
 comments preserve the ledger evidence but do not decide admission.
 

@@ -394,8 +394,9 @@ validation prerequisites proportional to the change.
   validation, and independent review/admission checks are complete with no unresolved
   blockers.
 - **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the coordinator-owned local admission preflight against the exact candidate SHA
-  before ready and again before `gh pr merge <number> --squash`. It requires the external
+  run the coordinator-owned external-state admission preflight before ready and again
+  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. It resolves
+  and returns the live `<validated-sha>` itself; it requires the external
   Squad finding ledger to resolve every non-advisory finding with an owner, correction or
   waiver, fresh validation/review, and resolved transition. PR comments preserve evidence
   but do not enforce admission. Confirm the PR is actually merged before dependents proceed.

@@ -53,10 +53,11 @@ Examples:
    completed with no unresolved blocker:
    ```bash
    gh pr ready <number>
-   gh pr merge <number> --squash
+   gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
    Before ready and immediately before this command, Ralph runs the coordinator-owned
-   local admission preflight against the exact PR head. Confirm the PR reports `MERGED`,
+   external-state admission preflight, which resolves and returns `<validated-sha>` for
+   the live PR head. Confirm the PR reports `MERGED`,
    `mergedAt`, and merge SHA before dispatching dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
