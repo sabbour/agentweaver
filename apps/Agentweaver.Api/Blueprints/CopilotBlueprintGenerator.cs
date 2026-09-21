@@ -141,7 +141,6 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
               research and validate -> write a PRD" is NOT Product Management Discovery. It has
               distinctive triage, dedupe, and validation stages that pm-discovery lacks. Return []
               so a specialized triage -> dedupe -> research -> PRD workflow is generated.
-            - When in doubt between a partial library match and generating, PREFER [] (generate).
             - For operational/domain-specific work that does not match the PROCESS of any library
               workflow, return an empty array []. An empty workflows array is the CORRECT answer when
               nothing fits — it is better than a wrong selection.

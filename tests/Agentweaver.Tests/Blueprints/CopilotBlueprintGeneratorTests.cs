@@ -204,6 +204,7 @@ public sealed class CopilotBlueprintGeneratorTests
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
         CountOccurrences(prompt, "immediately after any RAI safety check").Should().Be(1);
         CountOccurrences(prompt, "generic ungated catalog workflow").Should().Be(1);
+        CountOccurrences(prompt, "PREFER [] (generate)").Should().Be(1);
         CountOccurrences(prompt, "Available workflows:").Should().Be(1);
         CountOccurrences(prompt, "\"workflows\": array of workflow id strings (or []).").Should().Be(1);
     }
