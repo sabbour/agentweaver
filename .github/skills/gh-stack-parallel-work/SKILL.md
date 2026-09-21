@@ -20,52 +20,6 @@ for ordinary PRs.
 cohort. It is never the admission queue for independent issues. Independent changes use
 the temporary integration branch workflow below.
 
-## Admission findings ledger
-
-Ponytail remains one required reviewer source, but its candidate-branch JSON is not
-admission authority. The authoritative record is exactly one GitHub PR comment with the
-marker `<!-- agentweaver.admission-findings-ledger/v1 -->`, written by an admission owner
-independent from the candidate author. It binds the repository, PR number, current head
-SHA, owner, ordered cohort identity, every required reviewer source, every finding, and
-its complete transition history.
-
-Each reviewer submits an independent GitHub review at the exact current SHA containing
-an `agentweaver.findings-source/v1` payload. Required findings must transition exactly
-`recorded -> owned -> (corrective-pr | waived) -> revalidated -> resolved`; every
-transition records actor, timestamp, SHA, and evidence. The source payload controls a
-finding's severity and policy: the ledger cannot lower either. A corrective PR must be
-merged and included in the candidate. A waiver needs a rationale plus an authorized
-approver independent from both candidate author and ledger author. Revalidation is by a
-third independent actor against the current SHA. Any new head invalidates all evidence.
-The trusted workflow reads repository-controlled reviewer-source and admission-owner
-allowlists from GitHub repository variables; source labels in a review payload are never
-authority, and a candidate author or unlisted secondary account cannot satisfy them.
-Each reviewer source must also attest the SHA-256 hash of the immutable, non-empty ordered
-cohort snapshot, which binds the candidate PR, SHA, and order exactly once.
-
-The trusted `Admission findings` workflow uses `pull_request_target`, checks out only
-`dev`, and queries GitHub PR/review/comment metadata; it never checks out or executes
-candidate code. Run the same preflight before marking ready and immediately before
-merging:
-
-```bash
-gh workflow run "Admission findings" --ref dev -f pr-number=<pr>
-gh run watch --exit-status "$(gh run list --workflow 'Admission findings' --limit 1 --json databaseId --jq '.[0].databaseId')"
-```
-
-Missing, duplicate, unknown, reordered, skipped, stale, self-approved, or incomplete
-evidence blocks admission.
-
-### One-time bootstrap
-
-The check must never be required before this workflow is present on `origin/dev`. For the
-single bootstrap PR that adds it, complete independent review and existing CI, then use
-`gh pr merge 1490 --squash`. Immediately configure the repository-variable allowlists
-with an independently authorized principal, add `Admission findings` to the `dev` ruleset,
-and retain a passing disposable test-PR run as evidence. No later PR may use this
-exception; the full sequence is maintained in
-[`dev-branch-protection.md`](../../dev-branch-protection.md).
-
 ## Ponytail implementation evidence
 
 Coding agents use `ponytail` by default. After implementation they must:
@@ -118,10 +72,19 @@ npm run workflow:ponytail-gate -- \
   --expect-tip "$(git rev-parse HEAD)"
 ```
 
-The command failing blocks admission. Persist the validated JSON verbatim in the
+The command failing blocks review evidence. Persist the validated JSON verbatim in the
 candidate PR as a comment (a raw JSON body is intentionally machine-readable and
 auditable), for example `gh pr comment <number> --body-file <gate.json>`. A waiver is an
 explicit accountable decision, not reviewer silence.
+
+## Coordinator-owned admission preflight
+
+GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ralph stores
+the versioned finding ledger in authoritative external Squad state and runs
+`npm run squad:admission-preflight -- <ledger.json> <repository> <pr> <head-sha>` before
+ready and immediately before manual squash merge. Required findings must be owned,
+corrected or waived, freshly validated/reviewed at the current SHA, and resolved. PR
+comments preserve the ledger evidence but do not decide admission.
 
 ## Temporary integration branch queue
 
@@ -203,9 +166,8 @@ blockers to the coordinator.
 
 ## Merge policy
 
-The only ordinary admission command is `gh pr merge <pr> --squash`. Do not use
-`--auto`, `--rebase`, `--merge`, or `gh stack merge`. Confirm `MERGED`, `mergedAt`, the
-merge SHA, and refreshed `origin/dev` state before cleanup.
+For a real stack, only the coordinator uses `gh stack merge`; never use raw `gh pr merge`
+for it. Ordinary one-branch PRs use the repository's normal PR merge policy.
 
 ## Agent assignment prompt
 

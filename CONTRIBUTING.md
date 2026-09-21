@@ -58,8 +58,8 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Run the fresh admission preflight immediately before ready and merge, then use
-     `gh pr merge <number> --squash` for normal PRs. Keep each PR's commit history focused;
+   - Before ready and immediately before merge, Ralph runs the local Squad admission
+     preflight against the exact PR head, then uses `gh pr merge <number> --squash`.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
@@ -93,8 +93,8 @@ Bad: “feat: add export.” It repeats a commit title without explaining the us
 The active topology is `dev → release/vX.Y.Z → main`:
 
 - **`dev`** is the default, protected integration branch. Normal PRs target it and use
-  required PRs, blocking CI, a fresh admission preflight immediately before ready and
-  merge, manual squash merge, and automatic source branch deletion.
+  required PRs, blocking CI, a local exact-head admission preflight, manual squash merge,
+  and automatic source branch deletion.
 - **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
   `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
   `dev`.
@@ -259,11 +259,10 @@ to build the tag images before it creates the GitHub Release.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, run a fresh preflight, then manually squash-merge:**
+- **Update, retest, then enable rebase auto-merge:**
   `gh pr merge <number> --squash`. If another PR reaches `dev` first,
   GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts, rerun
-  relevant tests/CI, rerun the preflight, and manually squash-merge only after all
-  required checks are green on the updated branch.
+  relevant tests/CI and rerun the local preflight on the updated branch.
 
 ### Target release milestone
 
@@ -308,8 +307,7 @@ Rules:
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
 `upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
-up-to-date, review, fresh-preflight, and manual squash rules as every other
-contribution.
+up-to-date, review, and rebase-merge rules as every other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
 `pull_request_target`) and its jobs do not use `secrets.*`. `CODEOWNERS` and a required

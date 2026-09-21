@@ -55,10 +55,9 @@ Examples:
    gh pr ready <number>
    gh pr merge <number> --squash
    ```
-   Immediately before `gh pr ready` and immediately before the squash command, run the
-   trusted admission-finding preflight against the current PR head. Confirm
-   `state=MERGED`, `mergedAt`, and `mergeCommit.oid`, then fetch `origin/dev` and verify
-   the merge SHA is present before dispatching dependent work or cleanup.
+   Before ready and immediately before this command, Ralph runs the coordinator-owned
+   local admission preflight against the exact PR head. Confirm the PR reports `MERGED`,
+   `mergedAt`, and merge SHA before dispatching dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
    run, and any blocker.

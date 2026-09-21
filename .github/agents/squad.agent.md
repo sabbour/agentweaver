@@ -394,15 +394,11 @@ validation prerequisites proportional to the change.
   validation, and independent review/admission checks are complete with no unresolved
   blockers.
 - **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the trusted admission-finding preflight against the current SHA immediately before
-  both ready and merge, then merge it with `gh pr merge <number> --squash`. Do not use
-  auto-merge, rebase/merge strategies, or `gh stack merge`. Confirm `MERGED`, `mergedAt`,
-  merge SHA, and refreshed `origin/dev` state before dispatching dependents or cleanup.
-  A failed, blocked, or unmerged dependency remains in place and blocks its dependents.
-  Ralph snapshots an ordered cohort, admits one candidate at a time, refreshes after each
-  merge, and does not idle until every entry is terminal as Confirmed Merged or Owned
-  blocker with a named owner, action, and evidence. Newly discovered candidates are placed
-  in a later cohort.
+  run the coordinator-owned local admission preflight against the exact candidate SHA
+  before ready and again before `gh pr merge <number> --squash`. It requires the external
+  Squad finding ledger to resolve every non-advisory finding with an owner, correction or
+  waiver, fresh validation/review, and resolved transition. PR comments preserve evidence
+  but do not enforce admission. Confirm the PR is actually merged before dependents proceed.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;
