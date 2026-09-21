@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -55,6 +56,18 @@ function sourceReviewerPolicy(value) {
   return policy;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function cohortEntriesSha256(entries) {
+  return createHash('sha256').update(stableJson(entries)).digest('hex');
+}
+
 function transition(transitionEntry, expected, prefix, expectedHead) {
   const entry = object(transitionEntry, prefix);
   if (entry.state !== expected) fail(`${prefix}.state must be ${expected}`);
@@ -70,12 +83,14 @@ export function validateCohort(cohort) {
   string(cohort.id, 'cohort.id');
   string(cohort.snapshotAt, 'cohort.snapshotAt');
   const entries = array(cohort.entries, 'cohort.entries');
+  if (entries.length === 0) fail('cohort.entries must not be empty');
   const numbers = [];
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, inputEntry] of entries.entries()) {
     const prefix = `cohort.entries[${index}]`;
-    object(entry, prefix);
+    const entry = object(inputEntry, prefix);
     if (!Number.isInteger(entry.prNumber) || entry.prNumber < 1) fail(`${prefix}.prNumber must be positive`);
     if (!Number.isInteger(entry.order) || entry.order < 1) fail(`${prefix}.order must be positive`);
+    sha(entry.headSha, `${prefix}.headSha`);
     if (!TERMINAL_COHORT_STATES.has(entry.state)) fail(`${prefix}.state must be Confirmed Merged or Owned blocker`);
     string(entry.owner, `${prefix}.owner`);
     string(entry.action, `${prefix}.action`);
@@ -87,6 +102,34 @@ export function validateCohort(cohort) {
   const orders = entries.map((entry) => entry.order).sort((a, b) => a - b);
   if (orders.some((order, index) => order !== index + 1)) fail('cohort entries must have contiguous ordered positions');
   return { cohortId: cohort.id, entries: entries.length };
+}
+
+function validateLedgerCohort(cohort, prNumber, headSha) {
+  cohort = object(cohort, 'cohort');
+  string(cohort.id, 'cohort.id');
+  string(cohort.snapshotAt, 'cohort.snapshotAt');
+  const entries = array(cohort.entries, 'cohort.entries');
+  if (entries.length === 0) fail('cohort.entries must not be empty');
+  const entriesHash = cohortEntriesSha256(entries);
+  if (string(cohort.entriesSha256, 'cohort.entriesSha256') !== entriesHash) fail('cohort.entriesSha256 does not bind immutable cohort entries');
+  const numbers = [];
+  const orders = [];
+  const candidateEntries = [];
+  for (const [index, inputEntry] of entries.entries()) {
+    const prefix = `cohort.entries[${index}]`;
+    const entry = object(inputEntry, prefix);
+    if (!Number.isInteger(entry.prNumber) || entry.prNumber < 1) fail(`${prefix}.prNumber must be positive`);
+    if (!Number.isInteger(entry.order) || entry.order < 1) fail(`${prefix}.order must be positive`);
+    const entryHead = sha(entry.headSha, `${prefix}.headSha`);
+    numbers.push(entry.prNumber);
+    orders.push(entry.order);
+    if (entry.prNumber === prNumber) candidateEntries.push({ entry, entryHead });
+  }
+  unique(numbers, 'cohort PR number');
+  unique(orders, 'cohort order');
+  if (orders.sort((left, right) => left - right).some((order, index) => order !== index + 1)) fail('cohort entries must have contiguous ordered positions');
+  if (candidateEntries.length !== 1 || candidateEntries[0].entryHead !== headSha) fail('cohort must bind the candidate PR, SHA, and order exactly once');
+  return entriesHash;
 }
 
 export function validateAdmissionLedger(ledger, snapshot) {
@@ -107,14 +150,11 @@ export function validateAdmissionLedger(ledger, snapshot) {
     !admissionOwners.some((actor) => same(actor, admissionOwner))) {
     fail('candidate author cannot author or own its admission ledger');
   }
-  if (Array.isArray(ledger.cohort?.entries)) validateCohort(ledger.cohort);
-  else {
-    object(ledger.cohort, 'cohort');
-    string(ledger.cohort.id, 'cohort.id');
-    string(ledger.cohort.snapshotAt, 'cohort.snapshotAt');
-  }
+  const cohortEntriesHash = validateLedgerCohort(ledger.cohort, ledger.prNumber, headSha);
 
   const requiredSourceIds = array(snapshot.requiredSourceIds, 'snapshot.requiredSourceIds');
+  if (requiredSourceIds.length === 0) fail('required reviewer source configuration is missing');
+  unique(requiredSourceIds, 'required reviewer source id');
   const sourceRecords = new Map(array(snapshot.sources, 'snapshot.sources').map((source) => [source.reviewId, source]));
   const authorizedReviewers = object(snapshot.authorizedReviewers, 'snapshot.authorizedReviewers');
   const sources = array(ledger.reviewerSources, 'reviewerSources');
@@ -130,6 +170,7 @@ export function validateAdmissionLedger(ledger, snapshot) {
     const reviewer = string(source.reviewer, `${prefix}.reviewer`);
     if (same(reviewer, candidateAuthor)) fail(`${prefix}.reviewer must be independent from the candidate author`);
     const permittedReviewers = array(authorizedReviewers[id], `authorized reviewers for ${id}`);
+    if (permittedReviewers.length === 0) fail(`authorized reviewers for ${id} must not be empty`);
     if (!permittedReviewers.some((actor) => same(actor, reviewer))) fail(`${prefix}.reviewer is not authorized for ${id}`);
     if (sha(source.headSha, `${prefix}.headSha`) !== headSha) fail(`${prefix}.headSha is stale`);
     const review = sourceRecords.get(source.reviewId);
@@ -139,6 +180,7 @@ export function validateAdmissionLedger(ledger, snapshot) {
     const findingIds = array(source.findingIds, `${prefix}.findingIds`).map((id, findingIndex) => string(id, `${prefix}.findingIds[${findingIndex}]`));
     unique(findingIds, `${prefix} finding id`);
     if (JSON.stringify(findingIds) !== JSON.stringify(review.findingIds)) fail(`${prefix}.findingIds do not match the reviewer source`);
+    if (review.cohortEntriesSha256 !== cohortEntriesHash) fail(`${prefix} does not bind immutable cohort entries`);
     for (const requirement of array(review.requirements, `${prefix} source requirements`)) {
       const findingId = string(requirement.id, `${prefix} source requirement.id`);
       if (requirements.has(findingId)) fail(`duplicate source requirement for finding ${findingId}`);
@@ -244,6 +286,7 @@ async function githubSnapshot(repository, prNumber, token) {
       headSha: review.commit_id,
       findingIds: payload.findings.map((finding) => finding.id),
       requirements: payload.findings.map(({ id, severity, policy }) => ({ id, severity, policy })),
+      cohortEntriesSha256: payload.cohortEntriesSha256,
     });
   }
   const snapshot = {

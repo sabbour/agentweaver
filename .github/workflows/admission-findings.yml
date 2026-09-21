@@ -33,8 +33,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr-number }}
-          ADMISSION_FINDINGS_REQUIRED_SOURCES: code-review,security-review,ponytail-review
-          ADMISSION_FINDINGS_AUTHORIZED_REVIEWERS: code-review=sabbour;security-review=sabbour;ponytail-review=sabbour
-          ADMISSION_FINDINGS_ADMISSION_OWNERS: sabbour
-          ADMISSION_FINDINGS_WAIVER_APPROVERS: sabbour
+          ADMISSION_FINDINGS_REQUIRED_SOURCES: ${{ vars.ADMISSION_FINDINGS_REQUIRED_SOURCES }}
+          ADMISSION_FINDINGS_AUTHORIZED_REVIEWERS: ${{ vars.ADMISSION_FINDINGS_AUTHORIZED_REVIEWERS }}
+          ADMISSION_FINDINGS_ADMISSION_OWNERS: ${{ vars.ADMISSION_FINDINGS_ADMISSION_OWNERS }}
+          ADMISSION_FINDINGS_WAIVER_APPROVERS: ${{ vars.ADMISSION_FINDINGS_WAIVER_APPROVERS }}
         run: node scripts/ci/admission-findings-gate.mjs github "$PR_NUMBER"

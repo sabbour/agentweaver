@@ -37,9 +37,11 @@ finding's severity and policy: the ledger cannot lower either. A corrective PR m
 merged and included in the candidate. A waiver needs a rationale plus an authorized
 approver independent from both candidate author and ledger author. Revalidation is by a
 third independent actor against the current SHA. Any new head invalidates all evidence.
-The trusted workflow has repository-controlled reviewer-source and admission-owner
-allowlists; source labels in a review payload are never authority, and a candidate author
-or unlisted secondary account cannot satisfy them.
+The trusted workflow reads repository-controlled reviewer-source and admission-owner
+allowlists from GitHub repository variables; source labels in a review payload are never
+authority, and a candidate author or unlisted secondary account cannot satisfy them.
+Each reviewer source must also attest the SHA-256 hash of the immutable, non-empty ordered
+cohort snapshot, which binds the candidate PR, SHA, and order exactly once.
 
 The trusted `Admission findings` workflow uses `pull_request_target`, checks out only
 `dev`, and queries GitHub PR/review/comment metadata; it never checks out or executes
@@ -53,6 +55,16 @@ gh run watch --exit-status "$(gh run list --workflow 'Admission findings' --limi
 
 Missing, duplicate, unknown, reordered, skipped, stale, self-approved, or incomplete
 evidence blocks admission.
+
+### One-time bootstrap
+
+The check must never be required before this workflow is present on `origin/dev`. For the
+single bootstrap PR that adds it, complete independent review and existing CI, then use
+`gh pr merge 1490 --squash`. Immediately configure the repository-variable allowlists
+with an independently authorized principal, add `Admission findings` to the `dev` ruleset,
+and retain a passing disposable test-PR run as evidence. No later PR may use this
+exception; the full sequence is maintained in
+[`dev-branch-protection.md`](../../dev-branch-protection.md).
 
 ## Ponytail implementation evidence
 

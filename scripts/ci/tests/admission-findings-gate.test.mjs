@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateAdmissionLedger, validateCohort } from '../admission-findings-gate.mjs';
+import { cohortEntriesSha256, validateAdmissionLedger, validateCohort } from '../admission-findings-gate.mjs';
 
 const SHA = 'a'.repeat(40);
 const PR_AUTHOR = 'implementer';
 
 function source() {
-  return { id: 1, reviewId: 'code-review', reviewer: 'reviewer', headSha: SHA, findingIds: [], requirements: [] };
+  return { id: 1, reviewId: 'code-review', reviewer: 'reviewer', headSha: SHA, findingIds: [], requirements: [], cohortEntriesSha256: cohort().entriesSha256 };
+}
+
+function cohort() {
+  const entries = [{ prNumber: 1489, order: 1, headSha: SHA }];
+  return { id: '2026-09-21-1', snapshotAt: '2026-09-21T00:00:00Z', entries, entriesSha256: cohortEntriesSha256(entries) };
 }
 
 function snapshot(overrides = {}) {
@@ -22,7 +27,7 @@ function ledger(overrides = {}) {
   return {
     kind: 'agentweaver.admission-findings-ledger/v1', repository: 'sabbour/agentweaver',
     prNumber: 1489, headSha: SHA, admissionOwner: 'admission-owner',
-    cohort: { id: '2026-09-21-1', snapshotAt: '2026-09-21T00:00:00Z' },
+    cohort: cohort(),
     reviewerSources: [{ id: 'code-review', reviewId: 'code-review', reviewer: 'reviewer', headSha: SHA, findingIds: [], evidence: 'review #1' }],
     findings: [], ...overrides,
   };
@@ -64,6 +69,22 @@ test('1481 regression: earlier-SHA unactioned required medium finding blocks rea
   assert.throws(() => validateAdmissionLedger(candidate, evidence), /stale|skipped/u);
 });
 
+test('requires immutable non-empty cohort entries bound to the candidate PR, SHA, and order', () => {
+  assert.throws(() => validateAdmissionLedger(ledger({ cohort: { id: 'cohort', snapshotAt: 'now' } }), snapshot()), /cohort\.entries must be an array/u);
+  const empty = { id: 'cohort', snapshotAt: 'now', entries: [], entriesSha256: cohortEntriesSha256([]) };
+  assert.throws(() => validateAdmissionLedger(ledger({ cohort: empty }), snapshot()), /must not be empty/u);
+  const invalid = cohort();
+  invalid.entries[0].headSha = 'b'.repeat(40);
+  assert.throws(() => validateAdmissionLedger(ledger({ cohort: invalid }), snapshot()), /entriesSha256|candidate PR/u);
+  const missingCandidate = { ...cohort(), entries: [{ prNumber: 1490, order: 1, headSha: SHA }] };
+  missingCandidate.entriesSha256 = cohortEntriesSha256(missingCandidate.entries);
+  assert.throws(() => validateAdmissionLedger(ledger({ cohort: missingCandidate }), snapshot()), /candidate PR/u);
+  const altered = cohort();
+  altered.entries.push({ prNumber: 1490, order: 2, headSha: SHA });
+  altered.entriesSha256 = cohortEntriesSha256(altered.entries);
+  assert.throws(() => validateAdmissionLedger(ledger({ cohort: altered }), snapshot()), /does not bind immutable cohort entries/u);
+});
+
 test('rejects missing sources, omitted IDs, duplicate IDs, downgrade, and reordered transitions', () => {
   assert.throws(() => validateAdmissionLedger(ledger({ reviewerSources: [] }), snapshot()), /required reviewer source/u);
   let [candidate, evidence] = withFinding();
@@ -102,6 +123,9 @@ test('rejects unauthorized reviewer sources and ledger authors', () => {
   [candidate, evidence] = withFinding();
   evidence.ledgerAuthor = 'untrusted-owner';
   assert.throws(() => validateAdmissionLedger(candidate, evidence), /cannot author or own/u);
+  [candidate, evidence] = withFinding();
+  evidence.requiredSourceIds = [];
+  assert.throws(() => validateAdmissionLedger(candidate, evidence), /configuration is missing/u);
 });
 
 test('accepts an incorporated merged corrective PR', () => {
@@ -117,8 +141,8 @@ test('accepts an incorporated merged corrective PR', () => {
 
 test('requires a complete terminal Ralph cohort', () => {
   const cohort = { id: 'cohort-1', snapshotAt: '2026-09-21T00:00:00Z', entries: [
-    { prNumber: 1, order: 1, state: 'confirmed-merged', owner: 'ralph', action: 'squash merged', evidence: 'merge SHA', terminalAt: '2026-09-21T00:00:00Z' },
-    { prNumber: 2, order: 2, state: 'owned-blocker', owner: 'tank', action: 'fix source', evidence: 'issue comment', terminalAt: '2026-09-21T00:00:00Z' },
+    { prNumber: 1, order: 1, headSha: SHA, state: 'confirmed-merged', owner: 'ralph', action: 'squash merged', evidence: 'merge SHA', terminalAt: '2026-09-21T00:00:00Z' },
+    { prNumber: 2, order: 2, headSha: SHA, state: 'owned-blocker', owner: 'tank', action: 'fix source', evidence: 'issue comment', terminalAt: '2026-09-21T00:00:00Z' },
   ] };
   assert.equal(validateCohort(cohort).entries, 2);
   cohort.entries[1].state = 'ready';
