@@ -2045,9 +2045,11 @@ public sealed class CoordinatorRunService
             }
             else if (providerFailure is null)
             {
-                var errorCode = reason == "coordinator_executor_failed:coordinator-direct"
-                    ? "coordinator_direct_execution_failed"
-                    : "coordinator_execution_failed";
+                var errorCode = failure is MandatoryContextBudgetExceededException
+                    ? "mandatory_context_budget_exceeded"
+                    : reason == "coordinator_executor_failed:coordinator-direct"
+                        ? "coordinator_direct_execution_failed"
+                        : "coordinator_execution_failed";
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
                     reason,
