@@ -118,7 +118,9 @@ Escalate/pause if:
 ## Decision rule
 
 If any pre-flight result is surprising, ambiguous, or suggests the checkout is shared,
-**stop and ask the user before proceeding**. Do not guess.
+**do not dispatch implementation from that checkout**. A dirty or diverged repository root
+is coordination-only: resolve the state, then prepare a clean dedicated issue worktree and
+branch before implementation. Do not guess.
 
 ## What not to do while risk is present
 

@@ -35,7 +35,7 @@ public sealed class McpApiException : McpException
     }
 
     private McpApiException(McpErrorPayload payload)
-        : base(JsonSerializer.Serialize(new { error = payload.Error, hint = payload.Hint }, ErrorJsonOptions))
+        : base(SerializePayload(payload))
     {
         StatusCode = payload.StatusCode;
         Error = payload.Error;
@@ -45,10 +45,28 @@ public sealed class McpApiException : McpException
         Path = payload.Path;
     }
 
+    private static string SerializePayload(McpErrorPayload payload) =>
+        IsMemoryError(payload.ErrorCode)
+            ? JsonSerializer.Serialize(
+                new { error = payload.ErrorCode, message = payload.Error, hint = payload.Hint },
+                ErrorJsonOptions)
+            : JsonSerializer.Serialize(new { error = payload.Error, hint = payload.Hint }, ErrorJsonOptions);
+
     private static McpErrorPayload BuildPayload(int statusCode, string message, string? path, string? errorCode, string? explicitHint)
     {
         var normalizedPath = string.IsNullOrWhiteSpace(path) ? null : path;
         var normalizedMessage = NormalizeMessage(message);
+
+        if (IsMemoryError(errorCode))
+        {
+            return new McpErrorPayload(
+                statusCode,
+                normalizedMessage,
+                explicitHint ?? DefaultHintForPath(normalizedPath),
+                normalizedMessage,
+                normalizedPath,
+                errorCode);
+        }
 
         if (string.Equals(errorCode, "preview_registration_timeout", StringComparison.Ordinal))
         {
@@ -277,6 +295,9 @@ public sealed class McpApiException : McpException
             ? []
             : path.Split('?', 2)[0]
                 .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool IsMemoryError(string? errorCode) =>
+        errorCode?.StartsWith("memory_", StringComparison.Ordinal) == true;
 
     private static string? ExtractQuotedValue(string message)
     {

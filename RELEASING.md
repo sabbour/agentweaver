@@ -217,7 +217,10 @@ These are repository facts, not evidence that a specific image or release exists
 Release images are published from the `vX.Y.Z` tag push. The `release:publish`
 command waits for that image workflow before it creates the GitHub Release.
 As a result, the tag, the GitHub Release, and the `vX.Y.Z` images all describe
-the same exact `main` SHA. Image publication is independent of deployment.
+the same exact `main` SHA. The tag push builds with `IMAGE_TAG=vX.Y.Z` even
+when a `sha-<short>` image for that commit already exists; copying the SHA
+image manifest would preserve its non-release runtime identity. Image
+publication is independent of deployment.
 `azure:deploy-from-release` imports these images by default. Add
 `--image-source acr-build` to build and ship them into the configured Azure
 environment from source instead.

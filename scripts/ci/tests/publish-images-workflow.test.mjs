@@ -34,6 +34,15 @@ test("tag pushes publish release image tags before the GitHub Release exists", (
   assert.doesNotMatch(trigger, /\n\s+release:/);
 });
 
+test("tag pushes rebuild with semver identity instead of retagging a sha image", () => {
+  const build = workflowSection("  build:\n", "\n          labels: |\n");
+
+  assert.match(build, /startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  assert.match(build, /IMAGE_TAG=\$\{\{ needs\.plan\.outputs\.primary_tag \}\}/);
+  assert.doesNotMatch(build, /imagetools/);
+  assert.doesNotMatch(build, /steps\.existing/);
+});
+
 test("pull requests build but never push images", () => {
   const build = workflowSection("  build:\n", "\n          labels: |\n");
 

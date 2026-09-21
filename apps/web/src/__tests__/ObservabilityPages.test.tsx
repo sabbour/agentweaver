@@ -216,6 +216,146 @@ describe('observability pages', () => {
     expect(screen.getByText(new Date('2026-08-24T00:00:00.000Z').toLocaleDateString())).toBeDefined();
   });
 
+  it('clamps a long trace prompt to two lines and expands without hiding card controls', async () => {
+    const longPrompt = [
+      'Audit the deployed orchestration from the coordinator through every agent handoff.',
+      'Keep the status, run identity, start date, and trace actions visible while the prompt is collapsed.',
+      'Report the complete evidence after inspecting the trace tree and terminal diagnostics.',
+    ].join('\n\n');
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [{
+        workflow_run_id: 'coord-run-long',
+        execution_id: 'coord-run-long',
+        task: longPrompt,
+        agent_name: 'Coordinator',
+        status: 'in_progress',
+        coordinator_status: 'dispatching',
+        started_at: '2026-09-17T20:00:00.000Z',
+      }],
+      page: 1,
+      page_size: 100,
+      total_count: 1,
+      total_pages: 1,
+    });
+
+    render(
+      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const promptBody = screen.getByTestId('trace-prompt-body-coord-run-long');
+    Object.defineProperties(promptBody, {
+      scrollHeight: { configurable: true, value: 60 },
+      clientHeight: { configurable: true, value: 40 },
+    });
+    fireEvent(window, new Event('resize'));
+
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('false');
+    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('2');
+    expect(screen.getByText('Coordinator trace')).toBeDefined();
+    expect(screen.getByText('dispatching')).toBeDefined();
+    expect(screen.getByText(`Started ${new Date('2026-09-17T20:00:00.000Z').toLocaleString()}`)).toBeDefined();
+    expect(screen.getByText('Run coord-run-long')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Preview trace' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Open run' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more trace prompt' }));
+
+    expect(promptBody.textContent).toBe(longPrompt);
+    expect(promptBody.getAttribute('data-expanded')).toBe('true');
+    expect(promptBody.hasAttribute('data-collapsed-lines')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Show less trace prompt' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show less trace prompt' }));
+
+    expect(promptBody.getAttribute('data-expanded')).toBe('false');
+    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('2');
+  });
+
+  it('does not show prompt disclosure for a short trace prompt', async () => {
+    const shortPrompt = 'Inspect the latest coordinator trace.';
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [{
+        workflow_run_id: 'coord-run-short',
+        execution_id: 'coord-run-short',
+        task: shortPrompt,
+        agent_name: 'Coordinator',
+        status: 'complete',
+        coordinator_status: 'complete',
+        started_at: '2026-09-17T21:00:00.000Z',
+      }],
+      page: 1,
+      page_size: 100,
+      total_count: 1,
+      total_pages: 1,
+    });
+
+    render(
+      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const promptBody = screen.getByTestId('trace-prompt-body-coord-run-short');
+    expect(promptBody.textContent).toBe(shortPrompt);
+    expect(promptBody.hasAttribute('data-collapsed-lines')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Show more trace prompt' })).toBeNull();
+  });
+
+  it('shows prompt disclosure for a sub-160-character trace prompt that wraps beyond two lines at narrow width', async () => {
+    const wrappedPrompt = 'Inspect every coordinator handoff, preserve the action metadata, and identify the exact stage where the distributed trace stops reporting progress.';
+    expect(wrappedPrompt.length).toBeLessThan(160);
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [{
+        workflow_run_id: 'coord-run-wrapped',
+        execution_id: 'coord-run-wrapped',
+        task: wrappedPrompt,
+        agent_name: 'Coordinator',
+        status: 'in_progress',
+        coordinator_status: 'dispatching',
+        started_at: '2026-09-17T22:00:00.000Z',
+      }],
+      page: 1,
+      page_size: 100,
+      total_count: 1,
+      total_pages: 1,
+    });
+
+    render(
+      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const promptBody = screen.getByTestId('trace-prompt-body-coord-run-wrapped');
+    Object.defineProperties(promptBody, {
+      scrollHeight: { configurable: true, value: 60 },
+      clientHeight: { configurable: true, value: 40 },
+    });
+    fireEvent(window, new Event('resize'));
+
+    expect(promptBody.textContent).toBe(wrappedPrompt);
+    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('2');
+    expect(screen.getByRole('button', { name: 'Show more trace prompt' })).toBeDefined();
+  });
+
   it('opens a focused trace directly from a ?run= deep link, e.g. from the run detail page', async () => {
     vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
       items: [
