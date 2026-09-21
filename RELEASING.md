@@ -83,7 +83,7 @@ from its exact matching section; do not run another changelog generator.
 
    CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR, merged with
-   **"Rebase and merge"** (not squash — see note below).
+   **"Squash and merge"**.
 7. Reconcile the milestones against what the release actually consumed. Merge order
    decides the real contents, so a milestone set before the cut can name the wrong
    release. `release:prepare` consumes the changeset fragments it shipped. Map each
@@ -107,13 +107,13 @@ from its exact matching section; do not run another changelog generator.
    See [CONTRIBUTING.md → Target release
    milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
 
-> **Promotion history is not release identity.** The operating recommendation above
-> uses "Rebase and merge," but rebasing rewrites commits; it does not preserve the
-> original release-branch commits or guarantee that later promotions are conflict-free.
-> A merge commit preserves both parent histories when repository policy permits it.
-> Inspect the actual merge base and review every conflict resolution; do not treat
-> `-X ours` as proof that conflicts are cosmetic. Regardless of merge method,
-> `release:publish` requires the exact fetched `origin/main` SHA.
+> **Promotion history is not release identity.** Squash merging creates a new `main`
+> commit; it does not preserve the release branch's individual commits or guarantee
+> that later promotions are conflict-free. The `release:prepare` ancestry merge remains
+> the mechanism that incorporates `origin/main` into the release branch before release
+> metadata changes. Inspect the actual merge base and review every conflict resolution;
+> do not treat `-X ours` as proof that conflicts are cosmetic. `release:publish`
+> requires the exact fetched `origin/main` SHA.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the
