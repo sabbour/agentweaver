@@ -1055,7 +1055,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     "mandatory_context_budget_exceeded");
             entry.RecordNext(EventTypes.RunFailed, new
             {
-                reason = "mandatory_context_budget_exceeded",
+                errorCode = "mandatory_context_budget_exceeded",
+                retryable = false,
                 detail,
             });
             _ = FirePostRunScribeAsync(runId.ToString());
