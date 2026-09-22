@@ -352,7 +352,7 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
-    public async Task Projector_AdoptsOnlyCompatibleLegacyTerminalEvent()
+    public async Task Recovery_LegacyFailedRunWithoutTerminalEvent_ProjectsCurrentGenerationOnce()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
@@ -361,21 +361,23 @@ public sealed class TerminalRunOutcomeStoreTests
         await using (var command = connection.CreateCommand())
         {
             command.CommandText =
-                "UPDATE runs SET status = 'failed', ended_at = $endedAt WHERE run_id = $runId;";
+                "UPDATE runs SET status = 'failed', result = 'legacy-failure', ended_at = $endedAt WHERE run_id = $runId;";
             command.Parameters.AddWithValue("$endedAt", DateTimeOffset.UtcNow.ToString("O"));
             command.Parameters.AddWithValue("$runId", run.ToString());
             await command.ExecuteNonQueryAsync();
         }
 
         var stream = new RecordingEventStream();
-        await stream.AppendAsync(run.ToString(), new RunEvent(0, EventTypes.RunFailed,
-            new { reason = "legacy-rich-reason" }, DateTimeOffset.UtcNow));
         var projector = new TerminalOutcomeProjector(
             store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
 
         await projector.AdoptCompatibleLegacyOutcomesAsync();
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle();
+        await projector.ProjectPendingAsync();
         (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
-        stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed);
+        var terminal = stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed).Subject;
+        System.Text.Json.JsonSerializer.SerializeToElement(terminal.Payload)
+            .GetProperty("reason").GetString().Should().Be("legacy-failure");
 
         await using var verify = await testDb.Db.OpenConnectionAsync();
         await using var verifyCommand = verify.CreateCommand();
@@ -385,8 +387,160 @@ public sealed class TerminalRunOutcomeStoreTests
         await using var reader = await verifyCommand.ExecuteReaderAsync();
         (await reader.ReadAsync()).Should().BeTrue();
         reader.GetString(0).Should().Be(EventTypes.RunFailed);
-        reader.GetString(1).Should().Contain("legacy-rich-reason");
+        reader.GetString(1).Should().Contain("legacy-failure");
         reader.IsDBNull(2).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Recovery_ReopenedFailedRun_DoesNotAdoptPriorGenerationEvent()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var stream = new RecordingEventStream();
+        var generationOne = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "generation-one" },
+            DateTimeOffset.UtcNow, 1);
+        var historical = await stream.AppendTerminalOutcomeAsync(run.ToString(), generationOne);
+
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                """
+                UPDATE runs
+                   SET status = 'failed', result = 'generation-two', ended_at = $endedAt,
+                       lifecycle_generation = 2
+                 WHERE run_id = $runId;
+                """;
+            command.Parameters.AddWithValue("$endedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$runId", run.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+        await projector.AdoptCompatibleLegacyOutcomesAsync();
+        await projector.ProjectPendingAsync();
+
+        stream.Events.Where(evt => evt.Type == EventTypes.RunFailed).Select(evt => evt.Sequence)
+            .Should().Equal(historical.Sequence, historical.Sequence + 1);
+        System.Text.Json.JsonSerializer.SerializeToElement(stream.Events[^1].Payload)
+            .GetProperty("reason").GetString().Should().Be("generation-two");
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Recovery_ExactCurrentGenerationLinkedEvent_IsAdoptedWithoutDuplicate()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var stream = new RecordingEventStream();
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "already-durable" },
+            DateTimeOffset.UtcNow, 1);
+        var canonical = await stream.AppendTerminalOutcomeAsync(run.ToString(), outcome);
+
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "UPDATE runs SET status = 'failed', result = 'already-durable', ended_at = $endedAt WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$endedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$runId", run.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+        await projector.AdoptCompatibleLegacyOutcomesAsync();
+        await projector.ProjectPendingAsync();
+
+        stream.Events.Should().ContainSingle().Which.Should().Be(canonical);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Recovery_Rerun_RemainsIdempotent()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "UPDATE runs SET status = 'failed', result = 'legacy-failure', ended_at = $endedAt WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$endedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$runId", run.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var stream = new RecordingEventStream();
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+        await projector.AdoptCompatibleLegacyOutcomesAsync();
+        await projector.ProjectPendingAsync();
+        await projector.AdoptCompatibleLegacyOutcomesAsync();
+        await projector.ProjectPendingAsync();
+
+        stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RecoveryService_ExecuteAsync_YieldsBeforeRecoveryAndThenProjects()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "UPDATE runs SET status = 'failed', result = 'startup_recovery', ended_at = $endedAt WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$endedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$runId", run.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var projectionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new RecordingEventStream { TerminalAppendStarted = projectionStarted };
+        var service = new TerminalOutcomeRecoveryService(
+            new TerminalOutcomeProjector(store, stream, NullLogger<TerminalOutcomeProjector>.Instance),
+            NullLogger<TerminalOutcomeRecoveryService>.Instance);
+        var context = new QueuedSynchronizationContext();
+        var previousContext = SynchronizationContext.Current;
+        using var stopping = new CancellationTokenSource();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            var executeAsync = typeof(TerminalOutcomeRecoveryService).GetMethod(
+                "ExecuteAsync",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var execution = (Task)executeAsync!.Invoke(service, [stopping.Token])!;
+
+            execution.IsCompleted.Should().BeFalse();
+            projectionStarted.Task.IsCompleted.Should().BeFalse();
+            context.PendingCount.Should().Be(1);
+
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            context.RunOne();
+            await projectionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed);
+            (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+            stopping.Cancel();
+            var cancelled = async () => await execution;
+            await cancelled.Should().ThrowAsync<OperationCanceledException>();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            stopping.Cancel();
+        }
     }
 
     [Fact]
@@ -600,5 +754,33 @@ public sealed class TerminalRunOutcomeStoreTests
             string runId, int fromSequence = 0, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<RunEvent>>(
                 Events.Where(evt => evt.Sequence > fromSequence).ToArray());
+
+        public Task<bool> TryLinkTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            RunEvent canonicalEvent,
+            CancellationToken ct = default) =>
+            Task.FromResult(
+                _terminalOutcomes.TryGetValue((runId, outcome.ExpectedLifecycleGeneration), out var linked)
+                && linked.Sequence == canonicalEvent.Sequence
+                && linked.Type == canonicalEvent.Type);
+    }
+
+    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _continuations = [];
+
+        public int PendingCount => _continuations.Count;
+
+        public override void Post(SendOrPostCallback d, object? state) =>
+            _continuations.Enqueue((d, state));
+
+        public void RunOne()
+        {
+            if (!_continuations.TryDequeue(out var continuation))
+                throw new InvalidOperationException("No queued continuation.");
+
+            continuation.Callback(continuation.State);
+        }
     }
 }

@@ -61,7 +61,7 @@ public interface IRunStore
         Task.CompletedTask;
 
     /// <summary>
-    /// Adopts a compatible persisted legacy terminal event without inventing a new payload.
+    /// Persists a legacy terminal winner for generation-fenced projection.
     /// Returns false for a non-terminal, incompatible, or already-adopted row.
     /// </summary>
     Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
