@@ -17,6 +17,29 @@ Every run event uses the same envelope:
 
 Clients should order and deduplicate events by `sequence`.
 
+## Persisted event retrieval
+
+`GET /api/runs/{id}/events` returns persisted events for an authorized run in ascending
+`sequence` order.
+
+| Query parameter | Contract |
+| --- | --- |
+| `after` | Optional non-negative integer sequence. Only events with a greater sequence are returned. |
+| `limit` | Optional integer from 1 through 1000. The limit is applied after filters and ordering. |
+| `type` | Optional exact, case-sensitive event type. The value must be non-empty and at most 128 characters. |
+
+Each supported parameter may appear at most once. Malformed, repeated, empty, or out-of-range
+values return `400 Bad Request` after run authorization. A valid event type with no matching events
+returns `200 OK` with an empty array. With no query parameters, the endpoint returns the complete
+ascending event list.
+
+The `Range` request header is unsupported and ignored. The endpoint does not return `206 Partial
+Content`, `Content-Range`, or `Accept-Ranges`.
+
+The response preserves the existing public event projection. Prompt payloads remain suppressed,
+tool payloads remain bounded and redacted, and structured failure events remain normalized before
+serialization.
+
 ## Event taxonomy
 
 | Type | When it fires | Payload fields |

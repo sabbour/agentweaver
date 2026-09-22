@@ -749,7 +749,9 @@ Response `200 OK` `{ "run_id", "command_hash", "denied": true }`.
 
 ### GET /api/runs/{id}/events
 
-Returns persisted run events ordered by `sequence`. Each item has `sequence`, `type`, and `payload`.
+Returns persisted run events ordered by `sequence`. Optional `after`, `limit`, and `type` query
+parameters provide bounded server-side retrieval. See [Run events](events.md) for the complete
+request, validation, ordering, and response contract.
 
 ### GET /api/runs/{id}/history
 
