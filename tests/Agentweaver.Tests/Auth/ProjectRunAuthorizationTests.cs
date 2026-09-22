@@ -124,7 +124,14 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             retryable = true,
         });
 
-        await AppendEventAsync(runId, StructuredRunFailureTerminal.NormalizeFailure(inbound));
+        var normalized = StructuredRunFailureTerminal.NormalizeFailure(inbound);
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var run = (await runStore.GetAsync(RunId.Parse(runId)))!;
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, normalized.Type, normalized.Payload, DateTimeOffset.UtcNow, run.LifecycleGeneration);
+        (await runStore.TrySetTerminalOutcomeAsync(run.Id, outcome, "a2a_transport_failure")).Should().BeTrue();
+        await _factory.Services.GetRequiredService<IRunEventStream>()
+            .AppendTerminalOutcomeAsync(runId, outcome);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
@@ -153,7 +160,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     {
         const string secret = "secret-in-preexisting-row-3e2a";
         var projectId = await CreateProjectAsync(VictimOwnerOid);
-        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid, status: RunStatus.Failed);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
@@ -197,7 +204,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         const string signature = "abc%2Bdef%3D";
         var sas = $"https://agentweaver.blob.core.windows.net/runs/log?sv=2025-01-05&ss=b&sp=rl&se=2030-01-01T00%3A00%3A00Z&sig={signature}";
         var projectId = await CreateProjectAsync(VictimOwnerOid);
-        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid, status: RunStatus.Failed);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
@@ -242,7 +249,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         const string credentialUrl = "https://operator:password@example.test/trace";
         const string stackPath = "at /agent/run/Worker.cs:line 42";
         var projectId = await CreateProjectAsync(VictimOwnerOid);
-        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid, status: RunStatus.Failed);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {

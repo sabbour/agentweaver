@@ -393,6 +393,7 @@ public sealed class CoordinatorSteeringService
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
     private readonly IRunEventStream? _eventStream;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly AssemblyReviewGate? _reviewGate;
     private readonly IOutcomeSpecReplyClassifier? _replyClassifier;
     private readonly ILogger<CoordinatorSteeringService> _logger;
@@ -429,6 +430,7 @@ public sealed class CoordinatorSteeringService
         RunWorkflowFactory? runWorkflowFactory = null,
         IRunStore? runStore = null,
         IRunEventStream? eventStream = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null,
         AssemblyReviewGate? reviewGate = null,
         IOutcomeSpecReplyClassifier? replyClassifier = null,
         IAgentHostPodLifecycle? podLifecycle = null,
@@ -441,6 +443,7 @@ public sealed class CoordinatorSteeringService
         _coordinatorRunService = coordinatorRunService;
         _runStore = runStore;
         _eventStream = eventStream;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _reviewGate = reviewGate;
         _replyClassifier = replyClassifier;
         _logger = logger;
@@ -1033,13 +1036,24 @@ public sealed class CoordinatorSteeringService
                     childRunId);
             }
 
-            await EmitChildCancelledAsync(childRunId, CancellationToken.None).ConfigureAwait(false);
+            // A stop is immediately observable on this replica. This steering marker is distinct
+            // from the typed failed outcome below, which remains the durable terminal winner.
+            var childEntry = _streamStore.Get(childRunId);
+            if (childEntry is not null && !childEntry.IsCompleted)
+            {
+                childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop", directiveId });
+                _streamStore.Complete(childRunId);
+            }
 
             // Terminalize the child run row even when the request landed on a non-owner replica.
             // The owning watch loop polls this durable marker and abandons its local token.
             if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
-                await _runStore.TrySetTerminalStatusAsync(
-                    childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
+            {
+                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    childId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "steering_stop" }, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
+                if (changed && _terminalOutcomeProjector is not null)
+                    await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None, _streamStore).ConfigureAwait(false);
+            }
 
             // #350: cancelling the local CancellationTokenSource above has NO effect on the remote
             // AgentHost pod — reliably stop the actual process so a detached turn cannot keep
@@ -1057,7 +1071,7 @@ public sealed class CoordinatorSteeringService
         // For a broadcast stop (no specific child target) also terminalize the coordinator run itself.
         // Without this the coordinator's dispatch loop continues, dead-ends at assembly_blocked, and
         // the run stays InProgress — there is no clean cancellation path. StopCoordinatorRunAsync
-        // uses the same TrySetTerminalStatusAsync CAS used by the assembly service for its terminal states.
+        // uses the same TrySetTerminalOutcomeAsync generation fence used by the assembly service for its terminal states.
         if (targetChildRunId is null)
             await StopCoordinatorRunAsync(coordinatorRunId, ct).ConfigureAwait(false);
 
@@ -1296,32 +1310,6 @@ public sealed class CoordinatorSteeringService
     // redirect / amend — queue for the child's next turn boundary.
     // -----------------------------------------------------------------------
 
-    private async Task EmitChildCancelledAsync(string childRunId, CancellationToken ct)
-    {
-        // Emit a terminal run.cancelled so observers resolve the child as failed. If this replica owns
-        // the in-memory stream, record there so local subscribers wake; otherwise append directly to
-        // the durable event stream so reconnect/replay and non-owner stops still expose the terminal.
-        var childEntry = _streamStore.Get(childRunId);
-        if (childEntry is not null)
-        {
-            if (!childEntry.HasEventType(EventTypes.RunCancelled))
-                childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
-            _streamStore.Complete(childRunId);
-            if (_runWorkflowFactory is not null)
-                _ = _runWorkflowFactory.PersistRunEventsAsync(childRunId);
-            return;
-        }
-
-        if (_eventStream is not null)
-        {
-            await _eventStream.AppendAsync(
-                childRunId,
-                new RunEvent(0, EventTypes.RunCancelled, new { reason = "steering_stop" }),
-                ct).ConfigureAwait(false);
-            await _eventStream.CompleteAsync(childRunId, ct).ConfigureAwait(false);
-        }
-    }
-
     /// <summary>
     /// Terminates the coordinator run row as Failed/stopped. Called by <see cref="ApplyStopAsync"/>
     /// for broadcast stops so the coordinator run exits cleanly instead of continuing to the dispatch
@@ -1333,8 +1321,11 @@ public sealed class CoordinatorSteeringService
     {
         if (_runStore is null || !RunId.TryParse(coordinatorRunId, out var id))
             return;
-        await _runStore.TrySetTerminalStatusAsync(id, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", ct)
+        var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            id, RunStatus.Failed, EventTypes.RunFailed, new { reason = "steering_stop" }, DateTimeOffset.UtcNow, "steering_stop", ct)
             .ConfigureAwait(false);
+        if (changed && _terminalOutcomeProjector is not null)
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
         // #350: the coordinator's own AgentHost pod (when pod-per-run) also needs reliable teardown —
         // mirrors the child-release call in ApplyStopAsync above.
         await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
@@ -1587,14 +1578,19 @@ public sealed class CoordinatorSteeringService
 
         // Un-terminalize the coordinator run so the project runs list/detail show it live again.
         if (runIsTerminalRecoverable)
-            await runStore.UpdateStatusAsync(runId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+        {
+            if (!await runStore.TryReopenTerminalToInProgressAsync(runId, ct).ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    $"Coordinator run {coordinatorRunId} was no longer terminally recoverable.");
+            run = (await runStore.GetAsync(runId, ct).ConfigureAwait(false))!;
+        }
 
         // Re-open the coordinator stream IN PLACE (assembly's block had completed it) so the resumed
         // dispatch/assembly loops emit onto a live entry again. Reopening (issue #388) clears the
         // completed/awaiting-review flags WITHOUT discarding the history already recorded, so the
         // recovery event is APPENDED after the coordinator's prior messages instead of replacing them
         // (removing + recreating the entry would have started a blank history).
-        var entry = _streamStore.Reopen(coordinatorRunId)
+        var entry = _streamStore.Reopen(coordinatorRunId, run.LifecycleGeneration)
             ?? _streamStore.Create(coordinatorRunId, run.SubmittingUser);
         if (effectiveProvider is not null)
         {

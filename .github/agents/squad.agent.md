@@ -394,9 +394,18 @@ validation prerequisites proportional to the change.
   validation, and independent review/admission checks are complete with no unresolved
   blockers.
 - **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  then merge it with `gh pr merge <number> --rebase --auto`. Confirm the PR is actually
-  merged (not merely queued for auto-merge) before dispatching or merging work that depends
-  on it. A failed, blocked, or unmerged dependency remains in place and blocks its dependents.
+  run the coordinator-owned external-state admission preflight before ready and again
+  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
+  fetches `origin/dev`, gets the live PR head SHA, and runs
+  `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
+  --head-sha <live-head-sha>`. The preflight resolves declared external state with the
+  pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
+  required finding with an owner, correction or waiver, fresh validation/review, and a
+  resolved transition. Coordinator/Ralph and authoritative external Squad state are
+  trusted operational components; GitHub is evidence and CI only, and repository code
+  does not provide an adversarially immutable execution boundary. PR comments preserve
+  evidence but do not enforce admission. Confirm the PR is actually merged before
+  dependents proceed.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;
@@ -417,6 +426,60 @@ validation prerequisites proportional to the change.
   confirmed-dependency gates; deploy the corrected release through the documented npm
   scripts and rerun the affected focused API scenarios. Repeat until the acceptance gate is
   clean; do not declare the milestone complete while findings remain.
+
+### PR Comment Writing Policy
+
+Use this policy for every PR admission or reviewer revalidation comment.
+
+Add a new comment. Do not edit a previous PR comment.
+
+Write short active sentences. Write one fact in each descriptive sentence. Use one name
+for each concept. Do not use filler, contractions, or semicolons.
+
+Use `make sure that` for statements about a required state. Do not use `check`, `verify`,
+`confirm`, or `ensure` as state verbs.
+
+Keep descriptive sentences at 25 words or fewer. Keep procedural instructions at 20 words
+or fewer. Put each required condition before its command.
+
+Use a flat list after an introductory colon. Keep commands, identifiers, paths, SHA values,
+URLs, labels, and quoted errors exact.
+
+Use this format for admission comments:
+
+### Admission evidence
+
+Record the admission evidence:
+
+- PR head: `<head-sha>`.
+- Ledger: `<ledger-path>`.
+- Finding result: `<resolved-status>`.
+- Validation: `<command-and-result>`.
+- Decision: `<admission-decision>`.
+
+Use this format for reviewer revalidation comments:
+
+### Reviewer revalidation
+
+Record the reviewer revalidation:
+
+- PR head: `<head-sha>`.
+- Finding: `<finding-id>`.
+- Correction: `<correction-fact>`.
+- Validation: `<command-and-result>`.
+- Decision: `<revalidation-decision>`.
+
+Before you post, complete this self-review:
+
+1. Make sure that each descriptive sentence has 25 words or fewer.
+2. Make sure that each procedural instruction has 20 words or fewer.
+3. Scan for `should`, `would`, `may`, `might`, `could`, `shall`, and filler.
+4. Make sure that each condition appears before its command.
+5. Make sure that each list uses an introductory colon and flat items.
+6. Make sure that commands, identifiers, paths, SHA values, URLs, labels, and quoted errors are exact.
+
+Raw JSON is evidence, not descriptive prose. Keep raw JSON exact. Post it in a separate
+comment.
 
 ### Consult Mode Detection
 

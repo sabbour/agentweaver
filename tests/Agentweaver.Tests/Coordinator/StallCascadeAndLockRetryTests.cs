@@ -570,8 +570,8 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             retryable = true,
         }));
         await stream.CompleteAsync(failedChild);
-        await _runStore.UpdateStatusAsync(
-            RunId.Parse(failedChild), RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(
+            RunId.Parse(failedChild), RunStatus.Failed)).Should().BeTrue();
 
         var sut = BuildDispatch(stream);
         string? successfulChild = null;
@@ -753,8 +753,8 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             retryable = true,
         }));
         await stream.CompleteAsync(currentChild);
-        await _runStore.UpdateStatusAsync(
-            RunId.Parse(currentChild), RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(
+            RunId.Parse(currentChild), RunStatus.Failed)).Should().BeTrue();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
@@ -793,7 +793,7 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             };
         await stream.AppendAsync(child, new RunEvent(0, EventTypes.RunFailed, payload));
         await stream.CompleteAsync(child);
-        await _runStore.UpdateStatusAsync(RunId.Parse(child), RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(RunId.Parse(child), RunStatus.Failed)).Should().BeTrue();
 
         var sut = BuildDispatch(stream);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -933,7 +933,12 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         };
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        {
+            if (TerminalRunOutcome.IsTerminal(status))
+                (await _runStore.TerminalizeForTestAsync(id, status)).Should().BeTrue();
+            else
+                await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        }
         return id.ToString();
     }
 

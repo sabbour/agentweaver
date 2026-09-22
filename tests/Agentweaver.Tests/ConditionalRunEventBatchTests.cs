@@ -36,7 +36,7 @@ public sealed class ConditionalRunEventBatchTests : IDisposable
             run.Id.ToString(), new { ready = true }, store, CancellationToken.None);
         await paused.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        await store.UpdateStatusAsync(run.Id, status, DateTimeOffset.UtcNow);
+        (await store.TerminalizeForTestAsync(run.Id, status)).Should().BeTrue();
         paused.Resume.SetResult();
 
         (await append.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();

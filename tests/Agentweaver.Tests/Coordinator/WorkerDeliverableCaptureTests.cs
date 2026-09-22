@@ -385,7 +385,7 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
             ParentRunId = coordRunId,
             SubtaskId = subtaskId,
         });
-        await _runStore.UpdateStatusAsync(childRunId, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(childRunId, RunStatus.Failed)).Should().BeTrue();
 
         var found = await _runStore.FindActiveChildAsync(coordRunId, subtaskId);
 

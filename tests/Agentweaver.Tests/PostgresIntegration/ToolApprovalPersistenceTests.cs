@@ -3,6 +3,7 @@ using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -291,7 +292,7 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         gate.IsAutoApproved(siblingId, "web_fetch", "https://before-failure.test").Should().BeTrue(
             "active coordinators continue to propagate session policies");
 
-        await runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(parent.Id, RunStatus.Failed)).Should().BeTrue();
 
         (await runStore.GetAsync(sibling.Id))!.Status.Should().Be(RunStatus.InProgress);
         gate.IsAutoApproved(siblingId, "web_fetch", "https://after-failure.test").Should().BeFalse(
@@ -337,7 +338,7 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         gate.IsAutoApproved(activeChild.Id.ToString(), "web_fetch", "https://active.test").Should().BeTrue(
             "an active coordinator's policy remains available to new children");
 
-        await runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(parent.Id, RunStatus.Failed)).Should().BeTrue();
         await runStore.UpdateStatusAsync(parent.Id, RunStatus.InProgress, endedAt: null);
 
         var recoveredChild = NewRun($"alice-{suffix}", project);

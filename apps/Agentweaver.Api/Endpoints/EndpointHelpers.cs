@@ -425,8 +425,11 @@ internal static async Task CancelRunWorkAsync(
         catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
     }
 
-    await runStore.TrySetTerminalStatusAsync(
-        run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", CancellationToken.None);
+    await runStore.TrySetTerminalOutcomeAsync(
+        run.Id,
+        TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "abandoned" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+        "abandoned",
+        CancellationToken.None);
 
     // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
     await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);

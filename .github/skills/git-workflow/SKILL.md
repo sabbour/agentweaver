@@ -53,10 +53,18 @@ Examples:
    completed with no unresolved blocker:
    ```bash
    gh pr ready <number>
-   gh pr merge <number> --rebase --auto
+   gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
-   Confirm the PR reports `MERGED` before dispatching or merging dependent work. An
-   auto-merge request is not merge confirmation.
+   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
+   the live PR head SHA, and runs
+   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
+   The preflight uses the pinned Squad SDK to resolve declared external state and checks
+   the coordinator-owned findings ledger. Ralph records the returned
+   `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
+   and authoritative external Squad state are trusted operational components; GitHub is
+   evidence and CI only, and repository code is not an adversarially immutable boundary.
+   Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
+   dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
    run, and any blocker.

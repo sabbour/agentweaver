@@ -259,7 +259,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
             project.Id, task.Id,
             MakeCoordinatorRun(project.Id, runId), DateTimeOffset.UtcNow);
         // Drive the run terminal; a completed work plan collapses the card to the Done column.
-        await runStore.UpdateStatusAsync(runId, RunStatus.Merged, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(runId, RunStatus.Merged)).Should().BeTrue();
         await SeedWorkPlanAsync(project.Id, runId, WorkPlanStatus.Complete, null);
 
         var board = await service.GetBoardAsync(project.Id, includeTerminalHistory: false, default);
@@ -366,7 +366,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
 
         // A TERMINAL run whose subtasks must NOT leak into the rollup (historical, merged-away).
         var run3 = await ClaimRunAsync(backlogStore, project.Id, "c");
-        await runStore.UpdateStatusAsync(run3, RunStatus.Merged, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(run3, RunStatus.Merged)).Should().BeTrue();
         await SeedWorkPlanWithSubtasksAsync(project.Id, run3, WorkPlanStatus.Complete,
             ("Tank", "completed", "Tank's old merged work"));
 

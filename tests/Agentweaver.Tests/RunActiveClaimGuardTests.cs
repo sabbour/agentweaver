@@ -151,7 +151,7 @@ public sealed class RunActiveClaimGuardTests
     }
 
     [Fact]
-    public async Task GuardedRunStore_TrySetTerminalStatusAsync_WaitsForExternallyHeldActiveClaim()
+    public async Task GuardedRunStore_TrySetTerminalOutcomeAsync_WaitsForExternallyHeldActiveClaim()
     {
         var guard = new RunActiveClaimGuard();
         var runId = RunId.New();
@@ -161,8 +161,13 @@ public sealed class RunActiveClaimGuardTests
         // Simulate DurableToolApprovalGate.ResolveAndPersistAsync holding the claim across its
         // read-then-commit critical section, exactly as it now does for every non-once scope.
         var claim = await guard.AcquireAsync(runId, CancellationToken.None);
-        var terminalizeTask = store.TrySetTerminalStatusAsync(
-            runId, RunStatus.Failed, DateTimeOffset.UtcNow, "race", CancellationToken.None);
+        var terminalizeTask = store.TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed, EventTypes.RunFailed, new { reason = "race" },
+                DateTimeOffset.UtcNow, 1),
+            "race",
+            CancellationToken.None);
 
         await Task.Delay(TimeSpan.FromMilliseconds(200));
         terminalizeTask.IsCompleted.Should().BeFalse(
@@ -229,6 +234,13 @@ public sealed class RunActiveClaimGuardTests
 
         public Task<bool> TrySetTerminalStatusAsync(
             RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref TerminalizeCalls);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TrySetTerminalOutcomeAsync(
+            RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
         {
             Interlocked.Increment(ref TerminalizeCalls);
             return Task.FromResult(true);

@@ -82,6 +82,53 @@ public sealed class StreamEndpointTests : IClassFixture<AgentweaverWebApplicatio
     }
 
     [Fact]
+    public async Task ReopenedRunWithoutLiveEntry_DoesNotCloseOnHistoricalTerminalEvent()
+    {
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = Path.GetTempPath(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "replay terminal lifecycle",
+            SubmittingUser = AgentweaverWebApplicationFactory.TestUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+
+        var oldOutcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "old_generation" },
+            DateTimeOffset.UtcNow, 1);
+        (await runStore.TrySetTerminalOutcomeAsync(runId, oldOutcome, "old_generation")).Should().BeTrue();
+        await eventStream.AppendTerminalOutcomeAsync(runId.ToString(), oldOutcome);
+        (await runStore.TryReopenTerminalToInProgressAsync(runId)).Should().BeTrue();
+
+        var responseTask = _ownerClient.GetAsync($"/api/runs/{runId}/stream");
+        await Task.Delay(TimeSpan.FromSeconds(11));
+        responseTask.IsCompleted.Should().BeFalse(
+            "the historical terminal event belongs to the earlier lifecycle generation");
+
+        await eventStream.AppendAsync(runId.ToString(),
+            new RunEvent(0, "agent.message.delta", new { delta = "current_generation" }));
+        var reopened = (await runStore.GetAsync(runId))!;
+        var currentOutcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "current_generation" },
+            DateTimeOffset.UtcNow, reopened.LifecycleGeneration);
+        (await runStore.TrySetTerminalOutcomeAsync(runId, currentOutcome, "current_generation")).Should().BeTrue();
+        await eventStream.AppendTerminalOutcomeAsync(runId.ToString(), currentOutcome);
+
+        var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain(EventTypes.RunFailed)
+            .And.Contain("current_generation")
+            .And.Contain(EventTypes.RunCompleted)
+            .And.Contain("event: done");
+    }
+
+    [Fact]
     public async Task NonexistentRun_Returns404()
     {
         var response = await _ownerClient.GetAsync($"/api/runs/{Guid.NewGuid()}/stream");

@@ -1,4 +1,5 @@
 using Agentweaver.Domain;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Infrastructure;
 
@@ -21,6 +22,32 @@ public interface IRunEventStream
     /// Returns the durable sequence assigned to the persisted event row.
     /// </summary>
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Appends a terminal-outcome winner exactly once for its lifecycle generation. Production
+    /// streams persist the uniqueness claim with the event; the default keeps simple test streams
+    /// compatible while production callers never fall back to a read-then-append sequence.
+    /// </summary>
+    async Task<RunEvent> AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        var sequence = await AppendAsync(runId, outcome.ToRunEvent(), ct).ConfigureAwait(false);
+        return outcome.ToRunEvent(sequence);
+    }
+
+    /// <summary>
+    /// Verifies that an already durable canonical terminal event is owned by the exact outcome
+    /// generation. Returns <c>false</c> unless its persisted generation-to-sequence projection
+    /// already exists; callers must leave unproven events for the durable projector.
+    /// </summary>
+    Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
 
     /// <summary>
     /// Appends a batch with assigned sequences only if the durable run is still non-terminal.
@@ -92,9 +119,8 @@ public interface IRunEventStream
             DateTimeOffset? latest = null;
             foreach (var evt in events)
             {
-                if (evt.TimestampUtc == default)
-                    continue;
-                if (latest is null || evt.TimestampUtc > latest.Value)
+                if (evt.TimestampUtc != default
+                    && (latest is null || evt.TimestampUtc > latest.Value))
                     latest = evt.TimestampUtc;
             }
 
@@ -104,5 +130,32 @@ public interface IRunEventStream
         {
             return null;
         }
+    }
+}
+
+internal static class RunEventTerminality
+{
+    private static readonly HashSet<string> TerminalTypes = new(StringComparer.Ordinal)
+    {
+        EventTypes.RunCompleted,
+        EventTypes.RunFailed,
+        EventTypes.RunCancelled,
+        EventTypes.MergeCompleted,
+        EventTypes.MergeFailed,
+        EventTypes.ReviewDeclined,
+        EventTypes.RunAssembleReady,
+        EventTypes.CoordinatorAssemblyFailed,
+    };
+
+    public static bool IsTerminal(RunEvent evt)
+    {
+        if (!TerminalTypes.Contains(evt.Type))
+            return false;
+        if (evt.Type != EventTypes.RunCancelled)
+            return true;
+
+        var payload = JsonSerializer.SerializeToElement(evt.Payload);
+        return !payload.TryGetProperty("reason", out var reason)
+            || !string.Equals(reason.GetString(), "steering_redirect", StringComparison.Ordinal);
     }
 }

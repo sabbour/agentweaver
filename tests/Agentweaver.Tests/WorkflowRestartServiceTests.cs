@@ -507,7 +507,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var failure = streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.RunFailed);
         var payload = System.Text.Json.JsonSerializer.SerializeToElement(failure.Payload);
-        payload.GetProperty("errorCode").GetString().Should().Be("agent_turn_internal_error");
+        payload.GetProperty("reason").GetString().Should().Be("a2a_transport_interrupted");
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
@@ -525,6 +525,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Checkpoints:Path"] = _checkpointsPath,
+                ["Database:Path"] = _db.FilePath,
             })
             .Build();
 
@@ -582,6 +583,9 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new NoOpRunLeaseStore(),
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
+        var eventStream = new RecordingEventStream();
+        var projector = new TerminalOutcomeProjector(
+            runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, streamStore);
         return new WorkflowRestartService(
             runStore,
             streamStore,
@@ -591,7 +595,42 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             worktreeOps,
             watchLoop,
             scopeFactory,
-            loggerFactory.CreateLogger<WorkflowRestartService>());
+            loggerFactory.CreateLogger<WorkflowRestartService>(),
+            eventStream,
+            projector);
+    }
+
+    private sealed class RecordingEventStream : IRunEventStream
+    {
+        private readonly Dictionary<string, List<RunEvent>> _events = [];
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            var events = _events.GetValueOrDefault(runId) ?? [];
+            _events[runId] = events;
+            var persisted = evt with { Sequence = events.Count + 1 };
+            events.Add(persisted);
+            return ValueTask.FromResult(persisted.Sequence);
+        }
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            if (_events.TryGetValue(runId, out var events))
+                foreach (var evt in events.Where(evt => evt.Sequence > fromSequence))
+                    yield return evt;
+            await Task.CompletedTask;
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<RunEvent>>(
+                _events.TryGetValue(runId, out var events)
+                    ? events.Where(evt => evt.Sequence > fromSequence).ToArray()
+                    : []);
     }
 
     private (string RepositoryPath, string BasePath, WorktreeManager Manager, WorktreeOperationsAdapter Adapter)

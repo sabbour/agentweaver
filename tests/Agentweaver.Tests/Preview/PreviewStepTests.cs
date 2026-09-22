@@ -670,8 +670,16 @@ public sealed class PreviewStepTests : IDisposable
         if (conditionalAppendFails)
             h.Persistence!.ConditionalFailure = new InvalidOperationException("conditional append failed");
         else
-            (await h.RunStore.TrySetTerminalStatusAsync(
-                Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        {
+            var runId = Domain.RunId.Parse(RunId);
+            (await h.RunStore.TerminalizeForTestAsync(
+                runId, RunStatus.Failed, "abandoned")).Should().BeFalse(
+                "the active preview-publication lease owns the persistence boundary");
+            await h.RunStore.EndPreviewPublicationAsync(runId);
+            (await h.RunStore.TerminalizeForTestAsync(
+                runId, RunStatus.Failed, "abandoned"))
+                .Should().BeTrue("the terminal owner wins after releasing the publication lease");
+        }
         if (workflowStepFails)
             h.Persistence!.WorkflowStepFailure = new InvalidOperationException("preview workflow-step append failed");
         if (completeLocalStream)
@@ -723,8 +731,8 @@ public sealed class PreviewStepTests : IDisposable
         (await h.ApprovalGate.GrantAsync(RunId, approvalId, ApprovalScope.Once)).Should().BeTrue();
         var healthCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        (await h.RunStore.TrySetTerminalStatusAsync(
-            Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        (await h.RunStore.TerminalizeForTestAsync(
+            Domain.RunId.Parse(RunId), RunStatus.Failed, "abandoned")).Should().BeTrue();
         if (completeLocalStream)
             h.Streams.Complete(RunId);
         var healthCancelled = healthCt.IsCancellationRequested;

@@ -180,8 +180,8 @@ active, approved architectural/scope decisions, compiled by
 `MemoryContextCompiler.CompileDecisionsAsync(projectId)`. The decisions use the same
 untrusted JSON envelope but omit memory and session data. When there are no eligible
 decisions, the method returns `null` and only the charter is injected. Compilation
-failures are swallowed (logged as a warning); the child proceeds with its charter
-alone.
+non-budget failures are logged as warnings and the child proceeds with its charter alone.
+A mandatory-decision budget failure is terminalized before model invocation.
 
 Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory` correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and `memory_export`.
 
@@ -227,12 +227,12 @@ Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `expor
 <tr><td>relation-2</td><td>3 latest open</td></tr>
 <tr><td>relation-3</td><td>4 selected</td></tr>
 <tr><td>relation-4</td><td>5 serialize</td></tr>
-<tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. That budget bounds selected memories—not decisions or the entire context.</td></tr>
+<tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. The complete serialized envelope must fit; active approved decisions are mandatory and fail compilation when they exceed it.</td></tr>
 <tr><td>assurance-0-label</td><td>Joint memory ordering</td></tr>
 <tr><td>assurance-0-fact</td><td>Importance first; recency breaks ties.</td></tr>
 <tr><td>assurance-0-source</td><td>MemoryContextCompiler.cs</td></tr>
 <tr><td>assurance-1-label</td><td>Bounded selection</td></tr>
-<tr><td>assurance-1-fact</td><td>Item / character limits cover memory.</td></tr>
+<tr><td>assurance-1-fact</td><td>Item / character limits cover the complete envelope.</td></tr>
 <tr><td>assurance-2-label</td><td>Injection resistance</td></tr>
 <tr><td>assurance-2-fact</td><td>Context is wrapped as untrusted JSON.</td></tr>
 <tr><td>assurance-2-source</td><td>MemoryContextCompilerSecurityTests.cs</td></tr>
