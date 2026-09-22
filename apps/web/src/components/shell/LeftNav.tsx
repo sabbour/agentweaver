@@ -210,6 +210,7 @@ export function LeftNav({
       aria-label="Primary navigation"
       data-testid="app-navigation-menu"
       data-collapsed={collapsed ? 'true' : 'false'}
+      tabIndex={collapsed ? 0 : undefined}
       className={`aw-left-nav${collapsed ? ' aw-left-nav--collapsed' : ''}`}
     >
       {/* Brand + collapse toggle chrome */}
@@ -311,7 +312,7 @@ export function LeftNav({
         className="aw-rail-scroll"
         data-testid="app-navigation-scroll"
         data-scrollbar-mode={collapsed ? 'hidden' : 'hover'}
-        tabIndex={0}
+        tabIndex={collapsed ? -1 : 0}
       >
         {/* Global destinations (Overview, Projects) — no section heading */}
         <div role="group" aria-label="Global" className="aw-nav-section" style={{ gap: '2px' }}>

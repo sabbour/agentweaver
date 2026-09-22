@@ -66,12 +66,10 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagBalancedGrid, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
 import {
   ArrowMaximizeRegular,
   ArrowMinimizeRegular,
-  ArrowAutofitHeightRegular,
-  ArrowAutofitWidthRegular,
   ArrowRepeatAllRegular,
   BotRegular,
   BroomRegular,
@@ -2039,7 +2037,7 @@ export interface RunTreeSiblingMeta {
 
 // Sibling ordering for the run/session tree. The tree order is DECOUPLED from both wall-clock
 // timestamps and graph layout so it never reshuffles when work starts at different times or when
-// the graph orientation/tidy/fit changes (Ahmed: "the run tree is all over the place, it is not
+// the graph tidy/fit changes (Ahmed: "the run tree is all over the place, it is not
 // sorted properly at all"). PRIMARY key is the canonical pipeline stage rank
 // (Outcome plan → Work plan → subtasks → RAI → Build & Test → Human Review → Merge → Scribe) so the
 // tree always reads in dependency order regardless of the order events/descriptor nodes arrive in.
@@ -2242,17 +2240,14 @@ const useTopologyToolbarStyles = makeStyles({
 });
 
 interface TopologyToolbarProps {
-  orientation: 'LR' | 'TB';
-  onToggleOrientation: () => void;
   onTidy: () => void;
   fitPadding: number;
 }
 
 // Copilot Studio-style control bar for the topology overlay. Lives inside a ReactFlowProvider so it
 // can drive the shared viewport (zoom in/out, fit) natively. Tidy re-runs the dagre layout and
-// re-fits; Switch orientation toggles LR/TB rank direction (both re-fit on next render via the
-// keyed ReactFlow remount + its fitView prop).
-function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
+// re-fits via the keyed ReactFlow remount + its fitView prop.
+function TopologyToolbar({ onTidy, fitPadding }: TopologyToolbarProps) {
   const toolbarStyles = useTopologyToolbarStyles();
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
@@ -2272,14 +2267,6 @@ function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding 
       </Tooltip>
       <Tooltip content="Tidy" relationship="label" withArrow>
         <Button appearance="subtle" size="small" icon={<BroomRegular />} onClick={onTidy} />
-      </Tooltip>
-      <Tooltip content="Switch orientation" relationship="label" withArrow>
-        <Button
-          appearance="subtle"
-          size="small"
-          icon={orientation === 'LR' ? <ArrowAutofitHeightRegular /> : <ArrowAutofitWidthRegular />}
-          onClick={onToggleOrientation}
-        />
       </Tooltip>
     </div>
   );
@@ -2384,16 +2371,6 @@ export function CoordinatorRunPage() {
   } = usePendingApprovals(runId ?? '', approvalRefreshKey);
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
-  // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
-  // The toolbar's "Switch orientation" toggles this and re-fits the view.
-  const [graphOrientation, setGraphOrientation] = useState<'LR' | 'TB'>('LR');
-  // True once the user manually toggles orientation via the toolbar — suppresses the auto-pick so
-  // their explicit choice sticks. Reset when the topology panel closes so reopening re-evaluates.
-  const [orientationUserChose, setOrientationUserChose] = useState(false);
-  // Measured topology-graph container size (from a ResizeObserver on the canvas wrapper). Drives the
-  // fill-maximizing default-orientation pick. Null until first measured.
-  const [topoContainerSize, setTopoContainerSize] = useState<{ w: number; h: number } | null>(null);
-  const topoContainerRef = useRef<HTMLDivElement | null>(null);
   // Bumped by "Tidy" to force a fresh dagre layout + re-fit even when inputs are unchanged.
   const [tidyNonce, setTidyNonce] = useState(0);
 
@@ -3064,8 +3041,8 @@ export function CoordinatorRunPage() {
   }, [events, effectiveDescriptor]);
 
 
-  const { rfNodes, displayEdges, bboxLR, bboxTB } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[]; bboxLR: { w: number; h: number }; bboxTB: { w: number; h: number } }>(() => {
-    if (!planningDescriptor) return { rfNodes: [], displayEdges: [], bboxLR: { w: 0, h: 0 }, bboxTB: { w: 0, h: 0 } };
+  const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
+    if (!planningDescriptor) return { rfNodes: [], displayEdges: [] };
 
     const fwdEdges: Edge[] = [];
     const allEdges: Edge[] = [];
@@ -3299,21 +3276,17 @@ export function CoordinatorRunPage() {
       };
     });
 
-    const laidOutLR = layoutDagBalancedGrid(raw, fwdEdges, {
+    const laidOutNodes = layoutDagBalancedGrid(raw, fwdEdges, {
       rankSep: COORD_GRAPH_RANK_SEP,
       nodeSep: COORD_GRAPH_NODE_SEP,
       minColumns: 1,
       maxColumns: 4,
     }, nodeSizeHints);
-    const laidOutTB = laidOutLR;
-    const laidOutNodes = graphOrientation === 'TB' ? laidOutTB : laidOutLR;
     return {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
-      bboxLR:       layoutBBox(laidOutLR, nodeSizeHints),
-      bboxTB:       layoutBBox(laidOutTB, nodeSizeHints),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
 
   const liveTerminalNow = useTickingNow(viewState.terminal);
   const liveRfNodes = !viewState.terminal
@@ -3705,56 +3678,6 @@ export function CoordinatorRunPage() {
   // Run-wide (coordinator-level) collective-diff summary for the Changes chip above the composer.
   const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
-
-  // Measure the topology graph container so we can auto-pick the fill-maximizing orientation.
-  useEffect(() => {
-    const el = topoContainerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const measure = () => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (w > 0 && h > 0) {
-        setTopoContainerSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
-      }
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [topologyPanelOpen]);
-
-  // Reset the manual-override + measurement when the panel closes so each open re-evaluates the
-  // default orientation from scratch (deterministic: same run + same container ⇒ same choice).
-  useEffect(() => {
-    if (!topologyPanelOpen) {
-      const resetOrientationChoice = async () => {
-        setOrientationUserChose(false);
-        setTopoContainerSize(null);
-      };
-      void resetOrientationChoice();
-    }
-  }, [topologyPanelOpen]);
-
-  // Auto-pick the DEFAULT orientation to fill the most of the panel. For each banded-layout footprint the
-  // fit scale into the container is min(cw/bw, ch/bh); the larger scale fills more area. We only drive
-  // the default here — a manual toolbar toggle sets orientationUserChose and wins from then on. This
-  // never touches the run-tree ordering (that is derived from dependency edges, not graph layout).
-  useEffect(() => {
-    if (orientationUserChose || !topologyPanelOpen) return;
-    const size = topoContainerSize;
-    if (!size || bboxLR.w <= 0 || bboxTB.w <= 0) return;
-    const scaleLR = Math.min(size.w / bboxLR.w, size.h / bboxLR.h);
-    const scaleTB = Math.min(size.w / bboxTB.w, size.h / bboxTB.h);
-    const effectivelyEqual = Math.abs(scaleTB - scaleLR) <= Math.max(scaleLR, scaleTB) * 0.001;
-    const best: 'LR' | 'TB' = scaleTB > scaleLR * 1.001
-      || (effectivelyEqual && size.h > size.w)
-      ? 'TB'
-      : 'LR';
-    const syncGraphOrientation = async () => {
-      setGraphOrientation((prev) => (prev === best ? prev : best));
-    };
-    void syncGraphOrientation();
-  }, [orientationUserChose, topologyPanelOpen, topoContainerSize, bboxLR, bboxTB]);
 
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
@@ -4418,11 +4341,6 @@ export function CoordinatorRunPage() {
         <CoordPanelContext.Provider value={openPanelForNode}>
           <ReactFlowProvider>
           <TopologyToolbar
-            orientation={graphOrientation}
-            onToggleOrientation={() => {
-              setOrientationUserChose(true);
-              setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'));
-            }}
             onTidy={() => setTidyNonce((n) => n + 1)}
             fitPadding={0.14}
           />
@@ -4436,9 +4354,9 @@ export function CoordinatorRunPage() {
             tabIndex={0}
             aria-label="Topology graph. Drag to pan; use the toolbar or ctrl+scroll to zoom."
           >
-            <div ref={topoContainerRef} data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
+            <div data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
               <ReactFlow
-                key={`${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
+                key={`${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
                 nodes={linkedDisplayNodes}
                 edges={displayEdges2}
                 nodeTypes={coordinatorNodeTypes}

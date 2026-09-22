@@ -40,6 +40,9 @@
   width: 64px;
   min-width: 64px;
   max-width: 64px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* Chrome row: logo + collapse toggle */
@@ -394,9 +397,10 @@
 }
 
 .aw-left-nav--collapsed .aw-rail-scroll {
+  flex: 0 0 auto;
   align-items: center;
+  overflow: visible;
   padding-inline: 8px;
-  overscroll-behavior: contain;
 }
 
 .aw-left-nav--collapsed .aw-nav-section {

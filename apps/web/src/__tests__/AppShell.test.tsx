@@ -476,7 +476,9 @@ describe('AppShell navigation', () => {
     expect(screen.getByRole('link', { name: 'Board' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeDefined();
     expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getByTestId('app-navigation-menu').getAttribute('tabindex')).toBe('0');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hidden');
+    expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('-1');
     expect(localStorage.getItem('aw.nav.collapsed')).toBe('1');
 
     for (const control of [
@@ -531,13 +533,37 @@ describe('AppShell navigation', () => {
     expect(screen.getByTestId('shell-focus-state').textContent).toBe('standard');
   });
 
-  it('keeps the collapsed middle rail vertically scrollable without horizontal overflow', () => {
+  it('keeps every collapsed control in one vertically scrollable constrained-height rail', () => {
     localStorage.setItem('aw.nav.collapsed', '1');
     renderShellAt('/projects/proj-1');
 
-    expect(screen.getByTestId('app-navigation-scroll')).toBeTruthy();
-    expect(shellCss).toMatch(/\.aw-rail-scroll\s*\{[^}]*flex:\s*1;[^}]*overflow-y:\s*auto;[^}]*overflow-x:\s*hidden;[^}]*min-height:\s*0;/s);
-    expect(shellCss).toMatch(/\.aw-left-nav--collapsed \.aw-rail-scroll\s*\{[^}]*padding-inline:\s*8px;[^}]*overscroll-behavior:\s*contain;/s);
+    const stylesheet = document.createElement('style');
+    stylesheet.textContent = shellCss;
+    document.head.append(stylesheet);
+    const rail = screen.getByTestId('app-navigation-menu');
+    rail.style.height = '120px';
+
+    try {
+      expect(getComputedStyle(rail).overflowY).toBe('auto');
+      expect(getComputedStyle(rail).overflowX).toBe('hidden');
+      expect(rail.getAttribute('tabindex')).toBe('0');
+      expect(getComputedStyle(screen.getByTestId('app-navigation-scroll')).overflow).toBe('visible');
+
+      for (const control of [
+        screen.getByRole('button', { name: 'Settings' }),
+        screen.getByTestId('notification-bell'),
+        screen.getByRole('button', { name: 'Expand navigation' }),
+        screen.getByRole('link', { name: 'Overview' }),
+        screen.getByRole('button', { name: 'New session' }),
+        screen.getByRole('link', { name: 'Board' }),
+        screen.getByRole('button', { name: 'GitHub identity' }),
+      ]) {
+        expect(rail.contains(control)).toBe(true);
+      }
+      expect(rail.contains(screen.getByRole('button', { name: 'GitHub identity' }).closest('.aw-rail-footer'))).toBe(true);
+    } finally {
+      stylesheet.remove();
+    }
   });
 
   it('keeps the persisted project in context on the global Overview route', async () => {

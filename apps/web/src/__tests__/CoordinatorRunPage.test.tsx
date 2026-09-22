@@ -14,6 +14,8 @@ import {
   it,
   vi,
 } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
 // ResizeObserver is required by @xyflow/react and absent in happy-dom.
 class ResizeObserverStub {
@@ -22,6 +24,11 @@ class ResizeObserverStub {
   disconnect() {}
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+const coordinatorRunPageSource = readFileSync(
+  resolve(process.cwd(), 'src/pages/CoordinatorRunPage.tsx'),
+  'utf8',
+);
 
 const mockRunStreamState = vi.hoisted(() => ({
   current: {
@@ -1376,26 +1383,15 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
   });
 
 
-  it('keeps the run tree order completely stable when the graph orientation changes (LR ⇄ TB)', async () => {
+  it('renders the single balanced topology layout without orientation controls or state', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     const inspector = await openTopologyInspector();
     await waitFor(() => expect(inspector.textContent).toContain('Scribe'), { timeout: 4000 });
 
-    const treeOrder = () =>
-      screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label') ?? el.textContent ?? '');
-    const before = treeOrder();
-    expect(before.length).toBeGreaterThan(2);
-
-    // Switch to vertical (TB): rank now advances on Y, siblings on X. The run tree is derived from
-    // dependency/emission order, so its order/structure must be byte-identical.
-    const switchBtn = screen.getByRole('button', { name: /Switch orientation/i });
-    fireEvent.click(switchBtn);
-    expect(treeOrder()).toEqual(before);
-
-    // Back to horizontal (LR) — still identical.
-    fireEvent.click(switchBtn);
-    expect(treeOrder()).toEqual(before);
+    expect(screen.queryByRole('button', { name: /Switch orientation/i })).toBeNull();
+    expect(coordinatorRunPageSource).toContain('layoutDagBalancedGrid');
+    expect(coordinatorRunPageSource).not.toMatch(/graphOrientation|orientationUserChose|topoContainerSize/);
   });
 
   it('renders from REST descriptor even when SSE stream is done (finished coordinator runs)', async () => {
