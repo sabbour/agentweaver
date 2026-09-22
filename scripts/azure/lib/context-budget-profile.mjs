@@ -295,6 +295,7 @@ export async function withContextBudgetProfile(options, action) {
     const encodedSnapshot = Buffer.from(JSON.stringify(snapshots)).toString('base64url');
     const leasePatch = [
       { op: 'test', path: '/metadata/resourceVersion', value: lockIdentity.resourceVersion },
+      { op: 'test', path: '/metadata/uid', value: lockIdentity.uid },
       { op: 'test', path: '/spec/holderIdentity', value: owner },
       {
         op: 'add',
@@ -333,6 +334,7 @@ export async function withContextBudgetProfile(options, action) {
 
     for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
       const snapshot = snapshots[targetDeployment.deployment];
+      patchedDeployments.add(targetDeployment.deployment);
       try {
         await patchDeployment(
           capture,
@@ -343,18 +345,22 @@ export async function withContextBudgetProfile(options, action) {
           owner,
           { signal },
         );
-        patchedDeployments.add(targetDeployment.deployment);
       } catch (error) {
-        const current = selectedState(
-          await kubectlJson(
-            capture,
-            ['get', 'deployment', targetDeployment.deployment, '--namespace', namespace],
-            kubeContext,
-          ),
-          targetDeployment.container,
-        );
-        if (hasAppliedProfile(current, owner, maxItems, maxTokens)) {
-          patchedDeployments.add(targetDeployment.deployment);
+        const currentDeployment = await kubectlJson(
+          capture,
+          ['get', 'deployment', targetDeployment.deployment, '--namespace', namespace],
+          kubeContext,
+        ).catch(() => null);
+        if (currentDeployment) {
+          const current = selectedState(
+            currentDeployment,
+            targetDeployment.container,
+          );
+          if (!hasAppliedProfile(current, owner, maxItems, maxTokens)
+            && equalVariables(current, snapshot)
+            && current.annotation === snapshot.annotation) {
+            patchedDeployments.delete(targetDeployment.deployment);
+          }
         }
         throw error;
       }
@@ -368,10 +374,10 @@ export async function withContextBudgetProfile(options, action) {
     for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
       const current = selectedState(
         await kubectlJson(
-          capture,
-          ['get', 'deployment', targetDeployment.deployment, '--namespace', namespace],
-          kubeContext,
-          signal,
+        capture,
+        ['get', 'deployment', targetDeployment.deployment, '--namespace', namespace],
+        kubeContext,
+        signal,
         ),
         targetDeployment.container,
       );
@@ -405,6 +411,9 @@ export async function withContextBudgetProfile(options, action) {
             ),
             targetDeployment.container,
           );
+          if (equalVariables(current, snapshot) && current.annotation === snapshot.annotation) {
+            continue;
+          }
           if (!hasAppliedProfile(current, owner, maxItems, maxTokens)) {
             throw new Error('profile ownership or applied context-budget values changed; refusing to overwrite');
           }

@@ -62,9 +62,12 @@ function makeCluster({
   rolloutError = false,
   cleanupRolloutError = false,
   patchFailureAt = null,
+  patchAppliesThenFailsAt = null,
+  reconciliationGetFailure = false,
   namespace = 'agentweaver',
   environment = 'staging',
   replaceLeaseBeforeRelease = false,
+  replaceLeaseBeforeSnapshotPatch = false,
   abortOnPatch,
 } = {}) {
   const calls = [];
@@ -80,6 +83,7 @@ function makeCluster({
   ]);
   let lease = null;
   let deploymentPatchCount = 0;
+  let failedReconciliationGet = false;
   const capture = async (_cmd, args, options = {}) => {
     calls.push(['capture', ...args]);
     if (args[0] === 'config' && args[1] === 'current-context') return { stdout: 'staging-context' };
@@ -113,6 +117,10 @@ function makeCluster({
       return { json: { metadata: { labels: { 'agentweaver.io/environment': environment } } } };
     }
     if (args[0] === 'get' && args[1] === 'deployment') {
+      if (reconciliationGetFailure && !failedReconciliationGet && deploymentPatchCount === patchAppliesThenFailsAt) {
+        failedReconciliationGet = true;
+        throw new Error('transient deployment read failed');
+      }
       const value = structuredClone(state.get(args[2]));
       if (restoreMismatch && value.metadata.generation > 21 && args[2] === 'agentweaver-worker') {
         value.spec.template.spec.containers[0].env.push({ name: 'MemoryContext__MaxItems', value: '999' });
@@ -122,9 +130,14 @@ function makeCluster({
     if (args[0] === 'patch' && args[1] === 'lease') {
       const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
       assert.equal(patch[0].value, lease.metadata.resourceVersion);
-      assert.equal(patch[1].value, lease.spec.holderIdentity);
+      assert.equal(patch[1].value, lease.metadata.uid);
+      assert.equal(patch[2].value, lease.spec.holderIdentity);
+      if (replaceLeaseBeforeSnapshotPatch) {
+        lease.metadata.uid = 'replacement-uid';
+        throw new Error('Lease UID test failed');
+      }
       lease.metadata.annotations ??= {};
-      lease.metadata.annotations['agentweaver.io/context-budget-snapshot'] = patch[2].value;
+      lease.metadata.annotations['agentweaver.io/context-budget-snapshot'] = patch[3].value;
       lease.metadata.resourceVersion = '2';
       return { json: structuredClone(lease) };
     }
@@ -147,6 +160,7 @@ function makeCluster({
       }
       current.metadata.resourceVersion = String(Number(current.metadata.resourceVersion) + 1);
       current.metadata.generation += 1;
+      if (deploymentPatchCount === patchAppliesThenFailsAt) throw new Error('deployment patch response lost');
       if (abortOnPatch && deploymentPatchCount === abortOnPatch.at) {
         assert.equal(options.signal, undefined);
         abortOnPatch.controller.abort(new Error(abortOnPatch.reason));
@@ -227,6 +241,22 @@ test('profile restores the first deployment after partial setup failure', async 
     { name: 'UNCHANGED', value: 'api' },
     { name: 'MemoryContext__MaxItems', valueFrom: { secretKeyRef: { name: 'limits', key: 'items' } } },
   ]);
+});
+
+test('profile restores a patch whose response and immediate reconciliation read are both lost', async () => {
+  const cluster = makeCluster({
+    patchAppliesThenFailsAt: 1,
+    reconciliationGetFailure: true,
+  });
+  await assert.rejects(
+    withContextBudgetProfile(profileOptions(cluster), cluster.action),
+    /deployment patch response lost/,
+  );
+  assert.deepEqual(cluster.state.get('agentweaver-api').spec.template.spec.containers[0].env, [
+    { name: 'UNCHANGED', value: 'api' },
+    { name: 'MemoryContext__MaxItems', valueFrom: { secretKeyRef: { name: 'limits', key: 'items' } } },
+  ]);
+  assert.equal(cluster.calls.some((call) => call[1] === 'delete'), true);
 });
 
 test('cleanup structural mismatch fails the profile', async () => {
@@ -333,4 +363,18 @@ test('profile does not delete a replaced Lease', async () => {
     cluster.calls.some((call) => call[1] === 'delete'),
     false,
   );
+});
+
+test('profile snapshot patch atomically rejects a replaced Lease UID', async () => {
+  const cluster = makeCluster({ replaceLeaseBeforeSnapshotPatch: true });
+  await assert.rejects(
+    withContextBudgetProfile(profileOptions(cluster), cluster.action),
+    (error) => {
+      assert.match(error.message, /Lease UID test failed/);
+      assert.ok(error.cleanupErrors.some((message) => message.includes('Lease ownership changed')));
+      return true;
+    },
+  );
+  assert.equal(cluster.calls.some((call) => call[1] === 'patch' && call[2] === 'deployment'), false);
+  assert.equal(cluster.calls.some((call) => call[1] === 'delete'), false);
 });
