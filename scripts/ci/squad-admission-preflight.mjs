@@ -2,7 +2,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { resolveExternalStateDir } from '@bradygaster/squad-sdk';
 
 export const KIND = 'agentweaver.squad-admission-findings/v1';
 const SHA = /^[0-9a-f]{40}$/iu;
@@ -70,13 +69,14 @@ async function readAuthoritativeLedger(stateDirectory, repository, prNumber) {
 export async function resolveDeclaredExternalStateDirectory({
   configPath = '.squad/config.json',
   readConfig = (path) => readFile(path, 'utf8'),
-  resolveDirectory = resolveExternalStateDir,
+  resolveDirectory,
 } = {}) {
   const config = JSON.parse(await readConfig(configPath));
   if (!config || config.stateLocation !== 'external') {
     throw new Error('Squad config must declare external state');
   }
-  return resolveDirectory(required(config.projectKey, 'Squad project key'), false);
+  const directoryResolver = resolveDirectory ?? (await import('@bradygaster/squad-sdk')).resolveExternalStateDir;
+  return directoryResolver(required(config.projectKey, 'Squad project key'), false);
 }
 
 export async function runAdmissionPreflight(repository, prNumber, dependencies = {}) {
