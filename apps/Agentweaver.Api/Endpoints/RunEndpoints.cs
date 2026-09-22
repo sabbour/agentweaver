@@ -1442,9 +1442,14 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start revision workflow for run {RunId}", id);
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "revision_start_failed", CancellationToken.None).ConfigureAwait(false);
-        streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "revision_start_failed" });
-        if (streamEntry is not null) streamStore.Complete(id);
+        var terminalized = await runStore.TrySetTerminalStatusAsync(
+            runId, RunStatus.Failed, DateTimeOffset.UtcNow, "revision_start_failed", CancellationToken.None)
+            .ConfigureAwait(false);
+        if (terminalized)
+        {
+            streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "revision_start_failed" });
+            if (streamEntry is not null) streamStore.Complete(id);
+        }
         return Results.Problem("Failed to start revision workflow.", statusCode: 500);
     }
 
