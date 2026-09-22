@@ -383,7 +383,6 @@ public sealed class EfRunStore : IRunStore
             EventType = outcome.EventType,
             PayloadJson = outcome.Payload.GetRawText(),
             OccurredAt = outcome.OccurredAt,
-            ProjectedAt = outcome.OccurredAt,
         });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
