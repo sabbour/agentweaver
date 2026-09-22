@@ -9,6 +9,12 @@ export const REQUIRED_REVIEW_SOURCES = Object.freeze([
   'security-review',
   'ponytail-review',
 ]);
+export const REVIEWER_IDENTITIES = Object.freeze({
+  'code-review': Object.freeze(['smith']),
+  'security-review': Object.freeze(['seraph']),
+  'ponytail-review': Object.freeze(['ponytail-reviewer']),
+});
+export const WAIVER_ACTORS = Object.freeze(['sabbour']);
 
 function required(value, field) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${field} must be a non-empty string`);
@@ -99,7 +105,7 @@ export async function resolveAdmissionReviewPolicy({
     throw new Error('candidate SHA must be a 40-character SHA');
   }
   const run = dependencies.run ?? spawnCommand;
-  const result = await run(['git', 'diff', '--name-only', '--diff-filter=ACMR', `${baseRef}...${headSha}`], cwd);
+  const result = await run(['git', 'diff', '--name-only', `${baseRef}...${headSha}`], cwd);
   if (result.exitCode !== 0) throw new Error(`unable to resolve admission review policy: ${result.stderr.trim()}`);
   return requiredReviewSourcesForChanges(result.stdout.split(/\r?\n/u).filter(Boolean));
 }

@@ -14,6 +14,7 @@ import {
 import {
   assertAdmissionAuthority,
   requiredReviewSourcesForChanges,
+  resolveAdmissionReviewPolicy,
 } from '../squad-admission-authority.mjs';
 
 const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
@@ -103,6 +104,21 @@ test('repository policy permits one focused review only for one low-risk documen
   assert.equal(requiredReviewSourcesForChanges(['docs/guide/validation.md', 'README.md']).length, 3);
 });
 
+test('includes deleted and type-changed paths when resolving reviewer policy', async () => {
+  const calls = [];
+  const sources = await resolveAdmissionReviewPolicy({
+    cwd: worktree,
+    headSha,
+  }, {
+    run: async (argv) => {
+      calls.push(argv);
+      return { exitCode: 0, stdout: 'docs/guide/validation.md\nscripts/ci/deleted-control.mjs\n', stderr: '' };
+    },
+  });
+  assert.equal(sources.length, 3);
+  assert.deepEqual(calls[0], ['git', 'diff', '--name-only', 'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
+});
+
 test('requires distinct reviewers for each configured reviewer class', () => {
   assert.throws(() => materializeLedger(input({
     reviews: [
@@ -111,6 +127,30 @@ test('requires distinct reviewers for each configured reviewer class', () => {
       review('ponytail-review'),
     ],
   })), /independently issued/u);
+});
+
+test('rejects invented reviewer and waiver identities', () => {
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      review('code-review', { reviewer: 'invented-reviewer' }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  })), /not authorized for required source: code-review/u);
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      review('code-review', {
+        findings: [{
+          id: 'F-WAIVE',
+          policy: 'required',
+          summary: 'Caller-authored waiver.',
+          waiver: { actor: 'invented-actor', rationale: 'Self-authorized.' },
+        }],
+      }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  })), /waiver actor invented-actor is not authorized/u);
 });
 
 test('design review targets its artifact and requires no implementation evidence', () => {

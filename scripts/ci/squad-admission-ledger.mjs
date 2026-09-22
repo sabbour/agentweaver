@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import {
   REQUIRED_REVIEW_SOURCES,
+  REVIEWER_IDENTITIES,
+  WAIVER_ACTORS,
   assertAdmissionAuthority,
   resolveAdmissionAuthority,
   resolveAdmissionReviewPolicy,
@@ -136,6 +138,8 @@ function assertRequiredReviewSources(sources, requiredSources) {
 
 export function materializeLedger(input, {
   requiredReviewSources = REQUIRED_REVIEW_SOURCES,
+  reviewerIdentities = REVIEWER_IDENTITIES,
+  waiverActors = WAIVER_ACTORS,
 } = {}) {
   if (!input || typeof input !== 'object') throw new Error('materialization input is required');
   const repository = required(input.repository, 'repository');
@@ -152,6 +156,14 @@ export function materializeLedger(input, {
   if (!Array.isArray(input.validations) || input.validations.length === 0) throw new Error('validations must contain structured exact-head evidence');
 
   const reviews = input.reviews.map((review, index) => validateReviewOutput(review, `reviews[${index}]`));
+  const allowedWaiverActors = new Set(waiverActors.map((actor) => required(actor, 'waiver actor').toLowerCase()));
+  for (const review of reviews) {
+    for (const finding of review.findings) {
+      if (finding.waiver !== undefined && !allowedWaiverActors.has(finding.waiver.actor.toLowerCase())) {
+        throw new Error(`waiver actor ${finding.waiver.actor} is not authorized by configured policy`);
+      }
+    }
+  }
   const implementationReviews = reviews.filter((review) => review.phase === 'implementation');
   for (const [index, review] of implementationReviews.entries()) {
     if (review.target.worktree !== candidate.worktree || review.target.branch !== candidate.branch) {
@@ -163,6 +175,9 @@ export function materializeLedger(input, {
   }
   validateCorrectiveReviews(reviews);
   for (const source of requiredSources) {
+    const allowedReviewers = new Set((reviewerIdentities[source] ?? [])
+      .map((reviewer) => required(reviewer, `configured reviewer for ${source}`).toLowerCase()));
+    if (allowedReviewers.size === 0) throw new Error(`configured reviewer policy is missing identities for: ${source}`);
     const exactHeadReviews = implementationReviews.filter((review) => review.source === source
       && review.target.headSha === candidate.headSha);
     if (!exactHeadReviews.some((review) => review.verdict === 'approved')) {
@@ -170,6 +185,9 @@ export function materializeLedger(input, {
     }
     if (exactHeadReviews.some((review) => review.verdict === 'rejected')) {
       throw new Error(`required review source ${source} has a conflicting exact-head rejection`);
+    }
+    if (exactHeadReviews.some((review) => !allowedReviewers.has(review.reviewer.toLowerCase()))) {
+      throw new Error(`reviewer identity is not authorized for required source: ${source}`);
     }
   }
   const requiredReviewers = requiredSources.map((source) => required(
@@ -200,6 +218,8 @@ export function validateAdmissionLedger(ledger, expected) {
   if (!ledger || ledger.kind !== LEDGER_KIND) throw new Error(`kind must be ${LEDGER_KIND}`);
   const materialized = materializeLedger(ledger, {
     requiredReviewSources: expected.requiredReviewSources ?? REQUIRED_REVIEW_SOURCES,
+    reviewerIdentities: expected.reviewerIdentities ?? REVIEWER_IDENTITIES,
+    waiverActors: expected.waiverActors ?? WAIVER_ACTORS,
   });
   if (materialized.repository !== expected.repository) throw new Error('repository does not match');
   if (materialized.prNumber !== expected.prNumber) throw new Error('PR number does not match');

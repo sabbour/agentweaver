@@ -79,7 +79,9 @@ they are not Agentweaver sign-in providers.
      The required post-implementation reviewer classes come from repository policy and
      the exact candidate diff, not ledger input. Multi-file and high-risk changes require
      distinct, independently issued exact-head approvals for code review, security review,
-     and Ponytail review; one low-risk documentation file uses one focused code review.
+     and Ponytail review from the configured reviewer identities; one low-risk
+     documentation file uses one focused code review. Deleted and type-changed paths
+     participate in the same classification, and waiver actors must match configured policy.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
