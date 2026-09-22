@@ -66,8 +66,9 @@ they are not Agentweaver sign-in providers.
    - While the PR is still draft, Ralph fetches `origin/dev`, gets the live PR
      `headRefOid`, and runs the external-state preflight with that SHA:
      `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-     --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
-     state with the pinned Squad SDK and validates its coordinator-owned v2 findings
+     --head-sha <live-head-sha> --team-root <absolute-team-root>
+     --state-backend <backend>`. The preflight reads the explicit authoritative Squad
+     state backend and validates its coordinator-owned v2 findings
      ledger. Missing, legacy, incomplete, or mismatched evidence blocks the ready
      transition. Immediately before merge, Ralph repeats the preflight against the fresh
      live head, records the returned `<validated-sha>`, and merges manually with

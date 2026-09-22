@@ -35,6 +35,7 @@ async function snapshot(cwd, run) {
     worktree: resolve(await git(['rev-parse', '--show-toplevel'], cwd, run)),
     branch: await git(['branch', '--show-current'], cwd, run),
     headSha: (await git(['rev-parse', 'HEAD'], cwd, run)).toLowerCase(),
+    status: await git(['status', '--porcelain=v1', '--untracked-files=all'], cwd, run),
   };
 }
 
@@ -43,6 +44,7 @@ function assertExpected(actual, expected, when) {
   if (actual.worktree !== expected.worktree) throw new Error(`${when} git top-level does not match expected worktree`);
   if (actual.branch !== expected.branch) throw new Error(`${when} branch does not match expected branch`);
   if (actual.headSha !== expected.headSha) throw new Error(`${when} HEAD does not match expected SHA`);
+  if (actual.status !== '') throw new Error(`${when} worktree is not clean`);
 }
 
 export async function runValidationEvidence({

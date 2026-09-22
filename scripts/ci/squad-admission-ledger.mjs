@@ -58,6 +58,9 @@ export function validateReviewOutput(review, field = 'review') {
   }
 
   if (!Array.isArray(review.findings)) throw new Error(`${field}.findings must be an array`);
+  if (review.verdict === 'rejected' && review.findings.length === 0) {
+    throw new Error(`${field}.findings must identify why the review was rejected`);
+  }
   const ids = new Set();
   for (const [index, finding] of review.findings.entries()) {
     const prefix = `${field}.findings[${index}]`;

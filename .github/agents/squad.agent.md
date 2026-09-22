@@ -415,8 +415,9 @@ validation evidence.
   `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph fetches
   `origin/dev`, gets the live PR head SHA, and runs
   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-  --head-sha <live-head-sha>`. The preflight resolves declared external state with the
-  pinned Squad SDK and requires the coordinator-owned v2 findings ledger to contain every
+  --head-sha <live-head-sha> --team-root <absolute-team-root>
+  --state-backend <backend>`. The preflight uses the explicit authoritative state backend
+  and requires the coordinator-owned v2 findings ledger to contain every
   declared review source, exact-head validation, and resolved required finding or explicit
   waiver. Coordinator/Ralph and authoritative external Squad state are
   trusted operational components; GitHub is evidence and CI only, and repository code

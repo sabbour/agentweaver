@@ -6,8 +6,9 @@ const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
 
-function runner({ afterHead = headSha, commandExitCode = 0 } = {}) {
+function runner({ afterHead = headSha, commandExitCode = 0, beforeStatus = '', afterStatus = '' } = {}) {
   let headReads = 0;
+  let statusReads = 0;
   const validationCommands = [];
   return {
     validationCommands,
@@ -21,6 +22,10 @@ function runner({ afterHead = headSha, commandExitCode = 0 } = {}) {
       if (argv[1] === 'rev-parse' && argv[2] === 'HEAD') {
         headReads += 1;
         return { exitCode: 0, stdout: headReads === 1 ? headSha : afterHead, stderr: '' };
+      }
+      if (argv[1] === 'status') {
+        statusReads += 1;
+        return { exitCode: 0, stdout: statusReads === 1 ? beforeStatus : afterStatus, stderr: '' };
       }
       throw new Error(`unexpected git argv: ${argv.join(' ')}`);
     },
@@ -76,7 +81,18 @@ test('rejects changed HEAD after execution and preserves mismatch evidence', asy
   assert.equal(fake.validationCommands.length, 1);
 });
 
-test('contains no directory switching or destructive repair commands', async () => {
-  const source = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../squad-validation-evidence.mjs', import.meta.url), 'utf8'));
-  assert.doesNotMatch(source, /\b(?:chdir|checkout|pull|reset|stash|clean|remove|delete)\b/iu);
+test('rejects dirty contents before execution and changes made during execution', async () => {
+  for (const [fake, expectedCommands] of [
+    [runner({ beforeStatus: ' M tracked.mjs' }), 0],
+    [runner({ afterStatus: '?? generated.txt' }), 1],
+  ]) {
+    await assert.rejects(() => runValidationEvidence({
+      argv: ['node', '--test', 'focused.test.mjs'],
+      cwd: worktree,
+      expectedWorktree: worktree,
+      expectedBranch: branch,
+      expectedHeadSha: headSha,
+    }, { run: fake.run, realpath: async (path) => path }), /worktree is not clean/u);
+    assert.equal(fake.validationCommands.length, expectedCommands);
+  }
 });

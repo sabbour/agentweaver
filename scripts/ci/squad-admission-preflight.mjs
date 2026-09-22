@@ -54,12 +54,16 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
 }
 
 async function main() {
-  const [repository, value, headOption, headSha] = process.argv.slice(2);
+  const [repository, value, headOption, headSha, teamRootOption, teamRoot, backendOption, stateBackend] = process.argv.slice(2);
   const prNumber = Number(value);
-  if (!repository || !value || headOption !== '--head-sha' || !headSha) {
-    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --head-sha <live-pr-head>');
+  if (!repository || !value || headOption !== '--head-sha' || !headSha
+    || teamRootOption !== '--team-root' || !teamRoot || backendOption !== '--state-backend' || !stateBackend) {
+    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --head-sha <live-pr-head> --team-root <absolute-path> --state-backend <backend>');
   }
-  const stateDirectory = await resolveDeclaredExternalStateDirectory();
+  if (!['local', 'worktree'].includes(stateBackend)) {
+    throw new Error(`state backend ${stateBackend} requires the runtime state adapter; filesystem fallback is disabled`);
+  }
+  const stateDirectory = teamRoot;
   console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, { stateDirectory, headSha })));
 }
 

@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { KIND, resolveDeclaredExternalStateDirectory, runAdmissionPreflight, validateAdmissionPreflight } from '../squad-admission-preflight.mjs';
 import { REVIEW_KIND, VALIDATION_KIND } from '../squad-admission-ledger.mjs';
 
+const execFileAsync = promisify(execFile);
 const expected = { repository: 'sabbour/agentweaver', prNumber: 1502 };
 const worktree = 'C:\\Users\\agent\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
@@ -84,6 +91,16 @@ test('blocks provenance mismatches and unresolved required findings', () => {
   }), { ...expected, headSha }), /unresolved/u);
 });
 
+test('rejects a rejected review that omits its findings', () => {
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    reviews: [
+      review('code-review', { verdict: 'rejected' }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  }), { ...expected, headSha }), /must identify why the review was rejected/u);
+});
+
 test('admits an older rejection only after corrective approval at the final head', () => {
   const finding = { id: 'F-1', policy: 'required', summary: 'Exact-head review failed.' };
   const reviews = [
@@ -124,6 +141,27 @@ test('reads only the declared external state directory', async () => {
     },
   });
   assert.equal(result.headSha, headSha);
+});
+
+test('CLI reads explicit TEAM_ROOT from the dedicated worktree CWD', async () => {
+  const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-preflight-'));
+  const ledgerPath = join(teamRoot, 'admission', 'findings', 'sabbour', 'agentweaver', '1502.json');
+  await mkdir(dirname(ledgerPath), { recursive: true });
+  await writeFile(ledgerPath, JSON.stringify(ledger()));
+  const script = fileURLToPath(new URL('../squad-admission-preflight.mjs', import.meta.url));
+  const cwd = fileURLToPath(new URL('../../../', import.meta.url));
+  const { stdout } = await execFileAsync(process.execPath, [
+    script,
+    expected.repository,
+    String(expected.prNumber),
+    '--head-sha',
+    headSha,
+    '--team-root',
+    teamRoot,
+    '--state-backend',
+    'local',
+  ], { cwd });
+  assert.equal(JSON.parse(stdout).admitted, true);
 });
 
 test('uses the pinned Squad resolver for declared external state', async () => {

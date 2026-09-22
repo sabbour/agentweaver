@@ -59,8 +59,8 @@ Examples:
    ```
    Before ready and again immediately before merge, Ralph fetches `origin/dev`, gets the
    live PR head SHA, and runs
-   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
-   The preflight uses the pinned Squad SDK to resolve declared external state and checks
+   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha> --team-root <absolute-team-root> --state-backend <backend>`.
+   The preflight uses the explicit authoritative state backend and checks
    the coordinator-owned v2 findings ledger. Missing, legacy, incomplete, or provenance-
    mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph

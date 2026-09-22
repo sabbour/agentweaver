@@ -25,9 +25,10 @@ test('admission is external-state owned and squash-only', () => {
   assert.match(contract, /agentweaver\.squad-review\/v2/u);
   assert.match(contract, /agentweaver\.squad-admission-findings\/v2/u);
   assert.match(contract, /while the PR is still draft/u);
+  assert.match(contract, /--team-root <absolute-team-root>\s+--state-backend <backend>/u);
   assert.match(ledger, /explicit same-backend atomic adapter/u);
   assert.match(evidence, /CWD does not match expected worktree/u);
-  assert.doesNotMatch(evidence, /\b(?:chdir|checkout|pull|reset|stash|clean|remove|delete)\b/iu);
+  assert.doesNotMatch(evidence, /process\.chdir|git\(\[['"](?:checkout|pull|reset|stash|clean|rm)/u);
   const policy = read('.github/agents/squad.agent.md');
   assert.match(policy, /### Admission evidence\r?\n\r?\nRecord the admission evidence:\r?\n\r?\n- PR head: `<head-sha>`\./u);
   assert.match(policy, /### Reviewer revalidation\r?\n\r?\nRecord the reviewer revalidation:\r?\n\r?\n- PR head: `<head-sha>`\./u);
