@@ -61,28 +61,46 @@ they are not Agentweaver sign-in providers.
    - Open the PR as a draft before admission validation or review. Run every validation
      through `scripts/ci/squad-validation-evidence.mjs` from the assigned absolute
      worktree and exact candidate SHA. Collect structured, phase-aware review outputs.
-     Materialize the v2 external-state ledger only from those exact outputs and validation
-     records, then read and validate it through the same configured state backend.
+     Candidate repository bytes are evidence only. Materialize the v3 external-state
+     ledger only through the runtime-owned admission installation from those exact
+     outputs and validation records, then read and validate it through the same configured
+     state backend.
    - While the PR is still draft, Ralph fetches `origin/dev`, gets the live PR
-     `headRefOid`, and runs the external-state preflight with that SHA:
-     `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-     --head-sha <live-head-sha> --team-root <absolute-team-root>
-     --state-backend <backend>`. The preflight reads the explicit authoritative Squad
+     `headRefOid` and exact live base SHA, and invokes the external installed launcher:
+     `node <absolute-team-root>/admission/runtime/squad-admission-launcher.mjs preflight
+     --runtime-manifest <absolute-team-root>/admission/runtime/squad-admission-runtime.json
+     --repository <owner/repository> --pr-number <number>
+     --worktree <absolute-worktree> --head-sha <live-head-sha>
+     --base-sha <trusted-live-base-sha> --team-root <absolute-team-root>
+     --state-backend <backend>`. Never execute admission policy or preflight modules from
+     the candidate checkout. The installed launcher verifies its own digest and every
+     policy-module digest against its runtime-owned manifest. The manifest records the
+     exact trusted source ref and commit from which Coordinator/Ralph installed the
+     bytes after that commit was already admitted to `dev`. The preflight reads the explicit authoritative Squad
      root and backend from the repository's primary-checkout Squad configuration,
-     rejects mismatched or non-canonical caller values, and validates its coordinator-owned v2 findings
+     rejects mismatched or non-canonical caller values, and validates its coordinator-owned v3 findings
      ledger. Missing, legacy, incomplete, or mismatched evidence blocks the ready
      transition. Immediately before merge, Ralph repeats the preflight against the fresh
      live head, records the returned `<validated-sha>`, and merges manually with
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
-     Non-local backends call the exported materialization and preflight functions with
-     their runtime-owned adapter; the CLI never falls back to filesystem access.
-     The required post-implementation reviewer classes come from repository policy and
+     Non-local backends call the installed exported functions with their runtime-owned
+     adapter; the launcher never falls back to filesystem access. The trusted exact base
+     SHA, trusted runtime source identity, launcher digest, and policy digest are recorded
+     in the ledger and preflight result. The required post-implementation reviewer classes come from installed policy and
      the exact candidate diff, not ledger input. Multi-file and high-risk changes require
      distinct, independently issued exact-head approvals for code review, security review,
      and Ponytail review from the configured reviewer identities; one low-risk
      documentation file uses one focused code review. Deleted and type-changed paths
      participate in the same classification, and waiver actors must match configured policy.
      GitHub automatically deletes the source branch after merge.
+   - **v3 bootstrap:** #1504 cannot use its candidate-owned v3 source to admit itself.
+     It may merge only through the pre-existing v1/manual exact-head admission procedure.
+     After that squash merge is present on a fetched exact `origin/dev` commit,
+     Coordinator/Ralph extracts the four admission runtime files from that commit into
+     `<absolute-team-root>/admission/runtime`, writes the manifest with the source ref,
+     source commit, per-file SHA-256 values, launcher digest, and aggregate policy digest,
+     and atomically activates that installation. V3 is mandatory for every subsequent PR;
+     no later PR may fall back to candidate execution or the v1/manual path.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
      may use a merge commit when repository policy permits it.

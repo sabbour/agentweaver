@@ -2,4 +2,4 @@
 "agentweaver": patch
 ---
 
-Make Squad admission evidence exact-head, phase-aware, and worktree-bound before a draft pull request can move to ready.
+Make Squad admission evidence exact-head, phase-aware, worktree-bound, and enforced by a digest-recorded runtime installation outside the candidate checkout.

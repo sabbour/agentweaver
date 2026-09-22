@@ -15,6 +15,13 @@ const expected = { repository: 'sabbour/agentweaver', prNumber: 1502 };
 const worktree = 'C:\\Users\\agent\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
+const baseSha = 'b'.repeat(40);
+const trustedRuntime = {
+  kind: 'agentweaver.squad-admission-runtime/v1',
+  source: { ref: 'refs/remotes/origin/dev', commit: 'c'.repeat(40) },
+  launcherDigest: `sha256:${'d'.repeat(64)}`,
+  policyDigest: `sha256:${'e'.repeat(64)}`,
+};
 const target = { type: 'worktree', worktree, branch, headSha };
 const reviewers = {
   'code-review': 'smith',
@@ -53,6 +60,8 @@ const ledger = (extra = {}) => ({
   headSha,
   worktree,
   branch,
+  baseSha,
+  trustedRuntime,
   requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
   reviews: [review('code-review'), review('security-review'), review('ponytail-review')],
   validations: [validation],
@@ -69,8 +78,16 @@ const fullPolicyRun = async () => ({
   stderr: '',
 });
 
-test('admits a complete v2 exact-head ledger', () => {
-  assert.deepEqual(validateAdmissionPreflight(ledger(), { ...expected, headSha }), {
+const admissionExpected = (extra = {}) => ({
+  ...expected,
+  headSha,
+  baseSha,
+  trustedRuntime,
+  ...extra,
+});
+
+test('admits a complete v3 exact-head ledger', () => {
+  assert.deepEqual(validateAdmissionPreflight(ledger(), admissionExpected()), {
     admitted: true,
     headSha,
     findings: 0,
@@ -83,20 +100,22 @@ test('blocks missing, v1, incomplete, and stale ledgers', async () => {
       stateDirectory: 'C:\\state',
       authority: authority('C:\\state'),
       headSha,
+      baseSha,
+      trustedRuntime,
       policyRun: fullPolicyRun,
       readLedger: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
     }),
     /missing/u,
   );
-  assert.throws(() => validateAdmissionPreflight({ ...ledger(), kind: 'agentweaver.squad-admission-findings/v1' }, { ...expected, headSha }), /v2/u);
-  assert.throws(() => validateAdmissionPreflight({ ...ledger(), validations: [] }, { ...expected, headSha }), /validations/u);
-  assert.throws(() => validateAdmissionPreflight(ledger(), { ...expected, headSha: 'b'.repeat(40) }), /stale/u);
+  assert.throws(() => validateAdmissionPreflight({ ...ledger(), kind: 'agentweaver.squad-admission-findings/v2' }, admissionExpected()), /v3/u);
+  assert.throws(() => validateAdmissionPreflight({ ...ledger(), validations: [] }, admissionExpected()), /validations/u);
+  assert.throws(() => validateAdmissionPreflight(ledger(), admissionExpected({ headSha: 'f'.repeat(40) })), /stale/u);
 });
 
 test('blocks provenance mismatches and unresolved required findings', () => {
   assert.throws(() => validateAdmissionPreflight(ledger({
     validations: [{ ...validation, cwd: 'C:\\shared\\agentweaver' }],
-  }), { ...expected, headSha }), /cwd does not match/u);
+  }), admissionExpected()), /cwd does not match/u);
 
   const finding = { id: 'F-1', policy: 'required', summary: 'Exact-head review failed.' };
   assert.throws(() => validateAdmissionPreflight(ledger({
@@ -105,7 +124,19 @@ test('blocks provenance mismatches and unresolved required findings', () => {
       review('security-review'),
       review('ponytail-review'),
     ],
-  }), { ...expected, headSha }), /missing required exact-head approval/u);
+  }), admissionExpected()), /missing required exact-head approval/u);
+});
+
+test('blocks ledgers recorded under a different trusted runtime or base', () => {
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    trustedRuntime: {
+      ...trustedRuntime,
+      policyDigest: `sha256:${'f'.repeat(64)}`,
+    },
+  }), admissionExpected()), /trusted runtime identity/u);
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    baseSha: 'f'.repeat(40),
+  }), admissionExpected()), /trusted base SHA/u);
 });
 
 test('rejects a rejected review that omits its findings', () => {
@@ -115,7 +146,7 @@ test('rejects a rejected review that omits its findings', () => {
       review('security-review'),
       review('ponytail-review'),
     ],
-  }), { ...expected, headSha }), /must identify why the review was rejected/u);
+  }), admissionExpected()), /must identify why the review was rejected/u);
 });
 
 test('blocks unresolved required findings even when a review says approved', () => {
@@ -125,7 +156,7 @@ test('blocks unresolved required findings even when a review says approved', () 
       review('security-review'),
       review('ponytail-review'),
     ],
-  }), { ...expected, headSha }), /unresolved/u);
+  }), admissionExpected()), /unresolved/u);
 });
 
 test('admits an older rejection only after corrective approval at the final head', () => {
@@ -140,7 +171,7 @@ test('admits an older rejection only after corrective approval at the final head
     review('security-review'),
     review('ponytail-review'),
   ];
-  assert.equal(validateAdmissionPreflight(ledger({ reviews }), { ...expected, headSha }).admitted, true);
+  assert.equal(validateAdmissionPreflight(ledger({ reviews }), admissionExpected()).admitted, true);
 });
 
 test('preserves advisory and explicit waiver behavior', () => {
@@ -156,7 +187,7 @@ test('preserves advisory and explicit waiver behavior', () => {
     review('security-review'),
     review('ponytail-review'),
   ];
-  assert.equal(validateAdmissionPreflight(ledger({ reviews }), { ...expected, headSha }).admitted, true);
+  assert.equal(validateAdmissionPreflight(ledger({ reviews }), admissionExpected()).admitted, true);
 });
 
 test('reads only the declared external state directory', async () => {
@@ -164,6 +195,8 @@ test('reads only the declared external state directory', async () => {
     stateDirectory: 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver',
     authority: authority('C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver'),
     headSha,
+    baseSha,
+    trustedRuntime,
     policyRun: fullPolicyRun,
     readLedger: async (configuredAuthority) => {
       assert.equal(configuredAuthority.teamRoot, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
@@ -188,7 +221,7 @@ test('rejects an unconfigured repository authority', async () => {
   }), /missing config/u);
 });
 
-test('CLI rejects a fabricated alternate TEAM_ROOT ledger', async () => {
+test('candidate checkout preflight CLI cannot execute admission', async () => {
   const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-preflight-'));
   const ledgerPath = join(teamRoot, 'admission', 'findings', 'sabbour', 'agentweaver', '1502.json');
   await mkdir(dirname(ledgerPath), { recursive: true });
@@ -206,5 +239,5 @@ test('CLI rejects a fabricated alternate TEAM_ROOT ledger', async () => {
       '--state-backend',
       'local',
   ], { cwd }),
-  /does not match configured authority/u);
+  /candidate checkout admission code is evidence only/u);
 });

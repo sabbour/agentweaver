@@ -1,7 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
-import { capture } from '../azure/lib/exec.mjs';
 
 export const REQUIRED_REVIEW_SOURCES = Object.freeze([
   'code-review',
@@ -64,8 +64,15 @@ function normalizeBackend(value) {
 }
 
 async function runGit(args, cwd) {
-  const result = await capture('git', args, { cwd, allowFailure: true, trim: false, azSafeEnv: false });
-  return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
+  return new Promise((resolveResult, reject) => {
+    const child = spawn('git', args, { cwd, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (exitCode) => resolveResult({ exitCode, stdout, stderr }));
+  });
 }
 
 export function requiredReviewSourcesForChanges(changedFiles) {
@@ -82,12 +89,17 @@ export function requiredReviewSourcesForChanges(changedFiles) {
 export async function resolveAdmissionReviewPolicy({
   cwd = process.cwd(),
   headSha,
-  baseRef = 'origin/dev',
+  baseSha,
 } = {}, dependencies = {}) {
   if (!/^[0-9a-f]{40}$/iu.test(required(headSha, 'candidate SHA'))) {
     throw new Error('candidate SHA must be a 40-character SHA');
   }
+  if (!/^[0-9a-f]{40}$/iu.test(required(baseSha, 'trusted base SHA'))) {
+    throw new Error('trusted base SHA must be a 40-character SHA');
+  }
   const run = dependencies.run ?? runGit;
+  const ancestry = await run(['merge-base', '--is-ancestor', baseSha, headSha], cwd);
+  if (ancestry.exitCode !== 0) throw new Error('trusted base SHA must be an ancestor of the candidate SHA');
   const result = await run([
     'diff',
     '--name-status',
@@ -95,7 +107,7 @@ export async function resolveAdmissionReviewPolicy({
     '-M',
     '-C',
     '--find-copies-harder',
-    `${baseRef}...${headSha}`,
+    `${baseSha}...${headSha}`,
   ], cwd);
   if (result.exitCode !== 0) throw new Error(`unable to resolve admission review policy: ${result.stderr.trim()}`);
   const tokens = result.stdout.split('\0').filter(Boolean);

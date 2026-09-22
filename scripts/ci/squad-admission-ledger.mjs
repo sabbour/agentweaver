@@ -12,7 +12,7 @@ import {
   resolveAdmissionReviewPolicy,
 } from './squad-admission-authority.mjs';
 
-export const LEDGER_KIND = 'agentweaver.squad-admission-findings/v2';
+export const LEDGER_KIND = 'agentweaver.squad-admission-findings/v3';
 export const REVIEW_KIND = 'agentweaver.squad-review/v2';
 export const VALIDATION_KIND = 'agentweaver.validation-evidence/v1';
 const SHA = /^[0-9a-f]{40}$/iu;
@@ -20,6 +20,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/iu;
 const PHASES = new Set(['design', 'implementation']);
 const POLICIES = new Set(['advisory', 'required']);
 const VERDICTS = new Set(['approved', 'rejected']);
+const RUNTIME_KIND = 'agentweaver.squad-admission-runtime/v1';
 
 function required(value, field) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${field} must be a non-empty string`);
@@ -36,6 +37,24 @@ function absolute(value, field) {
   value = required(value, field);
   if (!isAbsolute(value)) throw new Error(`${field} must be absolute`);
   return value;
+}
+
+function validateTrustedRuntime(runtime, field = 'trustedRuntime') {
+  if (!runtime || runtime.kind !== RUNTIME_KIND) throw new Error(`${field}.kind must be ${RUNTIME_KIND}`);
+  required(runtime.source?.ref, `${field}.source.ref`);
+  sha(runtime.source?.commit, `${field}.source.commit`);
+  if (!DIGEST.test(required(runtime.launcherDigest, `${field}.launcherDigest`))) {
+    throw new Error(`${field}.launcherDigest must be a sha256 digest`);
+  }
+  if (!DIGEST.test(required(runtime.policyDigest, `${field}.policyDigest`))) {
+    throw new Error(`${field}.policyDigest must be a sha256 digest`);
+  }
+  return {
+    kind: runtime.kind,
+    source: { ref: runtime.source.ref, commit: runtime.source.commit.toLowerCase() },
+    launcherDigest: runtime.launcherDigest.toLowerCase(),
+    policyDigest: runtime.policyDigest.toLowerCase(),
+  };
 }
 
 function targetLineage(target) {
@@ -140,6 +159,8 @@ export function materializeLedger(input, {
   requiredReviewSources = REQUIRED_REVIEW_SOURCES,
   reviewerIdentities = REVIEWER_IDENTITIES,
   waiverActors = WAIVER_ACTORS,
+  trustedRuntime,
+  baseSha,
 } = {}) {
   if (!input || typeof input !== 'object') throw new Error('materialization input is required');
   const repository = required(input.repository, 'repository');
@@ -150,6 +171,8 @@ export function materializeLedger(input, {
     branch: required(input.branch, 'branch'),
     headSha: sha(input.headSha, 'headSha'),
   };
+  const runtime = validateTrustedRuntime(trustedRuntime);
+  const trustedBaseSha = sha(baseSha, 'trusted base SHA');
   assertRequiredReviewSources(input.requiredReviewSources, requiredReviewSources);
   const requiredSources = [...requiredReviewSources];
   if (!Array.isArray(input.reviews)) throw new Error('reviews must be an array');
@@ -207,6 +230,8 @@ export function materializeLedger(input, {
     headSha: candidate.headSha,
     worktree: candidate.worktree,
     branch: candidate.branch,
+    baseSha: trustedBaseSha,
+    trustedRuntime: runtime,
     requiredReviewSources: requiredSources,
     reviews,
     validations,
@@ -216,14 +241,25 @@ export function materializeLedger(input, {
 
 export function validateAdmissionLedger(ledger, expected) {
   if (!ledger || ledger.kind !== LEDGER_KIND) throw new Error(`kind must be ${LEDGER_KIND}`);
+  const recordedRuntime = validateTrustedRuntime(ledger.trustedRuntime, 'ledger.trustedRuntime');
+  const expectedRuntime = validateTrustedRuntime(expected.trustedRuntime, 'expected.trustedRuntime');
+  if (JSON.stringify(recordedRuntime) !== JSON.stringify(expectedRuntime)) {
+    throw new Error('ledger trusted runtime identity does not match the installed authority');
+  }
+  if (sha(ledger.baseSha, 'ledger.baseSha') !== sha(expected.baseSha, 'expected.baseSha')) {
+    throw new Error('ledger trusted base SHA does not match');
+  }
   const materialized = materializeLedger(ledger, {
     requiredReviewSources: expected.requiredReviewSources ?? REQUIRED_REVIEW_SOURCES,
     reviewerIdentities: expected.reviewerIdentities ?? REVIEWER_IDENTITIES,
     waiverActors: expected.waiverActors ?? WAIVER_ACTORS,
+    trustedRuntime: expected.trustedRuntime,
+    baseSha: expected.baseSha,
   });
   if (materialized.repository !== expected.repository) throw new Error('repository does not match');
   if (materialized.prNumber !== expected.prNumber) throw new Error('PR number does not match');
   if (materialized.headSha !== sha(expected.headSha, 'expected.headSha')) throw new Error('ledger evidence is stale for the live PR head');
+  if (materialized.baseSha !== sha(expected.baseSha, 'expected.baseSha')) throw new Error('ledger trusted base SHA does not match');
 
   for (const review of materialized.reviews.filter((entry) => entry.phase === 'implementation' && entry.correctiveOf === undefined)) {
     const unresolved = review.findings.some((finding) => finding.policy === 'required'
@@ -262,11 +298,13 @@ export async function materializeAdmissionLedger(input, {
   stateAdapter,
   cwd = process.cwd(),
   policyRun,
+  baseSha,
+  trustedRuntime,
 } = {}) {
   const configuredAuthority = authority ?? await resolveAdmissionAuthority({ cwd });
   const trusted = await assertAdmissionAuthority(configuredAuthority, { teamRoot, stateBackend });
   const requiredReviewSources = await resolveAdmissionReviewPolicy(
-    { cwd, headSha: input.headSha },
+    { cwd, headSha: input.headSha, baseSha },
     { run: policyRun },
   );
   const backend = trusted.stateBackend;
@@ -278,34 +316,25 @@ export async function materializeAdmissionLedger(input, {
     throw new Error(`state backend ${backend} requires an explicit same-backend atomic adapter`);
   }
 
-  const ledger = materializeLedger(input, { requiredReviewSources });
+  const ledger = materializeLedger(input, {
+    requiredReviewSources,
+    trustedRuntime,
+    baseSha,
+  });
   const key = `admission/findings/${ledger.repository}/${ledger.prNumber}.json`;
   await adapter.writeAtomic(key, `${JSON.stringify(ledger, null, 2)}\n`);
   const persisted = JSON.parse(await adapter.read(key));
-  validateAdmissionLedger(persisted, { ...ledger, requiredReviewSources });
+  validateAdmissionLedger(persisted, {
+    ...ledger,
+    requiredReviewSources,
+    trustedRuntime,
+    baseSha,
+  });
   return { key, ledger: persisted, stateBackend: backend, teamRoot: root };
 }
 
-function parseCli(args) {
-  const options = Object.fromEntries(Array.from({ length: args.length / 2 }, (_, index) => [args[index * 2], args[index * 2 + 1]]));
-  return options;
-}
-
 async function main() {
-  const options = parseCli(process.argv.slice(2));
-  if (!options['--input'] || !options['--team-root'] || !options['--state-backend']) {
-    throw new Error('usage: squad-admission-ledger.mjs --input <json-file> --team-root <absolute-path> --state-backend <local|worktree>');
-  }
-  const input = JSON.parse(await readFile(options['--input'], 'utf8'));
-  if (!['local', 'worktree'].includes(options['--state-backend'])) {
-    throw new Error('non-local backends must call materializeAdmissionLedger with the runtime-owned state adapter');
-  }
-  const authority = await resolveAdmissionAuthority();
-  console.log(JSON.stringify(await materializeAdmissionLedger(input, {
-    authority,
-    teamRoot: options['--team-root'],
-    stateBackend: options['--state-backend'],
-  })));
+  throw new Error('candidate checkout admission code is evidence only; invoke the installed runtime-owned launcher');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -20,6 +20,13 @@ import {
 const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
+const baseSha = 'b'.repeat(40);
+const trustedRuntime = {
+  kind: 'agentweaver.squad-admission-runtime/v1',
+  source: { ref: 'refs/remotes/origin/dev', commit: 'c'.repeat(40) },
+  launcherDigest: `sha256:${'d'.repeat(64)}`,
+  policyDigest: `sha256:${'e'.repeat(64)}`,
+};
 const target = { type: 'worktree', worktree, branch, headSha };
 const reviewers = {
   'code-review': 'smith',
@@ -74,29 +81,36 @@ const fullPolicyRun = async () => ({
   stdout: 'M\0scripts/ci/squad-admission-ledger.mjs\0',
   stderr: '',
 });
+const materialize = (value, options = {}) => materializeLedger(value, {
+  trustedRuntime,
+  baseSha,
+  ...options,
+});
 
 test('materializes only explicit structured review and validation evidence', () => {
-  const ledger = materializeLedger(input());
+  const ledger = materialize(input());
   assert.equal(ledger.kind, LEDGER_KIND);
+  assert.equal(ledger.baseSha, baseSha);
+  assert.deepEqual(ledger.trustedRuntime, trustedRuntime);
   assert.equal(ledger.reviews.length, 3);
   assert.equal(ledger.validations.length, 1);
   assert.equal('findings' in ledger, false);
 });
 
 test('rejects missing reviews and validation provenance mismatches', () => {
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [review('code-review'), review('security-review')],
   })), /missing required exact-head approval from: ponytail-review/u);
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     validations: [validation({ headSha: 'b'.repeat(40) })],
   })), /candidate SHA/u);
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [review('code-review', { target: { ...target, branch: 'dev' } }), review('security-review'), review('ponytail-review')],
   })), /candidate worktree lineage/u);
 });
 
 test('rejects a caller-declared reviewer policy that lowers configured requirements', () => {
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     requiredReviewSources: ['code-review'],
     reviews: [review('code-review')],
   })), /configured reviewer policy/u);
@@ -118,6 +132,7 @@ test('includes deleted and type-changed paths when resolving reviewer policy', a
   const sources = await resolveAdmissionReviewPolicy({
     cwd: worktree,
     headSha,
+    baseSha,
   }, {
     run: async (argv) => {
       calls.push(argv);
@@ -130,18 +145,24 @@ test('includes deleted and type-changed paths when resolving reviewer policy', a
   });
   assert.equal(sources.length, 3);
   assert.deepEqual(calls[0], [
+    'merge-base',
+    '--is-ancestor',
+    baseSha,
+    headSha,
+  ]);
+  assert.deepEqual(calls[1], [
     'diff',
     '--name-status',
     '-z',
     '-M',
     '-C',
     '--find-copies-harder',
-    'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    `${baseSha}...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
   ]);
 });
 
 test('requires distinct reviewers for each configured reviewer class', () => {
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       review('code-review', { reviewer: 'same-reviewer' }),
       review('security-review', { reviewer: 'same-reviewer' }),
@@ -157,14 +178,14 @@ test('requires distinct reviewers for each configured reviewer class', () => {
 });
 
 test('rejects invented reviewer and waiver identities', () => {
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       review('code-review', { reviewer: 'invented-reviewer' }),
       review('security-review'),
       review('ponytail-review'),
     ],
   })), /not authorized for required source: code-review/u);
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       review('code-review', {
         findings: [{
@@ -204,10 +225,10 @@ test('corrective re-review preserves finding ID, phase, source, and target type'
     findings: [finding],
   });
   const corrective = review('code-review', { correctiveOf: 'F-1', findings: [finding] });
-  assert.doesNotThrow(() => materializeLedger(input({
+  assert.doesNotThrow(() => materialize(input({
     reviews: [initial, corrective, review('security-review'), review('ponytail-review')],
   })));
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       initial,
       { ...corrective, source: 'security-review' },
@@ -215,7 +236,7 @@ test('corrective re-review preserves finding ID, phase, source, and target type'
       review('ponytail-review'),
     ],
   })), /does not match its original phase, source, and target/u);
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       initial,
       { ...corrective, target: { ...target, headSha: 'c'.repeat(40) } },
@@ -240,6 +261,8 @@ test('writes atomically and validates by reading from the same backend', async (
     teamRoot,
     stateBackend: 'local',
     policyRun: fullPolicyRun,
+    baseSha,
+    trustedRuntime,
   });
   const persisted = JSON.parse(await readFile(join(teamRoot, result.key), 'utf8'));
   assert.equal(persisted.kind, LEDGER_KIND);
@@ -253,6 +276,8 @@ test('requires an explicit adapter for non-local state', async () => {
     teamRoot,
     stateBackend: 'two-layer',
     policyRun: fullPolicyRun,
+    baseSha,
+    trustedRuntime,
   }), /explicit same-backend atomic adapter/u);
 });
 
@@ -269,6 +294,8 @@ test('uses one injected runtime adapter for non-local write and read validation'
     stateBackend: 'two-layer',
     stateAdapter,
     policyRun: fullPolicyRun,
+    baseSha,
+    trustedRuntime,
   });
   assert.equal(JSON.parse(await stateAdapter.read(result.key)).kind, LEDGER_KIND);
 });
@@ -281,6 +308,8 @@ test('rejects a materialization root that differs from configured authority', as
     teamRoot: alternateRoot,
     stateBackend: 'local',
     policyRun: fullPolicyRun,
+    baseSha,
+    trustedRuntime,
   }), /does not match configured authority/u);
 });
 
@@ -291,6 +320,8 @@ test('rejects caller backend and canonical-path substitutions', async () => {
     teamRoot,
     stateBackend: 'local',
     policyRun: fullPolicyRun,
+    baseSha,
+    trustedRuntime,
   }), /state backend does not match configured authority/u);
   await assert.rejects(() => assertAdmissionAuthority(
     authority(teamRoot),
@@ -303,7 +334,7 @@ test('rejects caller backend and canonical-path substitutions', async () => {
 
 test('rejects conflicting corrective results for one finding', () => {
   const finding = { id: 'F-1', policy: 'required', summary: 'Needs one bounded correction.' };
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       review('code-review', { verdict: 'rejected', target: { ...target, headSha: 'b'.repeat(40) }, findings: [finding] }),
       review('code-review', { correctiveOf: 'F-1', findings: [finding] }),
@@ -315,7 +346,7 @@ test('rejects conflicting corrective results for one finding', () => {
 });
 
 test('rejects conflicting exact-head outcomes from one required source', () => {
-  assert.throws(() => materializeLedger(input({
+  assert.throws(() => materialize(input({
     reviews: [
       review('code-review'),
       review('code-review', {

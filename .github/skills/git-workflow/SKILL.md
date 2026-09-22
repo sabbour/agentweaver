@@ -50,24 +50,31 @@ Examples:
    ```
    Run exact validations through `scripts/ci/squad-validation-evidence.mjs` from the
    assigned absolute worktree and exact candidate SHA. Collect structured phase-aware
-   review outputs. Materialize and read-validate the v2 ledger through the configured
-   state backend. Run the preflight while the PR is still draft. Only then may the PR
+   review outputs. Materialize and read-validate the v3 ledger through the external
+   runtime-owned admission installation and configured state backend. Run the preflight
+   while the PR is still draft. Only then may the PR
    move to ready:
    ```bash
    gh pr ready <number>
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
    Before ready and again immediately before merge, Ralph fetches `origin/dev`, gets the
-   live PR head SHA, and runs
-   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha> --team-root <absolute-team-root> --state-backend <backend>`.
-   The preflight uses the explicit authoritative state backend and checks
-   the coordinator-owned v2 findings ledger. Missing, legacy, incomplete, or provenance-
+   live PR head and base SHAs, and runs the absolute external
+   `<team-root>/admission/runtime/squad-admission-launcher.mjs` with its runtime manifest,
+   repository, PR number, absolute worktree, head SHA, base SHA, team root, and backend.
+   Never execute candidate checkout admission code. The launcher verifies and records its
+   digest, installed policy digest, exact trusted source ref/commit, and base SHA. The
+   preflight uses the explicit authoritative state backend and checks
+   the coordinator-owned v3 findings ledger. Missing, legacy, incomplete, or provenance-
    mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
-   invokes the exported functions with the runtime-owned adapter for non-local backends;
-   no filesystem fallback is permitted.
-   and authoritative external Squad state are trusted operational components; GitHub is
+   invokes the installed exported functions with the runtime-owned adapter for non-local
+   backends; no filesystem fallback is permitted. Coordinator/Ralph and authoritative
+   external Squad state are trusted operational components; GitHub is
    evidence and CI only, and repository code is not an adversarially immutable boundary.
+   PR #1504 alone bootstraps through the pre-existing v1/manual exact-head procedure;
+   after merge, Coordinator/Ralph installs the runtime from that exact fetched `dev`
+   commit and v3 is mandatory for every subsequent PR.
    Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
    dependent work.
 
