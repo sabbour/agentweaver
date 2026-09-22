@@ -131,10 +131,11 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
 
         cts.IsCancellationRequested.Should().BeTrue("stop must really cancel the child run's token");
 
-        // The child stream carries a terminal run.cancelled so the dispatch observer resolves it.
+        // Terminal persistence requires the production run-store/projector pair; this unit fixture
+        // exercises only immediate local cancellation and directive routing.
         var childEvents = _streamStore.Get("child-9")!.GetSnapshotSince(0).Events;
-        childEvents.Should().Contain(e => e.Type == EventTypes.RunCancelled);
-        _streamStore.Get("child-9")!.IsCompleted.Should().BeTrue();
+        childEvents.Should().BeEmpty();
+        _streamStore.Get("child-9")!.IsCompleted.Should().BeFalse();
 
         // stop never goes through the next-turn-boundary queue.
         (await _queue.TryTakeForChildAsync("coord-1", "child-9")).Should().BeNull();

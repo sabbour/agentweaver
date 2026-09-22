@@ -30,6 +30,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private readonly IConfiguration _configuration;
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly IRunEventStream? _eventStream;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly ILogger<RunOrchestrator> _logger;
@@ -127,7 +128,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             configuration,
             logger,
             runAgentHostContextResolver: null,
-            eventStream: eventStream)
+            eventStream: eventStream,
+            terminalOutcomeProjector: null)
     {
     }
 
@@ -144,7 +146,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         IRunAgentHostContextResolver? runAgentHostContextResolver,
         IRunEventStream? eventStream = null,
         AiExecutionPlanAccessor? executionPlanAccessor = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -156,6 +159,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         _configuration = configuration;
         _runAgentHostContextResolver = runAgentHostContextResolver;
         _eventStream = eventStream;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _executionPlanAccessor = executionPlanAccessor;
         _providerSnapshots = providerSnapshots;
         _logger = logger;
@@ -988,11 +992,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_bind_failed",
-                    detail = ex.Message,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -1018,11 +1018,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_start_failed",
-                    detail,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -1382,15 +1378,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 EmitErrorMetric(stored ?? reserved, "child_launch_failed");
             }
 
-            // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
-            // and close the stream — exactly the store/stream/event pattern RunWatchLoopService uses.
-            var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
-            _streamStore.Complete(runId);
+            await ProjectTerminalOutcomeAsync(changed, ct).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
-
-            await PersistFailedRunEventsAsync(runId, entry, ct).ConfigureAwait(false);
         }
+
         catch (Exception ex)
         {
             // Never propagate: the dispatch loop must keep finalizing the subtask regardless.
@@ -1399,6 +1390,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 runId);
         }
     }
+
+    private Task ProjectTerminalOutcomeAsync(bool changed, CancellationToken ct = default) =>
+        changed && _terminalOutcomeProjector is not null
+            ? _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore)
+            : Task.CompletedTask;
 
     /// <summary>
     /// Normalizes an exception into a durable, user-visible failure reason that is safe to persist

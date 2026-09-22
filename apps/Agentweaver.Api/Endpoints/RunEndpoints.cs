@@ -848,6 +848,7 @@ app.MapPost("/api/runs/{id}/review", async (
     ReviewRequest request,
     IRunStore runStore,
     RunStreamStore streamStore,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     RunWorkflowRegistry workflowRegistry,
     PendingRequestStore pendingStore,
     IServiceScopeFactory scopeFactory,
@@ -949,10 +950,18 @@ app.MapPost("/api/runs/{id}/review", async (
         }
         else if (!request.Approved)
         {
-            var declined = await runStore.TryTransitionReviewAsync(
-                runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, caller.User, CancellationToken.None);
+            var declined = await runStore.TryMutateTerminalOutcomeAsync(
+                runId,
+                new TerminalRunMutation(
+                    TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    null,
+                    new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                    caller.User),
+                CancellationToken.None);
             if (!declined)
                 return Results.StatusCode(StatusCodes.Status409Conflict);
+            await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
         }
 
         var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
@@ -975,9 +984,18 @@ app.MapPost("/api/runs/{id}/review", async (
     }
     else
     {
-        var declined = await runStore.TryTransitionReviewAsync(runId, RunStatus.Declined, DateTimeOffset.UtcNow, null, caller.User, ct);
+        var declined = await runStore.TryMutateTerminalOutcomeAsync(
+            runId,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                null,
+                new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                caller.User),
+            ct);
         if (!declined)
             return Results.StatusCode(StatusCodes.Status409Conflict);
+        await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+            .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
     }
 
     // Guardrail 10: Atomic TryRemove for replay/double-POST protection.
@@ -999,7 +1017,7 @@ app.MapPost("/api/runs/{id}/review", async (
                 "Review decision: {Decision} (direct path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
                 request.Approved ? "approved" : "declined", id, run.SubmittingUser, caller.User);
             return await ExecuteDirectReviewAsync(
-                id, runId, run, request, runStore, streamStore, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
+                id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
         }
         // If the run is registered but no pending request, the request was already consumed.
         return Results.StatusCode(409);
@@ -1064,8 +1082,8 @@ app.MapPost("/api/runs/{id}/review", async (
             await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
                 runId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "send_response_failed" }, DateTimeOffset.UtcNow, "send_response_failed", CancellationToken.None)
                 .ConfigureAwait(false);
-            if (failedEntry is not null)
-                failedEntry.RecordNext(EventTypes.RunFailed, new { reason = "send_response_failed" });
+            await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
         }
         catch (Exception recoveryEx)
         {
@@ -1201,10 +1219,8 @@ app.MapPost("/api/runs/{id}/commit", async (
             {
                 // Only emit merge.started after the CAS (Committing → Merging) succeeded.
                 entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = newTreeHash });
-                entry.RecordNext(EventTypes.MergeCompleted,
-                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
-                streamStore.Complete(id);
-                _ = workflowFactory.PersistRunEventsAsync(id);
+                await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                    .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
             }
             logger.LogInformation("Run {RunId} committed and merged by {User}", id, caller);
             return Results.Json(new CommitResponse
@@ -1414,8 +1430,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
             TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "audit_insert_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
             "audit_insert_failed",
             CancellationToken.None).ConfigureAwait(false);
-        streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "audit_insert_failed" });
-        if (streamEntry is not null) streamStore.Complete(id);
+        await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+            .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
         return Results.Problem("Failed to record revision audit; revision not started.", statusCode: 500);
     }
 
@@ -1446,8 +1462,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
             TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "revision_start_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
             "revision_start_failed",
             CancellationToken.None).ConfigureAwait(false);
-        streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "revision_start_failed" });
-        if (streamEntry is not null) streamStore.Complete(id);
+        await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+            .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
         return Results.Problem("Failed to start revision workflow.", statusCode: 500);
     }
 
@@ -2960,6 +2976,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
     ReviewRequest request,
     IRunStore runStore,
     RunStreamStore streamStore,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,
     RunWorkflowFactory workflowFactory,
@@ -2992,12 +3009,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
                 error = "request_changes is not supported when no live workflow is registered for this run. Please approve or decline instead."
             });
         }
-        if (entry is not null)
-        {
-            entry.RecordNext(EventTypes.ReviewDeclined, new { });
-            streamStore.Complete(id);
-            _ = workflowFactory.PersistRunEventsAsync(id);
-        }
+        await terminalOutcomeProjector.ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
         return Results.Json(new ReviewResponse { RunId = id, Status = RunStatus.Declined.ToApiString(), MergeResult = null });
     }
 
@@ -3042,10 +3054,7 @@ static async Task<IResult> ExecuteDirectReviewAsync(
             if (entry is not null)
             {
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
-                entry.RecordNext(EventTypes.MergeCompleted,
-                    new { merged_commit_hash = mergeExecResult.CommitHash, previous_head_sha = mergeExecResult.PreviousHeadSha, merge_mode = mergeExecResult.MergeMode });
-                streamStore.Complete(id);
-                _ = workflowFactory.PersistRunEventsAsync(id);
+                await terminalOutcomeProjector.ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
             }
             return Results.Json(new ReviewResponse
             {
