@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { KIND, runAdmissionPreflight, validateAdmissionPreflight } from '../squad-admission-preflight.mjs';
+import { resolveAdmissionAuthority } from '../squad-admission-authority.mjs';
 import { REVIEW_KIND, VALIDATION_KIND } from '../squad-admission-ledger.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -53,6 +54,7 @@ const ledger = (extra = {}) => ({
   materializedAt: '2026-09-22T18:00:02.000Z',
   ...extra,
 });
+const authority = (teamRoot, stateBackend = 'local') => ({ teamRoot, stateBackend });
 
 test('admits a complete v2 exact-head ledger', () => {
   assert.deepEqual(validateAdmissionPreflight(ledger(), { ...expected, headSha }), {
@@ -66,6 +68,7 @@ test('blocks missing, v1, incomplete, and stale ledgers', async () => {
   await assert.rejects(
     () => runAdmissionPreflight(expected.repository, expected.prNumber, {
       stateDirectory: 'C:\\state',
+      authority: authority('C:\\state'),
       headSha,
       readLedger: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
     }),
@@ -145,32 +148,48 @@ test('preserves advisory and explicit waiver behavior', () => {
 test('reads only the declared external state directory', async () => {
   const result = await runAdmissionPreflight(expected.repository, expected.prNumber, {
     stateDirectory: 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver',
+    authority: authority('C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver'),
     headSha,
-    readLedger: async (stateDirectory) => {
-      assert.equal(stateDirectory, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
+    readLedger: async (configuredAuthority) => {
+      assert.equal(configuredAuthority.teamRoot, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
       return ledger();
     },
   });
   assert.equal(result.headSha, headSha);
 });
 
-test('CLI reads explicit TEAM_ROOT from the dedicated worktree CWD', async () => {
+test('rejects an unconfigured repository authority', async () => {
+  const error = Object.assign(new Error('missing config'), { code: 'ENOENT' });
+  await assert.rejects(() => resolveAdmissionAuthority({
+    cwd: 'C:\\repo',
+    env: { APPDATA: 'C:\\Users\\agent\\AppData\\Roaming' },
+    platform: 'win32',
+  }, {
+    realpath: async (value) => value,
+    readFile: async (path) => {
+      if (path.endsWith('\\.git')) throw Object.assign(new Error('directory'), { code: 'EISDIR' });
+      throw error;
+    },
+  }), /missing config/u);
+});
+
+test('CLI rejects a fabricated alternate TEAM_ROOT ledger', async () => {
   const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-preflight-'));
   const ledgerPath = join(teamRoot, 'admission', 'findings', 'sabbour', 'agentweaver', '1502.json');
   await mkdir(dirname(ledgerPath), { recursive: true });
   await writeFile(ledgerPath, JSON.stringify(ledger()));
   const script = fileURLToPath(new URL('../squad-admission-preflight.mjs', import.meta.url));
   const cwd = fileURLToPath(new URL('../../../', import.meta.url));
-  const { stdout } = await execFileAsync(process.execPath, [
-    script,
-    expected.repository,
-    String(expected.prNumber),
-    '--head-sha',
-    headSha,
-    '--team-root',
-    teamRoot,
-    '--state-backend',
-    'local',
-  ], { cwd });
-  assert.equal(JSON.parse(stdout).admitted, true);
+  await assert.rejects(() => execFileAsync(process.execPath, [
+      script,
+      expected.repository,
+      String(expected.prNumber),
+      '--head-sha',
+      headSha,
+      '--team-root',
+      teamRoot,
+      '--state-backend',
+      'local',
+  ], { cwd }),
+  /does not match configured authority/u);
 });

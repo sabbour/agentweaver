@@ -3,6 +3,11 @@ import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/pr
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import {
+  REQUIRED_REVIEW_SOURCES,
+  assertAdmissionAuthority,
+  resolveAdmissionAuthority,
+} from './squad-admission-authority.mjs';
 
 export const LEDGER_KIND = 'agentweaver.squad-admission-findings/v2';
 export const REVIEW_KIND = 'agentweaver.squad-review/v2';
@@ -120,6 +125,14 @@ function validateCorrectiveReviews(reviews) {
   }
 }
 
+function assertRequiredReviewSources(sources) {
+  if (!Array.isArray(sources)) throw new Error('requiredReviewSources must match configured reviewer policy');
+  if (sources.length !== REQUIRED_REVIEW_SOURCES.length
+    || sources.some((source, index) => source !== REQUIRED_REVIEW_SOURCES[index])) {
+    throw new Error('requiredReviewSources must match configured reviewer policy');
+  }
+}
+
 export function materializeLedger(input) {
   if (!input || typeof input !== 'object') throw new Error('materialization input is required');
   const repository = required(input.repository, 'repository');
@@ -130,11 +143,8 @@ export function materializeLedger(input) {
     branch: required(input.branch, 'branch'),
     headSha: sha(input.headSha, 'headSha'),
   };
-  if (!Array.isArray(input.requiredReviewSources) || input.requiredReviewSources.length === 0) {
-    throw new Error('requiredReviewSources must explicitly list required reviewers');
-  }
-  const requiredSources = input.requiredReviewSources.map((source, index) => required(source, `requiredReviewSources[${index}]`));
-  if (new Set(requiredSources).size !== requiredSources.length) throw new Error('requiredReviewSources contains duplicates');
+  assertRequiredReviewSources(input.requiredReviewSources);
+  const requiredSources = [...REQUIRED_REVIEW_SOURCES];
   if (!Array.isArray(input.reviews)) throw new Error('reviews must be an array');
   if (!Array.isArray(input.validations) || input.validations.length === 0) throw new Error('validations must contain structured exact-head evidence');
 
@@ -158,6 +168,14 @@ export function materializeLedger(input) {
     if (exactHeadReviews.some((review) => review.verdict === 'rejected')) {
       throw new Error(`required review source ${source} has a conflicting exact-head rejection`);
     }
+  }
+  const requiredReviewers = requiredSources.map((source) => required(
+    implementationReviews.find((review) => review.source === source
+      && review.target.headSha === candidate.headSha && review.verdict === 'approved')?.reviewer,
+    `required reviewer for ${source}`,
+  ).toLowerCase());
+  if (new Set(requiredReviewers).size !== requiredReviewers.length) {
+    throw new Error('required review sources must be independently issued by distinct reviewers');
   }
   const validations = input.validations.map((entry, index) => validateValidationEvidence(entry, candidate, `validations[${index}]`));
 
@@ -213,12 +231,16 @@ function localAdapter(teamRoot) {
 }
 
 export async function materializeAdmissionLedger(input, {
+  authority,
   teamRoot,
   stateBackend,
   stateAdapter,
+  cwd = process.cwd(),
 } = {}) {
-  const backend = required(stateBackend, 'state backend');
-  const root = absolute(teamRoot, 'TEAM_ROOT');
+  const configuredAuthority = authority ?? await resolveAdmissionAuthority({ cwd });
+  const trusted = await assertAdmissionAuthority(configuredAuthority, { teamRoot, stateBackend });
+  const backend = trusted.stateBackend;
+  const root = trusted.teamRoot;
   const adapter = backend === 'local' || backend === 'worktree'
     ? localAdapter(await realpath(root))
     : stateAdapter;
@@ -248,7 +270,9 @@ async function main() {
   if (!['local', 'worktree'].includes(options['--state-backend'])) {
     throw new Error('non-local backends must call materializeAdmissionLedger with the runtime-owned state adapter');
   }
+  const authority = await resolveAdmissionAuthority();
   console.log(JSON.stringify(await materializeAdmissionLedger(input, {
+    authority,
     teamRoot: options['--team-root'],
     stateBackend: options['--state-backend'],
   })));

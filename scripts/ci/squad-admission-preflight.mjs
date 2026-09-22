@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { LEDGER_KIND as KIND, validateAdmissionLedger } from './squad-admission-ledger.mjs';
+import { assertAdmissionAuthority, resolveAdmissionAuthority } from './squad-admission-authority.mjs';
 
 export { KIND };
 const SHA = /^[0-9a-f]{40}$/iu;
@@ -20,23 +21,29 @@ function exactSha(value, field) {
 
 export const validateAdmissionPreflight = validateAdmissionLedger;
 
-async function readAuthoritativeLedger(stateDirectory, repository, prNumber) {
-  const directory = required(stateDirectory, 'canonical external state directory');
+async function readAuthoritativeLedger(authority, repository, prNumber, stateAdapter) {
   const key = `admission/findings/${repository}/${prNumber}.json`;
-  return JSON.parse(await readFile(join(directory, key), 'utf8'));
+  if (authority.stateBackend === 'local') {
+    return JSON.parse(await readFile(join(authority.teamRoot, key), 'utf8'));
+  }
+  if (!stateAdapter || typeof stateAdapter.read !== 'function') {
+    throw new Error(`state backend ${authority.stateBackend} requires an explicit runtime-owned read adapter`);
+  }
+  return JSON.parse(await stateAdapter.read(key));
 }
 
 export async function runAdmissionPreflight(repository, prNumber, dependencies = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error('repository must be owner/name');
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
-  const stateDirectory = required(dependencies.stateDirectory, 'canonical external state directory');
+  const authority = dependencies.authority ?? await resolveAdmissionAuthority({ cwd: dependencies.cwd });
   const headSha = exactSha(dependencies.headSha, 'launcher-attested live PR head');
   const ledger = dependencies.readLedger
-    ? await dependencies.readLedger(stateDirectory, repository, prNumber)
-    : await readAuthoritativeLedger(stateDirectory, repository, prNumber);
+    ? await dependencies.readLedger(authority, repository, prNumber)
+    : await readAuthoritativeLedger(authority, repository, prNumber, dependencies.stateAdapter);
   return {
     ...validateAdmissionPreflight(ledger, { repository, prNumber, headSha }),
-    stateDirectory,
+    stateDirectory: authority.teamRoot,
+    stateBackend: authority.stateBackend,
   };
 }
 
@@ -53,8 +60,12 @@ async function main() {
   if (!['local', 'worktree'].includes(stateBackend)) {
     throw new Error('non-local backends must call runAdmissionPreflight with the runtime-owned state adapter');
   }
+  const authority = await assertAdmissionAuthority(
+    await resolveAdmissionAuthority(),
+    { teamRoot, stateBackend },
+  );
   console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, {
-    stateDirectory: teamRoot,
+    authority,
     headSha,
   })));
 }

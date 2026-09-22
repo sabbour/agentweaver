@@ -11,6 +11,7 @@ import {
   materializeLedger,
   validateReviewOutput,
 } from '../squad-admission-ledger.mjs';
+import { assertAdmissionAuthority } from '../squad-admission-authority.mjs';
 
 const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
@@ -55,6 +56,7 @@ const input = (extra = {}) => ({
   materializedAt: '2026-09-22T18:00:02.000Z',
   ...extra,
 });
+const authority = (teamRoot, stateBackend = 'local') => ({ teamRoot, stateBackend });
 
 test('materializes only explicit structured review and validation evidence', () => {
   const ledger = materializeLedger(input());
@@ -74,6 +76,23 @@ test('rejects missing reviews and validation provenance mismatches', () => {
   assert.throws(() => materializeLedger(input({
     reviews: [review('code-review', { target: { ...target, branch: 'dev' } }), review('security-review'), review('ponytail-review')],
   })), /candidate worktree lineage/u);
+});
+
+test('rejects a caller-declared reviewer policy that lowers configured requirements', () => {
+  assert.throws(() => materializeLedger(input({
+    requiredReviewSources: ['code-review'],
+    reviews: [review('code-review')],
+  })), /configured reviewer policy/u);
+});
+
+test('requires distinct reviewers for each configured reviewer class', () => {
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      review('code-review', { reviewer: 'same-reviewer' }),
+      review('security-review', { reviewer: 'same-reviewer' }),
+      review('ponytail-review'),
+    ],
+  })), /independently issued/u);
 });
 
 test('design review targets its artifact and requires no implementation evidence', () => {
@@ -132,6 +151,7 @@ test('writes atomically and validates by reading from the same backend', async (
     worktree: teamRoot,
     after: { cwd: teamRoot, worktree: teamRoot, branch, headSha },
   })] }), {
+    authority: authority(teamRoot),
     teamRoot,
     stateBackend: 'local',
   });
@@ -141,24 +161,54 @@ test('writes atomically and validates by reading from the same backend', async (
 });
 
 test('requires an explicit adapter for non-local state', async () => {
+  const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-non-local-'));
   await assert.rejects(() => materializeAdmissionLedger(input(), {
-    teamRoot: worktree,
+    authority: authority(teamRoot, 'two-layer'),
+    teamRoot,
     stateBackend: 'two-layer',
   }), /explicit same-backend atomic adapter/u);
 });
 
 test('uses one injected runtime adapter for non-local write and read validation', async () => {
+  const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-non-local-'));
   const values = new Map();
   const stateAdapter = {
     async writeAtomic(key, value) { values.set(key, value); },
     async read(key) { return values.get(key); },
   };
   const result = await materializeAdmissionLedger(input(), {
-    teamRoot: worktree,
+    authority: authority(teamRoot, 'two-layer'),
+    teamRoot,
     stateBackend: 'two-layer',
     stateAdapter,
   });
   assert.equal(JSON.parse(await stateAdapter.read(result.key)).kind, LEDGER_KIND);
+});
+
+test('rejects a materialization root that differs from configured authority', async () => {
+  const configuredRoot = await mkdtemp(join(tmpdir(), 'agentweaver-authority-'));
+  const alternateRoot = await mkdtemp(join(tmpdir(), 'agentweaver-forged-'));
+  await assert.rejects(() => materializeAdmissionLedger(input(), {
+    authority: authority(configuredRoot),
+    teamRoot: alternateRoot,
+    stateBackend: 'local',
+  }), /does not match configured authority/u);
+});
+
+test('rejects caller backend and canonical-path substitutions', async () => {
+  const teamRoot = await mkdtemp(join(tmpdir(), 'agentweaver-authority-'));
+  await assert.rejects(() => materializeAdmissionLedger(input(), {
+    authority: authority(teamRoot, 'two-layer'),
+    teamRoot,
+    stateBackend: 'local',
+  }), /state backend does not match configured authority/u);
+  await assert.rejects(() => assertAdmissionAuthority(
+    authority(teamRoot),
+    { teamRoot, stateBackend: 'local' },
+    {
+    realpath: async () => `${teamRoot}-substituted`,
+    },
+  ), /symlink, reparse point, or canonical-path substitution/u);
 });
 
 test('rejects conflicting corrective results for one finding', () => {

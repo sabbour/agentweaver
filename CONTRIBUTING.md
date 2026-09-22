@@ -68,13 +68,17 @@ they are not Agentweaver sign-in providers.
      `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
      --head-sha <live-head-sha> --team-root <absolute-team-root>
      --state-backend <backend>`. The preflight reads the explicit authoritative Squad
-     state backend and validates its coordinator-owned v2 findings
+     root and backend from the repository's primary-checkout Squad configuration,
+     rejects mismatched or non-canonical caller values, and validates its coordinator-owned v2 findings
      ledger. Missing, legacy, incomplete, or mismatched evidence blocks the ready
      transition. Immediately before merge, Ralph repeats the preflight against the fresh
      live head, records the returned `<validated-sha>`, and merges manually with
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      Non-local backends call the exported materialization and preflight functions with
      their runtime-owned adapter; the CLI never falls back to filesystem access.
+     The required post-implementation reviewer classes come from repository policy, not
+     ledger input; evidence must contain distinct, independently issued exact-head
+     approvals for code review, security review, and Ponytail review.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
