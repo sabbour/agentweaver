@@ -39,6 +39,18 @@ test("run: rejects with ExecError when the binary does not exist on PATH (no all
   await assert.rejects(run(DEFINITELY_MISSING_BINARY, ["--version"]), /Failed to spawn/);
 });
 
+test("run: a pre-aborted signal rejects before spawning a missing binary", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("SIGTERM"));
+  await assert.rejects(run(DEFINITELY_MISSING_BINARY, ["--version"], { signal: controller.signal }), /SIGTERM/);
+});
+
+test("capture: a pre-aborted signal rejects before spawning a missing binary", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("SIGINT"));
+  await assert.rejects(capture(DEFINITELY_MISSING_BINARY, ["--version"], { signal: controller.signal }), /SIGINT/);
+});
+
 test("run: opt-in timeout terminates the local process and never retries it", async () => {
   await assert.rejects(
     run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25 }),

@@ -70,3 +70,41 @@ metadata, never the key or provider fingerprint. If a generator returns
 replacement context returned by the API.
 
 For headless/CI use with no agent session to dispatch a `task` call from, set `AGENTWEAVER_JUDGE_CMD` to an external judge command consumed by `core.mjs`'s `makeDefaultJudge()`; without it, a schema-valid `CANNOT_DETERMINE` verdict is emitted.
+
+## Staging-only context-budget pressure acceptance
+
+`run-context-budget-pressure.mjs` is an explicitly opted-in operational profile for
+issue #1501. It reuses the deployment-scoped `MemoryContext__MaxItems` and
+`MemoryContext__MaxTokens` settings; it does not add a per-request or project override.
+The command requires an HTTPS target whose public `/api/version` reports
+`isRelease=false`, the exact active Kubernetes context and namespace, the namespace
+label `agentweaver.io/environment=staging`, and a target hostname present on the
+namespace's `agentweaver-api-route`. Apply that label only to the controlled staging
+namespace; it is the independent environment identity that prevents a SHA-tagged
+production deployment from passing the non-release check. The command acquires a
+Kubernetes Lease before mutation:
+
+```powershell
+node scripts/api-harness/run-context-budget-pressure.mjs `
+  --target https://agentweaver.<zone>.staging.<domain> `
+  --confirm-non-production https://agentweaver.<zone>.staging.<domain> `
+  --kube-context <exact-current-context> `
+  --namespace agentweaver `
+  --timeout-seconds 120
+```
+
+If restoration or readback fails, the command deliberately retains
+`Lease/agentweaver-context-budget-harness` with its snapshot annotation so another run
+cannot adopt the pressured values as a new baseline. Recover the deployments from that
+snapshot before deleting the Lease.
+
+The profile independently snapshots each variable's exact literal `value`,
+`valueFrom`, or absence on both `agentweaver-api` and `agentweaver-worker`; applies
+bounded `1` item / `128` token values with resource-version checks; verifies pod-template
+generation changes and readback; and waits for both rollouts. It then creates three
+fresh projects for `item_limit`, token-budget omission, and
+`mandatory_context_budget_exceeded`. One awaited `finally` cancels active harness runs,
+deletes owned projects, restores the exact prior deployment structures, waits for both
+rollouts, verifies restoration, and releases the Lease. `SIGINT` and `SIGTERM` request
+cancellation and unwind through the same restoration path; they never call
+`process.exit`. Any cleanup mismatch makes the command fail.

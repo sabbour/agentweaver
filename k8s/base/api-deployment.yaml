@@ -117,6 +117,10 @@ spec:
             # SQLite path kept for reference; unused when Database__Provider=Postgres.
             - name: Database__Path
               value: /tmp/agentweaver.db
+            - name: MemoryContext__MaxItems
+              value: "20"
+            - name: MemoryContext__MaxTokens
+              value: "4000"
             - name: Workspace__Path
               value: /workspace
             # In-process loopback base URL for agent decision/memory/inbox tools and Scribe.

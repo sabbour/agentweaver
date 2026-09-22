@@ -75,6 +75,10 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Track token and AI credit usage](./observability-operations/track-token-and-cost-usage.md) — [#29](https://github.com/sabbour/agentweaver/issues/29)
 - [Operate health, heartbeat, and cluster status](./observability-operations/operate-health-heartbeat-and-cluster.md) — [#31](https://github.com/sabbour/agentweaver/issues/31)
 
+## Runtime resilience
+
+- [Validate deployed context budgets under deterministic pressure](./runtime-resilience/context-budget-pressure-acceptance.md) — [#1501](https://github.com/sabbour/agentweaver/issues/1501)
+
 ## MCP & integrations
 
 - [Drive Agentweaver through MCP tools](./mcp-integrations/drive-agentweaver-through-mcp.md) — [#33](https://github.com/sabbour/agentweaver/issues/33)
