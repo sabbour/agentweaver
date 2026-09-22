@@ -177,7 +177,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         }
 
         using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
-        var rest = await owner.GetAsync($"/api/runs/{runId}/events");
+        var rest = await owner.GetAsync($"/api/runs/{runId}/events?type={EventTypes.RunFailed}&limit=1");
         var restBody = await rest.Content.ReadAsStringAsync();
         rest.StatusCode.Should().Be(HttpStatusCode.OK);
         restBody.Should().Contain("agent_turn_internal_error")
@@ -196,6 +196,157 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             .And.NotContain("headers")
             .And.NotContain("prompt")
             .And.NotContain("stack");
+    }
+
+    [Fact]
+    public async Task RunEvents_NoQuery_ReturnsCompleteAscendingSequence()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        await SeedEventsAsync(
+            runId,
+            (3, "third", new { marker = 3 }),
+            (1, "first", new { marker = 1 }),
+            (2, "second", new { marker = 2 }));
+
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+        var response = await owner.GetAsync($"/api/runs/{runId}/events");
+        var events = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement[]>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        events.Should().NotBeNull();
+        events!.Select(e => e.GetProperty("sequence").GetInt32()).Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public async Task RunEvents_CombinedFilters_AreAppliedBeforeOrderingAndLimit()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        await SeedEventsAsync(
+            runId,
+            (5, "target", new { marker = 5 }),
+            (1, "target", new { marker = 1 }),
+            (4, "other", new { marker = 4 }),
+            (3, "target", new { marker = 3 }),
+            (2, "other", new { marker = 2 }));
+
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+        var response = await owner.GetAsync($"/api/runs/{runId}/events?after=1&type=target&limit=2");
+        var events = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement[]>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        events.Should().NotBeNull();
+        events!.Select(e => e.GetProperty("sequence").GetInt32()).Should().Equal(3, 5);
+    }
+
+    [Theory]
+    [InlineData("after=0")]
+    [InlineData("after=2147483647")]
+    [InlineData("limit=1")]
+    [InlineData("limit=1000")]
+    public async Task RunEvents_AcceptsNumericBoundaryValues(string query)
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.GetAsync($"/api/runs/{runId}/events?{query}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task RunEvents_AcceptsMaximumTypeLength_AndUnknownTypeReturnsEmpty()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        await SeedEventsAsync(runId, (1, "run.started", new { }));
+        var type = new string('a', 128);
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.GetAsync($"/api/runs/{runId}/events?type={type}");
+        var events = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement[]>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        events.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunEvents_TypeFilter_IsCaseSensitive()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        await SeedEventsAsync(runId, (1, "run.started", new { }));
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.GetAsync($"/api/runs/{runId}/events?type=RUN.STARTED");
+        var events = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement[]>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        events.Should().BeEmpty();
+    }
+
+    public static IEnumerable<object[]> InvalidRunEventQueries()
+    {
+        yield return ["after=-1"];
+        yield return ["after=%2B1"];
+        yield return ["after=1.0"];
+        yield return ["after=2147483648"];
+        yield return ["after=1&after=2"];
+        yield return ["limit=0"];
+        yield return ["limit=1001"];
+        yield return ["limit=-1"];
+        yield return ["limit=1.0"];
+        yield return ["limit=2147483648"];
+        yield return ["limit=1&limit=2"];
+        yield return ["type="];
+        yield return [$"type={new string('a', 129)}"];
+        yield return ["type=a&type=b"];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidRunEventQueries))]
+    public async Task RunEvents_RejectsMalformedOutOfRangeOrRepeatedValues(string query)
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.GetAsync($"/api/runs/{runId}/events?{query}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task RunEvents_AuthorizesBeforeRejectingMalformedQuery()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        using var unauthorized = CreateEntraClient(OtherProjectOwnerOid, PlatformRoles.Viewer);
+
+        var response = await unauthorized.GetAsync($"/api/runs/{runId}/events?limit=0&type=");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task RunEvents_IgnoresRangeHeader()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, VictimOwnerOid);
+        await SeedEventsAsync(runId, (1, "first", new { }), (2, "second", new { }));
+        using var owner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}/events");
+        request.Headers.Range = new RangeHeaderValue(0, 0);
+
+        var response = await owner.SendAsync(request);
+        var events = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement[]>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.AcceptRanges.Should().BeEmpty();
+        response.Content.Headers.ContentRange.Should().BeNull();
+        events.Should().HaveCount(2);
     }
 
     [Fact]
@@ -887,6 +1038,23 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
 
     private async Task AppendEventAsync(string runId, RunEvent evt) =>
         _ = await _factory.Services.GetRequiredService<IRunEventStream>().AppendAsync(runId, evt);
+
+    private async Task SeedEventsAsync(
+        string runId,
+        params (int Sequence, string Type, object Payload)[] events)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.AddRange(events.Select(evt => new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = evt.Sequence,
+            EventType = evt.Type,
+            PayloadJson = System.Text.Json.JsonSerializer.Serialize(evt.Payload),
+            CreatedAt = DateTime.UtcNow.AddMilliseconds(evt.Sequence),
+        }));
+        await db.SaveChangesAsync();
+    }
 
     private async Task<Run> GetRunAsync(string runId) =>
         (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId)))!;
