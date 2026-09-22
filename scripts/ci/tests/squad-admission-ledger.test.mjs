@@ -146,3 +146,30 @@ test('requires an explicit adapter for non-local state', async () => {
     stateBackend: 'two-layer',
   }), /explicit same-backend atomic adapter/u);
 });
+
+test('uses one injected runtime adapter for non-local write and read validation', async () => {
+  const values = new Map();
+  const stateAdapter = {
+    async writeAtomic(key, value) { values.set(key, value); },
+    async read(key) { return values.get(key); },
+  };
+  const result = await materializeAdmissionLedger(input(), {
+    teamRoot: worktree,
+    stateBackend: 'two-layer',
+    stateAdapter,
+  });
+  assert.equal(JSON.parse(await stateAdapter.read(result.key)).kind, LEDGER_KIND);
+});
+
+test('rejects conflicting corrective results for one finding', () => {
+  const finding = { id: 'F-1', policy: 'required', summary: 'Needs one bounded correction.' };
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      review('code-review', { verdict: 'rejected', target: { ...target, headSha: 'b'.repeat(40) }, findings: [finding] }),
+      review('code-review', { correctiveOf: 'F-1', findings: [finding] }),
+      review('code-review', { correctiveOf: 'F-1', verdict: 'rejected', findings: [finding] }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  })), /conflicting results/u);
+});

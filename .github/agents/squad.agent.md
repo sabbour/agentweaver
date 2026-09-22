@@ -419,9 +419,9 @@ validation evidence.
   --state-backend <backend>`. The preflight uses the explicit authoritative state backend
   and requires the coordinator-owned v2 findings ledger to contain every
   declared review source, exact-head validation, and resolved required finding or explicit
-  waiver. For non-local backends, pass `--state-adapter <runtime-adapter-module>` to both
-  materialization and preflight; never fall back to filesystem state. Coordinator/Ralph
-  and authoritative external Squad state are
+  waiver. For non-local backends, call the exported functions with the runtime-owned
+  adapter; never fall back to filesystem state. Coordinator/Ralph and authoritative
+  external Squad state are
   trusted operational components; GitHub is evidence and CI only, and repository code
   does not provide an adversarially immutable execution boundary. PR comments preserve
   evidence but do not enforce admission. Confirm the PR is actually merged before

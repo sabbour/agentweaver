@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { LEDGER_KIND as KIND, loadStateAdapter, validateAdmissionLedger } from './squad-admission-ledger.mjs';
+import { LEDGER_KIND as KIND, validateAdmissionLedger } from './squad-admission-ledger.mjs';
 
 export { KIND };
 const SHA = /^[0-9a-f]{40}$/iu;
@@ -48,19 +48,14 @@ async function main() {
   const teamRoot = options['--team-root'];
   const stateBackend = options['--state-backend'];
   if (!repository || !value || !headSha || !teamRoot || !stateBackend) {
-    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --head-sha <live-pr-head> --team-root <absolute-path> --state-backend <backend> [--state-adapter <module>]');
+    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --head-sha <live-pr-head> --team-root <absolute-path> --state-backend <local|worktree>');
   }
-  const local = ['local', 'worktree'].includes(stateBackend);
-  const stateAdapter = options['--state-adapter']
-    ? await loadStateAdapter(options['--state-adapter'], { teamRoot, stateBackend })
-    : undefined;
-  if (!local && !stateAdapter) throw new Error(`state backend ${stateBackend} requires --state-adapter; filesystem fallback is disabled`);
+  if (!['local', 'worktree'].includes(stateBackend)) {
+    throw new Error('non-local backends must call runAdmissionPreflight with the runtime-owned state adapter');
+  }
   console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, {
     stateDirectory: teamRoot,
     headSha,
-    readLedger: stateAdapter
-      ? async (_, ownerRepository, number) => JSON.parse(await stateAdapter.read(`admission/findings/${ownerRepository}/${number}.json`))
-      : undefined,
   })));
 }
 

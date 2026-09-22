@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -104,6 +104,7 @@ export function validateValidationEvidence(evidence, expected, field = 'validati
 
 function validateCorrectiveReviews(reviews) {
   const initialFindings = new Map();
+  const correctiveFindings = new Set();
   for (const review of reviews.filter((entry) => entry.correctiveOf === undefined)) {
     for (const finding of review.findings) {
       const key = `${review.phase}:${review.source}:${targetLineage(review.target)}:${finding.id}`;
@@ -114,6 +115,8 @@ function validateCorrectiveReviews(reviews) {
   for (const review of reviews.filter((entry) => entry.correctiveOf !== undefined)) {
     const key = `${review.phase}:${review.source}:${targetLineage(review.target)}:${review.correctiveOf}`;
     if (!initialFindings.has(key)) throw new Error(`corrective re-review ${review.correctiveOf} does not match its original phase, source, and target`);
+    if (correctiveFindings.has(key)) throw new Error(`corrective re-review ${review.correctiveOf} has conflicting results`);
+    correctiveFindings.add(key);
   }
 }
 
@@ -205,18 +208,6 @@ function localAdapter(teamRoot) {
   };
 }
 
-export async function loadStateAdapter(modulePath, context) {
-  const adapterPath = absolute(modulePath, 'state adapter module');
-  const imported = await import(pathToFileURL(resolve(adapterPath)).href);
-  const candidate = imported.createStateAdapter
-    ? await imported.createStateAdapter(context)
-    : imported.default;
-  if (!candidate || typeof candidate.read !== 'function') {
-    throw new Error('state adapter module must provide read(key)');
-  }
-  return candidate;
-}
-
 export async function materializeAdmissionLedger(input, {
   teamRoot,
   stateBackend,
@@ -247,16 +238,15 @@ function parseCli(args) {
 async function main() {
   const options = parseCli(process.argv.slice(2));
   if (!options['--input'] || !options['--team-root'] || !options['--state-backend']) {
-    throw new Error('usage: squad-admission-ledger.mjs --input <json-file> --team-root <absolute-path> --state-backend <backend> [--state-adapter <module>]');
+    throw new Error('usage: squad-admission-ledger.mjs --input <json-file> --team-root <absolute-path> --state-backend <local|worktree>');
   }
   const input = JSON.parse(await readFile(options['--input'], 'utf8'));
-  const context = { teamRoot: options['--team-root'], stateBackend: options['--state-backend'] };
-  const stateAdapter = options['--state-adapter']
-    ? await loadStateAdapter(options['--state-adapter'], context)
-    : undefined;
+  if (!['local', 'worktree'].includes(options['--state-backend'])) {
+    throw new Error('non-local backends must call materializeAdmissionLedger with the runtime-owned state adapter');
+  }
   console.log(JSON.stringify(await materializeAdmissionLedger(input, {
-    ...context,
-    stateAdapter,
+    teamRoot: options['--team-root'],
+    stateBackend: options['--state-backend'],
   })));
 }
 
