@@ -101,6 +101,16 @@ test('rejects a rejected review that omits its findings', () => {
   }), { ...expected, headSha }), /must identify why the review was rejected/u);
 });
 
+test('blocks unresolved required findings even when a review says approved', () => {
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    reviews: [
+      review('code-review', { findings: [{ id: 'F-APPROVED', policy: 'required', summary: 'Still unresolved.' }] }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  }), { ...expected, headSha }), /unresolved/u);
+});
+
 test('admits an older rejection only after corrective approval at the final head', () => {
   const finding = { id: 'F-1', policy: 'required', summary: 'Exact-head review failed.' };
   const reviews = [

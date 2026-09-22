@@ -175,16 +175,14 @@ export function validateAdmissionLedger(ledger, expected) {
   if (materialized.prNumber !== expected.prNumber) throw new Error('PR number does not match');
   if (materialized.headSha !== sha(expected.headSha, 'expected.headSha')) throw new Error('ledger evidence is stale for the live PR head');
 
-  for (const review of materialized.reviews.filter((entry) => entry.phase === 'implementation')) {
-    if (review.verdict === 'rejected' && review.findings.some((finding) => finding.policy === 'required')) {
-      const unresolved = review.findings.some((finding) => finding.policy === 'required'
-        && finding.waiver === undefined
-        && !materialized.reviews.some((entry) => entry.correctiveOf === finding.id
-          && entry.phase === review.phase && entry.source === review.source
-          && targetLineage(entry.target) === targetLineage(review.target)
-          && entry.target.headSha === materialized.headSha && entry.verdict === 'approved'));
-      if (unresolved) throw new Error(`required finding from ${review.source} is unresolved`);
-    }
+  for (const review of materialized.reviews.filter((entry) => entry.phase === 'implementation' && entry.correctiveOf === undefined)) {
+    const unresolved = review.findings.some((finding) => finding.policy === 'required'
+      && finding.waiver === undefined
+      && !materialized.reviews.some((entry) => entry.correctiveOf === finding.id
+        && entry.phase === review.phase && entry.source === review.source
+        && targetLineage(entry.target) === targetLineage(review.target)
+        && entry.target.headSha === materialized.headSha && entry.verdict === 'approved'));
+    if (unresolved) throw new Error(`required finding from ${review.source} is unresolved`);
   }
   return { admitted: true, headSha: materialized.headSha, findings: materialized.reviews.reduce((count, review) => count + review.findings.length, 0) };
 }
