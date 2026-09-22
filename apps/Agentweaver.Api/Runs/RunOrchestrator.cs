@@ -567,8 +567,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelId,
                 EffectiveModelProviderProvenance.ScopeProject));
 
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
-            run with { Task = revisedTask }, ct);
+        string taskWithHarvest;
+        string? systemPromptContext;
+        try
+        {
+            (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
+                run with { Task = revisedTask }, ct);
+        }
+        catch (MandatoryContextBudgetExceededException ex)
+        {
+            await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
+            throw;
+        }
 
         var input = new AgentTurnInput(
             run.Id.ToString(),
@@ -741,7 +751,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     EffectiveModelProviderProvenance.ScopeProject));
             entry.RecordNext("coordinator.child_revision_handoff", evidence);
 
-            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            string taskWithHarvest;
+            string? systemPromptContext;
+            try
+            {
+                (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             // BLOCKING #1 (lockout correctness): IsRevision:false → CreateSessionAsync mints a FRESH
             // SDK session under agentweaver-run-{newAgentRun.Id}. The new agent does NOT resume — and
@@ -1010,17 +1030,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var result = $"workflow_bind_failed: {ex.Message}";
             try
             {
+                var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
                 var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
                     runId,
                     RunStatus.Failed,
                     EventTypes.RunFailed,
-                    new { reason = "workflow_bind_failed", detail = ex.Message },
+                    payload,
                     DateTimeOffset.UtcNow,
                     result,
                     CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
                 await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
+                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                    entry.RecordNext(EventTypes.RunFailed, payload);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -1036,17 +1059,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var detail = RedactFailureReason(ex);
             try
             {
+                var payload = new { reason = "workflow_start_failed", detail };
                 var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
                     runId,
                     RunStatus.Failed,
                     EventTypes.RunFailed,
-                    new { reason = "workflow_start_failed", detail },
+                    payload,
                     DateTimeOffset.UtcNow,
                     detail,
                     CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
                 await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
+                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                    entry.RecordNext(EventTypes.RunFailed, payload);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally

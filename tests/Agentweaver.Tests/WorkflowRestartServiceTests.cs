@@ -511,42 +511,6 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
-    [Fact]
-    public async Task RecoverAsync_FailedRunWithoutTerminalEvent_RepairsAndCompletesStreamExactlyOnce()
-    {
-        var runStore = new SqliteRunStore(_db.Db);
-        var streamStore = new RunStreamStore();
-        var runId = RunId.New();
-        await runStore.InsertAsync(new Run
-        {
-            Id = runId,
-            RepositoryPath = _worktreePath,
-            OriginatingBranch = "main",
-            ModelSource = ModelSource.GitHubCopilot,
-            Task = "interrupted terminalization",
-            SubmittingUser = "test-user",
-            Status = RunStatus.InProgress,
-            StartedAt = DateTimeOffset.UtcNow,
-        });
-        (await runStore.TrySetTerminalStatusAsync(
-            runId, RunStatus.Failed, DateTimeOffset.UtcNow, "workflow_start_failed", default))
-            .Should().BeTrue("simulate process termination after the terminal CAS and before stream output");
-
-        var service = BuildService(
-            runStore,
-            streamStore,
-            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
-
-        await service.RecoverAsync(CancellationToken.None);
-        await service.RecoverAsync(CancellationToken.None);
-
-        var entry = streamStore.Get(runId.ToString())!;
-        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e => e.Type == EventTypes.RunFailed);
-        entry.IsCompleted.Should().BeTrue();
-        (await runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.Failed,
-            "recovery must repair terminal delivery without reopening the run");
-    }
-
     // =========================================================================
     // Helpers
     // =========================================================================

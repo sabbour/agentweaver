@@ -351,31 +351,14 @@ public sealed class WorkflowRestartService
         var runId = run.Id.ToString();
         var entry = _streamStore.Get(runId);
 
-        var stream = _eventStream;
-        if (stream is null)
+        if (_terminalOutcomeProjector is not null)
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            stream = scope.ServiceProvider.GetService<IRunEventStream>();
-        }
-
-        if (stream is not null)
-        {
-            try
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
+            entry = _streamStore.Get(runId);
+            if (entry?.HasEventType(EventTypes.RunFailed) == true)
             {
-                var terminal = await stream.EnsureTerminalFailureAsync(
-                    runId,
-                    new RunEvent(0, EventTypes.RunFailed,
-                        new { reason = run.Result ?? "recovered_missing_terminal_event", retryable = false, recovered = true }),
-                    ct: ct).ConfigureAwait(false);
-                entry ??= _streamStore.Create(runId, run.SubmittingUser);
-                if (!entry.HasEventType(EventTypes.RunFailed))
-                    entry.Record(terminal);
                 _streamStore.Complete(runId);
                 return;
-            }
-            catch (NotSupportedException)
-            {
-                // Lightweight streams fall back to the local entry path below.
             }
         }
 

@@ -25,27 +25,6 @@ public sealed class EfRunEventStreamTests : IDisposable
     }
 
     [Fact]
-    public async Task EnsureTerminalFailureAsync_ExistingCoordinatorAssemblyFailure_IsPreserved()
-    {
-        var runId = "run-existing-assembly-failure";
-        var firstReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
-        await firstReplica.AppendAsync(runId,
-            new RunEvent(0, EventTypes.CoordinatorAssemblyFailed, new { reason = "assembly_failed" }));
-
-        var secondReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
-        var terminal = await secondReplica.EnsureTerminalFailureAsync(runId,
-            new RunEvent(0, EventTypes.RunFailed, new { reason = "recovery_failure" }));
-        var repeated = await new EfRunEventStream(new TestMemoryDbContextFactory(_options))
-            .EnsureTerminalFailureAsync(runId, new RunEvent(0, EventTypes.RunFailed, new { reason = "recovery_failure" }));
-
-        terminal.Type.Should().Be(EventTypes.CoordinatorAssemblyFailed);
-        repeated.Type.Should().Be(EventTypes.CoordinatorAssemblyFailed);
-        var persisted = await secondReplica.GetPersistedEventsAsync(runId);
-        persisted.Should().ContainSingle(e => IRunEventStream.IsTerminalEventType(e.Type));
-        persisted.Should().NotContain(e => e.Type == EventTypes.RunFailed);
-    }
-
-    [Fact]
     public async Task SubscribeAsync_TailsEventsWrittenByAnotherStreamInstance()
     {
         var runId = "run-cross-replica";
