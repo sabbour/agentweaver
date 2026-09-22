@@ -82,6 +82,22 @@ public sealed class SqliteDb
 
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_ready_at TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_generation INTEGER NOT NULL DEFAULT 1;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN lifecycle_generation INTEGER NOT NULL DEFAULT 1;", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS terminal_run_outcomes (
+                run_id TEXT NOT NULL,
+                lifecycle_generation INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                projected_at TEXT,
+                PRIMARY KEY (run_id, lifecycle_generation)
+            );
+            CREATE INDEX IF NOT EXISTS idx_terminal_run_outcomes_unprojected
+                ON terminal_run_outcomes (projected_at, occurred_at);
+            """, ct);
 
         // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
@@ -577,6 +593,7 @@ public sealed class SqliteDb
             submitting_user    TEXT NOT NULL,
             status             TEXT NOT NULL,
             approval_generation INTEGER NOT NULL DEFAULT 1,
+            lifecycle_generation INTEGER NOT NULL DEFAULT 1,
             started_at      TEXT NOT NULL,
             ended_at           TEXT,
             result             TEXT,

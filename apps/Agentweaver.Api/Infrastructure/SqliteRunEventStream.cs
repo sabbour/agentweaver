@@ -51,6 +51,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
     };
 
     private readonly string _connectionString;
+    private readonly string _runConnectionString;
     private readonly ConcurrentDictionary<string, Channel<RunEvent>> _channels = new();
     private readonly ConcurrentDictionary<string, byte> _completedRuns = new();
     private readonly object _channelsGate = new();
@@ -73,6 +74,14 @@ public sealed class SqliteRunEventStream : IRunEventStream
             Cache = SqliteCacheMode.Shared,
             Pooling = true,
         }.ToString();
+        _runConnectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = configuration["Database:Path"] ?? Path.Combine(AppPaths.DataDirectory, "agentweaver.db"),
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            Pooling = true,
+        }.ToString();
+        EnsureTerminalOutcomeProjectionTable();
     }
 
     /// <inheritdoc />
@@ -117,6 +126,121 @@ public sealed class SqliteRunEventStream : IRunEventStream
         }
 
         return ValueTask.FromResult(sequence);
+    }
+
+    public Task<RunEvent> AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var evt = StampTimestamp(outcome.ToRunEvent());
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var claim = connection.CreateCommand();
+        claim.Transaction = tx;
+        claim.CommandText =
+            "INSERT OR IGNORE INTO terminal_run_outcome_projections (run_id, lifecycle_generation) VALUES ($runId, $generation);";
+        claim.Parameters.AddWithValue("$runId", runId);
+        claim.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        if (claim.ExecuteNonQuery() == 0)
+        {
+            using var existing = connection.CreateCommand();
+            existing.Transaction = tx;
+            existing.CommandText =
+                """
+                SELECT event."Sequence", event."CreatedAt"
+                  FROM terminal_run_outcome_projections projection
+                  JOIN "RunEvents" event
+                    ON event."RunId" = projection.run_id
+                   AND event."Sequence" = projection.event_sequence
+                 WHERE projection.run_id = $runId
+                   AND projection.lifecycle_generation = $generation
+                   AND event."EventType" = $type;
+                """;
+            existing.Parameters.AddWithValue("$runId", runId);
+            existing.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+            existing.Parameters.AddWithValue("$type", outcome.EventType);
+            using var reader = existing.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException(
+                    $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
+            tx.Commit();
+            var persistedExisting = new RunEvent(
+                reader.GetInt32(0), evt.Type, evt.Payload,
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+            PublishDurableEvent(runId, persistedExisting);
+            return Task.FromResult(persistedExisting);
+        }
+
+        using var append = connection.CreateCommand();
+        append.Transaction = tx;
+        append.CommandText =
+            """
+            INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+            SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+            FROM "RunEvents" WHERE "RunId" = $runId
+            RETURNING "Sequence";
+            """;
+        append.Parameters.AddWithValue("$runId", runId);
+        append.Parameters.AddWithValue("$type", evt.Type);
+        append.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+        append.Parameters.AddWithValue("$createdAt",
+            evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+        var terminalSequence = Convert.ToInt32(append.ExecuteScalar(), CultureInfo.InvariantCulture);
+        using var projected = connection.CreateCommand();
+        projected.Transaction = tx;
+        projected.CommandText =
+            """
+            UPDATE terminal_run_outcome_projections
+               SET event_sequence = $sequence
+             WHERE run_id = $runId AND lifecycle_generation = $generation;
+            """;
+        projected.Parameters.AddWithValue("$runId", runId);
+        projected.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        projected.Parameters.AddWithValue("$sequence", terminalSequence);
+        projected.ExecuteNonQuery();
+        tx.Commit();
+        var persisted = evt with { Sequence = terminalSequence };
+        PublishDurableEvent(runId, persisted);
+        return Task.FromResult(persisted);
+    }
+
+    public Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default)
+    {
+        if (canonicalEvent.Sequence <= 0 || canonicalEvent.Type != outcome.EventType)
+            return Task.FromResult(false);
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var existing = connection.CreateCommand();
+        existing.Transaction = tx;
+        existing.CommandText =
+            """
+            SELECT 1
+            FROM terminal_run_outcome_projections projection
+            JOIN "RunEvents" event
+              ON event."RunId" = projection.run_id
+             AND event."Sequence" = projection.event_sequence
+            WHERE projection.run_id = $runId
+              AND projection.lifecycle_generation = $generation
+              AND projection.event_sequence = $sequence
+              AND event."EventType" = $type;
+            """;
+        existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        existing.Parameters.AddWithValue("$sequence", canonicalEvent.Sequence);
+        existing.Parameters.AddWithValue("$type", canonicalEvent.Type);
+        if (existing.ExecuteScalar() is null)
+            return Task.FromResult(false);
+        tx.Commit();
+        return Task.FromResult(true);
     }
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
@@ -192,7 +316,10 @@ public sealed class SqliteRunEventStream : IRunEventStream
             lastReplayed = evt.Sequence;
         }
 
-        if (ShouldStopAfterReplayBatch(replayBatch))
+        if (ShouldStopAfterReplayBatch(
+            replayBatch,
+            lastReplayed,
+            GetCurrentLifecycleTerminalProjection(runId)))
             yield break; // Completed/parked run: drain durable diagnostics, then terminate cleanly.
 
         if (channel is null)
@@ -206,17 +333,35 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 continue;
             yield return evt;
             lastReplayed = evt.Sequence;
-            if (TerminalTypes.Contains(evt.Type))
+            if (ShouldStopAfterReplayBatch(
+                [evt],
+                lastReplayed,
+                GetCurrentLifecycleTerminalProjection(runId)))
                 yield break;
         }
     }
 
-    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    private static bool ShouldStopAfterReplayBatch(
+        IReadOnlyList<RunEvent> events,
+        int lastDeliveredSequence,
+        CurrentLifecycleTerminalProjection? currentLifecycle)
     {
+        if (currentLifecycle is not null)
+        {
+            if (!currentLifecycle.IsTerminal)
+                return false;
+
+            if (currentLifecycle.EventSequence is int eventSequence)
+                return lastDeliveredSequence >= eventSequence;
+
+            if (currentLifecycle.HasTerminalOutboxOutcome)
+                return false;
+        }
+
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
-            if (TerminalTypes.Contains(events[i].Type))
+            if (RunEventTerminality.IsTerminal(events[i]))
                 terminalIndex = i;
         }
 
@@ -224,6 +369,18 @@ public sealed class SqliteRunEventStream : IRunEventStream
             return false;
 
         return true;
+    }
+
+    private void PublishDurableEvent(string runId, RunEvent evt)
+    {
+        lock (_channelsGate)
+        {
+            if (!_completedRuns.ContainsKey(runId)
+                && _channels.TryGetValue(runId, out var channel))
+            {
+                channel.Writer.TryWrite(evt);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -282,6 +439,100 @@ public sealed class SqliteRunEventStream : IRunEventStream
             SingleReader = false,
             SingleWriter = false,
         });
+
+    private void EnsureTerminalOutcomeProjectionTable()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS terminal_run_outcome_projections (
+                run_id TEXT NOT NULL,
+                lifecycle_generation INTEGER NOT NULL,
+                event_sequence INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (run_id, lifecycle_generation)
+            );
+            """;
+        command.ExecuteNonQuery();
+        command.CommandText =
+            "ALTER TABLE terminal_run_outcome_projections ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0;";
+        try { command.ExecuteNonQuery(); }
+        catch (SqliteException) { }
+    }
+
+    private CurrentLifecycleTerminalProjection? GetCurrentLifecycleTerminalProjection(string runId)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_runConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT status, lifecycle_generation FROM runs WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$runId", runId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+
+            var status = reader.GetString(0);
+            if (status is not ("merged" or "declined" or "failed" or "completed"
+                or "merge_failed" or "assemble_ready" or "cancelled"))
+            {
+                return new CurrentLifecycleTerminalProjection(false, null);
+            }
+
+            var lifecycleGeneration = reader.GetInt32(1);
+            reader.Dispose();
+            using var eventConnection = new SqliteConnection(_connectionString);
+            eventConnection.Open();
+            using var projection = eventConnection.CreateCommand();
+            projection.CommandText =
+                """
+                SELECT event_sequence
+                FROM terminal_run_outcome_projections
+                WHERE run_id = $runId AND lifecycle_generation = $generation;
+                """;
+            projection.Parameters.AddWithValue("$runId", runId);
+            projection.Parameters.AddWithValue("$generation", lifecycleGeneration);
+            var eventSequence = projection.ExecuteScalar();
+            var hasTerminalOutboxOutcome = false;
+            if (eventSequence is null or DBNull)
+            {
+                try
+                {
+                    command.CommandText =
+                        """
+                        SELECT 1
+                        FROM terminal_run_outcomes
+                        WHERE run_id = $runId AND lifecycle_generation = $generation
+                        LIMIT 1;
+                        """;
+                    command.Parameters.Clear();
+                    command.Parameters.AddWithValue("$runId", runId);
+                    command.Parameters.AddWithValue("$generation", lifecycleGeneration);
+                    hasTerminalOutboxOutcome = command.ExecuteScalar() is not null;
+                }
+                catch (SqliteException)
+                {
+                    // Older local stores did not persist terminal-outcome outbox rows.
+                }
+            }
+            return new CurrentLifecycleTerminalProjection(
+                true,
+                eventSequence is null or DBNull ? null : Convert.ToInt32(eventSequence, CultureInfo.InvariantCulture),
+                hasTerminalOutboxOutcome);
+        }
+        catch (SqliteException)
+        {
+            // Retain legacy event-only behavior where no run database is available.
+            return null;
+        }
+    }
+
+    private sealed record CurrentLifecycleTerminalProjection(
+        bool IsTerminal,
+        int? EventSequence,
+        bool HasTerminalOutboxOutcome = false);
 
     /// <summary>
     /// Synchronous durable insert into the RunEvents table. Returns the sequence assigned to the

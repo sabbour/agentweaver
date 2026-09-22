@@ -28,6 +28,7 @@ public sealed class WorkflowRestartService
     private readonly RunWatchLoopService _watchLoop;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunEventStream? _eventStream;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly ILogger<WorkflowRestartService> _logger;
 
     public WorkflowRestartService(
@@ -40,7 +41,8 @@ public sealed class WorkflowRestartService
         RunWatchLoopService watchLoop,
         IServiceScopeFactory scopeFactory,
         ILogger<WorkflowRestartService> logger,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -51,6 +53,7 @@ public sealed class WorkflowRestartService
         _watchLoop = watchLoop;
         _scopeFactory = scopeFactory;
         _eventStream = eventStream;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _logger = logger;
     }
 
@@ -364,8 +367,11 @@ public sealed class WorkflowRestartService
         bool retryable = false)
     {
         var runId = run.Id.ToString();
-        var changed = await _runStore.TrySetTerminalStatusAsync(
-            run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, reason, ct).ConfigureAwait(false);
+        var changed = await _runStore.TrySetTerminalOutcomeAsync(
+            run.Id,
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+            reason,
+            ct).ConfigureAwait(false);
         if (!changed)
         {
             _logger.LogWarning(
@@ -375,9 +381,8 @@ public sealed class WorkflowRestartService
         }
 
         entry ??= _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-        await RecordRecoveryEventAsync(runId, entry, EventTypes.RunFailed, new { reason, retryable }, ct)
-            .ConfigureAwait(false);
-        _streamStore.Complete(runId);
+        if (_terminalOutcomeProjector is not null)
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
         _ = FirePostRunScribeAsync(runId);
 
         if (cleanupWorktree)

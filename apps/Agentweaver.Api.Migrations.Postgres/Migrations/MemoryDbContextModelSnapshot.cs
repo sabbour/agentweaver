@@ -2120,6 +2120,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_expires_at");
 
+                    b.Property<int>("LifecycleGeneration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("lifecycle_generation");
+
                     b.Property<string>("MergeConflicts")
                         .HasColumnType("text")
                         .HasColumnName("merge_conflicts");
@@ -2720,6 +2726,66 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("SubtaskId");
 
                     b.ToTable("SubtaskDependencies");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.TerminalRunOutcomeProjectionRecord", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("LifecycleGeneration")
+                        .HasColumnType("integer")
+                        .HasColumnName("lifecycle_generation");
+
+                    b.Property<int>("EventSequence")
+                        .HasColumnType("integer")
+                        .HasColumnName("event_sequence");
+
+                    b.HasKey("RunId", "LifecycleGeneration");
+
+                    b.ToTable("terminal_run_outcome_projections", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.TerminalRunOutcomeRecord", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("LifecycleGeneration")
+                        .HasColumnType("integer")
+                        .HasColumnName("lifecycle_generation");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_type");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payload_json");
+
+                    b.Property<DateTimeOffset?>("ProjectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("projected_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.HasKey("RunId", "LifecycleGeneration");
+
+                    b.HasIndex("ProjectedAt", "OccurredAt")
+                        .HasDatabaseName("IX_terminal_run_outcomes_unprojected");
+
+                    b.ToTable("terminal_run_outcomes", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.UserCopilotBindingRecord", b =>

@@ -150,6 +150,8 @@ builder.Services.AddSingleton<SqliteDb>();
 }
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
+builder.Services.AddSingleton<TerminalOutcomeProjector>();
+builder.Services.AddHostedService<TerminalOutcomeRecoveryService>();
 builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>();
 // IRunEventStream is registered conditionally in the Database:Provider block below.
 // SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + advisory lock).

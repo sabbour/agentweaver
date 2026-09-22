@@ -839,7 +839,12 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         };
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        {
+            if (TerminalRunOutcome.IsTerminal(status))
+                (await _runStore.TerminalizeForTestAsync(id, status)).Should().BeTrue();
+            else
+                await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        }
         return id.ToString();
     }
 
@@ -939,7 +944,12 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         };
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateStatusAsync(run.Id, status, DateTimeOffset.UtcNow);
+        {
+            if (TerminalRunOutcome.IsTerminal(status))
+                (await _runStore.TerminalizeForTestAsync(run.Id, status)).Should().BeTrue();
+            else
+                await _runStore.UpdateStatusAsync(run.Id, status, DateTimeOffset.UtcNow);
+        }
     }
 
     private static void CreateRunEventsTable(string memoryDbPath)

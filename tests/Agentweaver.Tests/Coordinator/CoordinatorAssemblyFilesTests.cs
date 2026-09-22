@@ -163,8 +163,8 @@ public sealed class CoordinatorAssemblyFilesTests : IDisposable
 
         await runStore.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount: 0);
 
-        if (status != RunStatus.AwaitingReview)
-            await runStore.UpdateResultAsync(runId, status, result, now);
+        if (status is not (RunStatus.AwaitingReview or RunStatus.InProgress))
+            (await runStore.TerminalizeForTestAsync(runId, status, result, now)).Should().BeTrue();
     }
 
     private string CreateTempGitRepo()

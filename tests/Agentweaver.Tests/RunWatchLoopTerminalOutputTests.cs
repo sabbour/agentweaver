@@ -202,6 +202,18 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         var scope = _factory.Services.CreateScope();
         var svc = scope.ServiceProvider.GetRequiredService<RunWatchLoopService>();
         var runId = RunId.New().ToString();
+        var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        runStore.InsertAsync(new Agentweaver.Domain.Run
+        {
+            Id = RunId.Parse(runId),
+            RepositoryPath = "test",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "terminal output test",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = Agentweaver.Domain.RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        }).GetAwaiter().GetResult();
         var streamStore = scope.ServiceProvider.GetRequiredService<RunStreamStore>();
         var entry = streamStore.Create(runId, ReviewWebApplicationFactory.OwnerUser);
         return (svc, entry, runId);

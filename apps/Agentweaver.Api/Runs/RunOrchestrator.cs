@@ -30,6 +30,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private readonly IConfiguration _configuration;
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly IRunEventStream? _eventStream;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly ILogger<RunOrchestrator> _logger;
@@ -127,7 +128,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             configuration,
             logger,
             runAgentHostContextResolver: null,
-            eventStream: eventStream)
+            eventStream: eventStream,
+            terminalOutcomeProjector: null)
     {
     }
 
@@ -144,7 +146,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         IRunAgentHostContextResolver? runAgentHostContextResolver,
         IRunEventStream? eventStream = null,
         AiExecutionPlanAccessor? executionPlanAccessor = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -156,6 +159,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         _configuration = configuration;
         _runAgentHostContextResolver = runAgentHostContextResolver;
         _eventStream = eventStream;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _executionPlanAccessor = executionPlanAccessor;
         _providerSnapshots = providerSnapshots;
         _logger = logger;
@@ -289,6 +293,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        // Reserve the canonical child row before resolving providers or creating a worktree. Every
+        // fallible launch path can now terminalize this generation instead of manufacturing a
+        // placeholder failed row after the fact.
+        var reserved = run with
+        {
+            Status = RunStatus.Pending,
+            StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
+            EndedAt = null,
+            Result = null,
+        };
+        await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+
         var childProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
@@ -326,7 +342,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         var launchCompleted = false;
         try
         {
-            await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            await _runStore.UpdateToInProgressAsync(
+                started.Id, started.WorktreePath!, started.WorktreeBranch!, started.StartedAt, ct).ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
             entry.RecordNext(
@@ -965,16 +982,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var result = $"workflow_bind_failed: {ex.Message}";
             try
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
-                    .ConfigureAwait(false);
+                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    runId,
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    new { reason = "workflow_bind_failed", detail = ex.Message },
+                    DateTimeOffset.UtcNow,
+                    result,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_bind_failed",
-                    detail = ex.Message,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -990,16 +1008,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var detail = RedactFailureReason(ex);
             try
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
-                    .ConfigureAwait(false);
+                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    runId,
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    new { reason = "workflow_start_failed", detail },
+                    DateTimeOffset.UtcNow,
+                    detail,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_start_failed",
-                    detail,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -1335,43 +1354,36 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             var now = DateTimeOffset.UtcNow;
 
-            // Insert the FAILED row first; if another launcher already inserted the row, atomically
-            // fall back to the terminal CAS update. This avoids a racy SELECT-then-INSERT window.
-            var failedRow = run with
+            var reserved = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+            if (reserved is null)
             {
-                Status = RunStatus.Failed,
-                StartedAt = run.StartedAt == default ? now : run.StartedAt,
-                EndedAt = now,
-                Result = reason,
-            };
-
-            try
-            {
-                await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
-                EmitCompletedMetric(failedRow, "failed");
-                EmitErrorMetric(failedRow, "child_launch_failed");
-            }
-            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
-            {
-                var changed = await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, now, reason, ct)
-                    .ConfigureAwait(false);
-                if (changed)
-                {
-                    var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
-                    EmitCompletedMetric(stored ?? failedRow, "failed");
-                    EmitErrorMetric(stored ?? failedRow, "child_launch_failed");
-                }
+                _logger.LogError(
+                    "Cannot terminalize unreserved child run {RunId}; launch reservation did not persist",
+                    runId);
+                return;
             }
 
-            // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
-            // and close the stream — exactly the store/stream/event pattern RunWatchLoopService uses.
-            var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
-            _streamStore.Complete(runId);
+            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
+
+            var outcome = TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { reason },
+                now,
+                reserved.LifecycleGeneration);
+            var changed = await _runStore.TrySetTerminalOutcomeAsync(run.Id, outcome, reason, ct)
+                .ConfigureAwait(false);
+            if (changed)
+            {
+                var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+                EmitCompletedMetric(stored ?? reserved, "failed");
+                EmitErrorMetric(stored ?? reserved, "child_launch_failed");
+            }
+
+            await ProjectTerminalOutcomeAsync(changed, ct).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
-
-            await PersistFailedRunEventsAsync(runId, entry, ct).ConfigureAwait(false);
         }
+
         catch (Exception ex)
         {
             // Never propagate: the dispatch loop must keep finalizing the subtask regardless.
@@ -1380,6 +1392,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 runId);
         }
     }
+
+    private Task ProjectTerminalOutcomeAsync(bool changed, CancellationToken ct = default) =>
+        changed && _terminalOutcomeProjector is not null
+            ? _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore)
+            : Task.CompletedTask;
 
     /// <summary>
     /// Normalizes an exception into a durable, user-visible failure reason that is safe to persist

@@ -63,8 +63,9 @@ public sealed class MergeCoordinator : IMergeCoordinator
 
     public async Task<bool> CompleteMergeAsync(string runId, string mergeResult, CancellationToken ct)
     {
-        return await _runStore.CompleteMergingAsync(
-            RunId.Parse(runId), RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult, null, CancellationToken.None).ConfigureAwait(false);
+        return await CompleteTerminalMergeAsync(
+            RunId.Parse(runId), RunStatus.Merged, EventTypes.MergeCompleted,
+            new { merge_result = mergeResult }, mergeResult, null, null, CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task RevertMergeAsync(string runId, CancellationToken ct)
@@ -74,8 +75,9 @@ public sealed class MergeCoordinator : IMergeCoordinator
 
     public async Task<bool> FailMergeAsync(string runId, string mergeResult, string? mergeConflictsJson, CancellationToken ct)
     {
-        return await _runStore.CompleteMergingAsync(
-            RunId.Parse(runId), RunStatus.MergeFailed, DateTimeOffset.UtcNow, mergeResult, mergeConflictsJson, CancellationToken.None).ConfigureAwait(false);
+        return await CompleteTerminalMergeAsync(
+            RunId.Parse(runId), RunStatus.MergeFailed, EventTypes.MergeFailed,
+            new { merge_result = mergeResult, conflicting_files = mergeConflictsJson }, mergeResult, mergeConflictsJson, null, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -104,9 +106,10 @@ public sealed class MergeCoordinator : IMergeCoordinator
             {
                 case MergeResultKind.Merged:
                     var mergeResult = $"merged:{result.CommitHash}";
-                    var completedMerge = await _runStore.CompleteMergingAsync(
-                        RunId.Parse(input.RunId), RunStatus.Merged, DateTimeOffset.UtcNow, mergeResult,
-                        null, CancellationToken.None, result.CommitHash).ConfigureAwait(false);
+                    var completedMerge = await CompleteTerminalMergeAsync(
+                        RunId.Parse(input.RunId), RunStatus.Merged, EventTypes.MergeCompleted,
+                        new { merged_commit_hash = result.CommitHash, previous_head_sha = result.PreviousHeadSha, merge_mode = result.MergeMode },
+                        mergeResult, null, result.CommitHash, CancellationToken.None).ConfigureAwait(false);
                     if (!completedMerge)
                         _logger.LogWarning("CompleteMergeAsync CAS returned false for run {RunId} — possible concurrency conflict", input.RunId);
 
@@ -167,6 +170,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
                 default:
                     throw new InvalidOperationException($"Unexpected merge result kind: {result.Kind}");
             }
+
         }
         catch (Exception ex) when (ex is not InvalidOperationException)
         {
@@ -182,6 +186,31 @@ public sealed class MergeCoordinator : IMergeCoordinator
         {
             lockResult.Release();
         }
+    }
+
+    private async Task<bool> CompleteTerminalMergeAsync(
+        RunId runId,
+        RunStatus status,
+        string eventType,
+        object payload,
+        string result,
+        string? mergeConflicts,
+        string? mergedCommitHash,
+        CancellationToken ct)
+    {
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return false;
+
+        return await _runStore.TryMutateTerminalOutcomeAsync(
+            runId,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(status, eventType, payload, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                result,
+                new HashSet<RunStatus> { RunStatus.Merging },
+                MergeConflicts: mergeConflicts,
+                MergedCommitHash: mergedCommitHash),
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>

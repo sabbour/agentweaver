@@ -608,7 +608,7 @@ public sealed class CastingService
         {
             _logger.LogWarning(ex,
                 "Model-assisted casting run {RunId} failed for project {ProjectId}", runId, projectId);
-            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, ex.Message, DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            try { await FinalizeCastRunAsync(castRunId, RunStatus.Failed, ex.Message, ct).ConfigureAwait(false); }
             catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model run failed to complete.");
         }
@@ -619,7 +619,7 @@ public sealed class CastingService
             _logger.LogWarning(
                 "Model-assisted casting run {RunId} produced no parseable role selections for project {ProjectId}",
                 runId, projectId);
-            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, "No parseable role selections", DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            try { await FinalizeCastRunAsync(castRunId, RunStatus.Failed, "No parseable role selections", ct).ConfigureAwait(false); }
             catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model did not return a valid role selection.");
         }
@@ -640,7 +640,7 @@ public sealed class CastingService
 
         if (resolved.Count == 0)
         {
-            try { await _runStore.UpdateResultAsync(castRunId, RunStatus.Failed, "No recognized role ids selected", DateTimeOffset.UtcNow, ct).ConfigureAwait(false); }
+            try { await FinalizeCastRunAsync(castRunId, RunStatus.Failed, "No recognized role ids selected", ct).ConfigureAwait(false); }
             catch { /* best-effort */ }
             throw new ModelRunFailedException("The casting model selected no recognized role ids.");
         }
@@ -691,9 +691,11 @@ public sealed class CastingService
         // Mark the casting run as completed so it surfaces in /api/projects/{id}/runs
         try
         {
-            await _runStore.UpdateResultAsync(castRunId, RunStatus.Completed,
+            await FinalizeCastRunAsync(
+                castRunId,
+                RunStatus.Completed,
                 $"Proposed {proposedMembers.Count} member(s), proposal {proposal.ProposalId}",
-                DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -708,6 +710,27 @@ public sealed class CastingService
     }
 
     private sealed record RoleSelection(string RoleId, string? Reason);
+
+    private async Task FinalizeCastRunAsync(
+        RunId runId,
+        RunStatus status,
+        string result,
+        CancellationToken ct)
+    {
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            throw new InvalidOperationException($"Casting run {runId} does not exist.");
+
+        var occurredAt = DateTimeOffset.UtcNow;
+        var outcome = status == RunStatus.Failed
+            ? TerminalRunOutcome.Create(
+                status, EventTypes.RunFailed, new { reason = result }, occurredAt, run.LifecycleGeneration)
+            : TerminalRunOutcome.Create(
+                status, EventTypes.RunCompleted, new { result }, occurredAt, run.LifecycleGeneration);
+        var changed = await _runStore.TrySetTerminalOutcomeAsync(runId, outcome, result, ct).ConfigureAwait(false);
+        if (changed && _runEventStream is not null)
+            await _runEventStream.AppendTerminalOutcomeAsync(runId.ToString(), outcome, ct).ConfigureAwait(false);
+    }
 
     private static (string? Rationale, List<RoleSelection> Selections) ParseRoleSelections(string modelOutput)
     {

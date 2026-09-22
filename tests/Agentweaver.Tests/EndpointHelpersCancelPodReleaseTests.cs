@@ -47,10 +47,11 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         var streamStore = new RunStreamStore();
         streamStore.Create(runId.ToString(), "alice");
         var registry = new RunWorkflowRegistry();
+        var runStore = new NoOpRunStore();
 
         await EndpointHelpers.CancelRunWorkAsync(
             run,
-            new NoOpRunStore(),
+            runStore,
             streamStore,
             registry,
             new NoOpWorktreeOperations(),
@@ -61,6 +62,10 @@ public sealed class EndpointHelpersCancelPodReleaseTests
 
         lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
             "cancelling a run (via DELETE or /cancel) must reliably tear down the remote AgentHost pod, not just the local token");
+        runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
+            outcome.Status == RunStatus.Failed
+            && outcome.EventType == EventTypes.RunFailed
+            && outcome.Payload.GetProperty("reason").GetString() == "abandoned");
     }
 
     [Fact]
@@ -141,13 +146,22 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         (await inner.GetPreviewPublicationLeaseAsync(runId)).Should().BeNull();
     }
 
-    /// <summary>Minimal <see cref="IRunStore"/> fake — only <see cref="TrySetTerminalStatusAsync"/> is
+    /// <summary>Minimal <see cref="IRunStore"/> fake — only <see cref="TrySetTerminalOutcomeAsync"/> is
     /// exercised by <see cref="EndpointHelpers.CancelRunWorkAsync"/>; every other member throws.</summary>
     private sealed class NoOpRunStore : IRunStore
     {
+        public TerminalRunOutcome? TerminalOutcome { get; private set; }
+
         public Task<bool> TrySetTerminalStatusAsync(
             RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
-            => Task.FromResult(true);
+            => throw new NotSupportedException("Cancellation must persist a typed terminal outcome.");
+
+        public Task<bool> TrySetTerminalOutcomeAsync(
+            RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
+        {
+            TerminalOutcome = outcome;
+            return Task.FromResult(true);
+        }
 
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => Task.FromResult<Run?>(null);

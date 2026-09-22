@@ -137,6 +137,56 @@ public sealed class PreviewPublicationLeaseRunStore(
         return await Inner.TrySetTerminalStatusAsync(runId, toStatus, endedAt, result, ct).ConfigureAwait(false);
     }
 
+    public async Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default)
+    {
+        return await TryAfterPreviewPublicationAsync(
+            runId, () => Inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct), ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunMutation mutation,
+        CancellationToken ct = default)
+    {
+        return await TryAfterPreviewPublicationAsync(
+            runId, () => Inner.TryMutateTerminalOutcomeAsync(runId, mutation, ct), ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryAfterPreviewPublicationAsync(
+        RunId runId, Func<Task<bool>> transition, CancellationToken ct)
+    {
+        while (true)
+        {
+            await AwaitPreviewPublicationAsync(runId, ct).ConfigureAwait(false);
+            if (await transition().ConfigureAwait(false))
+                return true;
+
+            var leaseUntil = await Inner.GetPreviewPublicationLeaseAsync(runId, ct).ConfigureAwait(false);
+            if (leaseUntil is null || leaseUntil <= _time.GetUtcNow())
+                return false;
+        }
+    }
+
+    public Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default) =>
+        Inner.GetUnprojectedTerminalOutcomesAsync(ct);
+
+    public Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct);
+
+    public Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default) =>
+        Inner.TryAdoptLegacyTerminalOutcomeAsync(runId, outcome, ct);
+
     // ---- Lease management: never defers, or publication could not claim its own lease. ----
 
     public Task<bool> TryBeginPreviewPublicationAsync(
@@ -185,6 +235,9 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
+
+    public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.TryReopenTerminalToInProgressAsync(runId, ct);
 
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

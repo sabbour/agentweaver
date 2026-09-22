@@ -389,7 +389,7 @@ public sealed class SqliteBacklogTaskStoreTests
             DateTimeOffset.UtcNow);
         blockedClaim.Should().Be(ClaimReserveResult.Lost);
 
-        await runStore.UpdateStatusAsync(prerequisiteRun.Id, RunStatus.Merged, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(prerequisiteRun.Id, RunStatus.Merged)).Should().BeTrue();
 
         (await store.ListReadyForClaimAsync(project.Id, 10)).Select(t => t.Id).Should().Equal(dependentTask.Id);
         (await store.CountReadyForPickupAsync()).Should().Be(1);

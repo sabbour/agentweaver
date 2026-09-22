@@ -226,6 +226,63 @@ public sealed class EfRunEventStreamTests : IDisposable
             EventTypes.RunAssembleReady, EventTypes.CoordinatorAssemblyFailed);
     }
 
+    [Fact]
+    public async Task AppendTerminalOutcome_IdenticalPayloadAcrossGenerations_PersistsOnePerGeneration()
+    {
+        var runId = "run-ef-reopened-identical-payload";
+        var stream = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" }, DateTimeOffset.UtcNow, 1);
+
+        await stream.AppendTerminalOutcomeAsync(runId, outcome);
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+
+        var events = await new EfRunEventStream(new TestMemoryDbContextFactory(_options))
+            .GetPersistedEventsAsync(runId);
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task DuplicateProviderTerminal_ReconnectsAtLinkedCurrentGenerationSequence()
+    {
+        const string runId = "run-ef-duplicate-provider";
+        var producer = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "outbox" }, DateTimeOffset.UtcNow, 2);
+        var canonical = await producer.AppendTerminalOutcomeAsync(runId, outcome);
+
+        (await producer.TryLinkTerminalOutcomeAsync(
+            runId, outcome, canonical)).Should().BeTrue();
+
+        var restarted = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var replayed = await ReplayWithTimeoutAsync(restarted, runId);
+        replayed.Should().ContainSingle().Which.Sequence.Should().Be(canonical.Sequence);
+        replayed.Should().ContainSingle().Which.Type.Should().Be(EventTypes.RunCompleted);
+
+        await using var verify = new MemoryDbContext(_options);
+        var projection = await verify.TerminalRunOutcomeProjections
+            .SingleAsync(x => x.RunId == runId && x.LifecycleGeneration == 2);
+        projection.EventSequence.Should().Be(canonical.Sequence);
+    }
+
+    [Fact]
+    public async Task DuplicateProviderTerminal_DoesNotClaimUnmappedSameTypeEvent()
+    {
+        const string runId = "run-ef-duplicate-provider-unmapped";
+        var stream = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var historical = await stream.AppendTerminalOutcomeAsync(runId, TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "same" }, DateTimeOffset.UtcNow, 1));
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "same" }, DateTimeOffset.UtcNow, 2);
+
+        (await stream.TryLinkTerminalOutcomeAsync(runId, outcome, historical)).Should().BeFalse(
+            "a generation-one projection cannot establish generation-two ownership");
+
+        await using var verify = new MemoryDbContext(_options);
+        (await verify.TerminalRunOutcomeProjections.CountAsync(x => x.RunId == runId)).Should().Be(1);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { }
