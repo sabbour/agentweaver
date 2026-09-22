@@ -92,6 +92,7 @@ function makeCluster({
     }
     if (args[0] === 'create') {
       lease = JSON.parse(options.input);
+      assert.deepEqual(lease.metadata.annotations, {});
       lease.metadata.uid = 'lease-uid';
       lease.metadata.resourceVersion = '1';
       return { json: structuredClone(lease) };

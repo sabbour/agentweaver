@@ -123,24 +123,39 @@ async function pollEvidence(client, runId, datasetId, signal, timeoutMs) {
   throw new Error(`${datasetId} did not emit the expected context-budget evidence within ${timeoutMs}ms.`);
 }
 
-async function cleanupDataset(client, lifecycle) {
+async function cleanupDataset(client, lifecycle, timeoutMs) {
   const errors = [];
   if (lifecycle.runId) {
-    const cancelled = await client.post(`/api/runs/${lifecycle.runId}/cancel`, {});
-    if (!cancelled.ok && cancelled.status !== 404) {
-      errors.push(`run ${lifecycle.runId} cancellation failed with status ${cancelled.status}`);
+    try {
+      const cancelled = await client.post(
+        `/api/runs/${lifecycle.runId}/cancel`,
+        {},
+        { signal: AbortSignal.timeout(timeoutMs) },
+      );
+      if (!cancelled.ok && cancelled.status !== 404) {
+        errors.push(`run ${lifecycle.runId} cancellation failed with status ${cancelled.status}`);
+      }
+    } catch (error) {
+      errors.push(`run ${lifecycle.runId} cancellation failed: ${error.message}`);
     }
   }
   if (lifecycle.projectId) {
-    const deleted = await client.del(`/api/projects/${lifecycle.projectId}?confirm=true`);
-    if (!deleted.ok && deleted.status !== 404) {
-      errors.push(`project ${lifecycle.projectId} deletion failed with status ${deleted.status}`);
+    try {
+      const deleted = await client.del(
+        `/api/projects/${lifecycle.projectId}?confirm=true`,
+        { signal: AbortSignal.timeout(timeoutMs) },
+      );
+      if (!deleted.ok && deleted.status !== 404) {
+        errors.push(`project ${lifecycle.projectId} deletion failed with status ${deleted.status}`);
+      }
+    } catch (error) {
+      errors.push(`project ${lifecycle.projectId} deletion failed: ${error.message}`);
     }
   }
   if (errors.length > 0) throw new AggregateError(errors.map((error) => new Error(error)), 'Dataset cleanup failed.');
 }
 
-async function runDataset(client, dataset, { signal, timeoutMs }) {
+async function runDataset(client, dataset, { signal, timeoutMs, cleanupTimeoutMs }) {
   const lifecycle = { projectId: null, runId: null };
   let primaryError = null;
   try {
@@ -159,10 +174,10 @@ async function runDataset(client, dataset, { signal, timeoutMs }) {
     throw error;
   } finally {
     try {
-      await cleanupDataset(client, lifecycle);
+      await cleanupDataset(client, lifecycle, cleanupTimeoutMs);
     } catch (cleanupError) {
       const messages = cleanupError.errors?.map((error) => error.message) ?? [cleanupError.message];
-      if (primaryError) primaryError.cleanupErrors = messages;
+      if (primaryError) primaryError.cleanupErrors = [...(primaryError.cleanupErrors ?? []), ...messages];
       else throw cleanupError;
     }
   }
@@ -174,6 +189,7 @@ export async function runContextBudgetPressure(client, options = {}) {
     results.push(await runDataset(client, dataset, {
       signal: options.signal,
       timeoutMs: options.timeoutMs ?? 120_000,
+      cleanupTimeoutMs: options.cleanupTimeoutMs ?? 15_000,
     }));
   }
   return { profile: PROFILE, results };

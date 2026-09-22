@@ -5,14 +5,14 @@ import { EventEmitter } from 'node:events';
 import { runContextBudgetPressure } from '../lib/context-budget-pressure.mjs';
 import { main } from '../run-context-budget-pressure.mjs';
 
-function clientFor({ cleanupFailure = false } = {}) {
+function clientFor({ cleanupFailure = false, hangingCancellation = false } = {}) {
   let project = 0;
   let memory = 0;
   const calls = [];
   const runDataset = new Map();
   return {
     calls,
-    async post(path, body) {
+    async post(path, body, options = {}) {
       calls.push(['post', path, body]);
       if (path === '/api/projects') return response(201, { project_id: `project-${++project}` });
       if (path.includes('/memory/') && path.endsWith('/promote')) return response(200, {});
@@ -32,7 +32,14 @@ function clientFor({ cleanupFailure = false } = {}) {
         runDataset.set(runId, dataset);
         return response(201, { runId });
       }
-      if (path.endsWith('/cancel')) return response(cleanupFailure ? 500 : 200, {});
+      if (path.endsWith('/cancel')) {
+        if (hangingCancellation) {
+          return new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+          });
+        }
+        return response(cleanupFailure ? 500 : 200, {});
+      }
       throw new Error(`unexpected post ${path}`);
     },
     async get(path) {
@@ -86,6 +93,19 @@ test('scenario failure still reports run and project cleanup mismatch', async ()
       return true;
     },
   );
+});
+
+test('bounded dataset cleanup continues to project deletion after run cancellation stalls', async () => {
+  const client = clientFor({ hangingCancellation: true });
+  await assert.rejects(
+    runContextBudgetPressure(client, { timeoutMs: 1000, cleanupTimeoutMs: 10 }),
+    (error) => {
+      assert.match(error.message, /Dataset cleanup failed/);
+      assert.ok(error.errors.some((entry) => /cancellation failed/.test(entry.message)));
+      return true;
+    },
+  );
+  assert.equal(client.calls.some(([method, path]) => method === 'del' && path.includes('/api/projects/')), true);
 });
 
 test('runner signal cancellation remains primary while the profile restores', async () => {

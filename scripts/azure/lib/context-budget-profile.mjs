@@ -99,7 +99,7 @@ async function createLock(capture, namespace, kubeContext, owner, signal) {
   const lease = {
     apiVersion: 'coordination.k8s.io/v1',
     kind: 'Lease',
-    metadata: { name: LOCK_NAME, namespace },
+    metadata: { name: LOCK_NAME, namespace, annotations: {} },
     spec: {
       holderIdentity: owner,
       leaseDurationSeconds: 1800,
