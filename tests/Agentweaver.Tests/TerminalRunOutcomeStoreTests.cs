@@ -390,6 +390,54 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
+    public async Task RecoveryService_ExecuteAsync_YieldsBeforeRecoveryAndThenProjects()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "startup_recovery" },
+            DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "startup_recovery")).Should().BeTrue();
+
+        var projectionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new RecordingEventStream { TerminalAppendStarted = projectionStarted };
+        var service = new TerminalOutcomeRecoveryService(
+            new TerminalOutcomeProjector(store, stream, NullLogger<TerminalOutcomeProjector>.Instance),
+            NullLogger<TerminalOutcomeRecoveryService>.Instance);
+        var context = new QueuedSynchronizationContext();
+        var previousContext = SynchronizationContext.Current;
+        using var stopping = new CancellationTokenSource();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            var executeAsync = typeof(TerminalOutcomeRecoveryService).GetMethod(
+                "ExecuteAsync",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var execution = (Task)executeAsync!.Invoke(service, [stopping.Token])!;
+
+            execution.IsCompleted.Should().BeFalse();
+            projectionStarted.Task.IsCompleted.Should().BeFalse();
+            context.PendingCount.Should().Be(1);
+
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            context.RunOne();
+            await projectionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed);
+            stopping.Cancel();
+            var cancelled = async () => await execution;
+            await cancelled.Should().ThrowAsync<OperationCanceledException>();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            stopping.Cancel();
+        }
+    }
+
+    [Fact]
     public async Task Projector_StaleGenerationDoesNotCloseReopenedTerminalStream()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
@@ -600,5 +648,23 @@ public sealed class TerminalRunOutcomeStoreTests
             string runId, int fromSequence = 0, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<RunEvent>>(
                 Events.Where(evt => evt.Sequence > fromSequence).ToArray());
+    }
+
+    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _continuations = [];
+
+        public int PendingCount => _continuations.Count;
+
+        public override void Post(SendOrPostCallback d, object? state) =>
+            _continuations.Enqueue((d, state));
+
+        public void RunOne()
+        {
+            if (!_continuations.TryDequeue(out var continuation))
+                throw new InvalidOperationException("No queued continuation.");
+
+            continuation.Callback(continuation.State);
+        }
     }
 }

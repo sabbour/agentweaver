@@ -180,6 +180,7 @@ public sealed class TerminalOutcomeRecoveryService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await Task.Yield();
         await RecoverAsync(stoppingToken).ConfigureAwait(false);
         using var timer = new PeriodicTimer(RetryInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
