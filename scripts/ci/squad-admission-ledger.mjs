@@ -7,6 +7,7 @@ import {
   REQUIRED_REVIEW_SOURCES,
   assertAdmissionAuthority,
   resolveAdmissionAuthority,
+  resolveAdmissionReviewPolicy,
 } from './squad-admission-authority.mjs';
 
 export const LEDGER_KIND = 'agentweaver.squad-admission-findings/v2';
@@ -125,15 +126,17 @@ function validateCorrectiveReviews(reviews) {
   }
 }
 
-function assertRequiredReviewSources(sources) {
+function assertRequiredReviewSources(sources, requiredSources) {
   if (!Array.isArray(sources)) throw new Error('requiredReviewSources must match configured reviewer policy');
-  if (sources.length !== REQUIRED_REVIEW_SOURCES.length
-    || sources.some((source, index) => source !== REQUIRED_REVIEW_SOURCES[index])) {
+  if (sources.length !== requiredSources.length
+    || sources.some((source, index) => source !== requiredSources[index])) {
     throw new Error('requiredReviewSources must match configured reviewer policy');
   }
 }
 
-export function materializeLedger(input) {
+export function materializeLedger(input, {
+  requiredReviewSources = REQUIRED_REVIEW_SOURCES,
+} = {}) {
   if (!input || typeof input !== 'object') throw new Error('materialization input is required');
   const repository = required(input.repository, 'repository');
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error('repository must be owner/name');
@@ -143,8 +146,8 @@ export function materializeLedger(input) {
     branch: required(input.branch, 'branch'),
     headSha: sha(input.headSha, 'headSha'),
   };
-  assertRequiredReviewSources(input.requiredReviewSources);
-  const requiredSources = [...REQUIRED_REVIEW_SOURCES];
+  assertRequiredReviewSources(input.requiredReviewSources, requiredReviewSources);
+  const requiredSources = [...requiredReviewSources];
   if (!Array.isArray(input.reviews)) throw new Error('reviews must be an array');
   if (!Array.isArray(input.validations) || input.validations.length === 0) throw new Error('validations must contain structured exact-head evidence');
 
@@ -195,7 +198,9 @@ export function materializeLedger(input) {
 
 export function validateAdmissionLedger(ledger, expected) {
   if (!ledger || ledger.kind !== LEDGER_KIND) throw new Error(`kind must be ${LEDGER_KIND}`);
-  const materialized = materializeLedger(ledger);
+  const materialized = materializeLedger(ledger, {
+    requiredReviewSources: expected.requiredReviewSources ?? REQUIRED_REVIEW_SOURCES,
+  });
   if (materialized.repository !== expected.repository) throw new Error('repository does not match');
   if (materialized.prNumber !== expected.prNumber) throw new Error('PR number does not match');
   if (materialized.headSha !== sha(expected.headSha, 'expected.headSha')) throw new Error('ledger evidence is stale for the live PR head');
@@ -239,6 +244,8 @@ export async function materializeAdmissionLedger(input, {
 } = {}) {
   const configuredAuthority = authority ?? await resolveAdmissionAuthority({ cwd });
   const trusted = await assertAdmissionAuthority(configuredAuthority, { teamRoot, stateBackend });
+  const requiredReviewSources = authority?.requiredReviewSources
+    ?? await resolveAdmissionReviewPolicy({ cwd, headSha: input.headSha });
   const backend = trusted.stateBackend;
   const root = trusted.teamRoot;
   const adapter = backend === 'local' || backend === 'worktree'
@@ -248,11 +255,11 @@ export async function materializeAdmissionLedger(input, {
     throw new Error(`state backend ${backend} requires an explicit same-backend atomic adapter`);
   }
 
-  const ledger = materializeLedger(input);
+  const ledger = materializeLedger(input, { requiredReviewSources });
   const key = `admission/findings/${ledger.repository}/${ledger.prNumber}.json`;
   await adapter.writeAtomic(key, `${JSON.stringify(ledger, null, 2)}\n`);
   const persisted = JSON.parse(await adapter.read(key));
-  validateAdmissionLedger(persisted, ledger);
+  validateAdmissionLedger(persisted, { ...ledger, requiredReviewSources });
   return { key, ledger: persisted, stateBackend: backend, teamRoot: root };
 }
 

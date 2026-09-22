@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { LEDGER_KIND as KIND, validateAdmissionLedger } from './squad-admission-ledger.mjs';
-import { assertAdmissionAuthority, resolveAdmissionAuthority } from './squad-admission-authority.mjs';
+import {
+  assertAdmissionAuthority,
+  resolveAdmissionAuthority,
+  resolveAdmissionReviewPolicy,
+} from './squad-admission-authority.mjs';
 
 export { KIND };
 const SHA = /^[0-9a-f]{40}$/iu;
@@ -37,11 +41,13 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
   const authority = dependencies.authority ?? await resolveAdmissionAuthority({ cwd: dependencies.cwd });
   const headSha = exactSha(dependencies.headSha, 'launcher-attested live PR head');
+  const requiredReviewSources = authority.requiredReviewSources
+    ?? await resolveAdmissionReviewPolicy({ cwd: dependencies.cwd, headSha });
   const ledger = dependencies.readLedger
     ? await dependencies.readLedger(authority, repository, prNumber)
     : await readAuthoritativeLedger(authority, repository, prNumber, dependencies.stateAdapter);
   return {
-    ...validateAdmissionPreflight(ledger, { repository, prNumber, headSha }),
+    ...validateAdmissionPreflight(ledger, { repository, prNumber, headSha, requiredReviewSources }),
     stateDirectory: authority.teamRoot,
     stateBackend: authority.stateBackend,
   };

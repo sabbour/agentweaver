@@ -418,8 +418,8 @@ validation evidence.
   --head-sha <live-head-sha> --team-root <absolute-team-root>
   --state-backend <backend>`. The preflight resolves the authoritative root and backend
   from the primary-checkout Squad configuration and rejects mismatched, unconfigured, or
-  non-canonical caller values. It uses the repository's fixed post-implementation reviewer
-  policy rather than ledger-declared requirements
+  non-canonical caller values. It derives the applicable post-implementation reviewer
+  classes from repository policy and the exact candidate diff rather than ledger-declared requirements
   and requires the coordinator-owned v2 findings ledger to contain every
   declared review source, exact-head validation, and resolved required finding or explicit
   waiver. For non-local backends, call the exported functions with the runtime-owned

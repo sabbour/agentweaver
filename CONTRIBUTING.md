@@ -76,9 +76,10 @@ they are not Agentweaver sign-in providers.
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      Non-local backends call the exported materialization and preflight functions with
      their runtime-owned adapter; the CLI never falls back to filesystem access.
-     The required post-implementation reviewer classes come from repository policy, not
-     ledger input; evidence must contain distinct, independently issued exact-head
-     approvals for code review, security review, and Ponytail review.
+     The required post-implementation reviewer classes come from repository policy and
+     the exact candidate diff, not ledger input. Multi-file and high-risk changes require
+     distinct, independently issued exact-head approvals for code review, security review,
+     and Ponytail review; one low-risk documentation file uses one focused code review.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion

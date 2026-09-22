@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
+import { buildSpawnPlan } from '../azure/lib/exec.mjs';
 
 export const REQUIRED_REVIEW_SOURCES = Object.freeze([
   'code-review',
@@ -61,6 +63,45 @@ function normalizeBackend(value) {
   if (!['local', 'orphan', 'two-layer'].includes(backend)) {
     throw new Error(`unsupported configured state backend: ${backend}`);
   }
+
+  function spawnCommand(argv, cwd) {
+    const plan = buildSpawnPlan(argv[0], argv.slice(1));
+    return new Promise((resolveResult, reject) => {
+      const child = spawn(plan.file, plan.spawnArgs, { ...plan.spawnOpts, cwd, windowsHide: true });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', reject);
+      child.on('close', (exitCode) => resolveResult({ exitCode, stdout, stderr }));
+    });
+  }
+
+  export function requiredReviewSourcesForChanges(changedFiles) {
+    if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+      throw new Error('changed files are required to resolve reviewer policy');
+    }
+    const file = changedFiles[0]?.replaceAll('\\', '/');
+    const singleLowRiskDocument = changedFiles.length === 1
+      && file.endsWith('.md')
+      && !file.startsWith('.github/agents/')
+      && !['CONTRIBUTING.md', 'RELEASING.md', '.github/dev-branch-protection.md'].includes(file);
+    return singleLowRiskDocument ? ['code-review'] : [...REQUIRED_REVIEW_SOURCES];
+  }
+
+  export async function resolveAdmissionReviewPolicy({
+    cwd = process.cwd(),
+    headSha,
+    baseRef = 'origin/dev',
+  } = {}, dependencies = {}) {
+    if (!/^[0-9a-f]{40}$/iu.test(required(headSha, 'candidate SHA'))) {
+      throw new Error('candidate SHA must be a 40-character SHA');
+    }
+    const run = dependencies.run ?? spawnCommand;
+    const result = await run(['git', 'diff', '--name-only', '--diff-filter=ACMR', `${baseRef}...${headSha}`], cwd);
+    if (result.exitCode !== 0) throw new Error(`unable to resolve admission review policy: ${result.stderr.trim()}`);
+    return requiredReviewSourcesForChanges(result.stdout.split(/\r?\n/u).filter(Boolean));
+  }
   return backend;
 }
 
@@ -92,7 +133,6 @@ export async function resolveAdmissionAuthority({
   return {
     teamRoot,
     stateBackend: normalizeBackend(teamConfig.stateBackend),
-    requiredReviewSources: REQUIRED_REVIEW_SOURCES,
   };
 }
 
@@ -110,6 +150,5 @@ export async function assertAdmissionAuthority(authority, {
   return {
     teamRoot: configuredRoot,
     stateBackend: configuredBackend,
-    requiredReviewSources: REQUIRED_REVIEW_SOURCES,
   };
 }

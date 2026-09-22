@@ -11,7 +11,10 @@ import {
   materializeLedger,
   validateReviewOutput,
 } from '../squad-admission-ledger.mjs';
-import { assertAdmissionAuthority } from '../squad-admission-authority.mjs';
+import {
+  assertAdmissionAuthority,
+  requiredReviewSourcesForChanges,
+} from '../squad-admission-authority.mjs';
 
 const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
@@ -56,7 +59,11 @@ const input = (extra = {}) => ({
   materializedAt: '2026-09-22T18:00:02.000Z',
   ...extra,
 });
-const authority = (teamRoot, stateBackend = 'local') => ({ teamRoot, stateBackend });
+const authority = (teamRoot, stateBackend = 'local') => ({
+  teamRoot,
+  stateBackend,
+  requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
+});
 
 test('materializes only explicit structured review and validation evidence', () => {
   const ledger = materializeLedger(input());
@@ -83,6 +90,16 @@ test('rejects a caller-declared reviewer policy that lowers configured requireme
     requiredReviewSources: ['code-review'],
     reviews: [review('code-review')],
   })), /configured reviewer policy/u);
+});
+
+test('repository policy permits one focused review only for one low-risk document', () => {
+  assert.deepEqual(requiredReviewSourcesForChanges(['docs/guide/validation.md']), ['code-review']);
+  assert.deepEqual(requiredReviewSourcesForChanges(['CONTRIBUTING.md']), [
+    'code-review',
+    'security-review',
+    'ponytail-review',
+  ]);
+  assert.equal(requiredReviewSourcesForChanges(['docs/guide/validation.md', 'README.md']).length, 3);
 });
 
 test('requires distinct reviewers for each configured reviewer class', () => {

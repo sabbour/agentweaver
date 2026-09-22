@@ -54,7 +54,11 @@ const ledger = (extra = {}) => ({
   materializedAt: '2026-09-22T18:00:02.000Z',
   ...extra,
 });
-const authority = (teamRoot, stateBackend = 'local') => ({ teamRoot, stateBackend });
+const authority = (teamRoot, stateBackend = 'local') => ({
+  teamRoot,
+  stateBackend,
+  requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
+});
 
 test('admits a complete v2 exact-head ledger', () => {
   assert.deepEqual(validateAdmissionPreflight(ledger(), { ...expected, headSha }), {
