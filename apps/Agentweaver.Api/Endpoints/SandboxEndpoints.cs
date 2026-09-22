@@ -244,8 +244,8 @@ public static class SandboxEndpoints
                     using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     try
                     {
-                        shouldCleanupProcess = await runStore.IsPreviewPublicationOwnerAsync(
-                            parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                        shouldCleanupProcess = await CanCleanUpPreviewProcessAsync(
+                            runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -978,8 +978,8 @@ public static class SandboxEndpoints
                 if (!published)
                 {
                     using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    if (await runStore.IsPreviewPublicationOwnerAsync(
-                        run.Id, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false))
+                    if (await CanCleanUpPreviewProcessAsync(
+                        runStore, run.Id, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false))
                     {
                         await TryStopRetainedProcessAsync(
                             runId,
@@ -1064,6 +1064,19 @@ public static class SandboxEndpoints
                 }
             }
         }
+    }
+
+    internal static async Task<bool> CanCleanUpPreviewProcessAsync(
+        IRunStore runStore,
+        RunId runId,
+        string publicationLeaseOwner,
+        CancellationToken ct)
+    {
+        if (await runStore.IsPreviewPublicationOwnerAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false))
+            return true;
+
+        var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        return run is not null && EndpointHelpers.IsTerminal(run.Status);
     }
 
     private static async Task TryStopRetainedProcessAsync(

@@ -461,8 +461,16 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         if (conditionalAppendFails)
             persistence!.ConditionalFailure = new InvalidOperationException("conditional append failed");
         else
-            (await terminalStore.TrySetTerminalStatusAsync(
-                RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        {
+            var terminalRunId = RunId.Parse(runId);
+            (await terminalStore.TerminalizeForTestAsync(
+                terminalRunId, RunStatus.Failed, "abandoned")).Should().BeFalse(
+                "the active preview-publication lease owns the persistence boundary");
+            await terminalStore.EndPreviewPublicationAsync(terminalRunId);
+            (await terminalStore.TerminalizeForTestAsync(
+                terminalRunId, RunStatus.Failed, "abandoned"))
+                .Should().BeTrue("the terminal owner wins after releasing the publication lease");
+        }
         if (workflowStepFails)
             persistence!.WorkflowStepFailure = new InvalidOperationException("preview workflow-step append failed");
         if (completeLocalStream)
@@ -572,8 +580,14 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var healthCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var runStore = factory.Services.GetRequiredService<IRunStore>();
         var terminalStore = RunStoreChain.Find<SqliteRunStore>(runStore) ?? runStore;
-        (await terminalStore.TrySetTerminalStatusAsync(
-            RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        var terminalRunId = RunId.Parse(runId);
+        (await terminalStore.TerminalizeForTestAsync(
+            terminalRunId, RunStatus.Failed, "abandoned")).Should().BeFalse(
+            "the active preview-publication lease owns the persistence boundary");
+        await terminalStore.EndPreviewPublicationAsync(terminalRunId);
+        (await terminalStore.TerminalizeForTestAsync(
+            terminalRunId, RunStatus.Failed, "abandoned"))
+            .Should().BeTrue("the terminal owner wins after releasing the publication lease");
         if (completeLocalStream)
             streams.Complete(runId);
         var healthCancelled = healthCt.IsCancellationRequested;
