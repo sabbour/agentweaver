@@ -19,10 +19,13 @@ test('admission is external-state owned and squash-only', () => {
   assert.match(contract, /gh pr merge <number> --squash --match-head-commit <validated-sha>/u);
   assert.equal(packageJson.devDependencies['@bradygaster/squad-cli'], '0.13.1');
   assert.equal(packageJson.devDependencies['@bradygaster/squad-sdk'], '0.13.1');
-  assert.match(validator, /resolveExternalStateDir/u);
-  assert.match(validator, /materialized trusted validator bytes do not match origin\/dev/u);
+  assert.match(launcher, /resolveCanonicalExternalStateDir/u);
+  assert.match(launcher, /STATE_CONFIG_PATH/u);
+  assert.match(validator, /readAuthoritativeLedger/u);
   assert.match(launcher, /mkdtemp/u);
   assert.match(launcher, /git', \['show'/u);
+  assert.match(launcher, /trusted validator bytes do not match origin\/dev blob/u);
+  assert.doesNotMatch(validator, /@bradygaster\/squad-sdk|state-mcp|from ['"](?:[^n]|n[^o]|no[^d]|nod[^e])[^'"]*['"]/u);
   assert.doesNotMatch(validator, /Active squad:\s*external/u);
   assert.doesNotMatch(contract, /npm run squad:admission-preflight/u);
   assert.doesNotMatch(contract, /\b(?:rebase(?:-| )?merge|auto(?:-| )?merge)\b|gh\s+pr\s+merge\b[^\r\n]*\b(?:--rebase|--auto)\b/iu);

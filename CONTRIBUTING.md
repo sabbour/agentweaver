@@ -61,8 +61,9 @@ they are not Agentweaver sign-in providers.
    - Before ready and immediately before merge, Ralph runs the Squad external-state
      admission launcher (`git show origin/dev:scripts/ci/squad-admission-launcher.mjs |
      node --input-type=module - <owner/repository> <pr-number>`), which materializes the canonical validator
-     from `origin/dev` outside the candidate checkout. It binds the live PR head and
-     trusted validator blob/version, then returns
+     from `origin/dev` outside the candidate checkout and derives canonical external
+     state from trusted `origin/dev:.squad/config.json`. It binds the live PR head and
+     trusted validator/state-config blobs, then returns
      `<validated-sha>`;
      merge manually with `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      GitHub automatically deletes the source branch after merge.

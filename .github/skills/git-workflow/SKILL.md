@@ -61,8 +61,9 @@ Examples:
    This materializes the launcher itself from trusted `origin/dev`; the launcher then
    materializes `git show origin/dev:scripts/ci/squad-admission-preflight.mjs` outside
    the candidate checkout and invokes only those trusted bytes—never a candidate
-   validator. It binds the live PR head and the trusted validator blob/version before it
-   returns `<validated-sha>`. Confirm the PR reports `MERGED`,
+   validator or SDK. It derives and binds the canonical external state directory from
+   trusted `origin/dev:.squad/config.json`, plus the live PR head and trusted validator
+   blob/version, before it returns `<validated-sha>`. Confirm the PR reports `MERGED`,
    `mergedAt`, and merge SHA before dispatching dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation

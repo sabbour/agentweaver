@@ -399,8 +399,9 @@ validation prerequisites proportional to the change.
   and returns the live `<validated-sha>` itself. Ralph invokes
   `git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module -
   <owner/repository> <pr-number>`; the trusted launcher materializes the canonical
-  validator from `origin/dev` with `git show`, verifies its blob hash/version, and never
-  executes a candidate-checkout validator; it requires the external
+  validator from `origin/dev` with `git show`, derives the canonical external state
+  directory from trusted `origin/dev:.squad/config.json`, and never executes a
+  candidate-checkout validator or SDK; it requires the external
   Squad finding ledger to resolve every non-advisory finding with an owner, correction or
   waiver, fresh validation/review, and resolved transition. PR comments preserve evidence
   but do not enforce admission. Confirm the PR is actually merged before dependents proceed.

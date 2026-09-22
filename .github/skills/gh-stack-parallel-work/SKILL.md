@@ -88,10 +88,11 @@ That materializes the launcher itself from trusted `origin/dev`. The trusted lau
 `git show origin/dev:scripts/ci/squad-admission-preflight.mjs`, securely creates a
 temporary file outside the candidate checkout, invokes **that materialized file**, and
 removes it reliably. It never uses `npm run` or executes a validator from the candidate
-checkout. The materialized validator checks that its own blob equals
-`git rev-parse origin/dev:scripts/ci/squad-admission-preflight.mjs`; substitution is
-rejected. The launcher binds the live candidate `headRefOid`, trusted ref, validator path,
-blob hash, and validator version before it returns
+checkout. The launcher also resolves the external state directory from the trusted
+`origin/dev:.squad/config.json` using the pinned Squad resolver semantics; the validator
+has only Node built-in imports and reads the ledger directly from that exact canonical
+directory. The launcher binds the live candidate `headRefOid`, trusted ref, validator path,
+validator blob hash/version, and trusted state-config blob before it returns
 `<validated-sha>`; merge with
 `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Required findings must be owned,
 corrected or waived, freshly validated/reviewed at the current SHA, and resolved. PR
