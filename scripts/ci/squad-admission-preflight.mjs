@@ -2,10 +2,9 @@
 import { stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { resolveExternalStateDir } from '@bradygaster/squad-sdk';
 
 export const KIND = 'agentweaver.squad-admission-findings/v1';
-export const VALIDATOR_VERSION = '2';
-export const VALIDATOR_PATH = 'scripts/ci/squad-admission-preflight.mjs';
 const SHA = /^[0-9a-f]{40}$/iu;
 const POLICIES = new Set(['advisory', 'required']);
 
@@ -69,6 +68,18 @@ async function readAuthoritativeLedger(stateDirectory, repository, prNumber) {
   return JSON.parse(await readFile(join(directory, key), 'utf8'));
 }
 
+export async function resolveDeclaredExternalStateDirectory({
+  configPath = '.squad/config.json',
+  readConfig = (path) => readFile(path, 'utf8'),
+  resolveDirectory = resolveExternalStateDir,
+} = {}) {
+  const config = JSON.parse(await readConfig(configPath));
+  if (!config || config.stateLocation !== 'external') {
+    throw new Error('Squad config must declare external state');
+  }
+  return resolveDirectory(required(config.projectKey, 'Squad project key'), false);
+}
+
 export async function runAdmissionPreflight(repository, prNumber, dependencies = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error('repository must be owner/name');
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
@@ -80,27 +91,17 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
   return {
     ...validateAdmissionPreflight(ledger, { repository, prNumber, headSha }),
     stateDirectory,
-    validator: dependencies.validator,
   };
 }
 
 async function main() {
-  const [repository, value, blobOption, trustedValidatorBlob, stateOption, stateDirectory, configOption, stateConfigBlob, headOption, headSha] = process.argv.slice(2);
+  const [repository, value, headOption, headSha] = process.argv.slice(2);
   const prNumber = Number(value);
-  if (!repository || !value || blobOption !== '--trusted-validator-blob' || !trustedValidatorBlob ||
-    stateOption !== '--state-directory' || !stateDirectory || configOption !== '--state-config-blob' || !stateConfigBlob ||
-    headOption !== '--live-head-sha' || !headSha) {
-    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --trusted-validator-blob <origin/dev-blob-sha> --state-directory <canonical-external-state-dir> --state-config-blob <origin/dev-config-blob-sha> --live-head-sha <launcher-attested-pr-head>');
+  if (!repository || !value || headOption !== '--head-sha' || !headSha) {
+    throw new Error('usage: squad-admission-preflight.mjs <repository> <pr-number> --head-sha <live-pr-head>');
   }
-  const validator = {
-    path: VALIDATOR_PATH,
-    ref: 'origin/dev',
-    blobSha: exactSha(trustedValidatorBlob, 'trusted validator blob'),
-    version: VALIDATOR_VERSION,
-    stateConfigPath: '.squad/config.json',
-    stateConfigBlob: exactSha(stateConfigBlob, 'trusted state config blob'),
-  };
-  console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, { stateDirectory, headSha, validator })));
+  const stateDirectory = await resolveDeclaredExternalStateDirectory();
+  console.log(JSON.stringify(await runAdmissionPreflight(repository, prNumber, { stateDirectory, headSha })));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

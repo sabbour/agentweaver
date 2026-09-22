@@ -395,16 +395,17 @@ validation prerequisites proportional to the change.
   blockers.
 - **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
   run the coordinator-owned external-state admission preflight before ready and again
-  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. It resolves
-  and returns the live `<validated-sha>` itself. Ralph invokes
-  `git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module -
-  <owner/repository> <pr-number>`; the trusted launcher materializes the canonical
-  validator from `origin/dev` with `git show`, derives the canonical external state
-  directory from trusted `origin/dev:.squad/config.json`, and never executes a
-  candidate-checkout validator or SDK; it requires the external
-  Squad finding ledger to resolve every non-advisory finding with an owner, correction or
-  waiver, fresh validation/review, and resolved transition. PR comments preserve evidence
-  but do not enforce admission. Confirm the PR is actually merged before dependents proceed.
+  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
+  fetches `origin/dev`, gets the live PR head SHA, and runs
+  `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
+  --head-sha <live-head-sha>`. The preflight resolves declared external state with the
+  pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
+  required finding with an owner, correction or waiver, fresh validation/review, and a
+  resolved transition. Coordinator/Ralph and authoritative external Squad state are
+  trusted operational components; GitHub is evidence and CI only, and repository code
+  does not provide an adversarially immutable execution boundary. PR comments preserve
+  evidence but do not enforce admission. Confirm the PR is actually merged before
+  dependents proceed.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;

@@ -58,14 +58,13 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Before ready and immediately before merge, Ralph runs the Squad external-state
-     admission launcher (`git show origin/dev:scripts/ci/squad-admission-launcher.mjs |
-     node --input-type=module - <owner/repository> <pr-number>`), which materializes the canonical validator
-     from `origin/dev` outside the candidate checkout and derives canonical external
-     state from trusted `origin/dev:.squad/config.json`. It binds the live PR head and
-     trusted validator/state-config blobs, then returns
-     `<validated-sha>`;
-     merge manually with `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+   - Before ready and immediately before merge, Ralph fetches `origin/dev`, gets the
+     live PR `headRefOid`, and runs the external-state preflight with that SHA:
+     `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
+     --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
+     state with the pinned Squad SDK and validates its coordinator-owned findings ledger.
+     Ralph records the returned `<validated-sha>` and merges manually with
+     `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
@@ -215,9 +214,12 @@ web, docs, and changeset jobs on a branch that is up to date with `dev`. Path-co
 non-.NET jobs count as passing when skipped; the named .NET shard jobs intentionally run
 on every `dev` PR so GitHub emits each required context. The GitHub ruleset described in
 [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) provides ordinary
-branch and CI protection. **Squad/Ralph external-state preflight owns admission** and
-blocks manual squash merge until its findings ledger validates at the live PR head with
-the trusted `origin/dev` validator blob/version.
+branch and CI protection. **Squad/Ralph external-state preflight owns admission**:
+the Coordinator/Ralph process and authoritative external Squad state are trusted
+operational components, while GitHub supplies PR evidence and CI only. Repository code
+does not create an adversarially immutable execution boundary. The coordinator must
+validate the closed findings policy and ledger state at the live head before manual
+squash merge.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 

@@ -81,29 +81,25 @@ explicit accountable decision, not reviewer silence.
 
 GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ralph stores
 the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
-authoritative external Squad state. Before ready and immediately before manual squash merge,
-Ralph fetches `origin/dev` and runs
-`git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module - <owner/repository> <pr-number>`.
-That materializes the launcher itself from trusted `origin/dev`. The trusted launcher obtains canonical validator bytes with
-`git show origin/dev:scripts/ci/squad-admission-preflight.mjs`, securely creates a
-temporary file outside the candidate checkout, invokes **that materialized file**, and
-removes it reliably. It never uses `npm run` or executes a validator from the candidate
-checkout. The launcher also resolves the external state directory from the trusted
-`origin/dev:.squad/config.json` using the pinned Squad resolver semantics; the validator
-has only Node built-in imports and reads the ledger directly from that exact canonical
-directory. The launcher binds the live candidate `headRefOid`, trusted ref, validator path,
-validator blob hash/version, and trusted state-config blob before it returns
-`<validated-sha>`; merge with
-`gh pr merge <number> --squash --match-head-commit <validated-sha>`. Required findings must be owned,
-corrected or waived, freshly validated/reviewed at the current SHA, and resolved. PR
-comments preserve the ledger evidence but do not decide admission.
+authoritative external Squad state. The coordinator hands Ralph the PR number, live
+`headRefOid`, required review findings, ceremony evidence, and any RFD decision that
+governed the change. Before ready and immediately before manual squash merge, Ralph
+fetches `origin/dev`, gets the live head SHA, and runs:
 
-Bootstrap exception — **#1490 only**: trusted `origin/dev` necessarily predates this
-launcher and validator and cannot validate its own introduction. An independently reviewed manual
-local preflight may admit that one bootstrap PR. Record the candidate SHA, reviewer, exact
-manual checks, and exception in the external ledger. Do not describe this as trusted-dev
-self-validation, and do not reuse this exception for later PRs; every later preflight
-uses the materialized `origin/dev` validator above.
+```bash
+node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+  --head-sha <live-head-sha>
+gh pr merge <number> --squash --match-head-commit <validated-sha>
+```
+
+The preflight resolves the declared external state with the pinned Squad SDK and applies
+a closed policy: every finding is advisory or required, and every required finding must
+be owned, corrected or waived, freshly validated/reviewed at the current SHA, and
+resolved. Record the output, ledger path, review/ceremony evidence, and RFD handoff with
+the candidate SHA before proceeding. Coordinator/Ralph and authoritative external Squad
+state are trusted operational components. GitHub is evidence and CI only; repository
+code is not a tamper-proof sandbox and cannot provide adversarially immutable
+`origin/dev` execution. PR comments preserve evidence but do not decide admission.
 
 ## Temporary integration branch queue
 

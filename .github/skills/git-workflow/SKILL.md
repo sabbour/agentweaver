@@ -55,16 +55,16 @@ Examples:
    gh pr ready <number>
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
-   Before ready and immediately before this command, Ralph runs the coordinator-owned
-   external-state admission launcher:
-   `git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module - <owner/repository> <pr-number>`.
-   This materializes the launcher itself from trusted `origin/dev`; the launcher then
-   materializes `git show origin/dev:scripts/ci/squad-admission-preflight.mjs` outside
-   the candidate checkout and invokes only those trusted bytes—never a candidate
-   validator or SDK. It derives and binds the canonical external state directory from
-   trusted `origin/dev:.squad/config.json`, plus the live PR head and trusted validator
-   blob/version, before it returns `<validated-sha>`. Confirm the PR reports `MERGED`,
-   `mergedAt`, and merge SHA before dispatching dependent work.
+   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
+   the live PR head SHA, and runs
+   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
+   The preflight uses the pinned Squad SDK to resolve declared external state and checks
+   the coordinator-owned findings ledger. Ralph records the returned
+   `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
+   and authoritative external Squad state are trusted operational components; GitHub is
+   evidence and CI only, and repository code is not an adversarially immutable boundary.
+   Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
+   dependent work.
 
 5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
    run, and any blocker.
