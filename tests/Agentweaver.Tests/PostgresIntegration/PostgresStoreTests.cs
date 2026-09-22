@@ -36,6 +36,8 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         migrations.Should().Contain("20260627000000_InitialPostgres",
             "migration must be discoverable via [DbContext] attribute + MigrationsAssembly config");
         migrations.Should().Contain("20260717003000_AddSkillProjectOwnershipCascades");
+        migrations.Should().Contain("20260921182700_AddTerminalRunOutcomes");
+        migrations.Should().Contain("20260922030000_AddTerminalProjectionEventSequence");
     }
 
     [PostgresFact]

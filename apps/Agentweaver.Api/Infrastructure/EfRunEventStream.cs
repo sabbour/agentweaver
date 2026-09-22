@@ -203,7 +203,7 @@ public sealed class EfRunEventStream : IRunEventStream
                 lastSeen = evt.Sequence;
             }
 
-            if (await ShouldStopAfterReplayBatchAsync(runId, batch, ct).ConfigureAwait(false))
+            if (await ShouldStopAfterReplayBatchAsync(runId, batch, lastSeen, ct).ConfigureAwait(false))
                 yield break;
 
             if (batch.Count == 0 && _completedRuns.ContainsKey(runId))
@@ -215,17 +215,38 @@ public sealed class EfRunEventStream : IRunEventStream
     }
 
     private async Task<bool> ShouldStopAfterReplayBatchAsync(
-        string runId, IReadOnlyList<RunEvent> events, CancellationToken ct)
+        string runId, IReadOnlyList<RunEvent> events, int lastDeliveredSequence, CancellationToken ct)
     {
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        var status = await db.Runs.AsNoTracking()
-            .Where(run => run.RunId == runId)
-            .Select(run => run.Status)
-            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
-        if (status is not null && status is not ("merged" or "declined" or "failed" or "completed"
-            or "merge_failed" or "assemble_ready" or "cancelled"))
-            return false;
+        if (db.Model.FindEntityType(typeof(RunRecord)) is null)
+            return ContainsTerminalEvent(events);
 
+        var currentLifecycle = await db.Runs.AsNoTracking()
+            .Where(run => run.RunId == runId)
+            .Select(run => new { run.Status, run.LifecycleGeneration })
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        if (currentLifecycle is not null
+            && currentLifecycle.Status is not ("merged" or "declined" or "failed" or "completed"
+            or "merge_failed" or "assemble_ready" or "cancelled"))
+        {
+            return false;
+        }
+
+        if (currentLifecycle is not null)
+        {
+            var eventSequence = await db.TerminalRunOutcomeProjections.AsNoTracking()
+                .Where(projection => projection.RunId == runId
+                    && projection.LifecycleGeneration == currentLifecycle.LifecycleGeneration)
+                .Select(projection => (int?)projection.EventSequence)
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            return eventSequence is > 0 && lastDeliveredSequence >= eventSequence;
+        }
+
+        return ContainsTerminalEvent(events);
+    }
+
+    private static bool ContainsTerminalEvent(IReadOnlyList<RunEvent> events)
+    {
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {

@@ -163,9 +163,11 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 throw new InvalidOperationException(
                     $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
             tx.Commit();
-            return Task.FromResult(new RunEvent(
+            var persistedExisting = new RunEvent(
                 reader.GetInt32(0), evt.Type, evt.Payload,
-                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+            PublishDurableEvent(runId, persistedExisting);
+            return Task.FromResult(persistedExisting);
         }
 
         using var append = connection.CreateCommand();
@@ -197,7 +199,9 @@ public sealed class SqliteRunEventStream : IRunEventStream
         using var sequence = connection.CreateCommand();
         sequence.CommandText = """SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId;""";
         sequence.Parameters.AddWithValue("$runId", runId);
-        return Task.FromResult(evt with { Sequence = Convert.ToInt32(sequence.ExecuteScalar(), CultureInfo.InvariantCulture) });
+        var persisted = evt with { Sequence = Convert.ToInt32(sequence.ExecuteScalar(), CultureInfo.InvariantCulture) };
+        PublishDurableEvent(runId, persisted);
+        return Task.FromResult(persisted);
     }
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
@@ -273,7 +277,10 @@ public sealed class SqliteRunEventStream : IRunEventStream
             lastReplayed = evt.Sequence;
         }
 
-        if (ShouldStopAfterReplayBatch(replayBatch, IsCurrentLifecycleTerminal(runId)))
+        if (ShouldStopAfterReplayBatch(
+            replayBatch,
+            lastReplayed,
+            GetCurrentLifecycleTerminalProjection(runId)))
             yield break; // Completed/parked run: drain durable diagnostics, then terminate cleanly.
 
         if (channel is null)
@@ -287,15 +294,31 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 continue;
             yield return evt;
             lastReplayed = evt.Sequence;
-            if (RunEventTerminality.IsTerminal(evt) && IsCurrentLifecycleTerminal(runId))
+            if (ShouldStopAfterReplayBatch(
+                [evt],
+                lastReplayed,
+                GetCurrentLifecycleTerminalProjection(runId)))
                 yield break;
         }
     }
 
-    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events, bool currentLifecycleTerminal)
+    private static bool ShouldStopAfterReplayBatch(
+        IReadOnlyList<RunEvent> events,
+        int lastDeliveredSequence,
+        CurrentLifecycleTerminalProjection? currentLifecycle)
     {
-        if (!currentLifecycleTerminal)
-            return false;
+        if (currentLifecycle is not null)
+        {
+            if (!currentLifecycle.IsTerminal)
+                return false;
+
+            if (currentLifecycle.EventSequence is int eventSequence)
+                return lastDeliveredSequence >= eventSequence;
+
+            if (currentLifecycle.HasTerminalOutboxOutcome)
+                return false;
+        }
+
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
@@ -307,6 +330,18 @@ public sealed class SqliteRunEventStream : IRunEventStream
             return false;
 
         return true;
+    }
+
+    private void PublishDurableEvent(string runId, RunEvent evt)
+    {
+        lock (_channelsGate)
+        {
+            if (!_completedRuns.ContainsKey(runId)
+                && _channels.TryGetValue(runId, out var channel))
+            {
+                channel.Writer.TryWrite(evt);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -387,25 +422,78 @@ public sealed class SqliteRunEventStream : IRunEventStream
         catch (SqliteException) { }
     }
 
-    private bool IsCurrentLifecycleTerminal(string runId)
+    private CurrentLifecycleTerminalProjection? GetCurrentLifecycleTerminalProjection(string runId)
     {
         try
         {
             using var connection = new SqliteConnection(_runConnectionString);
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT status FROM runs WHERE run_id = $runId;";
+            command.CommandText = "SELECT status, lifecycle_generation FROM runs WHERE run_id = $runId;";
             command.Parameters.AddWithValue("$runId", runId);
-            var status = command.ExecuteScalar() as string;
-            return status is null || status is "merged" or "declined" or "failed" or "completed"
-                or "merge_failed" or "assemble_ready" or "cancelled";
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+
+            var status = reader.GetString(0);
+            if (status is not ("merged" or "declined" or "failed" or "completed"
+                or "merge_failed" or "assemble_ready" or "cancelled"))
+            {
+                return new CurrentLifecycleTerminalProjection(false, null);
+            }
+
+            var lifecycleGeneration = reader.GetInt32(1);
+            reader.Dispose();
+            using var eventConnection = new SqliteConnection(_connectionString);
+            eventConnection.Open();
+            using var projection = eventConnection.CreateCommand();
+            projection.CommandText =
+                """
+                SELECT event_sequence
+                FROM terminal_run_outcome_projections
+                WHERE run_id = $runId AND lifecycle_generation = $generation;
+                """;
+            projection.Parameters.AddWithValue("$runId", runId);
+            projection.Parameters.AddWithValue("$generation", lifecycleGeneration);
+            var eventSequence = projection.ExecuteScalar();
+            var hasTerminalOutboxOutcome = false;
+            if (eventSequence is null or DBNull)
+            {
+                try
+                {
+                    command.CommandText =
+                        """
+                        SELECT 1
+                        FROM terminal_run_outcomes
+                        WHERE run_id = $runId AND lifecycle_generation = $generation
+                        LIMIT 1;
+                        """;
+                    command.Parameters.Clear();
+                    command.Parameters.AddWithValue("$runId", runId);
+                    command.Parameters.AddWithValue("$generation", lifecycleGeneration);
+                    hasTerminalOutboxOutcome = command.ExecuteScalar() is not null;
+                }
+                catch (SqliteException)
+                {
+                    // Older local stores did not persist terminal-outcome outbox rows.
+                }
+            }
+            return new CurrentLifecycleTerminalProjection(
+                true,
+                eventSequence is null or DBNull ? null : Convert.ToInt32(eventSequence, CultureInfo.InvariantCulture),
+                hasTerminalOutboxOutcome);
         }
         catch (SqliteException)
         {
             // Retain legacy event-only behavior where no run database is available.
-            return true;
+            return null;
         }
     }
+
+    private sealed record CurrentLifecycleTerminalProjection(
+        bool IsTerminal,
+        int? EventSequence,
+        bool HasTerminalOutboxOutcome = false);
 
     /// <summary>
     /// Synchronous durable insert into the RunEvents table. Returns the sequence assigned to the

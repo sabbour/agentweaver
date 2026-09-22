@@ -107,6 +107,42 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task ReconnectAfterTerminalOutboxWindow_WaitsForCurrentProjectedTerminalSequence()
+    {
+        const string runId = "reopened-terminal-outbox-window";
+        CreateRunRow(runId, "failed", 1);
+        var first = new SqliteRunEventStream(_config);
+        await first.AppendTerminalOutcomeAsync(runId, TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "old" }, DateTimeOffset.UtcNow, 1));
+
+        UpdateRunRow(runId, "completed", 2);
+        CreateUnprojectedTerminalOutcome(runId, 2, "completed", EventTypes.RunCompleted, new { result = "current" });
+
+        var restarted = new SqliteRunEventStream(_config);
+        var observed = new List<RunEvent>();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = Task.Run(async () =>
+        {
+            await foreach (var evt in restarted.SubscribeAsync(runId, ct: cancellation.Token))
+                observed.Add(evt);
+        }, cancellation.Token);
+
+        await WaitUntilAsync(
+            () => observed.Count == 1,
+            TimeSpan.FromSeconds(5),
+            "the historical lifecycle terminal should be replayed");
+        subscriber.IsCompleted.Should().BeFalse(
+            "the terminal status has no current-generation projected event yet");
+
+        await restarted.AppendTerminalOutcomeAsync(runId, TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "current" }, DateTimeOffset.UtcNow, 2));
+        await subscriber;
+
+        observed.Select(evt => evt.Type).Should().Equal(EventTypes.RunFailed, EventTypes.RunCompleted);
+        observed.Count(evt => evt.Type == EventTypes.RunCompleted).Should().Be(1);
+    }
+
+    [Fact]
     public async Task SteeringRedirect_DoesNotTerminateReplayOrLiveTail()
     {
         const string runId = "redirect-run";
@@ -157,6 +193,41 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         command.Parameters.AddWithValue("$runId", runId);
         command.Parameters.AddWithValue("$status", status);
         command.Parameters.AddWithValue("$generation", generation);
+        command.ExecuteNonQuery();
+    }
+
+    private void CreateUnprojectedTerminalOutcome(
+        string runId,
+        int generation,
+        string status,
+        string eventType,
+        object payload)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "agentweaver.db")}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS terminal_run_outcomes (
+                run_id TEXT NOT NULL,
+                lifecycle_generation INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                projected_at TEXT NULL,
+                PRIMARY KEY (run_id, lifecycle_generation)
+            );
+            INSERT INTO terminal_run_outcomes (
+                run_id, lifecycle_generation, status, event_type, payload_json, occurred_at)
+            VALUES ($runId, $generation, $status, $eventType, $payload, $occurredAt);
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$eventType", eventType);
+        command.Parameters.AddWithValue("$payload", System.Text.Json.JsonSerializer.Serialize(payload));
+        command.Parameters.AddWithValue("$occurredAt", DateTimeOffset.UtcNow.ToString("O"));
         command.ExecuteNonQuery();
     }
 
