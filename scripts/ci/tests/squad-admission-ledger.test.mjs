@@ -99,6 +99,7 @@ test('repository policy permits one focused review only for one low-risk documen
     'security-review',
     'ponytail-review',
   ]);
+  assert.equal(requiredReviewSourcesForChanges(['.github/skills/reviewer-protocol/SKILL.md']).length, 3);
   assert.equal(requiredReviewSourcesForChanges(['docs/guide/validation.md', 'README.md']).length, 3);
 });
 

@@ -86,8 +86,7 @@ export function requiredReviewSourcesForChanges(changedFiles) {
   const file = changedFiles[0]?.replaceAll('\\', '/');
   const singleLowRiskDocument = changedFiles.length === 1
     && file.endsWith('.md')
-    && !file.startsWith('.github/agents/')
-    && !['CONTRIBUTING.md', 'RELEASING.md', '.github/dev-branch-protection.md'].includes(file);
+    && (file === 'README.md' || file.startsWith('docs/') || file.startsWith('.changeset/'));
   return singleLowRiskDocument ? ['code-review'] : [...REQUIRED_REVIEW_SOURCES];
 }
 
