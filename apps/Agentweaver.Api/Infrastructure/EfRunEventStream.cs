@@ -96,16 +96,18 @@ public sealed class EfRunEventStream : IRunEventStream
         await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
         var payloadJson = outcome.Payload.GetRawText();
-        var exists = await db.TerminalRunOutcomeProjections.AnyAsync(
-            x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration, ct)
-            .ConfigureAwait(false);
-        if (exists)
+        var existingProjection = await db.TerminalRunOutcomeProjections.AsNoTracking()
+            .Where(x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration)
+            .Select(x => new { x.EventSequence })
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        if (existingProjection is not null)
         {
             var existing = await db.RunEvents
-                .Where(x => x.RunId == runId && x.EventType == outcome.EventType && x.PayloadJson == payloadJson)
-                .OrderByDescending(x => x.Sequence)
+                .Where(x => x.RunId == runId
+                    && x.Sequence == existingProjection.EventSequence
+                    && x.EventType == outcome.EventType)
                 .Select(x => new { x.Sequence, x.CreatedAt })
-                .FirstOrDefaultAsync(ct).ConfigureAwait(false)
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false)
                 ?? throw new InvalidOperationException(
                     $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
             await tx.CommitAsync(ct).ConfigureAwait(false);
@@ -145,27 +147,18 @@ public sealed class EfRunEventStream : IRunEventStream
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
-        var exists = await db.RunEvents.AnyAsync(
-            x => x.RunId == runId
-                && x.Sequence == canonicalEvent.Sequence
-                && x.EventType == canonicalEvent.Type,
-            ct).ConfigureAwait(false);
-        if (!exists)
-            return false;
-
-        var projected = await db.TerminalRunOutcomeProjections.AnyAsync(
-            x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration,
-            ct).ConfigureAwait(false);
+        var projected = await (
+            from projection in db.TerminalRunOutcomeProjections
+            join @event in db.RunEvents
+                on new { RunId = projection.RunId, Sequence = projection.EventSequence }
+                equals new { @event.RunId, @event.Sequence }
+            where projection.RunId == runId
+                && projection.LifecycleGeneration == outcome.ExpectedLifecycleGeneration
+                && projection.EventSequence == canonicalEvent.Sequence
+                && @event.EventType == canonicalEvent.Type
+            select projection).AnyAsync(ct).ConfigureAwait(false);
         if (!projected)
-        {
-            db.TerminalRunOutcomeProjections.Add(new TerminalRunOutcomeProjectionRecord
-            {
-                RunId = runId,
-                LifecycleGeneration = outcome.ExpectedLifecycleGeneration,
-                EventSequence = canonicalEvent.Sequence,
-            });
-            await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
+            return false;
 
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return true;

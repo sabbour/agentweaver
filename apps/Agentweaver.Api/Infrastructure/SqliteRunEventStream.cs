@@ -150,14 +150,18 @@ public sealed class SqliteRunEventStream : IRunEventStream
             existing.Transaction = tx;
             existing.CommandText =
                 """
-                SELECT "Sequence", "CreatedAt"
-                  FROM "RunEvents"
-                 WHERE "RunId" = $runId AND "EventType" = $type AND "PayloadJson" = $payload
-                 ORDER BY "Sequence" DESC LIMIT 1;
+                SELECT event."Sequence", event."CreatedAt"
+                  FROM terminal_run_outcome_projections projection
+                  JOIN "RunEvents" event
+                    ON event."RunId" = projection.run_id
+                   AND event."Sequence" = projection.event_sequence
+                 WHERE projection.run_id = $runId
+                   AND projection.lifecycle_generation = $generation
+                   AND event."EventType" = $type;
                 """;
             existing.Parameters.AddWithValue("$runId", runId);
+            existing.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
             existing.Parameters.AddWithValue("$type", outcome.EventType);
-            existing.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
             using var reader = existing.ExecuteReader();
             if (!reader.Read())
                 throw new InvalidOperationException(
@@ -220,27 +224,21 @@ public sealed class SqliteRunEventStream : IRunEventStream
         existing.CommandText =
             """
             SELECT 1
-            FROM "RunEvents"
-            WHERE "RunId" = $runId AND "Sequence" = $sequence AND "EventType" = $type;
+            FROM terminal_run_outcome_projections projection
+            JOIN "RunEvents" event
+              ON event."RunId" = projection.run_id
+             AND event."Sequence" = projection.event_sequence
+            WHERE projection.run_id = $runId
+              AND projection.lifecycle_generation = $generation
+              AND projection.event_sequence = $sequence
+              AND event."EventType" = $type;
             """;
         existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
         existing.Parameters.AddWithValue("$sequence", canonicalEvent.Sequence);
         existing.Parameters.AddWithValue("$type", canonicalEvent.Type);
         if (existing.ExecuteScalar() is null)
             return Task.FromResult(false);
-
-        using var link = connection.CreateCommand();
-        link.Transaction = tx;
-        link.CommandText =
-            """
-            INSERT INTO terminal_run_outcome_projections (run_id, lifecycle_generation, event_sequence)
-            VALUES ($runId, $generation, $sequence)
-            ON CONFLICT (run_id, lifecycle_generation) DO NOTHING;
-            """;
-        link.Parameters.AddWithValue("$runId", runId);
-        link.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
-        link.Parameters.AddWithValue("$sequence", canonicalEvent.Sequence);
-        link.ExecuteNonQuery();
         tx.Commit();
         return Task.FromResult(true);
     }

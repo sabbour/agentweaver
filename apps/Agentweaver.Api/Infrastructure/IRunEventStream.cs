@@ -38,8 +38,9 @@ public interface IRunEventStream
     }
 
     /// <summary>
-    /// Associates an already durable canonical terminal event with an outcome generation without
-    /// appending another event. Returns <c>false</c> when the event is not yet durable.
+    /// Verifies that an already durable canonical terminal event is owned by the exact outcome
+    /// generation. Returns <c>false</c> unless its persisted generation-to-sequence projection
+    /// already exists; callers must leave unproven events for the durable projector.
     /// </summary>
     Task<bool> TryLinkTerminalOutcomeAsync(
         string runId,

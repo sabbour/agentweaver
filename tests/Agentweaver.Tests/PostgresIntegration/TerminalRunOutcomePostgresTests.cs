@@ -216,17 +216,58 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
         (await store.TrySetTerminalOutcomeAsync(run, outcome, "outbox")).Should().BeTrue();
 
         var producer = new EfRunEventStream(pg.Factory);
-        var canonical = new RunEvent(0, EventTypes.RunCompleted, new { result = "provider" });
-        var sequence = await producer.AppendAsync(run.ToString(), canonical);
+        var canonical = await producer.AppendTerminalOutcomeAsync(run.ToString(), outcome);
         (await producer.TryLinkTerminalOutcomeAsync(
-            run.ToString(), outcome, canonical with { Sequence = sequence })).Should().BeTrue();
+            run.ToString(), outcome, canonical)).Should().BeTrue();
         await store.MarkTerminalOutcomeProjectedAsync(run, 1);
 
         var replayed = new List<RunEvent>();
         await foreach (var evt in new EfRunEventStream(pg.Factory).SubscribeAsync(run.ToString()))
             replayed.Add(evt);
-        replayed.Should().ContainSingle().Which.Sequence.Should().Be(sequence);
+        replayed.Should().ContainSingle().Which.Sequence.Should().Be(canonical.Sequence);
         replayed.Should().ContainSingle().Which.Type.Should().Be(EventTypes.RunCompleted);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [PostgresFact]
+    public async Task DuplicateProviderAfterReopen_DoesNotBindPreservedPriorGenerationTerminal()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var run = await InsertInProgressAsync(store);
+        var first = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" },
+            DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, first, "retriable_failure")).Should().BeTrue();
+
+        var stream = new EfRunEventStream(pg.Factory);
+        var historical = await stream.AppendTerminalOutcomeAsync(run.ToString(), first);
+        await store.MarkTerminalOutcomeProjectedAsync(run, 1);
+        (await store.TryReopenTerminalToInProgressAsync(run)).Should().BeTrue();
+        var reopened = (await store.GetAsync(run))!;
+        var current = first with
+        {
+            OccurredAt = DateTimeOffset.UtcNow,
+            ExpectedLifecycleGeneration = reopened.LifecycleGeneration,
+        };
+        (await store.TrySetTerminalOutcomeAsync(run, current, "retriable_failure")).Should().BeTrue();
+
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+        (await projector.TryProjectExistingTerminalAsync(run, reopened.LifecycleGeneration, historical)).Should().BeFalse(
+            "the preserved generation-one event is history, not a generation-two winner");
+        (await store.GetUnprojectedTerminalOutcomesAsync())
+            .Should().ContainSingle(outcome => outcome.LifecycleGeneration == reopened.LifecycleGeneration);
+
+        await projector.ProjectPendingAsync();
+        await projector.ProjectPendingAsync();
+
+        var events = await new EfRunEventStream(pg.Factory).GetPersistedEventsAsync(run.ToString());
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Select(evt => evt.Sequence).Should().Equal(
+            historical.Sequence, historical.Sequence + 1);
+        var replayed = new List<RunEvent>();
+        await foreach (var evt in new EfRunEventStream(pg.Factory).SubscribeAsync(run.ToString()))
+            replayed.Add(evt);
+        replayed.Select(evt => evt.Sequence).Should().Equal(historical.Sequence, historical.Sequence + 1);
         (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
     }
 

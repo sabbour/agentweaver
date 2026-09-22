@@ -288,6 +288,70 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
+    public async Task DuplicateProviderAfterReopen_DoesNotBindPreservedPriorGenerationTerminal()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var directory = Path.Combine(Path.GetTempPath(), "aw-terminal-outcome-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Database:Path"] = Path.Combine(directory, "agentweaver.db"),
+            }).Build();
+            CreateRunEventsTable(Path.Combine(directory, "memory.db"));
+            var stream = new SqliteRunEventStream(config);
+            var live = new RunStreamStore(stream);
+            var entry = live.Create(run.ToString(), "test");
+            var first = TerminalRunOutcome.Create(
+                RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" },
+                DateTimeOffset.UtcNow, 1);
+
+            (await store.TrySetTerminalOutcomeAsync(run, first, "retriable_failure")).Should().BeTrue();
+            var historical = await stream.AppendTerminalOutcomeAsync(run.ToString(), first);
+            entry.RecordDurable(historical);
+            await store.MarkTerminalOutcomeProjectedAsync(run, 1);
+            (await store.TryReopenTerminalToInProgressAsync(run)).Should().BeTrue();
+
+            var reopened = (await store.GetAsync(run))!;
+            live.Reopen(run.ToString(), reopened.LifecycleGeneration);
+            var current = first with
+            {
+                OccurredAt = DateTimeOffset.UtcNow,
+                ExpectedLifecycleGeneration = reopened.LifecycleGeneration,
+            };
+            (await store.TrySetTerminalOutcomeAsync(run, current, "retriable_failure")).Should().BeTrue();
+
+            var projector = new TerminalOutcomeProjector(
+                store, stream, NullLogger<TerminalOutcomeProjector>.Instance, live);
+            (await projector.TryProjectExistingTerminalAsync(
+                run, reopened.LifecycleGeneration, historical, targetStreamStore: live)).Should().BeFalse(
+                "the preserved generation-one event is history, not a generation-two winner");
+            (await store.GetUnprojectedTerminalOutcomesAsync())
+                .Should().ContainSingle(outcome => outcome.LifecycleGeneration == reopened.LifecycleGeneration);
+            entry.IsCompleted.Should().BeFalse();
+
+            await projector.ProjectPendingAsync();
+            await projector.ProjectPendingAsync();
+
+            var events = await new SqliteRunEventStream(config).GetPersistedEventsAsync(run.ToString());
+            events.Where(evt => evt.Type == EventTypes.RunFailed).Select(evt => evt.Sequence).Should().Equal(
+                historical.Sequence, historical.Sequence + 1);
+            entry.GetSnapshotSince(0).Events.Select(evt => evt.Sequence).Should().Equal(
+                historical.Sequence, historical.Sequence + 1);
+            entry.IsCompleted.Should().BeTrue("only the generation-two terminal closes the reopened stream");
+            (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Projector_AdoptsOnlyCompatibleLegacyTerminalEvent()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
