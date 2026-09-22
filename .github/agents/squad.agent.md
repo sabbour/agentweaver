@@ -377,6 +377,14 @@ or crosses domains or subsystems. A small, isolated, low-risk change gets one fo
 review selected by its risk or domain; it does not skip review. Keep documentation and
 validation prerequisites proportional to the change.
 
+**Structured review output contract:** Every review emits
+`agentweaver.squad-review/v2`. Set `phase` to `design` or `implementation`. A design
+target identifies the artifact path and SHA-256 digest. An implementation target
+identifies the absolute worktree, branch, and exact HEAD SHA. A corrective re-review
+preserves the original finding ID, phase, source, and target type and evaluates only that
+finding. Design review evaluates the design artifact and never requires implementation
+validation evidence.
+
 **Implementation lifecycle gates:**
 - During design, identify the appropriate GitHub milestone for each feature or fix and
   record it for the draft PR. If no suitable milestone exists, record that outcome
@@ -390,18 +398,27 @@ validation prerequisites proportional to the change.
   preserve normal approval, admission, and secret-handling gates regardless of the
   evidence. Do not require live diagnostics for feature work.
 - Create implementation PRs as drafts and apply the recorded milestone when the draft
-  is created. Run `gh pr ready` only after implementation, required documentation and
-  validation, and independent review/admission checks are complete with no unresolved
-  blockers.
-- **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the coordinator-owned external-state admission preflight before ready and again
-  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
-  fetches `origin/dev`, gets the live PR head SHA, and runs
+  is created. Keep the PR draft while exact validations and reviews run.
+- Run each implementation validation with `scripts/ci/squad-validation-evidence.mjs`.
+  The helper runs one exact argv command only when the current absolute CWD, git top-level,
+  branch, and HEAD match the assigned worktree and candidate SHA before and after execution.
+  It never switches or repairs repository state.
+- Materialize `agentweaver.squad-admission-findings/v2` only from structured exact-head
+  review outputs and structured validation evidence. Never infer an approval, finding,
+  correction, or missing evidence. Write atomically, then read and validate through the
+  same configured state backend. Non-local state requires its runtime adapter and never
+  falls back to filesystem writes.
+- **Milestone PR checkpoint:** after materialization, Ralph runs the coordinator-owned
+  external-state admission preflight while the PR is still draft. Missing, v1, incomplete,
+  or provenance-mismatched evidence blocks `gh pr ready <number>`. Ralph runs a fresh
+  preflight again immediately before
+  `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph fetches
+  `origin/dev`, gets the live PR head SHA, and runs
   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
   --head-sha <live-head-sha>`. The preflight resolves declared external state with the
-  pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
-  required finding with an owner, correction or waiver, fresh validation/review, and a
-  resolved transition. Coordinator/Ralph and authoritative external Squad state are
+  pinned Squad SDK and requires the coordinator-owned v2 findings ledger to contain every
+  declared review source, exact-head validation, and resolved required finding or explicit
+  waiver. Coordinator/Ralph and authoritative external Squad state are
   trusted operational components; GitHub is evidence and CI only, and repository code
   does not provide an adversarially immutable execution boundary. PR comments preserve
   evidence but do not enforce admission. Confirm the PR is actually merged before
@@ -465,6 +482,9 @@ Record the reviewer revalidation:
 
 - PR head: `<head-sha>`.
 - Finding: `<finding-id>`.
+- Phase: `<design-or-implementation>`.
+- Source: `<review-source>`.
+- Target: `<artifact-digest-or-worktree-and-sha>`.
 - Correction: `<correction-fact>`.
 - Validation: `<command-and-result>`.
 - Decision: `<revalidation-decision>`.

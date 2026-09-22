@@ -1,74 +1,114 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { KIND, resolveDeclaredExternalStateDirectory, runAdmissionPreflight, validateAdmissionPreflight } from '../squad-admission-preflight.mjs';
+import { REVIEW_KIND, VALIDATION_KIND } from '../squad-admission-ledger.mjs';
 
-const expected = { repository: 'sabbour/agentweaver', prNumber: 1489 };
-const event = (state, headSha, extra = {}) => ({ state, actor: 'ralph', at: '2026-09-21T00:00:00Z', headSha, evidence: state, ...extra });
-const ledger = (headSha, findings = []) => ({ kind: KIND, ...expected, headSha, findings });
-
-test('admits empty, advisory, and fully resolved authoritative ledgers', () => {
-  const headSha = 'a'.repeat(40);
-  assert.equal(validateAdmissionPreflight(ledger(headSha), { ...expected, headSha }).admitted, true);
-  assert.equal(validateAdmissionPreflight(ledger(headSha, [{ id: 'F-0', policy: 'advisory' }]), { ...expected, headSha }).findings, 1);
-  const finding = { id: 'F-1', policy: 'required', transitions: [
-    event('recorded', headSha), event('owned', headSha, { owner: 'neo', action: 'fix validator' }),
-    event('corrected', headSha), event('revalidated', headSha, { validation: 'node --test focused suite' }), event('resolved', headSha),
-  ] };
-  assert.equal(validateAdmissionPreflight(ledger(headSha, [finding]), { ...expected, headSha }).findings, 1);
+const expected = { repository: 'sabbour/agentweaver', prNumber: 1502 };
+const worktree = 'C:\\Users\\agent\\src\\agentweaver\\.worktrees\\issue-1502';
+const branch = 'squad/1502-evidence-admission';
+const headSha = 'a'.repeat(40);
+const target = { type: 'worktree', worktree, branch, headSha };
+const review = (source, extra = {}) => ({
+  kind: REVIEW_KIND,
+  phase: 'implementation',
+  source,
+  reviewer: `${source}-reviewer`,
+  verdict: 'approved',
+  target,
+  findings: [],
+  ...extra,
+});
+const validation = {
+  kind: VALIDATION_KIND,
+  argv: ['node', '--test', 'focused.test.mjs'],
+  cwd: worktree,
+  worktree,
+  branch,
+  headSha,
+  startedAt: '2026-09-22T18:00:00.000Z',
+  completedAt: '2026-09-22T18:00:01.000Z',
+  exitCode: 0,
+  signal: null,
+  result: 'passed',
+  stdout: '',
+  stderr: '',
+  after: { cwd: worktree, worktree, branch, headSha },
+};
+const ledger = (extra = {}) => ({
+  kind: KIND,
+  ...expected,
+  headSha,
+  worktree,
+  branch,
+  requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
+  reviews: [review('code-review'), review('security-review'), review('ponytail-review')],
+  validations: [validation],
+  materializedAt: '2026-09-22T18:00:02.000Z',
+  ...extra,
 });
 
-test('blocks unknown policies and incomplete required findings', () => {
-  const headSha = 'a'.repeat(40);
-  assert.throws(() => validateAdmissionPreflight(ledger(headSha, [{ id: 'F-1' }]), { ...expected, headSha }), /policy/u);
-  assert.throws(() => validateAdmissionPreflight(ledger(headSha, [{ id: 'F-1', policy: 'blocking' }]), { ...expected, headSha }), /policy/u);
-  assert.throws(() => validateAdmissionPreflight(ledger(headSha, [{ id: 'F-1', policy: 'required', transitions: [] }]), { ...expected, headSha }), /incomplete/u);
+test('admits a complete v2 exact-head ledger', () => {
+  assert.deepEqual(validateAdmissionPreflight(ledger(), { ...expected, headSha }), {
+    admitted: true,
+    headSha,
+    findings: 0,
+  });
 });
 
-test('blocks stale evidence in every required-finding lifecycle transition', () => {
-  const headSha = 'a'.repeat(40);
-  const staleHeadSha = 'b'.repeat(40);
-  const transitions = (remediation = 'corrected') => [
-    event('recorded', headSha),
-    event('owned', headSha, { owner: 'neo', action: 'fix validator' }),
-    event(remediation, headSha, remediation === 'waived' ? { rationale: 'accepted risk' } : {}),
-    event('revalidated', headSha, { validation: 'node --test focused suite' }),
-    event('resolved', headSha),
+test('blocks missing, v1, incomplete, and stale ledgers', async () => {
+  await assert.rejects(
+    () => runAdmissionPreflight(expected.repository, expected.prNumber, {
+      stateDirectory: 'C:\\state',
+      headSha,
+      readLedger: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
+    }),
+    /missing/u,
+  );
+  assert.throws(() => validateAdmissionPreflight({ ...ledger(), kind: 'agentweaver.squad-admission-findings/v1' }, { ...expected, headSha }), /v2/u);
+  assert.throws(() => validateAdmissionPreflight({ ...ledger(), validations: [] }, { ...expected, headSha }), /validations/u);
+  assert.throws(() => validateAdmissionPreflight(ledger(), { ...expected, headSha: 'b'.repeat(40) }), /stale/u);
+});
+
+test('blocks provenance mismatches and unresolved required findings', () => {
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    validations: [{ ...validation, cwd: 'C:\\shared\\agentweaver' }],
+  }), { ...expected, headSha }), /cwd does not match/u);
+
+  const finding = { id: 'F-1', policy: 'required', summary: 'Exact-head review failed.' };
+  assert.throws(() => validateAdmissionPreflight(ledger({
+    reviews: [
+      review('code-review', { verdict: 'rejected', findings: [finding] }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  }), { ...expected, headSha }), /unresolved/u);
+});
+
+test('preserves advisory and explicit waiver behavior', () => {
+  const reviews = [
+    review('code-review', {
+      verdict: 'rejected',
+      findings: [
+        { id: 'F-ADV', policy: 'advisory', summary: 'Optional cleanup.' },
+        { id: 'F-WAIVE', policy: 'required', summary: 'Accepted operational risk.', waiver: { actor: 'sabbour', rationale: 'Bounded and accepted.' } },
+      ],
+    }),
+    review('security-review'),
+    review('ponytail-review'),
   ];
-
-  for (const [index, state, remediation] of [
-    [0, 'recorded'],
-    [1, 'owned'],
-    [2, 'corrected', 'corrected'],
-    [2, 'waived', 'waived'],
-    [3, 'revalidated'],
-    [4, 'resolved'],
-  ]) {
-    const findingTransitions = transitions(remediation);
-    findingTransitions[index] = { ...findingTransitions[index], headSha: staleHeadSha };
-    assert.throws(
-      () => validateAdmissionPreflight(ledger(headSha, [{ id: `F-${state}`, policy: 'required', transitions: findingTransitions }]), { ...expected, headSha }),
-      new RegExp(`transitions\\[${index}\\]\\.headSha is stale`, 'u'),
-      `${state} evidence must match the live PR head`,
-    );
-  }
+  assert.equal(validateAdmissionPreflight(ledger({ reviews }), { ...expected, headSha }).admitted, true);
 });
 
-test('reads the declared external state directory and rejects stale ledger evidence', async () => {
-  const headSha = 'a'.repeat(40);
-  const result = await runAdmissionPreflight('sabbour/agentweaver', 1489, {
+test('reads only the declared external state directory', async () => {
+  const result = await runAdmissionPreflight(expected.repository, expected.prNumber, {
     stateDirectory: 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver',
     headSha,
     readLedger: async (stateDirectory) => {
       assert.equal(stateDirectory, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
-      return ledger(headSha);
+      return ledger();
     },
   });
   assert.equal(result.headSha, headSha);
-  await assert.rejects(() => runAdmissionPreflight('sabbour/agentweaver', 1489, {
-    stateDirectory: 'C:\\candidate\\.squad',
-    headSha,
-    readLedger: async () => ledger('b'.repeat(40)),
-  }), /stale/u);
 });
 
 test('uses the pinned Squad resolver for declared external state', async () => {

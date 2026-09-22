@@ -41,25 +41,28 @@ Examples:
    gh issue edit {number} --add-label "status:in-progress"
    ```
 
-3. **Do the work.** Make changes, write tests, and commit the completed issue on its own
-   branch before accepting another issue.
+3. **Do the work.** Make changes and write tests on the issue branch.
 
-4. **Run bounded independent review, then push and open a draft PR:**
+4. **Commit, push, and open the draft PR before admission evidence is collected:**
    ```bash
    git push -u origin squad/{issue-number}-{slug}
    gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-   Mark the PR ready only after required validation and independent review/admission have
-   completed with no unresolved blocker:
+   Run exact validations through `scripts/ci/squad-validation-evidence.mjs` from the
+   assigned absolute worktree and exact candidate SHA. Collect structured phase-aware
+   review outputs. Materialize and read-validate the v2 ledger through the configured
+   state backend. Run the preflight while the PR is still draft. Only then may the PR
+   move to ready:
    ```bash
    gh pr ready <number>
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
-   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
-   the live PR head SHA, and runs
+   Before ready and again immediately before merge, Ralph fetches `origin/dev`, gets the
+   live PR head SHA, and runs
    `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
    The preflight uses the pinned Squad SDK to resolve declared external state and checks
-   the coordinator-owned findings ledger. Ralph records the returned
+   the coordinator-owned v2 findings ledger. Missing, legacy, incomplete, or provenance-
+   mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
    and authoritative external Squad state are trusted operational components; GitHub is
    evidence and CI only, and repository code is not an adversarially immutable boundary.

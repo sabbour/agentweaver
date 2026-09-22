@@ -58,12 +58,19 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Before ready and immediately before merge, Ralph fetches `origin/dev`, gets the
-     live PR `headRefOid`, and runs the external-state preflight with that SHA:
+   - Open the PR as a draft before admission validation or review. Run every validation
+     through `scripts/ci/squad-validation-evidence.mjs` from the assigned absolute
+     worktree and exact candidate SHA. Collect structured, phase-aware review outputs.
+     Materialize the v2 external-state ledger only from those exact outputs and validation
+     records, then read and validate it through the same configured state backend.
+   - While the PR is still draft, Ralph fetches `origin/dev`, gets the live PR
+     `headRefOid`, and runs the external-state preflight with that SHA:
      `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
      --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
-     state with the pinned Squad SDK and validates its coordinator-owned findings ledger.
-     Ralph records the returned `<validated-sha>` and merges manually with
+     state with the pinned Squad SDK and validates its coordinator-owned v2 findings
+     ledger. Missing, legacy, incomplete, or mismatched evidence blocks the ready
+     transition. Immediately before merge, Ralph repeats the preflight against the fresh
+     live head, records the returned `<validated-sha>`, and merges manually with
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
