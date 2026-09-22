@@ -396,7 +396,9 @@ validation prerequisites proportional to the change.
 - **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
   run the coordinator-owned external-state admission preflight before ready and again
   before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. It resolves
-  and returns the live `<validated-sha>` itself. Ralph materializes the canonical
+  and returns the live `<validated-sha>` itself. Ralph invokes
+  `git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module -
+  <owner/repository> <pr-number>`; the trusted launcher materializes the canonical
   validator from `origin/dev` with `git show`, verifies its blob hash/version, and never
   executes a candidate-checkout validator; it requires the external
   Squad finding ledger to resolve every non-advisory finding with an owner, correction or

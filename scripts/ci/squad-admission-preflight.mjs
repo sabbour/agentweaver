@@ -173,7 +173,7 @@ export async function verifyTrustedValidator({ command = runFile, repositoryRoot
   if (trustedValidatorBlob !== trustedBlobHash) throw new Error('provided trusted validator blob does not match origin/dev');
   const materializedBlob = required((await command('git', ['hash-object', validatorPath], { cwd: repositoryRoot })).stdout, 'materialized validator blob').toLowerCase();
   if (materializedBlob !== trustedBlobHash) {
-    throw new Error('candidate-checkout validator substitution rejected: validator bytes do not match origin/dev');
+    throw new Error('materialized trusted validator bytes do not match origin/dev');
   }
   return { path: VALIDATOR_PATH, ref: trustedRef, blobSha: trustedBlobHash, version: VALIDATOR_VERSION };
 }

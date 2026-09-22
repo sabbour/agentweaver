@@ -59,8 +59,10 @@ they are not Agentweaver sign-in providers.
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
    - Before ready and immediately before merge, Ralph runs the Squad external-state
-     admission preflight from the canonical validator materialized from `origin/dev`.
-     It binds the live PR head and trusted validator blob/version, then returns
+     admission launcher (`git show origin/dev:scripts/ci/squad-admission-launcher.mjs |
+     node --input-type=module - <owner/repository> <pr-number>`), which materializes the canonical validator
+     from `origin/dev` outside the candidate checkout. It binds the live PR head and
+     trusted validator blob/version, then returns
      `<validated-sha>`;
      merge manually with `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
      GitHub automatically deletes the source branch after merge.

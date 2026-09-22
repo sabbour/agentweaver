@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDirConfig, resolveExternalStateDir } from '@bradygaster/squad-sdk';
 import { KIND, resolveAuthoritativeState, runAdmissionPreflight, validateAdmissionPreflight, verifyTrustedValidator } from '../squad-admission-preflight.mjs';
+import { launchTrustedAdmission } from '../squad-admission-launcher.mjs';
 
 const SHA = 'a'.repeat(40);
 const expected = { repository: 'sabbour/agentweaver', prNumber: 1489, headSha: SHA };
@@ -71,7 +73,7 @@ test('resolves the live PR head immediately before validating the external ledge
   }), /stale/u);
 });
 
-test('binds the trusted validator source and rejects candidate-checkout substitution', async () => {
+test('the materialized validator verifies its trusted source bytes', async () => {
   const trustedBlob = 'c'.repeat(40);
   const command = async (_file, args) => {
     if (args[0] === 'rev-parse') return { stdout: `${trustedBlob}\n` };
@@ -84,5 +86,58 @@ test('binds the trusted validator source and rejects candidate-checkout substitu
   await assert.rejects(() => verifyTrustedValidator({
     command: async (_file, args) => ({ stdout: `${args[0] === 'rev-parse' ? trustedBlob : 'd'.repeat(40)}\n` }),
     repositoryRoot: 'C:\\repo', validatorPath: 'C:\\candidate\\squad-admission-preflight.mjs', trustedValidatorBlob: trustedBlob,
-  }), /candidate-checkout validator substitution rejected/u);
+  }), /materialized trusted validator bytes do not match origin\/dev/u);
+});
+
+test('launcher executes actual trusted git bytes, not a modified candidate validator, and cleans up', async () => {
+  const fixture = join(dirname(fileURLToPath(import.meta.url)), `.admission-launcher-${process.pid}-${Date.now()}`);
+  const candidateRoot = join(fixture, 'candidate');
+  const validatorPath = 'scripts/ci/squad-admission-preflight.mjs';
+  const traceFile = join(fixture, 'trusted-trace.json');
+  const candidateMarker = join(fixture, 'candidate-ran');
+  const headSha = 'e'.repeat(40);
+  const previousTrace = process.env.ADMISSION_TRACE;
+  try {
+    mkdirSync(candidateRoot, { recursive: true });
+    execFileSync('git', ['init'], { cwd: candidateRoot, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'admission@example.test'], { cwd: candidateRoot });
+    execFileSync('git', ['config', 'user.name', 'Admission test'], { cwd: candidateRoot });
+    mkdirSync(dirname(join(candidateRoot, validatorPath)), { recursive: true });
+    writeFileSync(join(candidateRoot, validatorPath), `
+      import { execFileSync } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      const blob = execFileSync('git', ['hash-object', process.argv[1]], { encoding: 'utf8' }).trim();
+      if (blob !== process.argv[5]) throw new Error('untrusted materialization');
+      writeFileSync(process.env.ADMISSION_TRACE, JSON.stringify({ executable: process.argv[1], source: 'trusted-executed' }));
+      console.log(JSON.stringify({ headSha: '${headSha}', validator: { path: '${validatorPath}', ref: 'origin/dev', blobSha: blob, version: 'fixture-1' } }));
+    `);
+    execFileSync('git', ['add', validatorPath], { cwd: candidateRoot });
+    execFileSync('git', ['commit', '-m', 'trusted validator'], { cwd: candidateRoot, stdio: 'ignore' });
+    execFileSync('git', ['branch', '-M', 'dev'], { cwd: candidateRoot });
+    execFileSync('git', ['remote', 'add', 'origin', '.'], { cwd: candidateRoot });
+    execFileSync('git', ['fetch', 'origin', 'dev:refs/remotes/origin/dev'], { cwd: candidateRoot, stdio: 'ignore' });
+    writeFileSync(join(candidateRoot, validatorPath), `import { writeFileSync } from 'node:fs'; writeFileSync('${candidateMarker.replaceAll('\\', '\\\\')}', 'candidate-executed'); process.exit(88);`);
+    process.env.ADMISSION_TRACE = traceFile;
+
+    const result = await launchTrustedAdmission({
+      repository: 'sabbour/agentweaver',
+      prNumber: 1489,
+      repositoryRoot: candidateRoot,
+      command: async (file, args, options) => {
+        if (file === 'gh') return { stdout: JSON.stringify({ headRefOid: headSha }) };
+        return { stdout: execFileSync(file, args, { ...options, encoding: 'utf8' }) };
+      },
+    });
+
+    const trace = JSON.parse(readFileSync(traceFile, 'utf8'));
+    assert.equal(result.headSha, headSha);
+    assert.equal(trace.source, 'trusted-executed');
+    assert.equal(existsSync(candidateMarker), false);
+    assert.equal(relative(candidateRoot, trace.executable).startsWith('..'), true);
+    assert.equal(existsSync(trace.executable), false);
+  } finally {
+    if (previousTrace === undefined) delete process.env.ADMISSION_TRACE;
+    else process.env.ADMISSION_TRACE = previousTrace;
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });

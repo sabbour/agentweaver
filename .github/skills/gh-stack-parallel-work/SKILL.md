@@ -82,20 +82,23 @@ explicit accountable decision, not reviewer silence.
 GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ralph stores
 the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
 authoritative external Squad state. Before ready and immediately before manual squash merge,
-Ralph fetches `origin/dev`, obtains the canonical validator bytes with
-`git show origin/dev:scripts/ci/squad-admission-preflight.mjs` into a newly created
-temporary file, and invokes **that materialized file**, never `npm run` or a validator
-from the candidate checkout. The validator checks that its own blob equals
+Ralph fetches `origin/dev` and runs
+`git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module - <owner/repository> <pr-number>`.
+That materializes the launcher itself from trusted `origin/dev`. The trusted launcher obtains canonical validator bytes with
+`git show origin/dev:scripts/ci/squad-admission-preflight.mjs`, securely creates a
+temporary file outside the candidate checkout, invokes **that materialized file**, and
+removes it reliably. It never uses `npm run` or executes a validator from the candidate
+checkout. The materialized validator checks that its own blob equals
 `git rev-parse origin/dev:scripts/ci/squad-admission-preflight.mjs`; substitution is
-rejected. Its result records the live candidate `headRefOid`, trusted ref, validator path,
-blob hash, and validator version. It resolves the live PR head itself and returns
+rejected. The launcher binds the live candidate `headRefOid`, trusted ref, validator path,
+blob hash, and validator version before it returns
 `<validated-sha>`; merge with
 `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Required findings must be owned,
 corrected or waived, freshly validated/reviewed at the current SHA, and resolved. PR
 comments preserve the ledger evidence but do not decide admission.
 
 Bootstrap exception — **#1490 only**: trusted `origin/dev` necessarily predates this
-validator and cannot validate its own introduction. An independently reviewed manual
+launcher and validator and cannot validate its own introduction. An independently reviewed manual
 local preflight may admit that one bootstrap PR. Record the candidate SHA, reviewer, exact
 manual checks, and exception in the external ledger. Do not describe this as trusted-dev
 self-validation, and do not reuse this exception for later PRs; every later preflight

@@ -56,9 +56,12 @@ Examples:
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
    Before ready and immediately before this command, Ralph runs the coordinator-owned
-   external-state admission preflight from a temporary validator materialized with
-   `git show origin/dev:scripts/ci/squad-admission-preflight.mjs`, never the candidate
-   checkout. It binds the live PR head and the trusted validator blob/version before it
+   external-state admission launcher:
+   `git show origin/dev:scripts/ci/squad-admission-launcher.mjs | node --input-type=module - <owner/repository> <pr-number>`.
+   This materializes the launcher itself from trusted `origin/dev`; the launcher then
+   materializes `git show origin/dev:scripts/ci/squad-admission-preflight.mjs` outside
+   the candidate checkout and invokes only those trusted bytes—never a candidate
+   validator. It binds the live PR head and the trusted validator blob/version before it
    returns `<validated-sha>`. Confirm the PR reports `MERGED`,
    `mergedAt`, and merge SHA before dispatching dependent work.
 
