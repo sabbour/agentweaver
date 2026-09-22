@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 
 import { runContextBudgetPressure } from '../lib/context-budget-pressure.mjs';
+import { main } from '../run-context-budget-pressure.mjs';
 
 function clientFor({ cleanupFailure = false } = {}) {
   let project = 0;
@@ -84,4 +86,41 @@ test('scenario failure still reports run and project cleanup mismatch', async ()
       return true;
     },
   );
+});
+
+test('runner signal cancellation remains primary while the profile restores', async () => {
+  const processImpl = new EventEmitter();
+  processImpl.stdout = { write() {} };
+  let restored = false;
+  const dependencies = {
+    createAuthProvider: () => ({}),
+    createClient: () => ({
+      get: async () => response(200, { isRelease: false }),
+    }),
+    withProfile: async (options, action) => {
+      try {
+        return await action();
+      } finally {
+        assert.equal(options.signal.aborted, true);
+        restored = true;
+      }
+    },
+    runPressure: async (_client, options) => {
+      processImpl.emit('SIGTERM');
+      throw options.signal.reason;
+    },
+  };
+
+  await assert.rejects(
+    main([
+      '--target', 'https://agentweaver.example.staging.test',
+      '--namespace', 'agentweaver',
+      '--kube-context', 'staging-context',
+      '--confirm-non-production', 'https://agentweaver.example.staging.test',
+    ], processImpl, dependencies),
+    /cancelled by SIGTERM/,
+  );
+  assert.equal(restored, true);
+  assert.equal(processImpl.listenerCount('SIGINT'), 0);
+  assert.equal(processImpl.listenerCount('SIGTERM'), 0);
 });

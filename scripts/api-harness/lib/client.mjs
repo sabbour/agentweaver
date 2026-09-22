@@ -123,6 +123,9 @@ export class AgentweaverClient {
         responseBody = text; // non-JSON (e.g. SSE / plain text)
       }
     } catch (err) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : err;
+      }
       responseBody = { error: 'transport_error', message: String(err?.message ?? err) };
     }
 

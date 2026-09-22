@@ -21,7 +21,13 @@ function args(argv) {
   return result;
 }
 
-export async function main(argv = process.argv.slice(2), processImpl = process) {
+export async function main(argv = process.argv.slice(2), processImpl = process, dependencies = {}) {
+  const {
+    createAuthProvider = createRecorderSessionAuthProvider,
+    createClient = (options) => new AgentweaverClient(options),
+    runPressure = runContextBudgetPressure,
+    withProfile = withContextBudgetProfile,
+  } = dependencies;
   const parsed = args(argv);
   const target = parsed.target;
   if (!target) throw new Error('--target is required.');
@@ -34,16 +40,16 @@ export async function main(argv = process.argv.slice(2), processImpl = process) 
   processImpl.once('SIGINT', onSigint);
   processImpl.once('SIGTERM', onSigterm);
   try {
-    const authProvider = createRecorderSessionAuthProvider({
+    const authProvider = createAuthProvider({
       baseUrl: target,
       authRoot: parsed['recorder-auth-root'],
     });
-    const client = new AgentweaverClient({ baseUrl: target, authProvider });
+    const client = createClient({ baseUrl: target, authProvider });
     const version = await client.get('/api/version', { authenticated: false, signal: abort.signal });
     if (!version.ok || version.responseBody?.isRelease !== false) {
       throw new Error('Context-budget acceptance requires a reachable non-release target reporting isRelease=false.');
     }
-    const result = await withContextBudgetProfile({
+    const result = await withProfile({
       target,
       namespace: parsed.namespace,
       kubeContext: parsed['kube-context'],
@@ -51,7 +57,7 @@ export async function main(argv = process.argv.slice(2), processImpl = process) 
       nonProductionVerified: true,
       ...contextBudgetPressureProfile,
       signal: abort.signal,
-    }, async () => runContextBudgetPressure(client, {
+    }, async () => runPressure(client, {
       signal: abort.signal,
       timeoutMs: Number(parsed['timeout-seconds'] ?? 120) * 1000,
     }));

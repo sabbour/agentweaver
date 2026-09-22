@@ -105,41 +105,82 @@ async function createLock(capture, namespace, kubeContext, owner, signal) {
       acquireTime: new Date().toISOString(),
     },
   };
+  throwIfAborted(signal);
   try {
-    await capture('kubectl', inContext(['create', '-f', '-'], kubeContext), {
+    const result = await capture('kubectl', [...inContext(['create', '-f', '-'], kubeContext), '--output', 'json'], {
       input: JSON.stringify(lease),
-      signal,
+      json: true,
     });
+    return {
+      uid: result.json?.metadata?.uid,
+      resourceVersion: result.json?.metadata?.resourceVersion,
+    };
   } catch (error) {
+    const existing = await kubectlJson(
+      capture,
+      ['get', 'lease', LOCK_NAME, '--namespace', namespace],
+      kubeContext,
+    ).catch(() => null);
+    if (existing?.spec?.holderIdentity === owner) {
+      return {
+        uid: existing.metadata?.uid,
+        resourceVersion: existing.metadata?.resourceVersion,
+      };
+    }
     throw new Error(`Context-budget profile is already locked or cannot acquire its Lease: ${error.message}`);
   }
 }
 
-async function releaseLock(capture, namespace, kubeContext, owner) {
+async function releaseLock(capture, namespace, kubeContext, owner, identity) {
   const lease = await kubectlJson(capture, ['get', 'lease', LOCK_NAME, '--namespace', namespace], kubeContext);
-  if (lease?.spec?.holderIdentity !== owner) {
+  if (lease?.spec?.holderIdentity !== owner
+    || lease?.metadata?.uid !== identity.uid
+    || lease?.metadata?.resourceVersion !== identity.resourceVersion) {
     throw new Error('Context-budget profile Lease ownership changed; refusing to delete another owner\'s lock.');
   }
-  await capture('kubectl', inContext(['delete', 'lease', LOCK_NAME, '--namespace', namespace], kubeContext));
+  const path = `/apis/coordination.k8s.io/v1/namespaces/${encodeURIComponent(namespace)}/leases/${LOCK_NAME}`;
+  await capture('kubectl', inContext(['delete', `--raw=${path}`, '-f', '-'], kubeContext), {
+    input: JSON.stringify({
+      apiVersion: 'v1',
+      kind: 'DeleteOptions',
+      preconditions: {
+        uid: identity.uid,
+        resourceVersion: identity.resourceVersion,
+      },
+    }),
+  });
 }
 
-async function patchDeployment(capture, namespace, kubeContext, target, env, annotation, signal) {
+async function patchDeployment(
+  capture,
+  namespace,
+  kubeContext,
+  target,
+  env,
+  annotation,
+  { signal, requireOwner, expectedEnv } = {},
+) {
   const annotationPath = `/spec/template/metadata/annotations/${pointer(PROFILE_ANNOTATION)}`;
   const annotationExists = target.annotation !== null;
   const patch = [
     { op: 'test', path: '/metadata/resourceVersion', value: target.resourceVersion },
+    ...(requireOwner ? [
+      { op: 'test', path: annotationPath, value: requireOwner },
+      { op: 'test', path: `/spec/template/spec/containers/${target.containerIndex}/env`, value: expectedEnv },
+    ] : []),
     { op: 'replace', path: `/spec/template/spec/containers/${target.containerIndex}/env`, value: env },
     annotation === null
       ? { op: 'remove', path: annotationPath }
       : { op: annotationExists ? 'replace' : 'add', path: annotationPath, value: annotation },
   ];
+  throwIfAborted(signal);
   await capture(
     'kubectl',
     inContext(
       ['patch', 'deployment', target.deployment, '--namespace', namespace, '--type=json', '--patch', JSON.stringify(patch)],
       kubeContext,
     ),
-    { signal },
+    {},
   );
 }
 
@@ -165,6 +206,12 @@ async function waitForRollout(run, namespace, kubeContext, deployment, signal) {
 function equalVariables(actual, expected) {
   return CONTEXT_BUDGET_ENV.every((name) =>
     JSON.stringify(actual.variables[name]) === JSON.stringify(expected.variables[name]));
+}
+
+function hasAppliedProfile(state, owner, maxItems, maxTokens) {
+  return state.annotation === owner
+    && state.variables.MemoryContext__MaxItems?.value === String(maxItems)
+    && state.variables.MemoryContext__MaxTokens?.value === String(maxTokens);
 }
 
 export async function withContextBudgetProfile(options, action) {
@@ -195,6 +242,13 @@ export async function withContextBudgetProfile(options, action) {
   if (currentContext !== kubeContext) {
     throw new Error(`Active Kubernetes context "${currentContext}" does not match requested context "${kubeContext}".`);
   }
+  const kubeConfig = await kubectlJson(capture, ['config', 'view', '--minify'], kubeContext, signal);
+  const currentNamespace = kubeConfig?.contexts?.[0]?.context?.namespace ?? 'default';
+  if (currentNamespace !== namespace) {
+    throw new Error(
+      `Active Kubernetes namespace "${currentNamespace}" does not match requested namespace "${namespace}".`,
+    );
+  }
   const route = await kubectlJson(
     capture,
     ['get', 'httproute', 'agentweaver-api-route', '--namespace', namespace],
@@ -206,11 +260,17 @@ export async function withContextBudgetProfile(options, action) {
   }
 
   let locked = false;
+  let lockIdentity = null;
   let snapshots = null;
+  const patchedDeployments = new Set();
   let primaryError = null;
   try {
-    await createLock(capture, namespace, kubeContext, owner, signal);
+    lockIdentity = await createLock(capture, namespace, kubeContext, owner, signal);
+    if (!lockIdentity.uid || !lockIdentity.resourceVersion) {
+      throw new Error('Context-budget profile Lease creation did not return UID/resourceVersion identity.');
+    }
     locked = true;
+    throwIfAborted(signal);
     snapshots = {};
     for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
       const deployment = await kubectlJson(
@@ -224,25 +284,74 @@ export async function withContextBudgetProfile(options, action) {
         ...targetDeployment,
       };
     }
-    await capture(
-      'kubectl',
-      ['patch', 'lease', LOCK_NAME, '--namespace', namespace, '--type=merge', '--patch',
-        JSON.stringify({ metadata: { annotations: { [SNAPSHOT_ANNOTATION]: Buffer.from(JSON.stringify(snapshots)).toString('base64url') } } }),
-        '--context', kubeContext],
-      { signal },
-    );
+    throwIfAborted(signal);
+    const encodedSnapshot = Buffer.from(JSON.stringify(snapshots)).toString('base64url');
+    const leasePatch = [
+      { op: 'test', path: '/metadata/resourceVersion', value: lockIdentity.resourceVersion },
+      { op: 'test', path: '/spec/holderIdentity', value: owner },
+      {
+        op: 'add',
+        path: `/metadata/annotations/${pointer(SNAPSHOT_ANNOTATION)}`,
+        value: encodedSnapshot,
+      },
+    ];
+    let patchedLease;
+    try {
+      patchedLease = (await capture(
+        'kubectl',
+        inContext([
+          'patch', 'lease', LOCK_NAME, '--namespace', namespace, '--type=json', '--patch',
+          JSON.stringify(leasePatch), '--output', 'json',
+        ], kubeContext),
+        { json: true },
+      )).json;
+    } catch (error) {
+      const reconciled = await kubectlJson(
+        capture,
+        ['get', 'lease', LOCK_NAME, '--namespace', namespace],
+        kubeContext,
+      ).catch(() => null);
+      if (reconciled?.metadata?.uid !== lockIdentity.uid
+        || reconciled?.spec?.holderIdentity !== owner
+        || reconciled?.metadata?.annotations?.[SNAPSHOT_ANNOTATION] !== encodedSnapshot) {
+        throw error;
+      }
+      patchedLease = reconciled;
+    }
+    lockIdentity.resourceVersion = patchedLease?.metadata?.resourceVersion;
+    if (!lockIdentity.resourceVersion) {
+      throw new Error('Context-budget profile Lease snapshot patch did not return a resourceVersion.');
+    }
+    throwIfAborted(signal);
 
     for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
       const snapshot = snapshots[targetDeployment.deployment];
-      await patchDeployment(
-        capture,
-        namespace,
-        kubeContext,
-        snapshot,
-        nextEnv(snapshot.env, { maxItems, maxTokens }),
-        owner,
-        signal,
-      );
+      try {
+        await patchDeployment(
+          capture,
+          namespace,
+          kubeContext,
+          snapshot,
+          nextEnv(snapshot.env, { maxItems, maxTokens }),
+          owner,
+          { signal },
+        );
+        patchedDeployments.add(targetDeployment.deployment);
+      } catch (error) {
+        const current = selectedState(
+          await kubectlJson(
+            capture,
+            ['get', 'deployment', targetDeployment.deployment, '--namespace', namespace],
+            kubeContext,
+          ),
+          targetDeployment.container,
+        );
+        if (hasAppliedProfile(current, owner, maxItems, maxTokens)) {
+          patchedDeployments.add(targetDeployment.deployment);
+        }
+        throw error;
+      }
+      throwIfAborted(signal);
     }
     for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
       await waitForRollout(run, namespace, kubeContext, targetDeployment.deployment, signal);
@@ -264,7 +373,8 @@ export async function withContextBudgetProfile(options, action) {
         throw new Error(`${targetDeployment.deployment} generation did not increase.`);
       }
       if (current.variables.MemoryContext__MaxItems?.value !== String(maxItems)
-        || current.variables.MemoryContext__MaxTokens?.value !== String(maxTokens)) {
+        || current.variables.MemoryContext__MaxTokens?.value !== String(maxTokens)
+        || current.annotation !== owner) {
         throw new Error(`${targetDeployment.deployment} context-budget readback did not match requested values.`);
       }
       applied[targetDeployment.deployment] = current.variables;
@@ -277,6 +387,7 @@ export async function withContextBudgetProfile(options, action) {
     const cleanupErrors = [];
     if (snapshots) {
       for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
+        if (!patchedDeployments.has(targetDeployment.deployment)) continue;
         const snapshot = snapshots[targetDeployment.deployment];
         try {
           const current = selectedState(
@@ -287,6 +398,9 @@ export async function withContextBudgetProfile(options, action) {
             ),
             targetDeployment.container,
           );
+          if (!hasAppliedProfile(current, owner, maxItems, maxTokens)) {
+            throw new Error('profile ownership or applied context-budget values changed; refusing to overwrite');
+          }
           await patchDeployment(
             capture,
             namespace,
@@ -294,12 +408,17 @@ export async function withContextBudgetProfile(options, action) {
             { ...current, deployment: targetDeployment.deployment },
             restoredEnv(current.env, snapshot.variables),
             snapshot.annotation,
+            {
+              requireOwner: owner,
+              expectedEnv: current.env,
+            },
           );
         } catch (error) {
           cleanupErrors.push(`${targetDeployment.deployment} restore: ${error.message}`);
         }
       }
       for (const targetDeployment of CONTEXT_BUDGET_DEPLOYMENTS) {
+        if (!patchedDeployments.has(targetDeployment.deployment)) continue;
         try {
           await waitForRollout(run, namespace, kubeContext, targetDeployment.deployment);
           const restored = selectedState(
@@ -321,13 +440,15 @@ export async function withContextBudgetProfile(options, action) {
     }
     if (locked) {
       try {
-        await releaseLock(capture, namespace, kubeContext, owner);
+        await releaseLock(capture, namespace, kubeContext, owner, lockIdentity);
       } catch (error) {
         cleanupErrors.push(`Lease cleanup: ${error.message}`);
       }
     }
     if (cleanupErrors.length > 0) {
-      if (primaryError) primaryError.cleanupErrors = cleanupErrors;
+      if (primaryError) {
+        primaryError.cleanupErrors = [...(primaryError.cleanupErrors ?? []), ...cleanupErrors];
+      }
       else throw new AggregateError(cleanupErrors.map((message) => new Error(message)), 'Context-budget profile cleanup failed.');
     }
   }

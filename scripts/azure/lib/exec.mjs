@@ -282,6 +282,11 @@ function timeoutMessage(timeoutMs, displayLine) {
  * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, signal?: AbortSignal }} [opts]
  */
 export function run(cmd, args = [], opts = {}) {
+  if (opts.signal?.aborted) {
+    return Promise.reject(
+      opts.signal.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
+    );
+  }
   const dryRun = opts.dryRun ?? dryRunEnabled;
   const displayLine = formatCommandLine(cmd, args);
   if (dryRun) {
@@ -332,10 +337,6 @@ export function run(cmd, args = [], opts = {}) {
         opts.signal?.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
       ));
     };
-    if (opts.signal?.aborted) {
-      onAbort();
-      return;
-    }
     opts.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => {
       if (opts.allowFailure) {
@@ -391,6 +392,11 @@ export function run(cmd, args = [], opts = {}) {
  * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown, timedOut?: boolean }>}
  */
 export function capture(cmd, args = [], opts = {}) {
+  if (opts.signal?.aborted) {
+    return Promise.reject(
+      opts.signal.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
+    );
+  }
   const dryRun = opts.dryRun ?? dryRunEnabled;
   const displayLine = formatCommandLine(cmd, args);
   if (dryRun) {
@@ -440,10 +446,6 @@ export function capture(cmd, args = [], opts = {}) {
         opts.signal?.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
       ));
     };
-    if (opts.signal?.aborted) {
-      onAbort();
-      return;
-    }
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     let stdout = "";
