@@ -100,10 +100,11 @@ public sealed class EfRunEventStream : IRunEventStream
             try
             {
                 await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
-                var existing = await db.RunEvents.AsNoTracking()
-                    .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                var existing = (await db.RunEvents.AsNoTracking()
+                    .Where(e => e.RunId == runId)
                     .OrderBy(e => e.Sequence)
-                    .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                    .ToListAsync(ct).ConfigureAwait(false))
+                    .FirstOrDefault(e => IRunEventStream.IsTerminalEventType(e.EventType));
                 if (existing is not null)
                 {
                     await tx.CommitAsync(ct).ConfigureAwait(false);

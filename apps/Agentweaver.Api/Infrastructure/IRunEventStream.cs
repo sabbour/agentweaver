@@ -12,6 +12,16 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public interface IRunEventStream
 {
+    static bool IsTerminalEventType(string type) => type is
+        EventTypes.RunCompleted or
+        EventTypes.RunFailed or
+        EventTypes.RunCancelled or
+        EventTypes.MergeCompleted or
+        EventTypes.MergeFailed or
+        EventTypes.ReviewDeclined or
+        EventTypes.RunAssembleReady or
+        EventTypes.CoordinatorAssemblyFailed;
+
     /// <summary>
     /// Appends an event to the run's log. Performs a synchronous SQLite write BEFORE returning,
     /// then publishes to the in-process channel. The append is durable before it is acknowledged.
@@ -23,8 +33,8 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
-    /// Atomically returns the durable <c>run.failed</c> event for a run, appending
-    /// <paramref name="failure"/> only when no such terminal event exists.
+    /// Atomically returns the durable terminal event for a run, appending <paramref name="failure"/>
+    /// only when no terminal event exists.
     /// </summary>
     Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support atomic terminal failure reconciliation.");

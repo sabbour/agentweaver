@@ -129,15 +129,17 @@ public sealed class SqliteRunEventStream : IRunEventStream
         command.Transaction = transaction;
         command.CommandText = """
             SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt" FROM "RunEvents"
-            WHERE "RunId" = $runId AND "EventType" = $type ORDER BY "Sequence" LIMIT 1;
+            WHERE "RunId" = $runId ORDER BY "Sequence";
             """;
         command.Parameters.AddWithValue("$runId", runId);
-        command.Parameters.AddWithValue("$type", EventTypes.RunFailed);
         using var reader = command.ExecuteReader();
-        if (reader.Read())
+        while (reader.Read())
         {
-            var evt = new RunEvent(reader.GetInt32(0), reader.GetString(1),
-                DeserializePayload(runId, reader.GetInt32(0), reader.GetString(1), reader.GetString(2)),
+            var type = reader.GetString(1);
+            if (!IRunEventStream.IsTerminalEventType(type))
+                continue;
+            var evt = new RunEvent(reader.GetInt32(0), type,
+                DeserializePayload(runId, reader.GetInt32(0), type, reader.GetString(2)),
                 new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)));
             reader.Close();
             transaction.Commit();
