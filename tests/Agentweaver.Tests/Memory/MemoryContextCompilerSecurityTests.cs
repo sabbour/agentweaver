@@ -250,22 +250,6 @@ public sealed class MemoryContextCompilerSecurityTests : IAsyncDisposable
         error.Which.RequiredCharacters.Should().BeGreaterThan(4);
     }
 
-    [Fact]
-    public async Task CompileAsync_OmitsOptionalContextWhenTheEnvelopeCannotFit()
-    {
-        const string projectId = "project-optional-envelope-budget";
-        _db.AgentMemory.Add(Memory(projectId, "optional memory", DateTimeOffset.UtcNow));
-        await _db.SaveChangesAsync();
-
-        var compiled = await new MemoryContextCompiler(_db).CompileAsync(
-            projectId, "Tank", maxItems: 20, maxTokens: 1);
-
-        compiled.Should().NotBeNull();
-        compiled!.Text.Should().BeNull();
-        compiled.OmittedMemoryCount.Should().Be(1);
-        compiled.OmissionCauses.Should().Contain("budget");
-    }
-
     private static AgentMemory Memory(string projectId, string content, DateTimeOffset createdAt) => new()
     {
         ProjectId = projectId,

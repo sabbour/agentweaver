@@ -1207,7 +1207,7 @@ public sealed class CoordinatorOrchestratorExecutor
         }
     }
 
-    private async Task FailNoTeamAsync(string runId, CancellationToken ct)
+    internal async Task FailNoTeamAsync(string runId, CancellationToken ct)
     {
         _logger.LogWarning(
             "Coordinator orchestrate: run {RunId} has no dispatchable team; failing with {Reason}",

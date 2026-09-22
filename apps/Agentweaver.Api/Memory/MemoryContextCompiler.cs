@@ -115,7 +115,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             return null;
 
         var mandatoryText = BuildUntrustedContext(decisions, [], session: null);
-        if (decisions.Count > 0 && mandatoryText.Length > maxChars)
+        if (mandatoryText.Length > maxChars)
             throw new MandatoryContextBudgetExceededException(maxChars, mandatoryText.Length);
 
         var selected = new List<(AgentMemory Memory, string Label)>();
