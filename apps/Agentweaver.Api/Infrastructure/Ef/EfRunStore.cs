@@ -56,7 +56,11 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.EndedAt, endedAt)
                 .SetProperty(r => r.ApprovalGeneration,
                     r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
-                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
+                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration)
+                .SetProperty(r => r.LifecycleGeneration,
+                    r => statusStr == RunStatus.InProgress.ToApiString()
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? r.LifecycleGeneration + 1 : r.LifecycleGeneration), ct);
         WarnIfNoRows(rows, runId, $"update status to {statusStr}");
     }
 
@@ -74,7 +78,11 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.Result, result)
                 .SetProperty(r => r.ApprovalGeneration,
                     r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
-                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
+                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration)
+                .SetProperty(r => r.LifecycleGeneration,
+                    r => statusStr == RunStatus.InProgress.ToApiString()
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? r.LifecycleGeneration + 1 : r.LifecycleGeneration), ct);
         WarnIfNoRows(rows, runId, $"update result to {statusStr}");
     }
 
@@ -128,7 +136,12 @@ public sealed class EfRunStore : IRunStore
 
     public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
     {
-        var terminalStatuses = new[] { RunStatus.Failed.ToApiString(), RunStatus.MergeFailed.ToApiString() };
+        var terminalStatuses = new[]
+        {
+            RunStatus.Failed.ToApiString(),
+            RunStatus.MergeFailed.ToApiString(),
+            RunStatus.AssembleReady.ToApiString(),
+        };
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.Runs
             .Where(r => r.RunId == runId.ToString() && terminalStatuses.Contains(r.Status))
@@ -273,7 +286,7 @@ public sealed class EfRunStore : IRunStore
         if (record is null)
             return false;
         if (record.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration
-            || Endpoints.EndpointHelpers.IsTerminal(RunStatusExtensions.ParseStatus(record.Status)))
+            || TerminalRunOutcome.IsTerminal(RunStatusExtensions.ParseStatus(record.Status)))
             return false;
         if (mutation.ExpectedStatuses is { Count: > 0 }
             && !mutation.ExpectedStatuses.Contains(RunStatusExtensions.ParseStatus(record.Status)))

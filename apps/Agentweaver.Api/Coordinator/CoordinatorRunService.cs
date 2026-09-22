@@ -63,6 +63,7 @@ public sealed class CoordinatorRunService
     private readonly IBacklogTaskStore _backlogStore;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly ILogger<CoordinatorRunService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
@@ -94,7 +95,8 @@ public sealed class CoordinatorRunService
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
         AiExecutionPlanAccessor? executionPlanAccessor = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -110,6 +112,7 @@ public sealed class CoordinatorRunService
         _backlogStore = backlogStore;
         _executionPlanAccessor = executionPlanAccessor;
         _providerSnapshots = providerSnapshots;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _logger = logger;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
@@ -1993,13 +1996,25 @@ public sealed class CoordinatorRunService
         var parsedRunId = RunId.Parse(runId);
         var status = outcome.Status == "confirmed" ? RunStatus.Completed : RunStatus.Declined;
         var result = outcome.Status;
+        var eventType = status == RunStatus.Declined
+            ? EventTypes.ReviewDeclined
+            : EventTypes.RunCompleted;
         if (outcome.Status == "confirmed" && await IsDelegatedPlanAsync(runId).ConfigureAwait(false))
             result = "delegated_to_backlog";
 
-        await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-            parsedRunId, status, EventTypes.RunCompleted, new { result }, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
+        var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            parsedRunId, status, eventType, new { result }, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
 
-        entry.RecordNext(EventTypes.RunCompleted, new { result });
+        if (!changed)
+            return;
+
+        if (_terminalOutcomeProjector is not null)
+        {
+            await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        entry.RecordNext(eventType, new { result });
         _streamStore.Complete(runId);
         _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
     }

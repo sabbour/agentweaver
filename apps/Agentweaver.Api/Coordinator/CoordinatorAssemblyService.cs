@@ -3177,9 +3177,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // back to InProgress (same runId — never restarted), and inject the feedback as a revision
             // turn. (directiveId, attempt) thread through so the decorated checkpoint manager confirms
             // the per-child effect marker on the resumed workflow's first superstep.
-            _streamStore.Reopen(subtask.ChildRunId!);
-            await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct)
-                .ConfigureAwait(false);
+            if (!await _runStore.TryReopenTerminalToInProgressAsync(childRunId, ct).ConfigureAwait(false))
+                throw new InvalidOperationException($"Child run {subtask.ChildRunId} could not be reopened.");
+            var reopenedChildRun = (await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false))!;
+            _streamStore.Reopen(subtask.ChildRunId!, reopenedChildRun.LifecycleGeneration);
             await orchestrator.StartRevisionAsync(
                 childRun, guidance, ct, isChild: true,
                 steeringDirectiveId: directiveId, steeringAttempt: attempt).ConfigureAwait(false);

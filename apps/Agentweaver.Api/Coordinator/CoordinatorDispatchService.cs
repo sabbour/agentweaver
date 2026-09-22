@@ -1804,8 +1804,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // completed/awaiting-review flags WITHOUT discarding the recorded history, so the new
             // steering turn's events are APPENDED after the target agent's prior messages instead of
             // replacing them. Same runId + worktree — the run is never restarted.
-            _streamStore.Reopen(result.ChildRunId);
-            await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct).ConfigureAwait(false);
+            if (!await _runStore.TryReopenTerminalToInProgressAsync(childRunId, ct).ConfigureAwait(false))
+                return false;
+            childRun = (await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false))!;
+            _streamStore.Reopen(result.ChildRunId, childRun.LifecycleGeneration);
             await _orchestrator.StartRevisionAsync(childRun, directive.Instruction, ct, isChild: true)
                 .ConfigureAwait(false);
         }

@@ -14,8 +14,13 @@ public sealed record TerminalRunOutcome(
     DateTimeOffset OccurredAt,
     int ExpectedLifecycleGeneration)
 {
-    public static bool IsTerminal(RunStatus status) =>
-        Endpoints.EndpointHelpers.IsTerminal(status) || status == RunStatus.AssembleReady;
+    public static bool IsTerminal(RunStatus status) => status is
+        RunStatus.Completed or
+        RunStatus.Failed or
+        RunStatus.Merged or
+        RunStatus.Declined or
+        RunStatus.MergeFailed or
+        RunStatus.AssembleReady;
 
     public static TerminalRunOutcome Create(
         RunStatus status,

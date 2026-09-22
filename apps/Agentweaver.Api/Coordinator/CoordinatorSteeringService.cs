@@ -1592,6 +1592,7 @@ public sealed class CoordinatorSteeringService
             if (!await runStore.TryReopenTerminalToInProgressAsync(runId, ct).ConfigureAwait(false))
                 throw new InvalidOperationException(
                     $"Coordinator run {coordinatorRunId} was no longer terminally recoverable.");
+            run = (await runStore.GetAsync(runId, ct).ConfigureAwait(false))!;
         }
 
         // Re-open the coordinator stream IN PLACE (assembly's block had completed it) so the resumed
@@ -1599,7 +1600,7 @@ public sealed class CoordinatorSteeringService
         // completed/awaiting-review flags WITHOUT discarding the history already recorded, so the
         // recovery event is APPENDED after the coordinator's prior messages instead of replacing them
         // (removing + recreating the entry would have started a blank history).
-        var entry = _streamStore.Reopen(coordinatorRunId)
+        var entry = _streamStore.Reopen(coordinatorRunId, run.LifecycleGeneration)
             ?? _streamStore.Create(coordinatorRunId, run.SubmittingUser);
         if (effectiveProvider is not null)
         {

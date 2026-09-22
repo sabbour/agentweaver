@@ -324,6 +324,47 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
+    public async Task Projector_InterleavedReopenAfterInitialRead_DoesNotCloseNewGenerationStream()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "old" },
+            DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "old")).Should().BeTrue();
+
+        var stream = new RecordingEventStream
+        {
+            TerminalAppendStarted = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ContinueTerminalAppend = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var live = new RunStreamStore(stream);
+        var entry = live.Create(run.ToString(), "test");
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance, live);
+
+        var projection = projector.ProjectPendingAsync();
+        await stream.TerminalAppendStarted.Task;
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "UPDATE runs SET status = 'in_progress', ended_at = NULL, lifecycle_generation = 2 WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$runId", run.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+        live.Reopen(run.ToString(), 2);
+        stream.ContinueTerminalAppend.TrySetResult();
+        await projection;
+
+        entry.IsCompleted.Should().BeFalse();
+        entry.GetSnapshotSince(0).Events.Should().BeEmpty();
+        stream.Events.Should().ContainSingle(evt => evt.Type == EventTypes.RunFailed);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task AssembleReady_ProjectsCanonicalPayloadOnce_AcrossStreamRestart()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
@@ -410,6 +451,8 @@ public sealed class TerminalRunOutcomeStoreTests
         public List<RunEvent> Events { get; } = [];
         public List<string> CompletedRunIds { get; } = [];
         public bool ThrowAfterAppend { get; set; }
+        public TaskCompletionSource? TerminalAppendStarted { get; init; }
+        public TaskCompletionSource? ContinueTerminalAppend { get; init; }
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
@@ -420,11 +463,14 @@ public sealed class TerminalRunOutcomeStoreTests
             return ValueTask.FromResult(persisted.Sequence);
         }
 
-        public Task<RunEvent> AppendTerminalOutcomeAsync(
+        public async Task<RunEvent> AppendTerminalOutcomeAsync(
             string runId,
             TerminalRunOutcome outcome,
             CancellationToken ct = default)
         {
+            TerminalAppendStarted?.TrySetResult();
+            if (ContinueTerminalAppend is not null)
+                await ContinueTerminalAppend.Task.WaitAsync(ct);
             if (!Events.Any(evt => evt.Type == outcome.EventType
                 && System.Text.Json.JsonSerializer.Serialize(evt.Payload) == outcome.Payload.GetRawText()))
             {
@@ -433,7 +479,7 @@ public sealed class TerminalRunOutcomeStoreTests
                 if (ThrowAfterAppend)
                     throw new InvalidOperationException("simulated failure after durable append");
             }
-            return Task.FromResult(Events.Last());
+            return Events.Last();
         }
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(

@@ -115,7 +115,11 @@ public sealed class SqliteRunStore : IRunStore
             UPDATE runs
                SET status = $status, ended_at = $endedAt,
                    approval_generation = approval_generation +
-                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END
+                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END,
+                   lifecycle_generation = lifecycle_generation +
+                       CASE WHEN $status = 'in_progress'
+                                 AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                            THEN 1 ELSE 0 END
              WHERE run_id = $runId;
             """,
             cmd =>
@@ -135,7 +139,11 @@ public sealed class SqliteRunStore : IRunStore
             UPDATE runs
                SET status = $status, ended_at = $endedAt, result = $result,
                    approval_generation = approval_generation +
-                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END
+                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END,
+                   lifecycle_generation = lifecycle_generation +
+                       CASE WHEN $status = 'in_progress'
+                                 AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                            THEN 1 ELSE 0 END
              WHERE run_id = $runId;
             """,
             cmd =>
@@ -222,7 +230,7 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = 'in_progress', ended_at = NULL, lifecycle_generation = lifecycle_generation + 1
-             WHERE run_id = $runId AND status IN ('failed', 'merge_failed');
+             WHERE run_id = $runId AND status IN ('failed', 'merge_failed', 'assemble_ready');
             """,
             cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
             ct).ConfigureAwait(false);

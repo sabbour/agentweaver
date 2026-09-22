@@ -63,11 +63,34 @@ public sealed class TerminalOutcomeProjector(
 
         var persisted = await eventStream.AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
             .ConfigureAwait(false);
-        streamStore?.RecordDurableEvent(pending.RunId.ToString(), persisted);
+
+        current = await runStore.GetAsync(pending.RunId, ct).ConfigureAwait(false);
+        if (current is null || current.LifecycleGeneration != pending.LifecycleGeneration)
+        {
+            logger.LogInformation(
+                "Skipping stale terminal-outcome stream completion for {RunId} generation {Generation}",
+                pending.RunId, pending.LifecycleGeneration);
+            await runStore.MarkTerminalOutcomeProjectedAsync(
+                pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (streamStore is not null
+            && !streamStore.TryRecordDurableTerminalAndComplete(
+                pending.RunId.ToString(), pending.LifecycleGeneration, persisted))
+        {
+            logger.LogInformation(
+                "Skipping stale terminal-outcome live projection for {RunId} generation {Generation}",
+                pending.RunId, pending.LifecycleGeneration);
+            await runStore.MarkTerminalOutcomeProjectedAsync(
+                pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);
+            return;
+        }
 
         await runStore.MarkTerminalOutcomeProjectedAsync(
             pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);
-        await eventStream.CompleteAsync(pending.RunId.ToString(), ct).ConfigureAwait(false);
+        if (streamStore is null)
+            await eventStream.CompleteAsync(pending.RunId.ToString(), ct).ConfigureAwait(false);
     }
 
     private static readonly RunStatus[] TerminalStatuses =

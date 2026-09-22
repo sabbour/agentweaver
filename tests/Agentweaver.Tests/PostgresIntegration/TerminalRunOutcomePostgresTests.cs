@@ -62,6 +62,27 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task AssembleReady_RejectsCompetingTerminalOutcome()
+    {
+        var first = new EfRunStore(pg.Factory);
+        var second = new EfRunStore(pg.Factory);
+        var run = await InsertInProgressAsync(first);
+
+        (await first.SetAssembleReadyAsync(
+            run, "tree-winner", "agent/assembly", "winner diff", 3, DateTimeOffset.UtcNow)).Should().BeTrue();
+        (await second.TrySetTerminalOutcomeAsync(
+            run,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed, EventTypes.RunFailed, new { reason = "loser" }, DateTimeOffset.UtcNow, 1),
+            "loser")).Should().BeFalse();
+
+        var persisted = (await second.GetAsync(run))!;
+        persisted.Status.Should().Be(RunStatus.AssembleReady);
+        var winner = (await second.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
+        winner.Outcome.EventType.Should().Be(EventTypes.RunAssembleReady);
+    }
+
+    [PostgresFact]
     public async Task IndependentProjectors_RaceToOneDurableTerminalProjection()
     {
         var store = new EfRunStore(pg.Factory);
