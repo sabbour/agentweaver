@@ -206,6 +206,30 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
         observed.Count(evt => evt.Type == EventTypes.RunCompleted).Should().Be(1);
     }
 
+    [PostgresFact]
+    public async Task DuplicateProviderTerminal_ReconnectsAtLinkedCurrentGenerationSequence()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var run = await InsertInProgressAsync(store);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "outbox" }, DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "outbox")).Should().BeTrue();
+
+        var producer = new EfRunEventStream(pg.Factory);
+        var canonical = new RunEvent(0, EventTypes.RunCompleted, new { result = "provider" });
+        var sequence = await producer.AppendAsync(run.ToString(), canonical);
+        (await producer.TryLinkTerminalOutcomeAsync(
+            run.ToString(), outcome, canonical with { Sequence = sequence })).Should().BeTrue();
+        await store.MarkTerminalOutcomeProjectedAsync(run, 1);
+
+        var replayed = new List<RunEvent>();
+        await foreach (var evt in new EfRunEventStream(pg.Factory).SubscribeAsync(run.ToString()))
+            replayed.Add(evt);
+        replayed.Should().ContainSingle().Which.Sequence.Should().Be(sequence);
+        replayed.Should().ContainSingle().Which.Type.Should().Be(EventTypes.RunCompleted);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
     private static async Task<RunId> InsertInProgressAsync(EfRunStore store)
     {
         var run = RunId.New();

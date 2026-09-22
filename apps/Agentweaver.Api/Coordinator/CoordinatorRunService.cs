@@ -2015,13 +2015,17 @@ public sealed class CoordinatorRunService
         if (!changed)
             return;
 
-        if (entry.HasEventType(eventType))
+        if (entry.TryGetLatestEvent(eventType, out var canonicalEvent))
         {
             var run = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
-            if (run is not null)
-                await _runStore.MarkTerminalOutcomeProjectedAsync(
-                    run.Id, run.LifecycleGeneration, ct).ConfigureAwait(false);
-            _streamStore.Complete(runId);
+            if (run is not null
+                && _terminalOutcomeProjector is not null
+                && await _terminalOutcomeProjector.TryProjectExistingTerminalAsync(
+                    run.Id, run.LifecycleGeneration, canonicalEvent!, ct, _streamStore).ConfigureAwait(false))
+                return;
+
+            // Do not acknowledge an unlinked winner. Recovery will project it once its durable
+            // sequence is observable instead of sealing replay without a terminal boundary.
             return;
         }
 

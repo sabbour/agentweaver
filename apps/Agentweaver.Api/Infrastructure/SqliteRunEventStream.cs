@@ -203,6 +203,48 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return Task.FromResult(persisted);
     }
 
+    public Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default)
+    {
+        if (canonicalEvent.Sequence <= 0 || canonicalEvent.Type != outcome.EventType)
+            return Task.FromResult(false);
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var existing = connection.CreateCommand();
+        existing.Transaction = tx;
+        existing.CommandText =
+            """
+            SELECT 1
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "Sequence" = $sequence AND "EventType" = $type;
+            """;
+        existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$sequence", canonicalEvent.Sequence);
+        existing.Parameters.AddWithValue("$type", canonicalEvent.Type);
+        if (existing.ExecuteScalar() is null)
+            return Task.FromResult(false);
+
+        using var link = connection.CreateCommand();
+        link.Transaction = tx;
+        link.CommandText =
+            """
+            INSERT INTO terminal_run_outcome_projections (run_id, lifecycle_generation, event_sequence)
+            VALUES ($runId, $generation, $sequence)
+            ON CONFLICT (run_id, lifecycle_generation) DO NOTHING;
+            """;
+        link.Parameters.AddWithValue("$runId", runId);
+        link.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        link.Parameters.AddWithValue("$sequence", canonicalEvent.Sequence);
+        link.ExecuteNonQuery();
+        tx.Commit();
+        return Task.FromResult(true);
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {

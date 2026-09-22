@@ -162,6 +162,54 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_DuplicateProviderTerminal_LinksCanonicalSequenceForRestart()
+    {
+        var databasePath = Path.Combine(_checkpointsPath, "duplicate-provider.db");
+        var config = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Database:Path"] = databasePath,
+        });
+        var db = new SqliteDb(config);
+        await db.EnsureCreatedAsync();
+        CreateRunEventsTable(Path.Combine(_checkpointsPath, "duplicate-provider.memory.db"));
+        var store = new SqliteRunStore(db);
+        var run = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = run,
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "recover the duplicate provider event",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+            Origin = RunOrigin.Interactive,
+        });
+
+        var stream = new SqliteRunEventStream(config);
+        var live = new RunStreamStore(stream);
+        var entry = live.Create(run.ToString(), "test-user");
+        entry.RecordNext(EventTypes.RunFailed, new { reason = "provider_terminal" });
+        var projector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance, live);
+        var service = BuildCoordinatorRunService(store, live, terminalOutcomeProjector: projector, configuration: config);
+
+        await service.RecoverInterruptedRunsAsync(CancellationToken.None);
+
+        var persisted = await new SqliteRunEventStream(config).GetPersistedEventsAsync(run.ToString());
+        persisted.Where(evt => evt.Type == EventTypes.RunFailed).Should().ContainSingle();
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+
+        var restarted = new SqliteRunEventStream(config);
+        var replayed = new List<RunEvent>();
+        await foreach (var evt in restarted.SubscribeAsync(run.ToString()))
+            replayed.Add(evt);
+        replayed.Where(evt => evt.Type == EventTypes.RunFailed).Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task RecoverInterruptedRunsAsync_TwentyTerminalRuns_BoundsConcurrentFinalScribes()
     {
         var coordinatorRuns = new List<Run>();
@@ -479,7 +527,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         IRunStore runStore,
         RunStreamStore streamStore,
         ICoordinatorAssembly? assembly = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         var config = configuration ?? BuildConfiguration();
 
@@ -541,7 +590,28 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             backlogStore: null!,      // not invoked (run.Origin == Interactive)
             lifetime: new TestHostApplicationLifetime(),
             configuration: config,
-            logger: NullLogger<CoordinatorRunService>.Instance);
+            logger: NullLogger<CoordinatorRunService>.Instance,
+            terminalOutcomeProjector: terminalOutcomeProjector);
+    }
+
+    private static void CreateRunEventsTable(string memoryDbPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={memoryDbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS "RunEvents" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEvents" PRIMARY KEY AUTOINCREMENT,
+                "RunId" TEXT NOT NULL,
+                "Sequence" INTEGER NOT NULL,
+                "EventType" TEXT NOT NULL,
+                "PayloadJson" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_Sequence"
+                ON "RunEvents" ("RunId", "Sequence");
+            """;
+        command.ExecuteNonQuery();
     }
 
     private IConfiguration BuildConfiguration(

@@ -38,6 +38,17 @@ public interface IRunEventStream
     }
 
     /// <summary>
+    /// Associates an already durable canonical terminal event with an outcome generation without
+    /// appending another event. Returns <c>false</c> when the event is not yet durable.
+    /// </summary>
+    Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>
     /// Appends a batch with assigned sequences only if the durable run is still non-terminal.
     /// The status decision and the entire batch are protected against run-store transitions.
     /// Returns the committed events, or an empty list if terminalization won. Unsupported stores

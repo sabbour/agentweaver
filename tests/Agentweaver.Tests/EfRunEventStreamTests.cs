@@ -243,6 +243,30 @@ public sealed class EfRunEventStreamTests : IDisposable
         events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
     }
 
+    [Fact]
+    public async Task DuplicateProviderTerminal_ReconnectsAtLinkedCurrentGenerationSequence()
+    {
+        const string runId = "run-ef-duplicate-provider";
+        var producer = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var canonical = new RunEvent(0, EventTypes.RunCompleted, new { result = "provider" });
+        var sequence = await producer.AppendAsync(runId, canonical);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "outbox" }, DateTimeOffset.UtcNow, 2);
+
+        (await producer.TryLinkTerminalOutcomeAsync(
+            runId, outcome, canonical with { Sequence = sequence })).Should().BeTrue();
+
+        var restarted = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var replayed = await ReplayWithTimeoutAsync(restarted, runId);
+        replayed.Should().ContainSingle().Which.Sequence.Should().Be(sequence);
+        replayed.Should().ContainSingle().Which.Type.Should().Be(EventTypes.RunCompleted);
+
+        await using var verify = new MemoryDbContext(_options);
+        var projection = await verify.TerminalRunOutcomeProjections
+            .SingleAsync(x => x.RunId == runId && x.LifecycleGeneration == 2);
+        projection.EventSequence.Should().Be(sequence);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { }

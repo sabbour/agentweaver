@@ -100,6 +100,55 @@ public sealed class TerminalOutcomeProjector(
             await eventStream.CompleteAsync(pending.RunId.ToString(), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reconciles a terminal event that was already durably emitted by another provider. The
+    /// generation-to-sequence binding is persisted before the outbox row is acknowledged so a
+    /// restarted subscriber can close at that exact canonical event.
+    /// </summary>
+    public async Task<bool> TryProjectExistingTerminalAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default,
+        RunStreamStore? targetStreamStore = null)
+    {
+        var pending = (await runStore.GetUnprojectedTerminalOutcomesAsync(ct).ConfigureAwait(false))
+            .SingleOrDefault(outcome => outcome.RunId == runId && outcome.LifecycleGeneration == lifecycleGeneration);
+        if (pending is null || canonicalEvent.Type != pending.Outcome.EventType)
+            return false;
+
+        if (!await eventStream.TryLinkTerminalOutcomeAsync(
+                runId.ToString(), pending.Outcome, canonicalEvent, ct).ConfigureAwait(false))
+            return false;
+
+        var current = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (current is null || current.LifecycleGeneration != lifecycleGeneration)
+        {
+            logger.LogInformation(
+                "Skipping stale existing terminal projection for {RunId} generation {Generation}",
+                runId, lifecycleGeneration);
+            await runStore.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        var liveStreamStore = targetStreamStore ?? streamStore;
+        if (liveStreamStore is not null
+            && !liveStreamStore.TryRecordDurableTerminalAndComplete(
+                runId.ToString(), lifecycleGeneration, canonicalEvent))
+        {
+            logger.LogInformation(
+                "Skipping stale existing terminal live projection for {RunId} generation {Generation}",
+                runId, lifecycleGeneration);
+            await runStore.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        await runStore.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct).ConfigureAwait(false);
+        if (liveStreamStore is null)
+            await eventStream.CompleteAsync(runId.ToString(), ct).ConfigureAwait(false);
+        return true;
+    }
+
     private static readonly RunStatus[] TerminalStatuses =
     [
         RunStatus.Completed,

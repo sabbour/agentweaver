@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
@@ -98,6 +99,75 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
         entry.HasEventType(EventTypes.RunAssembleReady).Should().BeTrue(
             "the coordinator's assembly wave reads run.assemble_ready to collect this child's output");
         entry.IsCompleted.Should().BeTrue("the recovered terminal completes the stream");
+    }
+
+    [Fact]
+    public async Task ChildRun_DuplicateProviderAssembleReady_LinksCanonicalSequenceForRestart()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var svc = scope.ServiceProvider.GetRequiredService<RunWatchLoopService>();
+        var runStore = scope.ServiceProvider.GetRequiredService<SqliteRunStore>();
+        var streamStore = scope.ServiceProvider.GetRequiredService<RunStreamStore>();
+        var eventStream = scope.ServiceProvider.GetRequiredService<IRunEventStream>();
+        var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+
+        var runId = RunId.New();
+        var runIdText = runId.ToString();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = Path.GetTempPath(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "recover duplicate provider terminal",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Hicks",
+            ParentRunId = RunId.New().ToString(),
+            SubtaskId = "10",
+            WorktreePath = Path.GetTempPath(),
+            WorktreeBranch = "agentweaver/child-branch",
+        });
+        var entry = streamStore.Create(runIdText, ReviewWebApplicationFactory.OwnerUser);
+        var canonicalPayload = new
+        {
+            treeHash = "provider-tree",
+            worktreeBranch = "agentweaver/child-branch",
+            diff = "provider diff",
+            stepCount = 3,
+        };
+        var sequence = entry.RecordNext(EventTypes.RunAssembleReady, canonicalPayload);
+        await eventStream.AppendAsync(
+            runIdText,
+            new RunEvent(sequence, EventTypes.RunAssembleReady, canonicalPayload));
+
+        var successfulAgentTurnOutput = new AgentTurnOutput(
+            RunId: runIdText,
+            TreeHash: "provider-tree",
+            Diff: "provider diff",
+            StepCount: 3,
+            WorktreePath: Path.GetTempPath(),
+            WorktreeBranch: "agentweaver/child-branch",
+            RepositoryPath: Path.GetTempPath(),
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            SubmittingUser: ReviewWebApplicationFactory.OwnerUser,
+            AgentName: "Hicks");
+
+        (await svc.TryRecoverChildAssembleReadyOnStreamEndAsync(
+            runIdText, entry, successfulAgentTurnOutput, CancellationToken.None)).Should().BeTrue();
+        (await runStore.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+
+        var persisted = await eventStream.GetPersistedEventsAsync(runIdText);
+        persisted.Where(evt => evt.Type == EventTypes.RunAssembleReady).Should().ContainSingle()
+            .Which.Sequence.Should().Be(sequence);
+
+        var replayed = new List<RunEvent>();
+        await foreach (var evt in new SqliteRunEventStream(config).SubscribeAsync(runIdText))
+            replayed.Add(evt);
+        replayed.Where(evt => evt.Type == EventTypes.RunAssembleReady).Should().ContainSingle()
+            .Which.Sequence.Should().Be(sequence);
     }
 
     [Fact]

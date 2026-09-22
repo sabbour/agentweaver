@@ -349,6 +349,15 @@ public sealed class RunStreamEntry
             return _history.Any(e => string.Equals(e.Type, type, StringComparison.Ordinal));
     }
 
+    internal bool TryGetLatestEvent(string type, out RunEvent? evt)
+    {
+        lock (_lock)
+        {
+            evt = _history.LastOrDefault(e => string.Equals(e.Type, type, StringComparison.Ordinal));
+            return evt is not null;
+        }
+    }
+
     public void MarkCompleted()
     {
         CancellationTokenSource cancellation;

@@ -919,13 +919,17 @@ public sealed class RunWatchLoopService
         if (!changed)
             return;
 
-        if (entry.HasEventType(eventType))
+        if (entry.TryGetLatestEvent(eventType, out var canonicalEvent))
         {
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
-            if (run is not null)
-                await _runStore.MarkTerminalOutcomeProjectedAsync(
-                    run.Id, run.LifecycleGeneration, CancellationToken.None).ConfigureAwait(false);
-            _streamStore.Complete(runId);
+            if (run is not null
+                && _terminalOutcomeProjector is not null
+                && await _terminalOutcomeProjector.TryProjectExistingTerminalAsync(
+                    run.Id, run.LifecycleGeneration, canonicalEvent!, CancellationToken.None, _streamStore)
+                    .ConfigureAwait(false))
+                return;
+
+            // Keep the outbox retryable until the competing terminal has a durable sequence.
             return;
         }
 

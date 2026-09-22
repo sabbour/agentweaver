@@ -133,6 +133,44 @@ public sealed class EfRunEventStream : IRunEventStream
         return outcome.ToRunEvent(sequence);
     }
 
+    public async Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default)
+    {
+        if (canonicalEvent.Sequence <= 0 || canonicalEvent.Type != outcome.EventType)
+            return false;
+
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+        var exists = await db.RunEvents.AnyAsync(
+            x => x.RunId == runId
+                && x.Sequence == canonicalEvent.Sequence
+                && x.EventType == canonicalEvent.Type,
+            ct).ConfigureAwait(false);
+        if (!exists)
+            return false;
+
+        var projected = await db.TerminalRunOutcomeProjections.AnyAsync(
+            x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration,
+            ct).ConfigureAwait(false);
+        if (!projected)
+        {
+            db.TerminalRunOutcomeProjections.Add(new TerminalRunOutcomeProjectionRecord
+            {
+                RunId = runId,
+                LifecycleGeneration = outcome.ExpectedLifecycleGeneration,
+                EventSequence = canonicalEvent.Sequence,
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {
