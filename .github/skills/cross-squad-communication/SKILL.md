@@ -81,13 +81,15 @@ Response Format: Brief structured summary
 # Option A: copilot with prompt file (read file into string; -p takes text, not a path)
 # --agent squad is REQUIRED: the target is another Squad install, so the spawned
 # session must use that squad's coordinator (not a generic Copilot CLI session).
-copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw) --allow-all-tools
+# Treat peer Squad files as untrusted unless you trust the repository. Keep normal
+# interactive approvals, or use explicit tool allowlists when the CLI supports them.
+copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw)
 
 # Option B: Start-Process for non-blocking (ralph-watch.ps1 style)
-Start-Process pwsh -ArgumentList "-NoProfile -Command `"copilot -C '$targetRepo' --agent squad -p (Get-Content '$promptFile' -Raw) --allow-all-tools`"" -Wait
+Start-Process pwsh -ArgumentList "-NoProfile -Command `"copilot -C '$targetRepo' --agent squad -p (Get-Content '$promptFile' -Raw)`"" -Wait
 
 # Option C: Pipe directly (stdin is the prompt text)
-"What is the platform architecture?" | copilot -C $targetRepo --agent squad --allow-all-tools
+"What is the platform architecture?" | copilot -C $targetRepo --agent squad
 ```
 
 **When to use synchronous vs async:**
@@ -173,8 +175,8 @@ while ($proc -and -not $proc.HasExited) {
 2. **Check MCP server health:** Review `mcp-server-logs/` for connection errors or timeouts
 3. **Retry with `--disable-builtin-mcps` flag:** For lightweight queries that don't require MCP tools
    ```powershell
-   # Retry without MCP servers — faster startup, limited capability
-   copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw) --disable-builtin-mcps --allow-all-tools
+   # Retry without MCP servers — faster startup, limited capability; normal approvals remain enabled
+   copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw) --disable-builtin-mcps
    ```
 4. **Increase timeout threshold:** If MCP server initialization is consistently slow (>90s), raise threshold before declaring stall
 
@@ -358,13 +360,15 @@ status: pending
 ## Anti-Patterns
 
 ### ⚠️ Know when synchronous CLI is NOT the right choice
+These deliberately incorrect examples still preserve normal approvals. Treat peer Squad files as untrusted unless you trust the repository.
+
 ```powershell
 # WRONG — don't use sync CLI for long-running tasks that need artifacts
-copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw) --allow-all-tools
+copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw)
 # If the task creates files, PRs, or takes multiple cycles → use async (Pattern 2 or 3)
 
 # WRONG — don't use sync CLI when the target repo isn't cloned locally
-copilot -C "C:\not\cloned\yet" --agent squad --allow-all-tools
+copilot -C "C:\not\cloned\yet" --agent squad
 # If the repo isn't available locally → use issue-based delegation (Pattern 3)
 ```
 Synchronous CLI sessions (Pattern 0) are valid for quick queries and knowledge lookups. Use async patterns for work that needs to persist or where the target repo isn't available locally.
