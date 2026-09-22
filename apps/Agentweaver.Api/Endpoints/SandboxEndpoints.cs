@@ -1076,7 +1076,7 @@ public static class SandboxEndpoints
             return true;
 
         var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
-        return run is not null && EndpointHelpers.IsTerminal(run.Status);
+        return run is not null && TerminalRunOutcome.IsTerminal(run.Status);
     }
 
     private static async Task TryStopRetainedProcessAsync(

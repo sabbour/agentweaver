@@ -1,4 +1,5 @@
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -114,6 +115,30 @@ public class PreviewPublicationLeaseRunStoreTests
     }
 
     [Fact]
+    public async Task CleanupDecision_AssembleReadyAfterOwnershipLoss_AllowsCleanup()
+    {
+        var runId = RunId.New();
+        var store = new LeaseRunStore { StoredRun = MakeRun(runId, RunStatus.AssembleReady) };
+        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3)))
+            .Should().BeTrue();
+
+        (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+            store, runId, "losing-owner", CancellationToken.None)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CleanupDecision_NonTerminalRunWithCompetingOwner_DoesNotAllowCleanup()
+    {
+        var runId = RunId.New();
+        var store = new LeaseRunStore { StoredRun = MakeRun(runId, RunStatus.InProgress) };
+        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3)))
+            .Should().BeTrue();
+
+        (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+            store, runId, "losing-owner", CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
     public void RunStoreChain_FindsAStoreThroughDecorators()
     {
         var guard = new RunActiveClaimGuardedRunStore(new LeaseRunStore(), new RunActiveClaimGuard());
@@ -125,6 +150,18 @@ public class PreviewPublicationLeaseRunStoreTests
         RunStoreChain.Find<PreviewPublicationLeaseRunStore>(guard).Should().BeNull();
     }
 
+    private static Run MakeRun(RunId runId, RunStatus status) => new()
+    {
+        Id = runId,
+        RepositoryPath = Path.GetTempPath(),
+        OriginatingBranch = "main",
+        ModelSource = ModelSource.GitHubCopilot,
+        Task = "preview cleanup",
+        SubmittingUser = "alice",
+        Status = status,
+        StartedAt = DateTimeOffset.UtcNow,
+    };
+
     /// <summary>Minimal store that records the lease in memory, the way a database row would.</summary>
     internal sealed class LeaseRunStore : IRunStore
     {
@@ -132,6 +169,7 @@ public class PreviewPublicationLeaseRunStoreTests
         private string? _leaseOwner;
 
         public volatile bool Terminal;
+        public Run? StoredRun;
         public int TerminalCalls;
         public int StatusCalls;
         public List<DateTimeOffset> LeaseExpirations { get; } = [];
@@ -211,7 +249,7 @@ public class PreviewPublicationLeaseRunStoreTests
         }
 
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => Task.FromResult<Run?>(null);
+        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => Task.FromResult(StoredRun);
         public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
