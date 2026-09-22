@@ -2017,7 +2017,7 @@ public sealed class CoordinatorRunService
 
         if (_terminalOutcomeProjector is not null)
         {
-            await _terminalOutcomeProjector.ProjectPendingAsync(ct).ConfigureAwait(false);
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
             if (entry.HasEventType(eventType))
                 return;
         }

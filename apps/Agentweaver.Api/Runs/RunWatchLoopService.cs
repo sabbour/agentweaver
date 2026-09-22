@@ -921,7 +921,7 @@ public sealed class RunWatchLoopService
 
         if (_terminalOutcomeProjector is not null)
         {
-            await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
+            await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None, _streamStore).ConfigureAwait(false);
             if (entry.HasEventType(eventType))
                 return;
         }

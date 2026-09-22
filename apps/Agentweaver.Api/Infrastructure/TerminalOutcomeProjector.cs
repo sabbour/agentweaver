@@ -13,10 +13,12 @@ public sealed class TerminalOutcomeProjector(
     ILogger<TerminalOutcomeProjector> logger,
     RunStreamStore? streamStore = null)
 {
-    public async Task ProjectPendingAsync(CancellationToken ct = default)
+    public async Task ProjectPendingAsync(
+        CancellationToken ct = default,
+        RunStreamStore? targetStreamStore = null)
     {
         foreach (var pending in await runStore.GetUnprojectedTerminalOutcomesAsync(ct).ConfigureAwait(false))
-            await ProjectAsync(pending, ct).ConfigureAwait(false);
+            await ProjectAsync(pending, ct, targetStreamStore).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -46,7 +48,10 @@ public sealed class TerminalOutcomeProjector(
         }
     }
 
-    public async Task ProjectAsync(PendingTerminalRunOutcome pending, CancellationToken ct = default)
+    public async Task ProjectAsync(
+        PendingTerminalRunOutcome pending,
+        CancellationToken ct = default,
+        RunStreamStore? targetStreamStore = null)
     {
         var current = await runStore.GetAsync(pending.RunId, ct).ConfigureAwait(false);
         if (current is null || current.LifecycleGeneration != pending.LifecycleGeneration)
@@ -75,8 +80,9 @@ public sealed class TerminalOutcomeProjector(
             return;
         }
 
-        if (streamStore is not null
-            && !streamStore.TryRecordDurableTerminalAndComplete(
+        var liveStreamStore = targetStreamStore ?? streamStore;
+        if (liveStreamStore is not null
+            && !liveStreamStore.TryRecordDurableTerminalAndComplete(
                 pending.RunId.ToString(), pending.LifecycleGeneration, persisted))
         {
             logger.LogInformation(
@@ -89,7 +95,7 @@ public sealed class TerminalOutcomeProjector(
 
         await runStore.MarkTerminalOutcomeProjectedAsync(
             pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);
-        if (streamStore is null)
+        if (liveStreamStore is null)
             await eventStream.CompleteAsync(pending.RunId.ToString(), ct).ConfigureAwait(false);
     }
 
