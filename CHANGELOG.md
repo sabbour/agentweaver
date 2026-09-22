@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.33.0
+
+### Minor Changes
+
+- 41c098c: Emit metrics describing runtime context composition for supported agent executions.
+
+### Patch Changes
+
+- 15226db: Ensure coordinator prompts include architectural and scope decisions only after they are approved.
+- 6a07017: Avoid injecting memory tool guidance when the agent cannot use memory tools.
+- 7361203: Keep edit-workflow trigger-preservation guidance stated once in generated prompts.
+- dfe5908: Fix workflow-generation correction guidance for human-review approval routes.
+- 1deb986: Keep memory API error codes, messages, and recovery hints visible in MCP tool errors.
+- 92c9085: Reduce duplicate workflow and blueprint generation prompt guidance while retaining validation and correction safeguards. Representative prompt sizes: create 16,973 → 16,723 characters; edit 12,236 → 12,023; blueprint 14,488 → 14,382.
+- 8530747: Preserve mandatory coordinator context within the configured context budget.
+- 54f3ee9: Keep long orchestration prompts compact in observability trace cards while allowing the complete prompt to be expanded on demand.
+- fdba36e: Ensure published release images report their semantic release version instead of the underlying commit tag.
+- fd1614b: Duplicated runtime tool instructions no longer consume operator prompt context; live MCP tool declarations remain available during assistant runs.
+- 9e759aa: Safely retry an interrupted RAI assembly review without rebuilding completed integration or replacing its verified evidence.
+- a8a0834: Keep API and MCP persona harness lifecycle behavior consistent while preserving each surface's transport and evidence handling.
+- f707002: Preserve the winning typed terminal outcome when runs finish concurrently, including durable replay after restart.
+
 ## 0.32.9
 
 ### Patch Changes
