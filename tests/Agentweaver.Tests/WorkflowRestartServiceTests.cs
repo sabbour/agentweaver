@@ -533,9 +533,10 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             RunStatus.Failed, EventTypes.RunFailed, new { reason = "already_projected" },
             DateTimeOffset.UtcNow, expectedLifecycleGeneration: 1);
         (await runStore.TrySetTerminalOutcomeAsync(runId, outcome, "already_projected")).Should().BeTrue();
-        var canonical = outcome.ToRunEvent(
-            await eventStream.AppendAsync(runId.ToString(), outcome.ToRunEvent()));
-        await runStore.MarkTerminalOutcomeProjectedAsync(runId, 1);
+        await new TerminalOutcomeProjector(
+                runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance)
+            .ProjectPendingAsync();
+        var canonical = (await eventStream.GetPersistedEventsAsync(runId.ToString())).Single();
 
         await BuildService(
                 runStore,
@@ -553,7 +554,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RecoverAsync_AlreadyProjectedAssemblyFailure_ReplaysCanonicalTerminalType()
+    public async Task RecoverAsync_AlreadyProjectedAssemblyFailure_PreservesCanonicalTerminal()
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
@@ -574,9 +575,10 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             RunStatus.Failed, EventTypes.CoordinatorAssemblyFailed, new { reason = "assembly_failed" },
             DateTimeOffset.UtcNow, expectedLifecycleGeneration: 1);
         (await runStore.TrySetTerminalOutcomeAsync(runId, outcome, "assembly_failed")).Should().BeTrue();
-        var canonical = outcome.ToRunEvent(
-            await eventStream.AppendAsync(runId.ToString(), outcome.ToRunEvent()));
-        await runStore.MarkTerminalOutcomeProjectedAsync(runId, 1);
+        await new TerminalOutcomeProjector(
+                runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance)
+            .ProjectPendingAsync();
+        var canonical = (await eventStream.GetPersistedEventsAsync(runId.ToString())).Single();
 
         await BuildService(
                 runStore,
@@ -589,7 +591,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         entry.Should().NotBeNull();
         entry!.IsCompleted.Should().BeTrue();
         entry.GetSnapshotSince(0).Events.Should().ContainSingle()
-            .Which.Should().Be(canonical, "recovery must preserve the canonical assembly failure type");
+            .Which.Should().Be(canonical, "recovery must preserve the canonical assembly failure");
         entry.GetSnapshotSince(0).Events.Should().NotContain(evt => evt.Type == EventTypes.RunFailed);
         (await eventStream.GetPersistedEventsAsync(runId.ToString())).Should().ContainSingle();
     }
@@ -687,6 +689,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     private sealed class RecordingEventStream : IRunEventStream
     {
         private readonly Dictionary<string, List<RunEvent>> _events = [];
+        private readonly Dictionary<(string RunId, int LifecycleGeneration), int> _terminalProjections = [];
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
@@ -696,6 +699,27 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             events.Add(persisted);
             return ValueTask.FromResult(persisted.Sequence);
         }
+
+        public async Task<RunEvent> AppendTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            CancellationToken ct = default)
+        {
+            var sequence = await AppendAsync(runId, outcome.ToRunEvent(), ct);
+            _terminalProjections[(runId, outcome.ExpectedLifecycleGeneration)] = sequence;
+            return outcome.ToRunEvent(sequence);
+        }
+
+        public Task<bool> TryLinkTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            RunEvent canonicalEvent,
+            CancellationToken ct = default) =>
+            Task.FromResult(
+                _terminalProjections.TryGetValue(
+                    (runId, outcome.ExpectedLifecycleGeneration), out var sequence)
+                && sequence == canonicalEvent.Sequence
+                && canonicalEvent.Type == outcome.EventType);
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(
             string runId, int fromSequence = 0,

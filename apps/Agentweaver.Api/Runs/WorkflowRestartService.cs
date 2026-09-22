@@ -362,16 +362,40 @@ public sealed class WorkflowRestartService
             }
         }
 
+        if (entry?.GetSnapshotSince(0).Events.Any(RunEventTerminality.IsTerminal) == true)
+        {
+            _streamStore.Complete(runId);
+            return;
+        }
+
         if (_eventStream is not null)
         {
-            var durableEvents = await _eventStream.GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
-            var durableTerminal = durableEvents.LastOrDefault(RunEventTerminality.IsTerminal);
-            if (durableTerminal is not null)
+            IReadOnlyList<RunEvent> persistedEvents;
+            try
             {
-                var restoredEntry = entry ?? _streamStore.Create(runId, run.SubmittingUser);
-                restoredEntry.RecordDurable(durableTerminal);
-                _streamStore.Complete(runId);
-                return;
+                persistedEvents = await _eventStream.GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
+            }
+            catch (NotSupportedException)
+            {
+                persistedEvents = [];
+            }
+
+            foreach (var terminalEvent in persistedEvents.Where(RunEventTerminality.IsTerminal).Reverse())
+            {
+                var projectedOutcome = TerminalRunOutcome.Create(
+                    run.Status,
+                    terminalEvent.Type,
+                    terminalEvent.Payload,
+                    terminalEvent.TimestampUtc,
+                    run.LifecycleGeneration);
+                if (await _eventStream.TryLinkTerminalOutcomeAsync(
+                        runId, projectedOutcome, terminalEvent, ct).ConfigureAwait(false))
+                {
+                    var restoredEntry = entry ?? _streamStore.Create(runId, run.SubmittingUser);
+                    restoredEntry.RecordDurable(terminalEvent);
+                    _streamStore.Complete(runId);
+                    return;
+                }
             }
         }
 
