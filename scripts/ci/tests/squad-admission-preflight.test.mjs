@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { KIND, resolveDeclaredExternalStateDirectory, runAdmissionPreflight, validateAdmissionPreflight } from '../squad-admission-preflight.mjs';
+import { KIND, runAdmissionPreflight, validateAdmissionPreflight } from '../squad-admission-preflight.mjs';
 import { REVIEW_KIND, VALIDATION_KIND } from '../squad-admission-ledger.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -162,21 +162,4 @@ test('CLI reads explicit TEAM_ROOT from the dedicated worktree CWD', async () =>
     'local',
   ], { cwd });
   assert.equal(JSON.parse(stdout).admitted, true);
-});
-
-test('uses the pinned Squad resolver for declared external state', async () => {
-  let projectKey;
-  const directory = await resolveDeclaredExternalStateDirectory({
-    readConfig: async () => JSON.stringify({ stateLocation: 'external', projectKey: 'agentweaver' }),
-    resolveDirectory: (key, create) => {
-      projectKey = key;
-      assert.equal(create, false);
-      return 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver';
-    },
-  });
-  assert.equal(projectKey, 'agentweaver');
-  assert.equal(directory, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
-  await assert.rejects(() => resolveDeclaredExternalStateDirectory({
-    readConfig: async () => JSON.stringify({ stateLocation: 'repository', projectKey: 'agentweaver' }),
-  }), /declare external state/u);
 });

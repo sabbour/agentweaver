@@ -26,19 +26,6 @@ async function readAuthoritativeLedger(stateDirectory, repository, prNumber) {
   return JSON.parse(await readFile(join(directory, key), 'utf8'));
 }
 
-export async function resolveDeclaredExternalStateDirectory({
-  configPath = '.squad/config.json',
-  readConfig = (path) => readFile(path, 'utf8'),
-  resolveDirectory,
-} = {}) {
-  const config = JSON.parse(await readConfig(configPath));
-  if (!config || config.stateLocation !== 'external') {
-    throw new Error('Squad config must declare external state');
-  }
-  const directoryResolver = resolveDirectory ?? (await import('@bradygaster/squad-sdk')).resolveExternalStateDir;
-  return directoryResolver(required(config.projectKey, 'Squad project key'), false);
-}
-
 export async function runAdmissionPreflight(repository, prNumber, dependencies = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error('repository must be owner/name');
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
