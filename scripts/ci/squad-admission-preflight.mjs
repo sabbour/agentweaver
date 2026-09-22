@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { stat, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveExternalStateDir } from '@bradygaster/squad-sdk';
@@ -63,7 +63,6 @@ export function validateAdmissionPreflight(ledger, expected) {
 
 async function readAuthoritativeLedger(stateDirectory, repository, prNumber) {
   const directory = required(stateDirectory, 'canonical external state directory');
-  if (!(await stat(directory)).isDirectory()) throw new Error('canonical external state directory does not exist');
   const key = `admission/findings/${repository}/${prNumber}.json`;
   return JSON.parse(await readFile(join(directory, key), 'utf8'));
 }

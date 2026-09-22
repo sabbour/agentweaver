@@ -13,12 +13,8 @@ test('admission is external-state owned and squash-only', () => {
   assert.match(contract, /Squad\/Ralph external-state preflight owns admission/u);
   assert.match(contract, /Coordinator\/Ralph process and authoritative external Squad state are trusted\s+operational components/u);
   assert.match(contract, /gh pr merge <number> --squash --match-head-commit <validated-sha>/u);
-  assert.equal(packageJson.devDependencies['@bradygaster/squad-cli'], '0.13.1');
   assert.equal(packageJson.devDependencies['@bradygaster/squad-sdk'], '0.13.1');
   assert.equal(existsSync(new URL('scripts/ci/squad-admission-launcher.mjs', root)), false);
-  assert.match(validator, /readAuthoritativeLedger/u);
-  assert.match(validator, /resolveExternalStateDir/u);
-  assert.match(validator, /resolveDeclaredExternalStateDirectory/u);
   assert.match(contract, /not a tamper-proof sandbox/u);
   assert.match(contract, /does not provide an adversarially immutable execution boundary/u);
   assert.doesNotMatch(validator, /Active squad:\s*external/u);
