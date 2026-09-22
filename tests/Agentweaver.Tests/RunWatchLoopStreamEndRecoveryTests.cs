@@ -137,10 +137,15 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
             diff = "provider diff",
             stepCount = 3,
         };
-        var sequence = entry.RecordNext(EventTypes.RunAssembleReady, canonicalPayload);
-        await eventStream.AppendAsync(
+        var canonical = await eventStream.AppendTerminalOutcomeAsync(
             runIdText,
-            new RunEvent(sequence, EventTypes.RunAssembleReady, canonicalPayload));
+            TerminalRunOutcome.Create(
+                RunStatus.AssembleReady,
+                EventTypes.RunAssembleReady,
+                canonicalPayload,
+                DateTimeOffset.UtcNow,
+                (await runStore.GetAsync(runId, CancellationToken.None))!.LifecycleGeneration));
+        entry.RecordDurable(canonical);
 
         var successfulAgentTurnOutput = new AgentTurnOutput(
             RunId: runIdText,
@@ -161,13 +166,13 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
 
         var persisted = await eventStream.GetPersistedEventsAsync(runIdText);
         persisted.Where(evt => evt.Type == EventTypes.RunAssembleReady).Should().ContainSingle()
-            .Which.Sequence.Should().Be(sequence);
+            .Which.Sequence.Should().Be(canonical.Sequence);
 
         var replayed = new List<RunEvent>();
         await foreach (var evt in new SqliteRunEventStream(config).SubscribeAsync(runIdText))
             replayed.Add(evt);
         replayed.Where(evt => evt.Type == EventTypes.RunAssembleReady).Should().ContainSingle()
-            .Which.Sequence.Should().Be(sequence);
+            .Which.Sequence.Should().Be(canonical.Sequence);
     }
 
     [Fact]

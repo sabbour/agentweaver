@@ -191,7 +191,13 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         var stream = new SqliteRunEventStream(config);
         var live = new RunStreamStore(stream);
         var entry = live.Create(run.ToString(), "test-user");
-        entry.RecordNext(EventTypes.RunFailed, new { reason = "provider_terminal" });
+        var canonical = await stream.AppendTerminalOutcomeAsync(run.ToString(), TerminalRunOutcome.Create(
+            RunStatus.Failed,
+            EventTypes.RunFailed,
+            new { reason = "provider_terminal" },
+            DateTimeOffset.UtcNow,
+            (await store.GetAsync(run))!.LifecycleGeneration));
+        entry.RecordDurable(canonical);
         var projector = new TerminalOutcomeProjector(
             store, stream, NullLogger<TerminalOutcomeProjector>.Instance, live);
         var service = BuildCoordinatorRunService(store, live, terminalOutcomeProjector: projector, configuration: config);
