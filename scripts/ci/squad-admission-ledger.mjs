@@ -178,16 +178,16 @@ export function materializeLedger(input, {
     const allowedReviewers = new Set((reviewerIdentities[source] ?? [])
       .map((reviewer) => required(reviewer, `configured reviewer for ${source}`).toLowerCase()));
     if (allowedReviewers.size === 0) throw new Error(`configured reviewer policy is missing identities for: ${source}`);
-    const exactHeadReviews = implementationReviews.filter((review) => review.source === source
-      && review.target.headSha === candidate.headSha);
+    const sourceReviews = implementationReviews.filter((review) => review.source === source);
+    if (sourceReviews.some((review) => !allowedReviewers.has(review.reviewer.toLowerCase()))) {
+      throw new Error(`reviewer identity is not authorized for required source: ${source}`);
+    }
+    const exactHeadReviews = sourceReviews.filter((review) => review.target.headSha === candidate.headSha);
     if (!exactHeadReviews.some((review) => review.verdict === 'approved')) {
       throw new Error(`missing required exact-head approval from: ${source}`);
     }
     if (exactHeadReviews.some((review) => review.verdict === 'rejected')) {
       throw new Error(`required review source ${source} has a conflicting exact-head rejection`);
-    }
-    if (exactHeadReviews.some((review) => !allowedReviewers.has(review.reviewer.toLowerCase()))) {
-      throw new Error(`reviewer identity is not authorized for required source: ${source}`);
     }
   }
   const requiredReviewers = requiredSources.map((source) => required(
@@ -261,11 +261,14 @@ export async function materializeAdmissionLedger(input, {
   stateBackend,
   stateAdapter,
   cwd = process.cwd(),
+  policyRun,
 } = {}) {
   const configuredAuthority = authority ?? await resolveAdmissionAuthority({ cwd });
   const trusted = await assertAdmissionAuthority(configuredAuthority, { teamRoot, stateBackend });
-  const requiredReviewSources = authority?.requiredReviewSources
-    ?? await resolveAdmissionReviewPolicy({ cwd, headSha: input.headSha });
+  const requiredReviewSources = await resolveAdmissionReviewPolicy(
+    { cwd, headSha: input.headSha },
+    { run: policyRun },
+  );
   const backend = trusted.stateBackend;
   const root = trusted.teamRoot;
   const adapter = backend === 'local' || backend === 'worktree'

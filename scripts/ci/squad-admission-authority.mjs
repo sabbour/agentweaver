@@ -1,8 +1,7 @@
-import { spawn } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
-import { buildSpawnPlan } from '../azure/lib/exec.mjs';
+import { capture } from '../azure/lib/exec.mjs';
 
 export const REQUIRED_REVIEW_SOURCES = Object.freeze([
   'code-review',
@@ -38,20 +37,12 @@ async function canonicalPath(value, field, canonicalize = realpath) {
 async function repositoryRootFromWorktree(cwd, dependencies) {
   const canonicalize = dependencies.realpath ?? realpath;
   const worktree = await canonicalPath(cwd, 'repository worktree', canonicalize);
-  const dotGit = join(worktree, '.git');
-  const gitEntry = await (dependencies.readFile ?? readFile)(dotGit, 'utf8').catch((error) => {
-    if (error.code === 'EISDIR') return null;
-    throw error;
-  });
-  if (gitEntry === null) return worktree;
-  const match = /^gitdir:\s*(.+)\s*$/u.exec(gitEntry);
-  if (!match) throw new Error('repository .git file does not declare its gitdir');
-  const gitDirectory = await canonicalPath(resolve(worktree, match[1]), 'worktree git directory', canonicalize);
-  const commonDirectoryValue = required(
-    await (dependencies.readFile ?? readFile)(join(gitDirectory, 'commondir'), 'utf8'),
-    'git common directory',
+  const result = await (dependencies.run ?? runGit)(
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    worktree,
   );
-  const commonDirectory = await canonicalPath(resolve(gitDirectory, commonDirectoryValue), 'git common directory', canonicalize);
+  if (result.exitCode !== 0) throw new Error(`unable to resolve git common directory: ${result.stderr.trim()}`);
+  const commonDirectory = await canonicalPath(result.stdout.trim(), 'git common directory', canonicalize);
   if (dirname(commonDirectory) === commonDirectory) throw new Error('git common directory has no repository parent');
   return canonicalPath(dirname(commonDirectory), 'repository authority root', canonicalize);
 }
@@ -72,17 +63,9 @@ function normalizeBackend(value) {
   return backend;
 }
 
-function spawnCommand(argv, cwd) {
-  const plan = buildSpawnPlan(argv[0], argv.slice(1));
-  return new Promise((resolveResult, reject) => {
-    const child = spawn(plan.file, plan.spawnArgs, { ...plan.spawnOpts, cwd, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (exitCode) => resolveResult({ exitCode, stdout, stderr }));
-  });
+async function runGit(args, cwd) {
+  const result = await capture('git', args, { cwd, allowFailure: true, trim: false, azSafeEnv: false });
+  return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
 }
 
 export function requiredReviewSourcesForChanges(changedFiles) {
@@ -104,10 +87,18 @@ export async function resolveAdmissionReviewPolicy({
   if (!/^[0-9a-f]{40}$/iu.test(required(headSha, 'candidate SHA'))) {
     throw new Error('candidate SHA must be a 40-character SHA');
   }
-  const run = dependencies.run ?? spawnCommand;
-  const result = await run(['git', 'diff', '--name-only', `${baseRef}...${headSha}`], cwd);
+  const run = dependencies.run ?? runGit;
+  const result = await run(['diff', '--name-status', '-z', '-M', '-C', `${baseRef}...${headSha}`], cwd);
   if (result.exitCode !== 0) throw new Error(`unable to resolve admission review policy: ${result.stderr.trim()}`);
-  return requiredReviewSourcesForChanges(result.stdout.split(/\r?\n/u).filter(Boolean));
+  const tokens = result.stdout.split('\0').filter(Boolean);
+  const changedFiles = [];
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++];
+    const paths = /^[RC]/u.test(status) ? 2 : 1;
+    changedFiles.push(...tokens.slice(index, index + paths));
+    index += paths;
+  }
+  return requiredReviewSourcesForChanges(changedFiles);
 }
 
 export async function resolveAdmissionAuthority({

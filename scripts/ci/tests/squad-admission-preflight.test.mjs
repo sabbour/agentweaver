@@ -62,7 +62,11 @@ const ledger = (extra = {}) => ({
 const authority = (teamRoot, stateBackend = 'local') => ({
   teamRoot,
   stateBackend,
-  requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
+});
+const fullPolicyRun = async () => ({
+  exitCode: 0,
+  stdout: 'M\0scripts/ci/squad-admission-preflight.mjs\0',
+  stderr: '',
 });
 
 test('admits a complete v2 exact-head ledger', () => {
@@ -79,6 +83,7 @@ test('blocks missing, v1, incomplete, and stale ledgers', async () => {
       stateDirectory: 'C:\\state',
       authority: authority('C:\\state'),
       headSha,
+      policyRun: fullPolicyRun,
       readLedger: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
     }),
     /missing/u,
@@ -159,6 +164,7 @@ test('reads only the declared external state directory', async () => {
     stateDirectory: 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver',
     authority: authority('C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver'),
     headSha,
+    policyRun: fullPolicyRun,
     readLedger: async (configuredAuthority) => {
       assert.equal(configuredAuthority.teamRoot, 'C:\\Users\\agent\\AppData\\Roaming\\squad\\projects\\agentweaver');
       return ledger();
@@ -175,8 +181,8 @@ test('rejects an unconfigured repository authority', async () => {
     platform: 'win32',
   }, {
     realpath: async (value) => value,
+    run: async () => ({ exitCode: 0, stdout: 'C:\\repo\\.git\n', stderr: '' }),
     readFile: async (path) => {
-      if (path.endsWith('\\.git')) throw Object.assign(new Error('directory'), { code: 'EISDIR' });
       throw error;
     },
   }), /missing config/u);

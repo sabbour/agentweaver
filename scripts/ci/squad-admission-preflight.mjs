@@ -41,8 +41,10 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('PR number must be a positive integer');
   const authority = dependencies.authority ?? await resolveAdmissionAuthority({ cwd: dependencies.cwd });
   const headSha = exactSha(dependencies.headSha, 'launcher-attested live PR head');
-  const requiredReviewSources = authority.requiredReviewSources
-    ?? await resolveAdmissionReviewPolicy({ cwd: dependencies.cwd, headSha });
+  const requiredReviewSources = await resolveAdmissionReviewPolicy(
+    { cwd: dependencies.cwd, headSha },
+    { run: dependencies.policyRun },
+  );
   const ledger = dependencies.readLedger
     ? await dependencies.readLedger(authority, repository, prNumber)
     : await readAuthoritativeLedger(authority, repository, prNumber, dependencies.stateAdapter);

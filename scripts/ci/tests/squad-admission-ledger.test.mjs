@@ -68,7 +68,11 @@ const input = (extra = {}) => ({
 const authority = (teamRoot, stateBackend = 'local') => ({
   teamRoot,
   stateBackend,
-  requiredReviewSources: ['code-review', 'security-review', 'ponytail-review'],
+});
+const fullPolicyRun = async () => ({
+  exitCode: 0,
+  stdout: 'M\0scripts/ci/squad-admission-ledger.mjs\0',
+  stderr: '',
 });
 
 test('materializes only explicit structured review and validation evidence', () => {
@@ -117,11 +121,15 @@ test('includes deleted and type-changed paths when resolving reviewer policy', a
   }, {
     run: async (argv) => {
       calls.push(argv);
-      return { exitCode: 0, stdout: 'docs/guide/validation.md\nscripts/ci/deleted-control.mjs\n', stderr: '' };
+      return {
+        exitCode: 0,
+        stdout: 'M\0docs/guide/validation.md\0D\0scripts/ci/deleted-control.mjs\0R100\0.github/skills/reviewer-protocol/SKILL.md\0docs/reviewer-protocol.md\0',
+        stderr: '',
+      };
     },
   });
   assert.equal(sources.length, 3);
-  assert.deepEqual(calls[0], ['git', 'diff', '--name-only', 'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
+  assert.deepEqual(calls[0], ['diff', '--name-status', '-z', '-M', '-C', 'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
 });
 
 test('requires distinct reviewers for each configured reviewer class', () => {
@@ -223,6 +231,7 @@ test('writes atomically and validates by reading from the same backend', async (
     authority: authority(teamRoot),
     teamRoot,
     stateBackend: 'local',
+    policyRun: fullPolicyRun,
   });
   const persisted = JSON.parse(await readFile(join(teamRoot, result.key), 'utf8'));
   assert.equal(persisted.kind, LEDGER_KIND);
@@ -235,6 +244,7 @@ test('requires an explicit adapter for non-local state', async () => {
     authority: authority(teamRoot, 'two-layer'),
     teamRoot,
     stateBackend: 'two-layer',
+    policyRun: fullPolicyRun,
   }), /explicit same-backend atomic adapter/u);
 });
 
@@ -250,6 +260,7 @@ test('uses one injected runtime adapter for non-local write and read validation'
     teamRoot,
     stateBackend: 'two-layer',
     stateAdapter,
+    policyRun: fullPolicyRun,
   });
   assert.equal(JSON.parse(await stateAdapter.read(result.key)).kind, LEDGER_KIND);
 });
@@ -261,6 +272,7 @@ test('rejects a materialization root that differs from configured authority', as
     authority: authority(configuredRoot),
     teamRoot: alternateRoot,
     stateBackend: 'local',
+    policyRun: fullPolicyRun,
   }), /does not match configured authority/u);
 });
 
@@ -270,6 +282,7 @@ test('rejects caller backend and canonical-path substitutions', async () => {
     authority: authority(teamRoot, 'two-layer'),
     teamRoot,
     stateBackend: 'local',
+    policyRun: fullPolicyRun,
   }), /state backend does not match configured authority/u);
   await assert.rejects(() => assertAdmissionAuthority(
     authority(teamRoot),
