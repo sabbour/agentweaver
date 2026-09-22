@@ -543,7 +543,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
 
         await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "orphaned", "start_preview");
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        await runStore.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(run.Id, RunStatus.Failed)).Should().BeTrue();
 
         var afterTerminal = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}/pending-approvals");
         afterTerminal.GetProperty("count").GetInt32().Should().Be(0);
@@ -588,7 +588,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         approval.GetProperty("action_run_id").GetString().Should().Be(child.Id.ToString());
 
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        await runStore.UpdateStatusAsync(child.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(child.Id, RunStatus.Failed)).Should().BeTrue();
 
         var afterChildFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
         afterChildFailure.GetProperty("count").GetInt32().Should().Be(0);
@@ -596,7 +596,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         notifications.GetProperty("notifications").EnumerateArray()
             .Should().NotContain(item => item.GetProperty("run_id").GetString() == root.Id.ToString());
 
-        await runStore.UpdateStatusAsync(root.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await runStore.TerminalizeForTestAsync(root.Id, RunStatus.Failed)).Should().BeTrue();
         var afterRootFailure = await _client.GetFromJsonAsync<JsonElement>($"/api/runs/{root.Id}/pending-approvals");
         afterRootFailure.GetProperty("count").GetInt32().Should().Be(0);
     }

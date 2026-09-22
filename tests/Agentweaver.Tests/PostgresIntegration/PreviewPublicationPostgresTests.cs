@@ -36,10 +36,33 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
     private async Task AssertTerminalizationWinsAsync(RunStatus status, bool hasLocalEntry)
     {
         var run = await CreateRunAsync();
+        var terminalOutcome = TerminalRunOutcome.Create(
+            status,
+            status switch
+            {
+                RunStatus.Failed => EventTypes.RunFailed,
+                RunStatus.AssembleReady => EventTypes.RunAssembleReady,
+                _ => throw new ArgumentOutOfRangeException(nameof(status)),
+            },
+            new { reason = "conditional update winner" },
+            DateTimeOffset.UtcNow,
+            1);
         await using var terminalDb = await pg.CreateDbContextAsync();
         await using var terminalTx = await terminalDb.Database.BeginTransactionAsync();
         await terminalDb.Runs.Where(r => r.RunId == run.Id.ToString())
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, status.ToApiString()));
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, status.ToApiString())
+                .SetProperty(r => r.EndedAt, terminalOutcome.OccurredAt));
+        terminalDb.TerminalRunOutcomes.Add(new TerminalRunOutcomeRecord
+        {
+            RunId = run.Id.ToString(),
+            LifecycleGeneration = 1,
+            Status = status.ToApiString(),
+            EventType = terminalOutcome.EventType,
+            PayloadJson = terminalOutcome.Payload.GetRawText(),
+            OccurredAt = terminalOutcome.OccurredAt,
+        });
+        await terminalDb.SaveChangesAsync();
         var observer = new UpdateObserver();
         var stream = new EfRunEventStream(Factory(observer));
         var streams = new RunStreamStore(stream);
@@ -102,8 +125,12 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
         await commit.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var observer = new UpdateObserver();
-        var terminal = new EfRunStore(Factory(observer)).TrySetTerminalStatusAsync(
-            run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "terminated");
+        var terminal = new EfRunStore(Factory(observer)).TrySetTerminalOutcomeAsync(
+            run.Id,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed, EventTypes.RunFailed, new { reason = "terminated" },
+                DateTimeOffset.UtcNow, 1),
+            "terminated");
         try
         {
             await observer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));

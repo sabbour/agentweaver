@@ -28,8 +28,12 @@ public class PreviewPublicationLeaseRunStoreTests
         (await store.TryBeginPreviewPublicationAsync(Run, DateTimeOffset.UtcNow.AddMinutes(3)))
             .Should().BeTrue();
 
-        var terminal = Task.Run(() => store.TrySetTerminalStatusAsync(
-            Run, RunStatus.Completed, DateTimeOffset.UtcNow, "done"));
+        var terminal = Task.Run(() => store.TrySetTerminalOutcomeAsync(
+            Run,
+            TerminalRunOutcome.Create(
+                RunStatus.Completed, EventTypes.RunCompleted, new { result = "done" },
+                DateTimeOffset.UtcNow, 1),
+            "done"));
 
         // The transition must still be parked while the publication holds the lease.
         await Task.Delay(100);
@@ -51,7 +55,12 @@ public class PreviewPublicationLeaseRunStoreTests
         // A replica that crashes mid-publication never releases the lease. Expiry is the backstop.
         await store.TryBeginPreviewPublicationAsync(Run, DateTimeOffset.UtcNow.AddMilliseconds(300));
 
-        await store.TrySetTerminalStatusAsync(Run, RunStatus.Completed, DateTimeOffset.UtcNow, "done")
+        await store.TrySetTerminalOutcomeAsync(
+                Run,
+                TerminalRunOutcome.Create(
+                    RunStatus.Completed, EventTypes.RunCompleted, new { result = "done" },
+                    DateTimeOffset.UtcNow, 1),
+                "done")
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         inner.TerminalCalls.Should().Be(1);
@@ -183,6 +192,13 @@ public class PreviewPublicationLeaseRunStoreTests
             Task.FromResult(_leaseUntil);
 
         public Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref TerminalCalls);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TrySetTerminalOutcomeAsync(
+            RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
         {
             Interlocked.Increment(ref TerminalCalls);
             return Task.FromResult(true);

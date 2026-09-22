@@ -46,6 +46,11 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
         _streamStore = new RunStreamStore(_provider.GetRequiredService<IRunEventStream>());
+        var terminalOutcomeProjector = new TerminalOutcomeProjector(
+            _runStore,
+            _provider.GetRequiredService<IRunEventStream>(),
+            NullLogger<TerminalOutcomeProjector>.Instance,
+            _streamStore);
 
         _orchestrator = new RunOrchestrator(
             _runStore,
@@ -56,7 +61,10 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             watchLoop: null!,
             _scopeFactory,
             configuration: null!,
-            NullLogger<RunOrchestrator>.Instance);
+            NullLogger<RunOrchestrator>.Instance,
+            runAgentHostContextResolver: null,
+            eventStream: _provider.GetRequiredService<IRunEventStream>(),
+            terminalOutcomeProjector: terminalOutcomeProjector);
     }
 
     [Fact]
