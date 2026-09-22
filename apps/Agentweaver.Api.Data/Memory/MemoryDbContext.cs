@@ -134,6 +134,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             entity.HasKey(x => new { x.RunId, x.LifecycleGeneration });
             entity.Property(x => x.RunId).HasColumnName("run_id");
             entity.Property(x => x.LifecycleGeneration).HasColumnName("lifecycle_generation");
+            entity.Property(x => x.EventSequence).HasColumnName("event_sequence");
         });
         model.Entity<OutcomeSpec>().HasIndex(o => new { o.ProjectId, o.CoordinatorRunId });
 

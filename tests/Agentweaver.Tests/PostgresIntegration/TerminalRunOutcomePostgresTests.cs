@@ -127,6 +127,43 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
         events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
     }
 
+    [PostgresFact]
+    public async Task ReconnectAfterReopen_ReplaysHistoricalTerminalButClosesOnlyCurrentLifecycle()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var run = await InsertInProgressAsync(store);
+        var firstOutcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "old" }, DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, firstOutcome, "old")).Should().BeTrue();
+        await new TerminalOutcomeProjector(
+            store, new EfRunEventStream(pg.Factory), NullLogger<TerminalOutcomeProjector>.Instance).ProjectPendingAsync();
+        (await store.TryReopenTerminalToInProgressAsync(run)).Should().BeTrue();
+
+        var stream = new EfRunEventStream(pg.Factory);
+        var observed = new List<RunEvent>();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = Task.Run(async () =>
+        {
+            await foreach (var evt in stream.SubscribeAsync(run.ToString(), ct: cancellation.Token))
+                observed.Add(evt);
+        }, cancellation.Token);
+        await Task.Delay(500, cancellation.Token);
+        subscriber.IsCompleted.Should().BeFalse();
+
+        await stream.AppendAsync(run.ToString(), new RunEvent(0, "agent.message.delta", new { delta = "continued" }));
+        var current = (await store.GetAsync(run))!;
+        var secondOutcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "current" },
+            DateTimeOffset.UtcNow, current.LifecycleGeneration);
+        (await store.TrySetTerminalOutcomeAsync(run, secondOutcome, "current")).Should().BeTrue();
+        await new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance).ProjectPendingAsync();
+        await subscriber;
+
+        observed.Select(evt => evt.Type).Should().ContainInOrder(
+            EventTypes.RunFailed, "agent.message.delta", EventTypes.RunCompleted);
+    }
+
     private static async Task<RunId> InsertInProgressAsync(EfRunStore store)
     {
         var run = RunId.New();

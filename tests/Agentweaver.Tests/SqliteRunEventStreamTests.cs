@@ -75,6 +75,92 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task ReconnectAfterReopen_ReplaysHistoricalTerminalButClosesOnlyCurrentLifecycle()
+    {
+        const string runId = "reopened-run";
+        CreateRunRow(runId, "failed", 1);
+        var first = new SqliteRunEventStream(_config);
+        await first.AppendAsync(runId, new RunEvent(0, EventTypes.RunFailed, new { reason = "old" }));
+
+        // Simulate a revision after the stream was evicted and the process restarted.
+        UpdateRunRow(runId, "in_progress", 2);
+        var restarted = new SqliteRunEventStream(_config);
+        var observed = new List<RunEvent>();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = Task.Run(async () =>
+        {
+            await foreach (var evt in restarted.SubscribeAsync(runId, ct: cancellation.Token))
+                observed.Add(evt);
+        }, cancellation.Token);
+
+        await Task.Delay(100, cancellation.Token);
+        subscriber.IsCompleted.Should().BeFalse("the generation-one terminal is historical evidence only");
+
+        await restarted.AppendAsync(runId, new RunEvent(0, "agent.message.delta", new { delta = "continued" }));
+        UpdateRunRow(runId, "completed", 2);
+        await restarted.AppendAsync(runId, new RunEvent(0, EventTypes.RunCompleted, new { result = "current" }));
+        await subscriber;
+
+        observed.Select(evt => evt.Type).Should().Equal(
+            EventTypes.RunFailed, "agent.message.delta", EventTypes.RunCompleted);
+        observed.Count(evt => evt.Type == EventTypes.RunCompleted).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SteeringRedirect_DoesNotTerminateReplayOrLiveTail()
+    {
+        const string runId = "redirect-run";
+        CreateRunRow(runId, "in_progress", 1);
+        var stream = new SqliteRunEventStream(_config);
+        var observed = new List<RunEvent>();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = Task.Run(async () =>
+        {
+            await foreach (var evt in stream.SubscribeAsync(runId, ct: cancellation.Token))
+                observed.Add(evt);
+        }, cancellation.Token);
+
+        await stream.AppendAsync(runId, new RunEvent(
+            0, EventTypes.RunCancelled, new { reason = "steering_redirect", directiveId = 7 }));
+        await stream.AppendAsync(runId, new RunEvent(0, "agent.message.delta", new { delta = "redirected" }));
+        await Task.Delay(100, cancellation.Token);
+        subscriber.IsCompleted.Should().BeFalse();
+
+        UpdateRunRow(runId, "completed", 1);
+        await stream.AppendAsync(runId, new RunEvent(0, EventTypes.RunCompleted, new { result = "done" }));
+        await subscriber;
+
+        observed.Select(evt => evt.Type).Should().Equal(
+            EventTypes.RunCancelled, "agent.message.delta", EventTypes.RunCompleted);
+    }
+
+    private void CreateRunRow(string runId, string status, int generation)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "agentweaver.db")}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, lifecycle_generation INTEGER NOT NULL);"
+            + " INSERT INTO runs (run_id, status, lifecycle_generation) VALUES ($runId, $status, $generation);";
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.ExecuteNonQuery();
+    }
+
+    private void UpdateRunRow(string runId, string status, int generation)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "agentweaver.db")}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE runs SET status = $status, lifecycle_generation = $generation WHERE run_id = $runId;";
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
     public async Task Subscribe_FromCursor_ReturnsOnlyNewerEvents_NoDuplicate()
     {
         var runId = "run-2";

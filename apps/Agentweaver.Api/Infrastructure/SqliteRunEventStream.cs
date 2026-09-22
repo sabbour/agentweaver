@@ -51,6 +51,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
     };
 
     private readonly string _connectionString;
+    private readonly string _runConnectionString;
     private readonly ConcurrentDictionary<string, Channel<RunEvent>> _channels = new();
     private readonly ConcurrentDictionary<string, byte> _completedRuns = new();
     private readonly object _channelsGate = new();
@@ -69,6 +70,13 @@ public sealed class SqliteRunEventStream : IRunEventStream
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = memoryDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            Pooling = true,
+        }.ToString();
+        _runConnectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = configuration["Database:Path"] ?? Path.Combine(AppPaths.DataDirectory, "agentweaver.db"),
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             Pooling = true,
@@ -174,6 +182,17 @@ public sealed class SqliteRunEventStream : IRunEventStream
         append.Parameters.AddWithValue("$createdAt",
             evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
         append.ExecuteNonQuery();
+        using var projected = connection.CreateCommand();
+        projected.Transaction = tx;
+        projected.CommandText =
+            """
+            UPDATE terminal_run_outcome_projections
+               SET event_sequence = (SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId)
+             WHERE run_id = $runId AND lifecycle_generation = $generation;
+            """;
+        projected.Parameters.AddWithValue("$runId", runId);
+        projected.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        projected.ExecuteNonQuery();
         tx.Commit();
         using var sequence = connection.CreateCommand();
         sequence.CommandText = """SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId;""";
@@ -254,7 +273,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             lastReplayed = evt.Sequence;
         }
 
-        if (ShouldStopAfterReplayBatch(replayBatch))
+        if (ShouldStopAfterReplayBatch(replayBatch, IsCurrentLifecycleTerminal(runId)))
             yield break; // Completed/parked run: drain durable diagnostics, then terminate cleanly.
 
         if (channel is null)
@@ -268,13 +287,15 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 continue;
             yield return evt;
             lastReplayed = evt.Sequence;
-            if (RunEventTerminality.IsTerminal(evt))
+            if (RunEventTerminality.IsTerminal(evt) && IsCurrentLifecycleTerminal(runId))
                 yield break;
         }
     }
 
-    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events, bool currentLifecycleTerminal)
     {
+        if (!currentLifecycleTerminal)
+            return false;
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
@@ -355,10 +376,35 @@ public sealed class SqliteRunEventStream : IRunEventStream
             CREATE TABLE IF NOT EXISTS terminal_run_outcome_projections (
                 run_id TEXT NOT NULL,
                 lifecycle_generation INTEGER NOT NULL,
+                event_sequence INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (run_id, lifecycle_generation)
             );
             """;
         command.ExecuteNonQuery();
+        command.CommandText =
+            "ALTER TABLE terminal_run_outcome_projections ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0;";
+        try { command.ExecuteNonQuery(); }
+        catch (SqliteException) { }
+    }
+
+    private bool IsCurrentLifecycleTerminal(string runId)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_runConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT status FROM runs WHERE run_id = $runId;";
+            command.Parameters.AddWithValue("$runId", runId);
+            var status = command.ExecuteScalar() as string;
+            return status is null || status is "merged" or "declined" or "failed" or "completed"
+                or "merge_failed" or "assemble_ready" or "cancelled";
+        }
+        catch (SqliteException)
+        {
+            // Retain legacy event-only behavior where no run database is available.
+            return true;
+        }
     }
 
     /// <summary>

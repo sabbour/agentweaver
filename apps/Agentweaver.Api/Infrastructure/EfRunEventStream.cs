@@ -118,6 +118,7 @@ public sealed class EfRunEventStream : IRunEventStream
         {
             RunId = runId,
             LifecycleGeneration = outcome.ExpectedLifecycleGeneration,
+            EventSequence = sequence,
         });
         db.RunEvents.Add(new RunEventRecord
         {
@@ -202,7 +203,7 @@ public sealed class EfRunEventStream : IRunEventStream
                 lastSeen = evt.Sequence;
             }
 
-            if (ShouldStopAfterReplayBatch(batch))
+            if (await ShouldStopAfterReplayBatchAsync(runId, batch, ct).ConfigureAwait(false))
                 yield break;
 
             if (batch.Count == 0 && _completedRuns.ContainsKey(runId))
@@ -213,8 +214,18 @@ public sealed class EfRunEventStream : IRunEventStream
         }
     }
 
-    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    private async Task<bool> ShouldStopAfterReplayBatchAsync(
+        string runId, IReadOnlyList<RunEvent> events, CancellationToken ct)
     {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var status = await db.Runs.AsNoTracking()
+            .Where(run => run.RunId == runId)
+            .Select(run => run.Status)
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        if (status is not null && status is not ("merged" or "declined" or "failed" or "completed"
+            or "merge_failed" or "assemble_ready" or "cancelled"))
+            return false;
+
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {

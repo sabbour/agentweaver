@@ -5,4 +5,5 @@ public sealed class TerminalRunOutcomeProjectionRecord
 {
     public string RunId { get; set; } = "";
     public int LifecycleGeneration { get; set; }
+    public int EventSequence { get; set; }
 }
