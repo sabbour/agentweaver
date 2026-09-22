@@ -63,6 +63,7 @@ function makeCluster({
   cleanupRolloutError = false,
   patchFailureAt = null,
   namespace = 'agentweaver',
+  environment = 'staging',
   replaceLeaseBeforeRelease = false,
   abortOnPatch,
 } = {}) {
@@ -107,6 +108,9 @@ function makeCluster({
     }
     if (args[0] === 'get' && args[1] === 'httproute') {
       return { json: { spec: { hostnames: ['agentweaver.example.staging.test'] } } };
+    }
+    if (args[0] === 'get' && args[1] === 'namespace') {
+      return { json: { metadata: { labels: { 'agentweaver.io/environment': environment } } } };
     }
     if (args[0] === 'get' && args[1] === 'deployment') {
       const value = structuredClone(state.get(args[2]));
@@ -258,6 +262,15 @@ test('profile refuses a namespace that is not active in the selected context', a
   assert.equal(cluster.calls.some((call) => call[1] === 'create'), false);
 });
 
+test('profile requires an independent Kubernetes staging environment label', async () => {
+  const cluster = makeCluster({ environment: 'production' });
+  await assert.rejects(
+    withContextBudgetProfile(profileOptions(cluster), cluster.action),
+    /agentweaver.io\/environment=staging/,
+  );
+  assert.equal(cluster.calls.some((call) => call[1] === 'create'), false);
+});
+
 test('profile cancellation waits for a mutating patch to settle before restoring it', async () => {
   const controller = new AbortController();
   const cluster = makeCluster({
@@ -303,9 +316,11 @@ test('profile preserves existing cleanup errors when deployment restoration also
       assert.equal(error, scenarioError);
       assert.ok(error.cleanupErrors.includes('dataset cleanup failed'));
       assert.ok(error.cleanupErrors.some((message) => message.includes('verification: rollout failed')));
+      assert.ok(error.cleanupErrors.some((message) => message.includes('Lease retained for recovery')));
       return true;
     },
   );
+  assert.equal(cluster.calls.some((call) => call[1] === 'delete'), false);
 });
 
 test('profile does not delete a replaced Lease', async () => {

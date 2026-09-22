@@ -247,8 +247,11 @@ node scripts/api-harness/run-context-budget-pressure.mjs `
   --namespace agentweaver
 ```
 
-The target must report `isRelease=false` from public `/api/version`, and its hostname
-must match the selected namespace's `agentweaver-api-route`. The command locks and
+The target must report `isRelease=false` from public `/api/version`, the selected
+namespace must carry `agentweaver.io/environment=staging`, and the target hostname
+must match that namespace's `agentweaver-api-route`. The namespace label is an
+independent operator-controlled environment identity; do not apply it to production.
+The command locks and
 temporarily changes only `MemoryContext__MaxItems` and `MemoryContext__MaxTokens` on
 the API and worker pod templates, runs three fresh datasets, and restores exact prior
 `value`/`valueFrom`/absence structures through its awaited cleanup path. Never run it

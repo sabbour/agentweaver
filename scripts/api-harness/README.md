@@ -77,9 +77,12 @@ For headless/CI use with no agent session to dispatch a `task` call from, set `A
 issue #1501. It reuses the deployment-scoped `MemoryContext__MaxItems` and
 `MemoryContext__MaxTokens` settings; it does not add a per-request or project override.
 The command requires an HTTPS target whose public `/api/version` reports
-`isRelease=false`, the exact active Kubernetes context and namespace, and a target
-hostname present on the namespace's `agentweaver-api-route`. It acquires a Kubernetes
-Lease before mutation:
+`isRelease=false`, the exact active Kubernetes context and namespace, the namespace
+label `agentweaver.io/environment=staging`, and a target hostname present on the
+namespace's `agentweaver-api-route`. Apply that label only to the controlled staging
+namespace; it is the independent environment identity that prevents a SHA-tagged
+production deployment from passing the non-release check. The command acquires a
+Kubernetes Lease before mutation:
 
 ```powershell
 node scripts/api-harness/run-context-budget-pressure.mjs `
@@ -89,6 +92,11 @@ node scripts/api-harness/run-context-budget-pressure.mjs `
   --namespace agentweaver `
   --timeout-seconds 120
 ```
+
+If restoration or readback fails, the command deliberately retains
+`Lease/agentweaver-context-budget-harness` with its snapshot annotation so another run
+cannot adopt the pressured values as a new baseline. Recover the deployments from that
+snapshot before deleting the Lease.
 
 The profile independently snapshots each variable's exact literal `value`,
 `valueFrom`, or absence on both `agentweaver-api` and `agentweaver-worker`; applies

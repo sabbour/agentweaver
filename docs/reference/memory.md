@@ -51,7 +51,10 @@ deployment-scoped operator settings. Agentweaver intentionally has no request he
 query parameter, run option, project setting, or public API that overrides context
 budgets. The staging API harness can temporarily lower the deployment values through
 its explicit non-production pressure profile; it snapshots and restores the exact
-prior Kubernetes environment entries and must never be used as a production fixture.
+prior Kubernetes environment entries and requires the independently managed namespace
+label `agentweaver.io/environment=staging`. It must never be used as a production
+fixture. A failed restoration retains the profile Lease and snapshot to fence out
+another run until an operator recovers the deployments.
 
 ### Layer 3 — High-importance learnings & patterns
 

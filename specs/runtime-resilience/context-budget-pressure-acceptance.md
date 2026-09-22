@@ -38,8 +38,9 @@ option, or project setting would create an unsafe production bypass.
 
 - [ ] Production defaults remain 20 items and approximately 4,000 tokens.
 - [ ] Existing positive call-site overrides still precede deployment configuration.
-- [ ] The profile requires `isRelease=false` and rejects a target that is not bound to
-      the exact Kubernetes context, namespace, and API HTTPRoute.
+- [ ] The profile requires `isRelease=false`, an independently managed
+      `agentweaver.io/environment=staging` namespace label, and rejects a target that
+      is not bound to the exact Kubernetes context, namespace, and API HTTPRoute.
 - [ ] API and worker templates are locked, snapshotted independently, patched with
       bounded values, observed at a new generation, rolled out, and read back.
 - [ ] Fresh datasets prove `item_limit`, token-budget `budget` omission, and
@@ -48,6 +49,8 @@ option, or project setting would create an unsafe production bypass.
       restoration path.
 - [ ] Restoration removes variables that were absent and preserves exact prior
       `value`/`valueFrom` structures; any mismatch fails.
+- [ ] A restoration or readback failure retains the owned Lease and snapshot so a
+      later run cannot adopt pressured values as its baseline.
 
 ## Notable edge cases
 

@@ -10,6 +10,7 @@ export const CONTEXT_BUDGET_DEPLOYMENTS = [
 
 const PROFILE_ANNOTATION = 'agentweaver.io/context-budget-profile';
 const SNAPSHOT_ANNOTATION = 'agentweaver.io/context-budget-snapshot';
+const ENVIRONMENT_LABEL = 'agentweaver.io/environment';
 const LOCK_NAME = 'agentweaver-context-budget-harness';
 
 function abortError(signal) {
@@ -249,6 +250,12 @@ export async function withContextBudgetProfile(options, action) {
       `Active Kubernetes namespace "${currentNamespace}" does not match requested namespace "${namespace}".`,
     );
   }
+  const namespaceResource = await kubectlJson(capture, ['get', 'namespace', namespace], kubeContext, signal);
+  if (namespaceResource?.metadata?.labels?.[ENVIRONMENT_LABEL] !== 'staging') {
+    throw new Error(
+      `Namespace ${namespace} must be independently labeled ${ENVIRONMENT_LABEL}=staging.`,
+    );
+  }
   const route = await kubectlJson(
     capture,
     ['get', 'httproute', 'agentweaver-api-route', '--namespace', namespace],
@@ -438,12 +445,14 @@ export async function withContextBudgetProfile(options, action) {
         }
       }
     }
-    if (locked) {
+    if (locked && cleanupErrors.length === 0) {
       try {
         await releaseLock(capture, namespace, kubeContext, owner, lockIdentity);
       } catch (error) {
         cleanupErrors.push(`Lease cleanup: ${error.message}`);
       }
+    } else if (locked) {
+      cleanupErrors.push(`Lease retained for recovery: ${namespace}/${LOCK_NAME}`);
     }
     if (cleanupErrors.length > 0) {
       if (primaryError) {
