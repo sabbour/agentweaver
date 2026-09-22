@@ -20,4 +20,7 @@ test('admission is external-state owned and squash-only', () => {
   assert.doesNotMatch(validator, /Active squad:\s*external/u);
   assert.doesNotMatch(contract, /npm run squad:admission-preflight/u);
   assert.doesNotMatch(contract, /\b(?:rebase(?:-| )?merge|auto(?:-| )?merge)\b|gh\s+pr\s+merge\b[^\r\n]*\b(?:--rebase|--auto)\b/iu);
+  const policy = read('.github/agents/squad.agent.md');
+  assert.match(policy, /### Admission evidence\r?\n\r?\nRecord the admission evidence:\r?\n\r?\n- PR head: `<head-sha>`\./u);
+  assert.match(policy, /### Reviewer revalidation\r?\n\r?\nRecord the reviewer revalidation:\r?\n\r?\n- PR head: `<head-sha>`\./u);
 });

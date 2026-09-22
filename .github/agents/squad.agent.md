@@ -449,6 +449,8 @@ Use this format for admission comments:
 
 ### Admission evidence
 
+Record the admission evidence:
+
 - PR head: `<head-sha>`.
 - Ledger: `<ledger-path>`.
 - Finding result: `<resolved-status>`.
@@ -458,6 +460,8 @@ Use this format for admission comments:
 Use this format for reviewer revalidation comments:
 
 ### Reviewer revalidation
+
+Record the reviewer revalidation:
 
 - PR head: `<head-sha>`.
 - Finding: `<finding-id>`.
