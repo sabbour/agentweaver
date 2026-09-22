@@ -45,7 +45,7 @@ async function spawnCommand(argv, cwd) {
     if (/\.(?:cmd|bat)$/iu.test(executable)) {
       const commandLine = [executable, ...args].map(quoteCmd).join(' ');
       executable = process.env.ComSpec ?? 'cmd.exe';
-      args = ['/d', '/s', '/c', `"${commandLine}"`];
+      args = ['/d', '/s', '/c', commandLine];
     }
   }
   return new Promise((resolveResult, reject) => {
