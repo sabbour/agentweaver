@@ -1068,8 +1068,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
 
         try
         {
-            if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))
-                entry.RecordNext(EventTypes.RunFailed, payload);
+            await ReconcileDurableLaunchFailureEventAsync(runId, entry, payload, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1107,15 +1106,24 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
 
         if (stream is null)
-            throw new InvalidOperationException($"No durable event stream is available for failed run {runId}.");
-
-        var persisted = await stream.GetPersistedEventsAsync(runId.ToString(), 0, ct).ConfigureAwait(false);
-        var terminal = persisted.FirstOrDefault(e => e.Type == EventTypes.RunFailed);
-        if (terminal is null)
         {
-            var sequence = await stream.AppendAsync(
-                runId.ToString(), new RunEvent(0, EventTypes.RunFailed, payload), ct).ConfigureAwait(false);
-            terminal = new RunEvent(sequence, EventTypes.RunFailed, payload);
+            if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, payload);
+            return;
+        }
+
+        RunEvent terminal;
+        try
+        {
+            terminal = await stream.EnsureTerminalFailureAsync(
+                runId.ToString(), new RunEvent(0, EventTypes.RunFailed, payload),
+                preserveAnyTerminal: false, ct: ct).ConfigureAwait(false);
+        }
+        catch (NotSupportedException)
+        {
+            if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, payload);
+            return;
         }
 
         if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))

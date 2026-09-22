@@ -119,9 +119,12 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return ValueTask.FromResult(sequence);
     }
 
-    public Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default)
+    public Task<RunEvent> EnsureTerminalFailureAsync(
+        string runId, RunEvent failure, bool preserveAnyTerminal = true, CancellationToken ct = default)
     {
         failure = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(failure));
+        if (failure.Type != EventTypes.RunFailed)
+            throw new ArgumentException("Only run.failed can be atomically reconciled.", nameof(failure));
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
         using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable);
@@ -136,7 +139,9 @@ public sealed class SqliteRunEventStream : IRunEventStream
         while (reader.Read())
         {
             var type = reader.GetString(1);
-            if (!IRunEventStream.IsTerminalEventType(type))
+            if (preserveAnyTerminal
+                ? !IRunEventStream.IsTerminalEventType(type)
+                : type != EventTypes.RunFailed)
                 continue;
             var evt = new RunEvent(reader.GetInt32(0), type,
                 DeserializePayload(runId, reader.GetInt32(0), type, reader.GetString(2)),
@@ -151,7 +156,8 @@ public sealed class SqliteRunEventStream : IRunEventStream
             SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
             FROM "RunEvents" WHERE "RunId" = $runId RETURNING "Sequence";
             """;
-        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(failure.Payload));
+            command.Parameters.AddWithValue("$type", failure.Type);
+            command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(failure.Payload));
         command.Parameters.AddWithValue("$createdAt", failure.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
         var recorded = failure with { Sequence = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) };
         transaction.Commit();

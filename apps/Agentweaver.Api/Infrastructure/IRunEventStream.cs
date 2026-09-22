@@ -36,7 +36,8 @@ public interface IRunEventStream
     /// Atomically returns the durable terminal event for a run, appending <paramref name="failure"/>
     /// only when no terminal event exists.
     /// </summary>
-    Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default) =>
+    Task<RunEvent> EnsureTerminalFailureAsync(
+        string runId, RunEvent failure, bool preserveAnyTerminal = true, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support atomic terminal failure reconciliation.");
 
     /// <summary>

@@ -87,7 +87,8 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
-    public async Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default)
+    public async Task<RunEvent> EnsureTerminalFailureAsync(
+        string runId, RunEvent failure, bool preserveAnyTerminal = true, CancellationToken ct = default)
     {
         failure = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(failure));
         if (failure.Type != EventTypes.RunFailed)
@@ -104,7 +105,9 @@ public sealed class EfRunEventStream : IRunEventStream
                     .Where(e => e.RunId == runId)
                     .OrderBy(e => e.Sequence)
                     .ToListAsync(ct).ConfigureAwait(false))
-                    .FirstOrDefault(e => IRunEventStream.IsTerminalEventType(e.EventType));
+                    .FirstOrDefault(e => preserveAnyTerminal
+                        ? IRunEventStream.IsTerminalEventType(e.EventType)
+                        : e.EventType == EventTypes.RunFailed);
                 if (existing is not null)
                 {
                     await tx.CommitAsync(ct).ConfigureAwait(false);

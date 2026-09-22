@@ -363,7 +363,7 @@ public sealed class WorkflowRestartService
                     runId,
                     new RunEvent(0, EventTypes.RunFailed,
                         new { reason = run.Result ?? "recovered_missing_terminal_event", retryable = false, recovered = true }),
-                    ct).ConfigureAwait(false);
+                    ct: ct).ConfigureAwait(false);
                 entry ??= _streamStore.Create(runId, run.SubmittingUser);
                 if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.Record(terminal);
