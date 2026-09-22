@@ -30,10 +30,10 @@ import { redact } from '../../harness-shared/redaction.mjs';
 const PROVIDER_FAIL_STATUS = new Set([401, 402, 429, 500, 502, 503, 504]);
 const MODEL_PROVIDER_KEY_HEADER = 'If-Model-Provider-Key';
 
-async function prepareAiExecutionContext(client, operation, projectId) {
+export async function prepareAiExecutionContext(client, operation, projectId, options) {
   const body = { operation };
   if (projectId) body.project_id = projectId;
-  const response = await client.post('/api/ai/execution-context', body);
+  const response = await client.post('/api/ai/execution-context', body, options);
   const raw = response.transientResponseBody ?? response.responseBody ?? {};
   delete response.transientResponseBody;
   const context = raw.context ?? raw;
@@ -91,7 +91,7 @@ function addExecutionContextCheck(label, context, add) {
   );
 }
 
-function replacementExecutionContext(response, operation) {
+export function replacementExecutionContext(response, operation) {
   const raw = response.transientResponseBody ?? response.responseBody ?? {};
   delete response.transientResponseBody;
   if (raw.error !== 'model_provider_changed' || !raw.context) return null;

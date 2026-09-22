@@ -3,6 +3,7 @@ using Agentweaver.Api.Memory;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Tests.Memory;
 
@@ -248,6 +249,34 @@ public sealed class MemoryContextCompilerSecurityTests : IAsyncDisposable
         var error = await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
         error.Which.BudgetCharacters.Should().Be(4);
         error.Which.RequiredCharacters.Should().BeGreaterThan(4);
+    }
+
+    [Fact]
+    public async Task CompileAsync_PreservesDefaultsAndCallerOverridePrecedence()
+    {
+        const string projectId = "project-configuration-precedence";
+        var createdAt = DateTimeOffset.UtcNow;
+        _db.AgentMemory.AddRange(Enumerable.Range(1, 21)
+            .Select(index => Memory(projectId, $"memory-{index}", createdAt.AddMinutes(index))));
+        await _db.SaveChangesAsync();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["MemoryContext:MaxItems"] = "1",
+            ["MemoryContext:MaxTokens"] = "4000",
+            ["Memory:ContextMaxItems"] = "2",
+            ["Memory:ContextMaxTokens"] = "1",
+        }).Build();
+        var compiler = new MemoryContextCompiler(_db, configuration);
+
+        var configured = await compiler.CompileAsync(projectId, "Tank");
+        var callerOverride = await compiler.CompileAsync(projectId, "Tank", maxItems: 21, maxTokens: 4000);
+        var defaults = await new MemoryContextCompiler(_db).CompileAsync(projectId, "Tank");
+
+        configured!.OmittedMemoryCount.Should().Be(20);
+        configured.OmissionCauses.Should().Contain("item_limit");
+        callerOverride!.OmittedMemoryCount.Should().Be(0);
+        defaults!.OmittedMemoryCount.Should().Be(1);
+        defaults.OmissionCauses.Should().Contain("item_limit");
     }
 
     private static AgentMemory Memory(string projectId, string content, DateTimeOffset createdAt) => new()

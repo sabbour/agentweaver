@@ -115,6 +115,10 @@ spec:
             # Worker listens on 8081 (dedicated port, no external ingress via gateway).
             - name: ASPNETCORE_URLS
               value: http://+:8081
+            - name: MemoryContext__MaxItems
+              value: "20"
+            - name: MemoryContext__MaxTokens
+              value: "4000"
             # Workspace shared with sandbox pods via RWX PVC.
             - name: Workspace__Path
               value: /workspace

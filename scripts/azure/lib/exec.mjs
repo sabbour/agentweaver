@@ -279,7 +279,7 @@ function timeoutMessage(timeoutMs, displayLine) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, signal?: AbortSignal }} [opts]
  */
 export function run(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -303,10 +303,12 @@ export function run(cmd, args = [], opts = {}) {
     let child;
     let timer;
     let settled = false;
+    let onAbort;
     const finish = (callback) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
       callback();
     };
     try {
@@ -324,6 +326,17 @@ export function run(cmd, args = [], opts = {}) {
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
+    onAbort = () => {
+      killProcessTree(child);
+      finish(() => reject(
+        opts.signal?.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
+      ));
+    };
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => {
       if (opts.allowFailure) {
         finish(() => resolve({ code: 127, stderr: redact(err.message) }));
@@ -374,7 +387,7 @@ export function run(cmd, args = [], opts = {}) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, input?: string|Buffer }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, input?: string|Buffer, signal?: AbortSignal }} [opts]
  * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown, timedOut?: boolean }>}
  */
 export function capture(cmd, args = [], opts = {}) {
@@ -398,10 +411,12 @@ export function capture(cmd, args = [], opts = {}) {
     let child;
     let timer;
     let settled = false;
+    let onAbort;
     const finish = (callback) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
       callback();
     };
     try {
@@ -419,6 +434,17 @@ export function capture(cmd, args = [], opts = {}) {
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
+    onAbort = () => {
+      killProcessTree(child);
+      finish(() => reject(
+        opts.signal?.reason instanceof Error ? opts.signal.reason : new Error("Command cancelled."),
+      ));
+    };
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     let stdout = "";
     let stderr = "";

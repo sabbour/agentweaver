@@ -348,6 +348,11 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
   assert.ok(apiDeployment, "expected api-deployment.yaml to have been written before apply");
   assert.match(apiDeployment, /image: agentweaverregistry\.azurecr\.io\/agentweaver-api:v0\.9\.71/);
   assert.doesNotMatch(apiDeployment, /:latest/);
+  assert.match(apiDeployment, /name: MemoryContext__MaxItems\s+value: "20"/);
+  assert.match(apiDeployment, /name: MemoryContext__MaxTokens\s+value: "4000"/);
+  const workerDeployment = writtenFiles.get("worker-deployment.yaml");
+  assert.match(workerDeployment, /name: MemoryContext__MaxItems\s+value: "20"/);
+  assert.match(workerDeployment, /name: MemoryContext__MaxTokens\s+value: "4000"/);
 
   const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
   assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");

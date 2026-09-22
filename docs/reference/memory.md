@@ -45,6 +45,14 @@ governance and bookkeeping.
 
 Core memories are eligible regardless of importance, not guaranteed inclusion. They share the ranked memory item limit with eligible learnings/patterns. Defaults are 20 items and about 4,000 tokens at four characters per token. Positive call-site overrides precede `MemoryContext:MaxItems` / `MaxTokens`, then legacy `Memory:ContextMaxItems` / `ContextMaxTokens`. The complete serialized envelope must fit the token budget; selection stops before the next full record would exceed it. Active approved decisions are mandatory: compilation fails before a model call with a typed budget error if all decision records cannot fit. The session is included only if its entire serialized record fits the remaining envelope budget.
 
+AKS deployments set the same defaults with `MemoryContext__MaxItems=20` and
+`MemoryContext__MaxTokens=4000` on both the API and worker pod templates. These are
+deployment-scoped operator settings. Agentweaver intentionally has no request header,
+query parameter, run option, project setting, or public API that overrides context
+budgets. The staging API harness can temporarily lower the deployment values through
+its explicit non-production pressure profile; it snapshots and restores the exact
+prior Kubernetes environment entries and must never be used as a production fixture.
+
 ### Layer 3 — High-importance learnings & patterns
 
 High-importance `learning` and `pattern` rows are selected when either:

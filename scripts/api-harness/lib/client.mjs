@@ -61,7 +61,7 @@ export class AgentweaverClient {
    * Never throws on non-2xx — the scenario judge decides what a bad status means.
    * @returns {Promise<ApiCall>}
    */
-  async call(method, path, body, { authenticated = true, headers = {} } = {}) {
+  async call(method, path, body, { authenticated = true, headers = {}, signal } = {}) {
     let url;
     try {
       url = new URL(path, `${this.baseUrl}/`);
@@ -89,6 +89,7 @@ export class AgentweaverClient {
       /** @type {RequestInit} */
       const init = {
         method,
+        signal,
         headers: {
           Authorization: authorization,
           Accept: 'application/json',
@@ -151,10 +152,10 @@ export class AgentweaverClient {
   post(path, body, options) {
     return this.call('POST', path, body, options);
   }
-  put(path, body) {
-    return this.call('PUT', path, body);
+  put(path, body, options) {
+    return this.call('PUT', path, body, options);
   }
-  del(path) {
-    return this.call('DELETE', path);
+  del(path, options) {
+    return this.call('DELETE', path, undefined, options);
   }
 }
