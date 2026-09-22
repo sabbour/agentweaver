@@ -2,6 +2,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
@@ -118,6 +119,7 @@ public sealed class EfRunStore : IRunStore
         rec.Status = "in_progress";
         rec.EndedAt = null;
         rec.ReviewReadyAt = null;
+        rec.LifecycleGeneration++;
         await db.SaveChangesAsync(ct);
         return true;
     }
@@ -126,17 +128,11 @@ public sealed class EfRunStore : IRunStore
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result,
         string? reviewer = null, CancellationToken ct = default)
     {
-        var id = runId.ToString();
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
-        if (rec is null) return false;
-        rec.Status = toStatus.ToApiString();
-        rec.EndedAt = endedAt;
-        rec.Result = result;
-        rec.ReviewedBy = reviewer;
-        rec.ReviewReadyAt = null;
-        await db.SaveChangesAsync(ct);
-        return true;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.Status != RunStatus.AwaitingReview) return false;
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(toStatus, EventTypes.ReviewDeclined, new { result, reviewer }, endedAt, run.LifecycleGeneration),
+            result, new HashSet<RunStatus> { RunStatus.AwaitingReview }, Reviewer: reviewer), ct).ConfigureAwait(false);
     }
 
     public async Task<bool> TryTransitionToCommittingAsync(
@@ -202,18 +198,13 @@ public sealed class EfRunStore : IRunStore
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result,
         string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null)
     {
-        var id = runId.ToString();
-        var toStr = toStatus.ToApiString();
-        await using var db = await _factory.CreateDbContextAsync();
-        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "merging");
-        if (rec is null) return false;
-        rec.Status = toStr;
-        rec.EndedAt = endedAt;
-        rec.Result = result;
-        rec.MergeConflicts = mergeConflicts;
-        if (mergedCommitHash is not null) rec.MergedCommitHash = mergedCommitHash;
-        await db.SaveChangesAsync();
-        return true;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.Status != RunStatus.Merging) return false;
+        var type = toStatus == RunStatus.Merged ? EventTypes.MergeCompleted : EventTypes.MergeFailed;
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(toStatus, type, new { result, mergeConflicts, mergedCommitHash }, endedAt, run.LifecycleGeneration),
+            result, new HashSet<RunStatus> { RunStatus.Merging }, MergeConflicts: mergeConflicts,
+            MergedCommitHash: mergedCommitHash), ct).ConfigureAwait(false);
     }
 
     public async Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default)
@@ -230,39 +221,148 @@ public sealed class EfRunStore : IRunStore
         RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
         DateTimeOffset endedAt, CancellationToken ct = default)
     {
-        var id = runId.ToString();
-        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var rows = await db.Runs
-            .Where(r => r.RunId == id && !terminalStatuses.Contains(r.Status))
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, "assemble_ready")
-                .SetProperty(r => r.TreeHash, treeHash)
-                .SetProperty(r => r.WorktreeBranch, worktreeBranch)
-                .SetProperty(r => r.Diff, diff)
-                .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
-                .SetProperty(r => r.ApprovalGeneration,
-                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
-        return rows > 0;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null) return false;
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.AssembleReady, EventTypes.RunAssembleReady,
+                new { treeHash, worktreeBranch, diff, stepCount }, endedAt, run.LifecycleGeneration),
+            null, TreeHash: treeHash, WorktreeBranch: worktreeBranch, Diff: diff), ct).ConfigureAwait(false);
     }
 
     public async Task<bool> TrySetTerminalStatusAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
     {
-        var id = runId.ToString();
-        var toStr = toStatus.ToApiString();
-        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return false;
+        return await TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.FromLegacyStatus(toStatus, result, endedAt, run.LifecycleGeneration),
+            result,
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default)
+    {
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(outcome, result), ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId, TerminalRunMutation mutation, CancellationToken ct = default)
+    {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var rows = await db.Runs
-            .Where(r => r.RunId == id && !terminalStatuses.Contains(r.Status))
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, toStr)
-                .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
-                .SetProperty(r => r.Result, result)
-                .SetProperty(r => r.ApprovalGeneration,
-                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
-        WarnIfNoRows(rows, runId, $"set terminal status to {toStr}");
-        return rows > 0;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Match EfRunEventStream's per-run advisory-lock protocol. The lock and row update are
+        // in this transaction, so two API instances cannot each write a terminal winner.
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({runId.ToString()}, 0));", ct);
+        var record = await db.Runs.SingleOrDefaultAsync(r => r.RunId == runId.ToString(), ct);
+        if (record is null)
+            return false;
+        if (record.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration
+            || Endpoints.EndpointHelpers.IsTerminal(RunStatusExtensions.ParseStatus(record.Status)))
+            return false;
+        if (mutation.ExpectedStatuses is { Count: > 0 }
+            && !mutation.ExpectedStatuses.Contains(RunStatusExtensions.ParseStatus(record.Status)))
+            return false;
+
+        var wasInProgress = record.Status == RunStatus.InProgress.ToApiString();
+        record.Status = mutation.Outcome.Status.ToApiString();
+        record.EndedAt = mutation.Outcome.OccurredAt;
+        record.Result = mutation.Result;
+        if (mutation.Reviewer is not null) record.ReviewedBy = mutation.Reviewer;
+        if (mutation.MergeConflicts is not null) record.MergeConflicts = mutation.MergeConflicts;
+        if (mutation.MergedCommitHash is not null) record.MergedCommitHash = mutation.MergedCommitHash;
+        if (mutation.TreeHash is not null) record.TreeHash = mutation.TreeHash;
+        if (mutation.WorktreeBranch is not null) record.WorktreeBranch = mutation.WorktreeBranch;
+        if (mutation.Diff is not null) record.Diff = mutation.Diff;
+        if (wasInProgress)
+            record.ApprovalGeneration++;
+        db.TerminalRunOutcomes.Add(new TerminalRunOutcomeRecord
+        {
+            RunId = record.RunId,
+            LifecycleGeneration = record.LifecycleGeneration,
+            Status = record.Status,
+            EventType = mutation.Outcome.EventType,
+            PayloadJson = mutation.Outcome.Payload.GetRawText(),
+            OccurredAt = mutation.Outcome.OccurredAt,
+        });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var records = await db.TerminalRunOutcomes.AsNoTracking()
+            .Where(x => x.ProjectedAt == null)
+            .OrderBy(x => x.OccurredAt)
+            .ToListAsync(ct);
+        return records.Select(record =>
+        {
+            using var payload = JsonDocument.Parse(record.PayloadJson);
+            return new PendingTerminalRunOutcome(
+                RunId.Parse(record.RunId),
+                record.LifecycleGeneration,
+                new TerminalRunOutcome(
+                    RunStatusExtensions.ParseStatus(record.Status),
+                    record.EventType,
+                    payload.RootElement.Clone(),
+                    record.OccurredAt,
+                    record.LifecycleGeneration));
+        }).ToList();
+    }
+
+    public async Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.TerminalRunOutcomes
+            .Where(x => x.RunId == runId.ToString()
+                && x.LifecycleGeneration == lifecycleGeneration
+                && x.ProjectedAt == null)
+            .ExecuteUpdateAsync(
+                updates => updates.SetProperty(x => x.ProjectedAt, DateTimeOffset.UtcNow), ct);
+    }
+
+    public async Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({runId.ToString()}, 0));", ct);
+        var run = await db.Runs.SingleOrDefaultAsync(r => r.RunId == runId.ToString(), ct);
+        if (run is null
+            || run.LifecycleGeneration != outcome.ExpectedLifecycleGeneration
+            || run.Status != outcome.Status.ToApiString())
+            return false;
+        if (await db.TerminalRunOutcomes.AnyAsync(
+                x => x.RunId == run.RunId && x.LifecycleGeneration == run.LifecycleGeneration, ct))
+            return false;
+        db.TerminalRunOutcomes.Add(new TerminalRunOutcomeRecord
+        {
+            RunId = run.RunId,
+            LifecycleGeneration = run.LifecycleGeneration,
+            Status = run.Status,
+            EventType = outcome.EventType,
+            PayloadJson = outcome.Payload.GetRawText(),
+            OccurredAt = outcome.OccurredAt,
+            ProjectedAt = outcome.OccurredAt,
+        });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     public async Task<bool> TryBeginPreviewPublicationAsync(
@@ -382,7 +482,8 @@ public sealed class EfRunStore : IRunStore
         var rows = await db.Runs
             .Where(r => r.RunId == id && r.Status == idleStr)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, inProgressStr), ct);
+                .SetProperty(r => r.Status, inProgressStr)
+                .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
         return rows > 0;
     }
 
@@ -584,6 +685,7 @@ public sealed class EfRunStore : IRunStore
         SubmittingUser = r.SubmittingUser,
         Status = r.Status.ToApiString(),
         ApprovalGeneration = r.ApprovalGeneration,
+        LifecycleGeneration = r.LifecycleGeneration,
         StartedAt = r.StartedAt,
         EndedAt = r.EndedAt,
         Result = r.Result,
@@ -629,6 +731,7 @@ public sealed class EfRunStore : IRunStore
         SubmittingUser = r.SubmittingUser,
         Status = RunStatusExtensions.ParseStatus(r.Status),
         ApprovalGeneration = r.ApprovalGeneration,
+        LifecycleGeneration = r.LifecycleGeneration,
         StartedAt = r.StartedAt,
         EndedAt = r.EndedAt,
         Result = r.Result,

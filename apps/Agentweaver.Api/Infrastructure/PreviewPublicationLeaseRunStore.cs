@@ -137,6 +137,32 @@ public sealed class PreviewPublicationLeaseRunStore(
         return await Inner.TrySetTerminalStatusAsync(runId, toStatus, endedAt, result, ct).ConfigureAwait(false);
     }
 
+    public async Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default)
+    {
+        await AwaitPreviewPublicationAsync(runId, ct).ConfigureAwait(false);
+        return await Inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct).ConfigureAwait(false);
+    }
+
+    public Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default) =>
+        Inner.GetUnprojectedTerminalOutcomesAsync(ct);
+
+    public Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct);
+
+    public Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default) =>
+        Inner.TryAdoptLegacyTerminalOutcomeAsync(runId, outcome, ct);
+
     // ---- Lease management: never defers, or publication could not claim its own lease. ----
 
     public Task<bool> TryBeginPreviewPublicationAsync(

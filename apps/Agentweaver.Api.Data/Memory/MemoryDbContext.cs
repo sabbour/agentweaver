@@ -62,6 +62,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
+    public DbSet<TerminalRunOutcomeRecord> TerminalRunOutcomes => Set<TerminalRunOutcomeRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
@@ -214,6 +215,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 e.Property(x => x.ProjectId).HasColumnName("project_id");
             });
             model.Ignore<RunRecord>();
+            model.Ignore<TerminalRunOutcomeRecord>();
             model.Ignore<RunRevisionRecord>();
             model.Ignore<ProjectRoleAssignmentRecord>();
             model.Ignore<BacklogTaskRecord>();
@@ -244,6 +246,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.SubmittingUser).HasColumnName("submitting_user");
             e.Property(r => r.Status).HasColumnName("status");
             e.Property(r => r.ApprovalGeneration).HasColumnName("approval_generation").HasDefaultValue(1);
+            e.Property(r => r.LifecycleGeneration).HasColumnName("lifecycle_generation").HasDefaultValue(1);
             e.Property(r => r.StartedAt).HasColumnName("started_at");
             e.Property(r => r.EndedAt).HasColumnName("ended_at");
             e.Property(r => r.Result).HasColumnName("result");
@@ -288,6 +291,21 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(r => new { r.Origin, r.Status }).HasDatabaseName("IX_runs_origin_status");
             e.HasIndex(r => new { r.ParentRunId, r.SubtaskId }).HasDatabaseName("IX_runs_parent_subtask");
             e.HasIndex(r => r.WorkflowRunId).HasDatabaseName("IX_runs_workflow_run_id");
+        });
+
+        model.Entity<TerminalRunOutcomeRecord>(e =>
+        {
+            e.ToTable("terminal_run_outcomes");
+            e.HasKey(x => new { x.RunId, x.LifecycleGeneration });
+            e.Property(x => x.RunId).HasColumnName("run_id");
+            e.Property(x => x.LifecycleGeneration).HasColumnName("lifecycle_generation");
+            e.Property(x => x.Status).HasColumnName("status").IsRequired();
+            e.Property(x => x.EventType).HasColumnName("event_type").IsRequired();
+            e.Property(x => x.PayloadJson).HasColumnName("payload_json").IsRequired();
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.Property(x => x.ProjectedAt).HasColumnName("projected_at");
+            e.HasIndex(x => new { x.ProjectedAt, x.OccurredAt })
+                .HasDatabaseName("IX_terminal_run_outcomes_unprojected");
         });
 
         model.Entity<RunRevisionRecord>(e =>

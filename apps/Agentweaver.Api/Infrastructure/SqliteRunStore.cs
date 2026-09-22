@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Domain;
@@ -203,7 +204,8 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'in_progress', ended_at = NULL, review_ready_at = NULL
+               SET status = 'in_progress', ended_at = NULL, review_ready_at = NULL,
+                   lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
         command.Parameters.AddWithValue("$now", Ts(ts));
@@ -218,22 +220,11 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> TryTransitionReviewAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default)
     {
-        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result, reviewed_by = $reviewer,
-                   review_ready_at = NULL
-             WHERE run_id = $runId AND status = 'awaiting_review';
-            """;
-        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
-        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
-        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
-        command.Parameters.AddWithValue("$reviewer", (object?)reviewer ?? DBNull.Value);
-        command.Parameters.AddWithValue("$runId", runId.ToString());
-        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.Status != RunStatus.AwaitingReview) return false;
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(toStatus, EventTypes.ReviewDeclined, new { result, reviewer }, endedAt, run.LifecycleGeneration),
+            result, new HashSet<RunStatus> { RunStatus.AwaitingReview }, Reviewer: reviewer), ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -339,23 +330,14 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> CompleteMergingAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null)
     {
-        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result, merge_conflicts = $mergeConflicts,
-                   merged_commit_hash = COALESCE($mergedCommitHash, merged_commit_hash)
-             WHERE run_id = $runId AND status = 'merging';
-            """;
-        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
-        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
-        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
-        command.Parameters.AddWithValue("$mergeConflicts", (object?)mergeConflicts ?? DBNull.Value);
-        command.Parameters.AddWithValue("$mergedCommitHash", (object?)mergedCommitHash ?? DBNull.Value);
-        command.Parameters.AddWithValue("$runId", runId.ToString());
-        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.Status != RunStatus.Merging) return false;
+        var eventType = toStatus == RunStatus.Merged ? EventTypes.MergeCompleted : EventTypes.MergeFailed;
+        var outcome = TerminalRunOutcome.Create(toStatus, eventType,
+            new { result, mergeConflicts, mergedCommitHash }, endedAt, run.LifecycleGeneration);
+        return await TryMutateTerminalOutcomeAsync(runId,
+            new TerminalRunMutation(outcome, result, new HashSet<RunStatus> { RunStatus.Merging },
+                MergeConflicts: mergeConflicts, MergedCommitHash: mergedCommitHash), ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -379,47 +361,203 @@ public sealed class SqliteRunStore : IRunStore
         RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
         DateTimeOffset endedAt, CancellationToken ct = default)
     {
-        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE runs
-               SET status = 'assemble_ready', tree_hash = $treeHash,
-                   worktree_branch = $worktreeBranch, diff = $diff, ended_at = $endedAt
-                   , approval_generation = approval_generation +
-                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
-             WHERE run_id = $runId
-               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
-            """;
-        command.Parameters.AddWithValue("$treeHash", treeHash);
-        command.Parameters.AddWithValue("$worktreeBranch", worktreeBranch);
-        command.Parameters.AddWithValue("$diff", diff);
-        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
-        command.Parameters.AddWithValue("$runId", runId.ToString());
-        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null) return false;
+        return await TryMutateTerminalOutcomeAsync(runId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.AssembleReady, EventTypes.RunAssembleReady,
+                new { treeHash, worktreeBranch, diff, stepCount }, endedAt, run.LifecycleGeneration),
+            null, TreeHash: treeHash, WorktreeBranch: worktreeBranch, Diff: diff), ct).ConfigureAwait(false);
     }
 
     public async Task<bool> TrySetTerminalStatusAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
     {
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return false;
+        return await TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.FromLegacyStatus(toStatus, result, endedAt, run.LifecycleGeneration),
+            result,
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var update = connection.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText =
+            """
+            UPDATE runs
+               SET status = $status, ended_at = $endedAt, result = $result,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
+             WHERE run_id = $runId
+               AND lifecycle_generation = $generation
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
+            """;
+        update.Parameters.AddWithValue("$status", outcome.Status.ToApiString());
+        update.Parameters.AddWithValue("$endedAt", Ts(outcome.OccurredAt));
+        update.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        update.Parameters.AddWithValue("$runId", runId.ToString());
+        update.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
+            return false;
+
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = tx;
+        insert.CommandText =
+            """
+            INSERT INTO terminal_run_outcomes
+                (run_id, lifecycle_generation, status, event_type, payload_json, occurred_at)
+            VALUES ($runId, $generation, $status, $eventType, $payload, $occurredAt);
+            """;
+        insert.Parameters.AddWithValue("$runId", runId.ToString());
+        insert.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        insert.Parameters.AddWithValue("$status", outcome.Status.ToApiString());
+        insert.Parameters.AddWithValue("$eventType", outcome.EventType);
+        insert.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+        insert.Parameters.AddWithValue("$occurredAt", Ts(outcome.OccurredAt));
+        await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId, TerminalRunMutation mutation, CancellationToken ct = default)
+    {
+        // Specialized callers currently require one precise source status (merging or
+        // awaiting_review). Keep that compare-and-swap in the same SQLite transaction as the outbox.
+        var expected = mutation.ExpectedStatuses?.SingleOrDefault();
+        if (mutation.ExpectedStatuses is { Count: > 1 })
+            throw new NotSupportedException("Terminal mutations require one expected source status.");
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var update = connection.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText =
+            """
+            UPDATE runs SET status=$status, ended_at=$endedAt, result=$result,
+              reviewed_by=COALESCE($reviewer, reviewed_by),
+              merge_conflicts=COALESCE($mergeConflicts, merge_conflicts),
+              merged_commit_hash=COALESCE($mergedCommitHash, merged_commit_hash),
+              tree_hash=COALESCE($treeHash, tree_hash),
+              worktree_branch=COALESCE($worktreeBranch, worktree_branch),
+              diff=COALESCE($diff, diff)
+             WHERE run_id=$runId AND lifecycle_generation=$generation
+               AND ($expectedStatus IS NULL OR status=$expectedStatus)
+               AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled');
+            """;
+        update.Parameters.AddWithValue("$status", mutation.Outcome.Status.ToApiString());
+        update.Parameters.AddWithValue("$endedAt", Ts(mutation.Outcome.OccurredAt));
+        update.Parameters.AddWithValue("$result", (object?)mutation.Result ?? DBNull.Value);
+        update.Parameters.AddWithValue("$reviewer", (object?)mutation.Reviewer ?? DBNull.Value);
+        update.Parameters.AddWithValue("$mergeConflicts", (object?)mutation.MergeConflicts ?? DBNull.Value);
+        update.Parameters.AddWithValue("$mergedCommitHash", (object?)mutation.MergedCommitHash ?? DBNull.Value);
+        update.Parameters.AddWithValue("$treeHash", (object?)mutation.TreeHash ?? DBNull.Value);
+        update.Parameters.AddWithValue("$worktreeBranch", (object?)mutation.WorktreeBranch ?? DBNull.Value);
+        update.Parameters.AddWithValue("$diff", (object?)mutation.Diff ?? DBNull.Value);
+        update.Parameters.AddWithValue("$runId", runId.ToString());
+        update.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+        update.Parameters.AddWithValue("$expectedStatus", expected is null ? DBNull.Value : expected.Value.ToApiString());
+        if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0) return false;
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = tx;
+        insert.CommandText = "INSERT INTO terminal_run_outcomes (run_id,lifecycle_generation,status,event_type,payload_json,occurred_at) VALUES ($runId,$generation,$status,$eventType,$payload,$occurredAt);";
+        insert.Parameters.AddWithValue("$runId", runId.ToString()); insert.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+        insert.Parameters.AddWithValue("$status", mutation.Outcome.Status.ToApiString()); insert.Parameters.AddWithValue("$eventType", mutation.Outcome.EventType);
+        insert.Parameters.AddWithValue("$payload", mutation.Outcome.Payload.GetRawText()); insert.Parameters.AddWithValue("$occurredAt", Ts(mutation.Outcome.OccurredAt));
+        await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default)
+    {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result,
-                   approval_generation = approval_generation +
-                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
-             WHERE run_id = $runId
-               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
+            SELECT run_id, lifecycle_generation, status, event_type, payload_json, occurred_at
+              FROM terminal_run_outcomes
+             WHERE projected_at IS NULL
+             ORDER BY occurred_at;
             """;
-        command.Parameters.AddWithValue("$toStatus", toStatus.ToApiString());
-        command.Parameters.AddWithValue("$endedAt", Ts(endedAt));
-        command.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
-        command.Parameters.AddWithValue("$runId", runId.ToString());
-        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        WarnIfNoRows(rows, runId, $"set terminal status to {toStatus.ToApiString()}");
+        var result = new List<PendingTerminalRunOutcome>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            using var payload = JsonDocument.Parse(reader.GetString(4));
+            result.Add(new PendingTerminalRunOutcome(
+                RunId.Parse(reader.GetString(0)),
+                reader.GetInt32(1),
+                new TerminalRunOutcome(
+                    RunStatusExtensions.ParseStatus(reader.GetString(2)),
+                    reader.GetString(3),
+                    payload.RootElement.Clone(),
+                    DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    reader.GetInt32(1))));
+        }
+        return result;
+    }
+
+    public async Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await ExecuteNonQueryAsync(
+            """
+            UPDATE terminal_run_outcomes
+               SET projected_at = $projectedAt
+             WHERE run_id = $runId
+               AND lifecycle_generation = $generation
+               AND projected_at IS NULL;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$projectedAt", Ts(DateTimeOffset.UtcNow));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+                cmd.Parameters.AddWithValue("$generation", lifecycleGeneration);
+            }, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = tx;
+        insert.CommandText =
+            """
+            INSERT INTO terminal_run_outcomes
+                (run_id, lifecycle_generation, status, event_type, payload_json, occurred_at, projected_at)
+            SELECT $runId, $generation, $status, $eventType, $payload, $occurredAt, $occurredAt
+              WHERE EXISTS (
+                  SELECT 1 FROM runs
+                   WHERE run_id = $runId
+                     AND lifecycle_generation = $generation
+                     AND status = $status)
+            ON CONFLICT (run_id, lifecycle_generation) DO NOTHING;
+            """;
+        insert.Parameters.AddWithValue("$runId", runId.ToString());
+        insert.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        insert.Parameters.AddWithValue("$status", outcome.Status.ToApiString());
+        insert.Parameters.AddWithValue("$eventType", outcome.EventType);
+        insert.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+        insert.Parameters.AddWithValue("$occurredAt", Ts(outcome.OccurredAt));
+        var rows = await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
     }
 
@@ -574,7 +712,7 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET status = 'in_progress'
+               SET status = 'in_progress', lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'idle';
             """,
             cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
@@ -853,19 +991,19 @@ public sealed class SqliteRunStore : IRunStore
     }
 
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
-    //           5=submitting_user 6=status 7=approval_generation 8=started_at 9=ended_at 10=result
-    //           11=worktree_path 12=worktree_branch 13=tree_hash 14=diff 15=merge_conflicts
-    //           16=project_id 17=model_id 18=agent_name 19=agent_charter 20=reviewed_by
-    //           21=workflow_run_id 22=merged_commit_hash 23=parent_run_id 24=subtask_id
-    //           25=origin 26=retried_from 27=archived_at 28=sandbox_backend 29=sandbox_claim_name
-    //           30=sandbox_pod_name 31=sandbox_namespace 32=workflow_selection_reason
-    //           33=launch_auto_approve_tools 34=launch_autopilot 35=approval_policy_snapshot_id
-    //           36=approval_policy_source 37=approval_policy_captured_at
-    //           38=approval_policy_settings_updated_at 39=approval_policy_inherited_from_run_id
+    //           5=submitting_user 6=status 7=approval_generation 8=lifecycle_generation 9=started_at 10=ended_at 11=result
+    //           12=worktree_path 13=worktree_branch 14=tree_hash 15=diff 16=merge_conflicts
+    //           17=project_id 18=model_id 19=agent_name 20=agent_charter 21=reviewed_by
+    //           22=workflow_run_id 23=merged_commit_hash 24=parent_run_id 25=subtask_id
+    //           26=origin 27=retried_from 28=archived_at 29=sandbox_backend 30=sandbox_claim_name
+    //           31=sandbox_pod_name 32=sandbox_namespace 33=workflow_selection_reason
+    //           34=launch_auto_approve_tools 35=launch_autopilot 36=approval_policy_snapshot_id
+    //           37=approval_policy_source 38=approval_policy_captured_at
+    //           39=approval_policy_settings_updated_at 40=approval_policy_inherited_from_run_id
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
-               submitting_user, status, approval_generation, started_at, ended_at, result,
+               submitting_user, status, approval_generation, lifecycle_generation, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, diff, merge_conflicts,
                project_id, model_id, agent_name, agent_charter, reviewed_by,
                workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
@@ -888,39 +1026,40 @@ public sealed class SqliteRunStore : IRunStore
         SubmittingUser   = r.GetString(5),
         Status           = RunStatusExtensions.ParseStatus(r.GetString(6)),
         ApprovalGeneration = r.GetInt32(7),
-        StartedAt        = DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        EndedAt          = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        Result           = r.IsDBNull(10) ? null : r.GetString(10),
-        WorktreePath     = r.IsDBNull(11) ? null : r.GetString(11),
-        WorktreeBranch   = r.IsDBNull(12) ? null : r.GetString(12),
-        TreeHash         = r.IsDBNull(13) ? null : r.GetString(13),
+        LifecycleGeneration = r.GetInt32(8),
+        StartedAt        = DateTimeOffset.Parse(r.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        EndedAt          = r.IsDBNull(10)  ? null : DateTimeOffset.Parse(r.GetString(10),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        Result           = r.IsDBNull(11) ? null : r.GetString(11),
+        WorktreePath     = r.IsDBNull(12) ? null : r.GetString(12),
+        WorktreeBranch   = r.IsDBNull(13) ? null : r.GetString(13),
+        TreeHash         = r.IsDBNull(14) ? null : r.GetString(14),
         StepCount        = 0,
-        Diff             = r.IsDBNull(14) ? null : r.GetString(14),
-        MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
-        ProjectId        = r.IsDBNull(16) ? null : ProjectId.Parse(r.GetString(16)),
-        ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
-        AgentName        = r.IsDBNull(18) ? null : r.GetString(18),
-        AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
-        ReviewedBy       = r.IsDBNull(20) ? null : r.GetString(20),
-        WorkflowRunId    = r.IsDBNull(21) ? null : r.GetString(21),
-        MergedCommitHash = r.IsDBNull(22) ? null : r.GetString(22),
-        ParentRunId      = r.IsDBNull(23) ? null : r.GetString(23),
-        SubtaskId        = r.IsDBNull(24) ? null : r.GetString(24),
-        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(25) ? null : r.GetString(25)),
-        RetriedFrom      = r.IsDBNull(26) ? null : r.GetString(26),
-        ArchivedAt       = r.IsDBNull(27) ? null : DateTimeOffset.Parse(r.GetString(27), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        SandboxBackend   = r.IsDBNull(28) ? null : r.GetString(28),
-        SandboxClaimName = r.IsDBNull(29) ? null : r.GetString(29),
-        SandboxPodName   = r.IsDBNull(30) ? null : r.GetString(30),
-        SandboxNamespace = r.IsDBNull(31) ? null : r.GetString(31),
-        WorkflowSelectionReason = r.IsDBNull(32) ? null : r.GetString(32),
-        LaunchAutoApproveTools = r.IsDBNull(33) ? null : r.GetInt32(33) != 0,
-        LaunchAutopilot = r.IsDBNull(34) ? null : r.GetInt32(34) != 0,
-        ApprovalPolicySnapshotId = r.IsDBNull(35) ? null : r.GetString(35),
-        ApprovalPolicySource = r.IsDBNull(36) ? null : r.GetString(36),
-        ApprovalPolicyCapturedAt = r.IsDBNull(37) ? null : DateTimeOffset.Parse(r.GetString(37), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        ApprovalPolicySettingsUpdatedAt = r.IsDBNull(38) ? null : DateTimeOffset.Parse(r.GetString(38), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        ApprovalPolicyInheritedFromRunId = r.IsDBNull(39) ? null : r.GetString(39),
+        Diff             = r.IsDBNull(15) ? null : r.GetString(15),
+        MergeConflicts   = r.IsDBNull(16) ? null : r.GetString(16),
+        ProjectId        = r.IsDBNull(17) ? null : ProjectId.Parse(r.GetString(17)),
+        ModelId          = r.IsDBNull(18) ? null : r.GetString(18),
+        AgentName        = r.IsDBNull(19) ? null : r.GetString(19),
+        AgentCharter     = r.IsDBNull(20) ? null : r.GetString(20),
+        ReviewedBy       = r.IsDBNull(21) ? null : r.GetString(21),
+        WorkflowRunId    = r.IsDBNull(22) ? null : r.GetString(22),
+        MergedCommitHash = r.IsDBNull(23) ? null : r.GetString(23),
+        ParentRunId      = r.IsDBNull(24) ? null : r.GetString(24),
+        SubtaskId        = r.IsDBNull(25) ? null : r.GetString(25),
+        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(26) ? null : r.GetString(26)),
+        RetriedFrom      = r.IsDBNull(27) ? null : r.GetString(27),
+        ArchivedAt       = r.IsDBNull(28) ? null : DateTimeOffset.Parse(r.GetString(28), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SandboxBackend   = r.IsDBNull(29) ? null : r.GetString(29),
+        SandboxClaimName = r.IsDBNull(30) ? null : r.GetString(30),
+        SandboxPodName   = r.IsDBNull(31) ? null : r.GetString(31),
+        SandboxNamespace = r.IsDBNull(32) ? null : r.GetString(32),
+        WorkflowSelectionReason = r.IsDBNull(33) ? null : r.GetString(33),
+        LaunchAutoApproveTools = r.IsDBNull(34) ? null : r.GetInt32(34) != 0,
+        LaunchAutopilot = r.IsDBNull(35) ? null : r.GetInt32(35) != 0,
+        ApprovalPolicySnapshotId = r.IsDBNull(36) ? null : r.GetString(36),
+        ApprovalPolicySource = r.IsDBNull(37) ? null : r.GetString(37),
+        ApprovalPolicyCapturedAt = r.IsDBNull(38) ? null : DateTimeOffset.Parse(r.GetString(38), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ApprovalPolicySettingsUpdatedAt = r.IsDBNull(39) ? null : DateTimeOffset.Parse(r.GetString(39), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ApprovalPolicyInheritedFromRunId = r.IsDBNull(40) ? null : r.GetString(40),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

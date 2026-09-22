@@ -29,6 +29,46 @@ public interface IRunStore
     Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default);
 
     /// <summary>
+    /// Atomically chooses the terminal state and its canonical typed event for the current lifecycle
+    /// generation. Implementations persist the winner to a run-database outbox; callers project it
+    /// only after the transaction commits because SQLite keeps RunEvents in a separate database.
+    /// </summary>
+    Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement terminal outcomes.");
+
+    Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunMutation mutation,
+        CancellationToken ct = default) =>
+        TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);
+
+    /// <summary>Returns durable winners that have not yet been projected into RunEvents.</summary>
+    Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PendingTerminalRunOutcome>>([]);
+
+    /// <summary>Marks a terminal winner projected only after its exact typed event is durable.</summary>
+    Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Adopts a compatible persisted legacy terminal event without inventing a new payload.
+    /// Returns false for a non-terminal, incompatible, or already-adopted row.
+    /// </summary>
+    Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>
     /// Claims the preview-publication lease for <paramref name="runId"/> until
     /// <paramref name="leaseUntil"/>, but only while the run is still active. Returns <c>false</c>
     /// when the run is already terminal, in which case publication must abort — a preview URL
