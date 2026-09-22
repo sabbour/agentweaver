@@ -67,7 +67,7 @@ test('materializes only explicit structured review and validation evidence', () 
 test('rejects missing reviews and validation provenance mismatches', () => {
   assert.throws(() => materializeLedger(input({
     reviews: [review('code-review'), review('security-review')],
-  })), /missing required exact-head review from: ponytail-review/u);
+  })), /missing required exact-head approval from: ponytail-review/u);
   assert.throws(() => materializeLedger(input({
     validations: [validation({ headSha: 'b'.repeat(40) })],
   })), /candidate SHA/u);

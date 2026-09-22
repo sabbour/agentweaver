@@ -151,8 +151,8 @@ export function materializeLedger(input) {
   validateCorrectiveReviews(reviews);
   for (const source of requiredSources) {
     if (!implementationReviews.some((review) => review.source === source
-      && review.target.headSha === candidate.headSha)) {
-      throw new Error(`missing required exact-head review from: ${source}`);
+      && review.target.headSha === candidate.headSha && review.verdict === 'approved')) {
+      throw new Error(`missing required exact-head approval from: ${source}`);
     }
   }
   const validations = input.validations.map((entry, index) => validateValidationEvidence(entry, candidate, `validations[${index}]`));

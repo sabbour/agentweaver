@@ -88,7 +88,7 @@ test('blocks provenance mismatches and unresolved required findings', () => {
       review('security-review'),
       review('ponytail-review'),
     ],
-  }), { ...expected, headSha }), /unresolved/u);
+  }), { ...expected, headSha }), /missing required exact-head approval/u);
 });
 
 test('rejects a rejected review that omits its findings', () => {
@@ -127,14 +127,15 @@ test('admits an older rejection only after corrective approval at the final head
 });
 
 test('preserves advisory and explicit waiver behavior', () => {
+  const advisory = { id: 'F-ADV', policy: 'advisory', summary: 'Optional cleanup.' };
+  const waived = { id: 'F-WAIVE', policy: 'required', summary: 'Accepted operational risk.', waiver: { actor: 'sabbour', rationale: 'Bounded and accepted.' } };
   const reviews = [
     review('code-review', {
       verdict: 'rejected',
-      findings: [
-        { id: 'F-ADV', policy: 'advisory', summary: 'Optional cleanup.' },
-        { id: 'F-WAIVE', policy: 'required', summary: 'Accepted operational risk.', waiver: { actor: 'sabbour', rationale: 'Bounded and accepted.' } },
-      ],
+      target: { ...target, headSha: 'b'.repeat(40) },
+      findings: [advisory, waived],
     }),
+    review('code-review', { correctiveOf: 'F-WAIVE', findings: [waived] }),
     review('security-review'),
     review('ponytail-review'),
   ];
