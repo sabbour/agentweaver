@@ -1,6 +1,6 @@
 # Validate deployed context budgets under deterministic pressure
 
-**Issue:** [#1501](https://github.com/sabbour/agentweaver/issues/1501)  
+**Issue:** [#1501](https://github.com/sabbour/agentweaver/issues/1501)
 **Area:** Runtime resilience
 
 ## User story
