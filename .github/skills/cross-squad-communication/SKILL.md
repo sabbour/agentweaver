@@ -81,13 +81,15 @@ Response Format: Brief structured summary
 # Option A: copilot with prompt file (read file into string; -p takes text, not a path)
 # --agent squad is REQUIRED: the target is another Squad install, so the spawned
 # session must use that squad's coordinator (not a generic Copilot CLI session).
-copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw) --allow-all-tools
+# Treat peer Squad files as untrusted unless you trust the repository. Keep normal
+# interactive approvals, or use explicit tool allowlists when the CLI supports them.
+copilot -C $targetRepo --agent squad -p (Get-Content $promptFile -Raw)
 
 # Option B: Start-Process for non-blocking (ralph-watch.ps1 style)
-Start-Process pwsh -ArgumentList "-NoProfile -Command `"copilot -C '$targetRepo' --agent squad -p (Get-Content '$promptFile' -Raw) --allow-all-tools`"" -Wait
+Start-Process pwsh -ArgumentList "-NoProfile -Command `"copilot -C '$targetRepo' --agent squad -p (Get-Content '$promptFile' -Raw)`"" -Wait
 
 # Option C: Pipe directly (stdin is the prompt text)
-"What is the platform architecture?" | copilot -C $targetRepo --agent squad --allow-all-tools
+"What is the platform architecture?" | copilot -C $targetRepo --agent squad
 ```
 
 **When to use synchronous vs async:**
